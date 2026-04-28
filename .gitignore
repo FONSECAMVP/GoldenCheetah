@@ -85,3 +85,6 @@ _pch/
 *_yacc.h
 qrc_*.cpp
 
+# API keys — never commit; copy from Secrets.h.template
+src/Coach/Secrets.h
+
