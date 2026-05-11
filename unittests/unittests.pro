@@ -12,6 +12,7 @@ equals(GC_UNITTESTS, active) {
 			   Core/utils \
 			   Core/signalSafety \
 			   Core/splineCrash \
+			   Core/coach \
 			   Gui/calendarData
 	CONFIG += ordered
 } else {
