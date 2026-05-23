@@ -5,8 +5,13 @@ directly. The C++ worker (DES-001) calls this adapter; nothing else in the
 codebase imports the underlying library. Swapping `python-garminconnect` for
 a community fork is a one-file change here.
 
-Phase 2.2 status: STUB. Each method raises NotImplementedError until its
-owning REQ reaches GREEN. TEST-NNN files live under tests/.
+Phase 2.2 status (REQ-by-REQ):
+  - REQ-002 login / GarminError(kind='auth') translation: GREEN.
+  - REQ-003 / REQ-007 / REQ-008 / REQ-012 / REQ-013: still raise
+    NotImplementedError until their owning slice reaches GREEN.
+
+The wider `_EXCEPTION_MAP` (rate_limit, connection, captcha, mfa_required,
+token_permissions) lands with REQ-014 — REQ-002's bar is the auth path only.
 """
 
 from __future__ import annotations
@@ -44,10 +49,27 @@ class GarminClient:
     """Adapter — see DES-012 for surface and translation responsibilities."""
 
     def __init__(self, email: str, password: str, tokenstore_path: str) -> None:
-        raise NotImplementedError("REQ-002 GREEN step not yet implemented")
+        if _gc is None:
+            raise GarminError(
+                "unknown",
+                "python-garminconnect is not installed; cannot construct GarminClient",
+            )
+        # Forward `password` straight into the library constructor and drop
+        # the local reference; REQ-005 forbids retaining it on this adapter.
+        # The library's own retention is its contract — DES-012 isolates it.
+        # tokenstore_path is forwarded only — the library owns the path; the
+        # adapter has no reason to retain it on `self` until REQ-012 needs it.
+        self._garmin = _gc.Garmin(email, password, tokenstore_path)
 
     def login(self) -> dict[str, Any]:
-        raise NotImplementedError("REQ-002 GREEN step not yet implemented")
+        try:
+            self._garmin.login()
+        except _gc.exceptions.GarminConnectAuthenticationError as e:
+            raise GarminError("auth", str(e) or "Authentication failed", e) from e
+        return {
+            "garmin_user_id": str(self._garmin.full_name_id),
+            "display_name": self._garmin.display_name,
+        }
 
     def submit_mfa(self, code: str) -> dict[str, Any]:
         raise NotImplementedError("REQ-003 GREEN step not yet implemented")

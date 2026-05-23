@@ -132,6 +132,60 @@ def test_login_bad_credentials_raises_GarminError_kind_auth(tmp_path: Any, monke
     assert not tokenstore.exists(), "REQ-002 acceptance: failed auth must not leave a token file on disk"
 
 
+def test_non_auth_exception_is_not_misclassified_as_auth(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A3/REQ-002 — mutant M6 kill.
+
+    A library exception that is NOT an authentication failure must NOT come
+    out of the adapter as `GarminError(kind='auth')`. DES-008's switch table
+    routes user-facing copy off `kind`; a `RuntimeError` (or any non-auth
+    exception) tagged 'auth' would route the wizard to "wrong password" copy
+    for what is actually a connection/library error.
+
+    REQ-002's GREEN slice only specs the `auth` branch — the wider
+    `_EXCEPTION_MAP` (rate_limit, connection, captcha, ...) lands with
+    REQ-014. Until then, non-auth exceptions propagate unchanged; what they
+    must not do is silently inherit 'auth'.
+    """
+    tokenstore = tmp_path / "tokens.json"
+
+    class _BoomGarmin(_FakeGarminBase):
+        def login(self) -> None:
+            raise RuntimeError("simulated downstream library bug")
+
+    _install_fake_gc(monkeypatch, _BoomGarmin)
+
+    client = GarminClient("u@x.com", "p", str(tokenstore))
+    with pytest.raises(RuntimeError, match="simulated downstream library bug"):
+        client.login()
+
+
+def test_auth_error_with_empty_message_still_yields_displayable_message(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A3/REQ-002 — mutant M11 kill.
+
+    Some library exceptions carry no message (`raise GarminConnectAuthenticationError()`).
+    The adapter must still produce a non-empty `.message` so DES-008's UI
+    translation has something to display — never an empty dialog body.
+    """
+    tokenstore = tmp_path / "tokens.json"
+
+    class _SilentBadGarmin(_FakeGarminBase):
+        def login(self) -> None:
+            raise _FakeAuthError()  # no message
+
+    _install_fake_gc(monkeypatch, _SilentBadGarmin)
+
+    client = GarminClient("u@x.com", "p", str(tokenstore))
+    with pytest.raises(GarminError) as excinfo:
+        client.login()
+
+    assert excinfo.value.kind == "auth"
+    assert excinfo.value.message, (
+        "Empty library-side message must still yield a non-empty adapter message " "for UI display"
+    )
+
+
 def test_password_not_retained_on_adapter_instance(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """REQ-005 (must) — the password must not survive on the adapter beyond
     its handoff to the library's login() call.
