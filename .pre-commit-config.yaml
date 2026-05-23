@@ -1,0 +1,49 @@
+# Per DEC-010: pre-commit framework, scoped to new Garmin Connect paths only.
+# Does NOT retrofit legacy GoldenCheetah files — `files:` regex restricts every
+# hook to src/Cloud/Garmin*, src/Python/garminconnect/, unittests/Core/garminconnect/.
+#
+# Contributor onboarding:  pip install pre-commit && pre-commit install
+# CI parity:               pre-commit run --files <changed-files>
+
+default_install_hook_types: [pre-commit]
+
+repos:
+  # -------- C++ (DEC-009) ------------------------------------------------
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v18.1.8
+    hooks:
+      - id: clang-format
+        name: clang-format (Garmin C++)
+        files: '^(src/Cloud/Garmin[^/]*\.(cpp|h)|unittests/Core/garminconnect/.*\.(cpp|h))$'
+        args: [--style=file]
+
+  # -------- Python (DEC-009) ---------------------------------------------
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        name: ruff-check (Garmin Python)
+        files: '^src/Python/garminconnect/.*\.py$'
+        args: [--fix]
+      - id: ruff-format
+        name: ruff-format (Garmin Python)
+        files: '^src/Python/garminconnect/.*\.py$'
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.11.2
+    hooks:
+      - id: mypy
+        name: mypy --strict (Garmin Python)
+        files: '^src/Python/garminconnect/.*\.py$'
+        args: [--strict, --config-file=src/Python/garminconnect/pyproject.toml]
+        additional_dependencies: []
+
+# Secret scanning (DEC-003 threat model) is enabled in Phase 2.2 once the
+# first Garmin source file lands and a `.secrets.baseline` can be generated
+# against real content via `detect-secrets scan > .secrets.baseline`. Wiring
+# the hook now without a baseline would fail on every fresh `pre-commit install`.
+#
+# Commit-message trace-ID citation (REQ-NNN / TEST-NNN / DEC-NNN) is enforced
+# by code-review convention (see dod.md), not by a pre-commit hook — the
+# commit-msg stage cannot scope by changed files, so a global hook would
+# reject every non-Garmin commit in the repo.

@@ -771,6 +771,9 @@ set(GC_HEADERS_PLANNING
     Planning/PlanningWindow.h
 )
 
+# Garmin Connect integration (optional, OFF until DEC-011 / Phase-1 A4 gate passes)
+option(GC_WANT_GARMINCONNECT "Enable Garmin Connect activity download" OFF)
+
 # Train View Components
 set(GC_SOURCES_TRAIN
     Train/AddDeviceWizard.cpp
@@ -1448,6 +1451,7 @@ message(STATUS "Features:")
 message(STATUS "  Python Support: ${GC_WANT_PYTHON}")
 message(STATUS "  R Support: ${GC_WANT_R}")
 message(STATUS "  HTTP API: ${GC_WANT_HTTP}")
+message(STATUS "  Garmin Connect: ${GC_WANT_GARMINCONNECT}")
 message(STATUS "  iCal Support: ${GC_HAVE_ICAL}")
 message(STATUS "  USB Support: ${GC_HAVE_LIBUSB}")
 message(STATUS "  VLC Support: ${GC_HAVE_VLC}")

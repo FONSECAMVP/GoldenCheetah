@@ -1,0 +1,10 @@
+# D-02 — local dev artifacts under src/Python/garminconnect/ never enter history.
+# Scoped to this directory so we don't retrofit the repo-root .gitignore.
+.venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/

@@ -1,0 +1,52 @@
+# Per DEC-009: ruff (lint+format) + mypy --strict scoped to this directory.
+# Per DEC-008: pytest + coverage.py for the Python adapter (DES-005, DES-012).
+# This config is intentionally narrow so it does not touch legacy src/Python/* scripts.
+
+[project]
+name = "gc-garminconnect"
+version = "0.0.1"
+description = "Embedded Python adapter for Garmin Connect download (Phase 1)."
+requires-python = ">=3.9"
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+strict = true
+python_version = "3.9"
+files = ["."]
+# mypy_path is resolved against cwd, not the config-file directory. Pre-commit
+# invokes mypy from the repo root, so spell the path out explicitly. Adapter
+# modules (garmin_client.py, gc_rate.py) are top-level — explicit_package_bases
+# stops mypy from also treating them as `garminconnect.*` (a name collision
+# with the upstream `garminconnect` PyPI package the adapter wraps).
+mypy_path = ["src/Python/garminconnect"]
+explicit_package_bases = true
+# Third-party stubs we accept as untyped:
+[[tool.mypy.overrides]]
+module = ["garminconnect", "curl_cffi.*", "freezegun", "pytest"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+# Adapter modules live at the package root (garmin_client.py, gc_rate.py);
+# adding "." to pythonpath lets tests import them directly without a build step.
+pythonpath = ["."]
+
+[tool.coverage.run]
+source = ["."]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
