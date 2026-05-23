@@ -1364,6 +1364,17 @@ set_target_properties(GoldenCheetah PROPERTIES
     MACOSX_BUNDLE TRUE
 )
 
+# Garmin Connect integration (optional, OFF by default — see DEC-008/009/010)
+# Per DES-004 the implementation is a CloudService subclass compiled inline
+# into the GoldenCheetah target rather than a subdirectory library.
+if(GC_WANT_GARMINCONNECT)
+    target_sources(GoldenCheetah PRIVATE
+        Cloud/GarminConnect.cpp
+        Cloud/GarminConnect.h
+    )
+    target_compile_definitions(GoldenCheetah PRIVATE GC_WANT_GARMINCONNECT)
+endif()
+
 # Link Qt libraries
 target_link_libraries(GoldenCheetah PRIVATE
     Qt${QT_VERSION_MAJOR}::Core
