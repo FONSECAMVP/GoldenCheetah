@@ -277,6 +277,72 @@ class TestGarminConnectCredentialsPage : public QObject
         QVERIFY2(!page.isComplete(), "REQ-NF-Perf-002 page-side: isComplete() must be false during in-flight to "
                                      "disable Next and prevent a second concurrent dispatch");
     }
+
+    // A3 M8 mutation kill: without a tracked InFlight state the only thing blocking
+    // Next after dispatch is the empty password field. If the user types their
+    // password back in while a request is still in-flight, Next must still be
+    // blocked — the state machine, not the field check, is the gate.
+    void inFlightBlocksEvenIfPasswordRetyped()
+    {
+        FakeAuthClient fake;
+        GarminCredentialsPage page(&fake);
+        populate(page, QStringLiteral("rider@example.com"), QStringLiteral("hunter2"));
+
+        QVERIFY(!page.validatePage()); // dispatch clears password; in-flight begins
+        // Simulate the user re-entering the password while the request is in-flight.
+        passwordField(page)->setText(QStringLiteral("hunter2"));
+        QVERIFY2(!page.isComplete(), "A3-M8 kill: isComplete() must be false even if the user re-types the "
+                                     "password during in-flight — the InFlight state, not the empty field, gates "
+                                     "Next (prevents a second concurrent dispatch via field re-fill)");
+    }
+
+    // A3 M6 mutation kill: without the 'if (Success) return true' branch in
+    // isComplete() the wizard can never re-enable Next after a successful auth
+    // because the password field is cleared and the field check would return false.
+    void isCompleteIsTrueAfterSuccessResponse()
+    {
+        FakeAuthClient fake;
+        GarminCredentialsPage page(&fake);
+        populate(page, QStringLiteral("rider@example.com"), QStringLiteral("hunter2"));
+        QVERIFY(!page.validatePage()); // dispatch
+        QCOMPARE(fake.calls.size(), 1);
+
+        GarminAuthSuccess result{QStringLiteral("uid-12345"), QStringLiteral("Rider")};
+        fake.synthFinished(fake.calls.first().requestId, result);
+
+        QVERIFY2(page.isComplete(), "A3-M6 kill: isComplete() must return true after a success response so the "
+                                    "wizard re-enables Next — cannot rely on the field check because the password "
+                                    "was cleared at dispatch time");
+    }
+
+    // A3 M3/M4 mutation kill: a finished/failed signal whose requestId does not
+    // match the in-flight request must be ignored (stale-reply guard). Without
+    // the guard a slow earlier attempt could advance or error the page while a
+    // fresh attempt is in-flight.
+    void staleReplyIsIgnored()
+    {
+        FakeAuthClient fake;
+        GarminCredentialsPage page(&fake);
+        populate(page, QStringLiteral("rider@example.com"), QStringLiteral("hunter2"));
+        QVERIFY(!page.validatePage()); // dispatch; m_pendingId set to calls[0].requestId
+        QCOMPARE(fake.calls.size(), 1);
+
+        // Emit 'finished' with a UUID that was never issued by the page.
+        const QUuid staleId = QUuid::createUuid();
+        QVERIFY(staleId != fake.calls.first().requestId);
+        GarminAuthSuccess result{QStringLiteral("uid-stale"), QStringLiteral("Ghost")};
+        fake.synthFinished(staleId, result);
+
+        // Page must still be in-flight — the stale reply must not advance it.
+        QVERIFY2(!page.validatePage(), "A3-M3/M4 kill: a stale 'finished' signal (mismatched requestId) must not "
+                                       "advance the page — validatePage() must still return false (still in-flight)");
+        QVERIFY2(!page.isComplete(), "A3-M3/M4 kill: isComplete() must remain false after a stale reply "
+                                     "(still in-flight)");
+
+        // Now deliver the real reply — page must advance.
+        fake.synthFinished(fake.calls.first().requestId, result);
+        QVERIFY2(page.validatePage(), "After the matching 'finished' reply, validatePage() must return true");
+    }
 };
 
 QTEST_MAIN(TestGarminConnectCredentialsPage)
