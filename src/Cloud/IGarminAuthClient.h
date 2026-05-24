@@ -60,4 +60,12 @@ class IGarminAuthClient : public QObject
     void failed(QUuid id, GarminAuthFailure error);
 };
 
+// Cross-thread signal marshalling: GarminWorker (on a worker thread) emits
+// these via finished/failed; queued connections to the GUI thread require
+// both Q_DECLARE_METATYPE here and qRegisterMetaType at construction time
+// (see WorkerAuthClient's ctor). Same-thread direct connections (TEST-003)
+// did not need this, but the cross-thread path (TEST-004) does.
+Q_DECLARE_METATYPE(GarminAuthSuccess)
+Q_DECLARE_METATYPE(GarminAuthFailure)
+
 #endif // GC_IGarminAuthClient_h
