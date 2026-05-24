@@ -7,7 +7,7 @@ Last updated: 2026-05-24 (Phase 2.2 — REQ-002 C++ wizard-wiring slice TEST-003
 | REQ | Description | DEC(s) | DES(s) | TEST(s) | Commit |
 |-----|-------------|--------|--------|---------|--------|
 | REQ-001 | "Garmin Connect" tile in AddCloudWizard | DEC-001, DEC-005, DEC-011 | DES-004 (DES-003 → REQ-002) | TEST-001 | 6381b90f4 |
-| REQ-002 | SSO auth via python-garminconnect | DEC-001, DEC-002, DEC-004, DEC-008, DEC-009, DEC-010, DEC-011, DEC-012 | DES-001, DES-003, DES-003a, DES-008, DES-012 | TEST-002 (5 tests, adapter slice GREEN). TEST-003 (C++ wizard-wiring slice — 9 tests, **GREEN**; covers REQ-002 wizard side + REQ-005 wizard-side enforcement) | e4ac2a88b (RED + bootstrap), 1c355a102 (adapter GREEN + A3 kills), fbb94cff7 (TEST-003 RED), 4b4fd4dd5 (TEST-003 GREEN) |
+| REQ-002 | SSO auth via python-garminconnect | DEC-001, DEC-002, DEC-004, DEC-008, DEC-009, DEC-010, DEC-011, DEC-012, DEC-013 | DES-001, DES-001a, DES-003, DES-003a, DES-008, DES-012 | TEST-002 (5, adapter GREEN). TEST-003 (wizard-wiring slice — 13 GREEN; REQ-002 wizard side + REQ-005 + A3 kills). TEST-004 (end-to-end slice — 10 GREEN; GarminWorker + WorkerAuthClient + IGarminPyAdapter seam + REQ-NF-Threads-001 thread-id assertion) | e4ac2a88b (RED + bootstrap), 1c355a102 (adapter GREEN + A3 kills), fbb94cff7 (TEST-003 RED), 4b4fd4dd5 (TEST-003 GREEN), 58ae2704e (A3 wizard kills), 15d5e10c7 (VAL-005), _pending_ (TEST-004 + VAL-006 on branch worktree-garmin-req002-e2e) |
 | REQ-003 | MFA OTP prompt | DEC-001, DEC-002, DEC-004 | DES-001, DES-003, DES-012 | — | — |
 | REQ-004 | Per-athlete token storage | DEC-001, DEC-003 | DES-002, DES-006 | — | — |
 | REQ-005 | Password never persisted | DEC-001, DEC-012 | DES-003, DES-003a, DES-012 | TEST-002 / `test_password_not_retained_on_adapter_instance` (adapter-seam in-memory shim — GREEN). TEST-003 wizard-side enforcement: `passwordFieldIsMasked`, `passwordFieldDisablesAutocomplete`, `passwordClearedAfterSubmit` — currently RED. | e4ac2a88b (RED stub), 1c355a102 (adapter-seam structurally complete), _pending_ (TEST-003 wizard-side RED) |
@@ -25,7 +25,7 @@ Last updated: 2026-05-24 (Phase 2.2 — REQ-002 C++ wizard-wiring slice TEST-003
 | REQ-NF-Sec-001..004 | Security incl. file-storage residual risk | DEC-001, DEC-003 | DES-002, DES-003, DES-008 | — | — |
 | REQ-NF-Compat-001 | Known limitations doc (incl. library-tracked SSO risk) | DEC-001 | DES-012 (adapter contains swap cost) | — | — |
 | REQ-NF-Reliab-001..002 | Retry + resumable | DEC-001, DEC-003, DEC-007 | DES-005, DES-006, DES-009, DES-012 | — | — |
-| REQ-NF-Threads-001 | Off-GUI execution | DEC-001, DEC-002 | DES-001 | — | — |
+| REQ-NF-Threads-001 | Off-GUI execution | DEC-001, DEC-002, DEC-013 | DES-001, DES-001a | TEST-004 / `workerAuthClientForwardsAndAdapterRunsOnWorkerThread` — asserts `QThread::currentThread()` inside FakePyAdapter ≠ test/GUI thread and == worker thread | _pending_ (REQ-002 end-to-end slice) |
 | REQ-NF-Cancel-001 | Cancellable sync | DEC-001, DEC-002 | DES-001, DES-009 | — | — |
 | REQ-NF-Obs-001 | Structured logs | DEC-001 | DES-008 | — | — |
 | REQ-NF-i18n-001 | tr() i18n | DEC-001, DEC-004 | DES-003, DES-008 | — | — |
@@ -48,12 +48,14 @@ Last updated: 2026-05-24 (Phase 2.2 — REQ-002 C++ wizard-wiring slice TEST-003
 | DEC-010 | Pre-commit automation (pre-commit framework, scoped to new Garmin paths) | accepted (A) | 2026-05-17 |
 | DEC-011 | Phase-1 rollout (CMake flag GC_WANT_GARMINCONNECT, default OFF) | accepted | 2026-05-17 |
 | DEC-012 | Auth-dispatcher seam between `GarminCredentialsPage` and SSO layer (Option A — inject `IGarminAuthClient`) | accepted (A) | 2026-05-24 |
+| DEC-013 | Worker ↔ Python adapter seam (Option A — inject `IGarminPyAdapter`) | accepted (A) | 2026-05-24 |
 
 ## DES index
 
 | DES | Component | Implements | Status |
 |-----|-----------|------------|--------|
-| DES-001 | GarminWorker: worker thread + mailbox transport | DEC-002 | drafted |
+| DES-001 | GarminWorker: worker thread + mailbox transport | DEC-002, DEC-013 | drafted (Auth-only subset GREEN — REQ-002 end-to-end slice) |
+| DES-001a | `IGarminPyAdapter` pure-virtual interface (worker ↔ Python seam) | DEC-013 | GREEN (Auth-only surface — TEST-004 locks in `authenticate()` + `PyAuthOutcome`) |
 | DES-002 | Per-athlete storage layer (tokens, sidecar, backfill state) | DEC-003 | drafted |
 | DES-003 | AddCloudWizard pages (credentials, MFA, CAPTCHA, ToS, backfill) | DEC-004 | drafted |
 | DES-004 | Cloud/GarminConnect CloudService subclass | DEC-001, DEC-005, DEC-006 | drafted |
