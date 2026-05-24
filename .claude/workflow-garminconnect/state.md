@@ -81,6 +81,7 @@ Full motivation cells and acceptance fragments live in `prd.md`. Use this table 
 | A2-iter2 | Phase 1 (re-run) | clean | 0/0 | cycles/archive/a2-iter2.md |
 | A3 | REQ-001 | clean | 0/4 | cycles/archive/a3-req-001.md |
 | A3 | REQ-002 (adapter slice) | clean | 0/6 | cycles/active/a3-req-002.md |
+| A3 | REQ-002 (e2e slice) | clean | 0/20 (19 KILLED + 1 non-mutation) | cycles/active/a3-req-002-e2e.md |
 
 ## vals
 | VAL | trigger | result | file |
