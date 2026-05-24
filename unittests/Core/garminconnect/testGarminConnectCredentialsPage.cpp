@@ -37,7 +37,6 @@
 #include "GarminCredentialsPage.h" // <-- intentionally missing in RED phase
 #include "IGarminAuthClient.h"     // <-- intentionally missing in RED phase
 
-#include <QInputMethodHints>
 #include <QLabel>
 #include <QLineEdit>
 #include <QSignalSpy>

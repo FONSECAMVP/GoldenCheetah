@@ -66,10 +66,9 @@ set_tests_properties(testGarminConnectTile PROPERTIES LABELS "garmin-fast")
 # real Q_OBJECT and the link resolves.
 add_executable(testGarminConnectCredentialsPage
     testGarminConnectCredentialsPage.cpp
-    # GREEN adds:
-    #   ${CMAKE_SOURCE_DIR}/src/Cloud/GarminCredentialsPage.cpp
-    #   ${CMAKE_SOURCE_DIR}/src/Cloud/GarminCredentialsPage.h
-    #   ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminAuthClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminCredentialsPage.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminCredentialsPage.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminAuthClient.h
 )
 
 set_target_properties(testGarminConnectCredentialsPage PROPERTIES
