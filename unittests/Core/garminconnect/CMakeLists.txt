@@ -9,7 +9,7 @@
 # stays green; the smoke file itself documented that it would be superseded
 # by REQ-001..015 tests in 2.2.
 
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Test)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Widgets Test)
 
 # --- Phase 2.1 smoke (toolchain alive) --------------------------------------
 add_executable(testGarminConnectSmoke
@@ -52,3 +52,42 @@ target_compile_features(testGarminConnectTile PRIVATE cxx_std_17)
 
 add_test(NAME testGarminConnectTile COMMAND testGarminConnectTile)
 set_tests_properties(testGarminConnectTile PROPERTIES LABELS "garmin-fast")
+
+# --- TEST-003 — REQ-002 wizard-side + REQ-005 wizard-side enforcement -------
+# C++ wizard-wiring slice for REQ-002. Pure unit test of GarminCredentialsPage
+# under DEC-012 Option A (inject IGarminAuthClient); does NOT drag in the
+# embedded-Python worker. AUTOMOC processes the page's Q_OBJECT and the test
+# file's FakeAuthClient. Pulls in Qt Widgets for QWizardPage/QLineEdit/QLabel.
+#
+# RED phase: src/Cloud/GarminCredentialsPage.{h,cpp} and src/Cloud/IGarminAuthClient.h
+# do not exist yet — the executable's *compile* fails at the test's #include
+# lines (right-reason RED). GREEN adds those files AND extends this
+# add_executable() with the page .cpp + header so AUTOMOC processes the
+# real Q_OBJECT and the link resolves.
+add_executable(testGarminConnectCredentialsPage
+    testGarminConnectCredentialsPage.cpp
+    # GREEN adds:
+    #   ${CMAKE_SOURCE_DIR}/src/Cloud/GarminCredentialsPage.cpp
+    #   ${CMAKE_SOURCE_DIR}/src/Cloud/GarminCredentialsPage.h
+    #   ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminAuthClient.h
+)
+
+set_target_properties(testGarminConnectCredentialsPage PROPERTIES
+    AUTOMOC ON
+)
+
+target_include_directories(testGarminConnectCredentialsPage PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+)
+
+target_link_libraries(testGarminConnectCredentialsPage PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Gui
+    Qt${QT_VERSION_MAJOR}::Widgets
+    Qt${QT_VERSION_MAJOR}::Test
+)
+target_compile_features(testGarminConnectCredentialsPage PRIVATE cxx_std_17)
+
+add_test(NAME testGarminConnectCredentialsPage COMMAND testGarminConnectCredentialsPage)
+set_tests_properties(testGarminConnectCredentialsPage PROPERTIES LABELS "garmin-fast")
