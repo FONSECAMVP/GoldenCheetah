@@ -1,12 +1,12 @@
 # State — Garmin Connect Integration
 
-_Updated: 2026-05-24 — VAL-005 PASS (9/9); A3 wizard-slice 4 survivors killed (M3/M4/M6/M8); commits 4b4fd4dd5 + 58ae2704e._
+_Updated: 2026-05-24 — VAL-006 PASS (9/9); REQ-002 end-to-end slice COMPLETE (worktree garmin-req002-e2e); GarminWorker + WorkerAuthClient + IGarminPyAdapter shipped; A3 sweep 19 KILLED + 1 accept-with-rationale._
 
 ## phase
 - current: Phase 2.2
-- active feature: REQ-002 (slice: C++ wizard-wiring — **COMPLETE**; next: GarminWorker + WorkerAuthClient + AddCloudWizard wiring)
-- next gate: VAL-006 (REQ-002 end-to-end)
-- last-clean-VAL: VAL-005 (2026-05-24 — wizard-wiring slice)
+- active feature: REQ-002 (slice: end-to-end Authenticate — **COMPLETE**; next: PyEmbeddedAdapter + AddCloudWizard tile-routing — see state.md ## open)
+- next gate: VAL-007 (PyEmbeddedAdapter slice — production embedded-Python adapter implementing IGarminPyAdapter)
+- last-clean-VAL: VAL-006 (2026-05-24 — end-to-end Authenticate slice)
 
 ## decs
 | DEC | question | status | rev | dep-count | last |
@@ -23,11 +23,13 @@ _Updated: 2026-05-24 — VAL-005 PASS (9/9); A3 wizard-slice 4 survivors killed 
 | 010 | Pre-commit framework (scoped to new Garmin paths) | accepted (A) | high | 3 | 2026-05-17 |
 | 011 | Phase-1 rollout (GC_WANT_GARMINCONNECT, default OFF) | accepted | high | 6 | 2026-05-17 |
 | 012 | Auth-dispatcher seam (IGarminAuthClient interface, injected) | accepted (A) | high | 4 | 2026-05-24 |
+| 013 | Worker ↔ Python adapter seam (IGarminPyAdapter interface, injected) | accepted (A) | high | 4 | 2026-05-24 |
 
 ## des
 | DES | implements | status | last |
 |---|---|---|---|
-| 001 | DEC-002 | drafted | 2026-05-17 |
+| 001 | DEC-002, DEC-013 | drafted (Auth-only subset GREEN) | 2026-05-24 |
+| 001a | DEC-013 | GREEN (Auth-only surface) | 2026-05-24 |
 | 002 | DEC-003 | drafted | 2026-05-17 |
 | 003 | DEC-004, DEC-012 | drafted | 2026-05-24 |
 | 003a | DEC-012 | drafted | 2026-05-24 |
@@ -45,7 +47,7 @@ _Updated: 2026-05-24 — VAL-005 PASS (9/9); A3 wizard-slice 4 survivors killed 
 | REQ | cat | DECs | DESs | TESTs | status |
 |---|---|---|---|---|---|
 | 001 | must | 001,005,011 | 004 | T-001 | deployed (6381b90f4) |
-| 002 | must | 001,002,004,008,009,010,011,012 | 001,003,003a,008,012 | T-002 (GREEN, 5 tests), T-003 (GREEN, 13 tests — wizard slice + A3 kills) | VAL-005 PASS |
+| 002 | must | 001,002,004,008,009,010,011,012,013 | 001,001a,003,003a,008,012 | T-002 (GREEN, 5), T-003 (GREEN, 13), T-004 (GREEN, 10) | **VAL-006 PASS** (C++ end-to-end; production PyEmbeddedAdapter pending — see ## open) |
 | 003 | must | 001,002,004 | 001,003,012 | — | not started |
 | 004 | must | 001,003 | 002,006 | — | not started |
 | 005 | must | 001,012 | 003,003a,012 | T-002 (adapter half: password-not-retained); T-003 (wizard side — GREEN) | tested (A3 pending) |
@@ -81,6 +83,7 @@ Full motivation cells and acceptance fragments live in `prd.md`. Use this table 
 | A2-iter2 | Phase 1 (re-run) | clean | 0/0 | cycles/archive/a2-iter2.md |
 | A3 | REQ-001 | clean | 0/4 | cycles/archive/a3-req-001.md |
 | A3 | REQ-002 (adapter slice) | clean | 0/6 | cycles/active/a3-req-002.md |
+| A3 | REQ-002 (e2e slice) | clean | 0/20 (19 KILLED + 1 non-mutation) | cycles/active/a3-req-002-e2e.md |
 
 ## vals
 | VAL | trigger | result | file |
@@ -90,6 +93,7 @@ Full motivation cells and acceptance fragments live in `prd.md`. Use this table 
 | 003 | P2.2 REQ-001 / TEST-001 | PASS | validations/archive/val-003.md |
 | 004 | P2.2 REQ-002 adapter slice | PASS | validations/active/val-004.md |
 | 005 | P2.2 REQ-002 wizard-wiring slice | PASS | validations/active/val-005.md |
+| 006 | P2.2 REQ-002 end-to-end slice | PASS | validations/active/val-006.md |
 
 ## open
 - needs-review: none
@@ -101,6 +105,7 @@ Full motivation cells and acceptance fragments live in `prd.md`. Use this table 
   - A3-R002-mutmut — evaluate at A3/REQ-007 cycle
   - A3-R002-hypothesis — evaluate at A3/REQ-014 cycle
   - A3-R001-tool — C++ mutation tool (mull-cxx/cosmic-ray-cpp) at Phase 3 entry
+  - **PyEmbeddedAdapter + AddCloudWizard tile-routing → next slice** (production embedded-Python adapter implementing IGarminPyAdapter; needed for REQ-006 token persistence and for the wizard Garmin tile to actually connect a real account. REQ-002 end-to-end C++ contract is GREEN against FakePyAdapter at the IGarminPyAdapter seam; the same WorkerAuthClient/GarminWorker chain is reused by the production adapter when it lands — no test-shape rework required.)
 - accept-with-rationale:
   - A2-002 library-tracked SSO risk → REQ-NF-Compat-001 (docs)
   - A2-007 parse cancel
@@ -109,5 +114,5 @@ Full motivation cells and acceptance fragments live in `prd.md`. Use this table 
 - drift items: D-01 closed by e4ac2a88b; D-02 closed by e4ac2a88b
 
 ## last-clv
-- VAL-005 — 2026-05-24 — PASS (9/9) — REQ-002 wizard-wiring slice scope
-- next: VAL-006 on REQ-002 end-to-end (GarminWorker + WorkerAuthClient + AddCloudWizard wiring)
+- VAL-006 — 2026-05-24 — PASS (9/9) — REQ-002 end-to-end slice scope
+- next: VAL-007 on PyEmbeddedAdapter slice (production embedded-Python IGarminPyAdapter impl; unblocks REQ-006 + AddCloudWizard tile-routing)
