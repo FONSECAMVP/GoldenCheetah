@@ -90,3 +90,45 @@ target_compile_features(testGarminConnectCredentialsPage PRIVATE cxx_std_17)
 
 add_test(NAME testGarminConnectCredentialsPage COMMAND testGarminConnectCredentialsPage)
 set_tests_properties(testGarminConnectCredentialsPage PROPERTIES LABELS "garmin-fast")
+
+# --- TEST-004 — REQ-002 end-to-end (worker + WorkerAuthClient) --------------
+# REQ-002 closure slice: GarminWorker on a dedicated QThread + WorkerAuthClient
+# adapter (IGarminAuthClient impl) bridging the page to the worker, with a
+# FakePyAdapter (DEC-013 Option A — IGarminPyAdapter interface) standing in
+# for the embedded-Python PyEmbeddedAdapter. The Python boundary itself is
+# still tested by Python-side test_adapter_login.py — this executable stays
+# Python-free under the `garmin-fast` label.
+#
+# RED phase: src/Cloud/IGarminPyAdapter.h, src/Cloud/GarminWorker.{h,cpp},
+# and src/Cloud/WorkerAuthClient.{h,cpp} do not exist yet — the executable's
+# compile fails at the #include lines (right-reason RED). GREEN adds those
+# files AND extends this add_executable() with the GarminWorker +
+# WorkerAuthClient .cpp + headers so AUTOMOC processes the real Q_OBJECTs
+# and the link resolves.
+add_executable(testGarminConnectAuthClient
+    testGarminConnectAuthClient.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/WorkerAuthClient.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/WorkerAuthClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminAuthClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminPyAdapter.h
+)
+
+set_target_properties(testGarminConnectAuthClient PROPERTIES
+    AUTOMOC ON
+)
+
+target_include_directories(testGarminConnectAuthClient PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+)
+
+target_link_libraries(testGarminConnectAuthClient PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Test
+)
+target_compile_features(testGarminConnectAuthClient PRIVATE cxx_std_17)
+
+add_test(NAME testGarminConnectAuthClient COMMAND testGarminConnectAuthClient)
+set_tests_properties(testGarminConnectAuthClient PROPERTIES LABELS "garmin-fast")
