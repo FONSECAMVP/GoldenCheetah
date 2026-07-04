@@ -1,5 +1,9 @@
 # Workflow Ledger Index
 
+> **Migrated to the wiki-memory edition (2026-07-04).** The project brain now lives at
+> the repo root: read `WIKI.md` first, then `STATE.md` (the condensed project cursor).
+> This index remains the authority on which per-feature ledger is active vs closed.
+
 This project uses the `quality-gated-dev-workflow` skill, which keeps a per-feature
 ledger directory. **The skill's default lookup ("read `state.md` first") assumes a
 single ledger — so always start from the ACTIVE ledger named below, not the bare
