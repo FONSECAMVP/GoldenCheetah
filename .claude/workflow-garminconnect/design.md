@@ -252,6 +252,48 @@ All paths are rooted at `<athlete-config-dir>` (the same directory used by other
 
 A post-wizard checkbox dialog (Yes / No, defaults No) — wired to DES-011. Not a wizard page because it depends on the successful auth result and is a clearly separable step.
 
+### Implementation note — REQ-002 closure slice (page-id wiring, 2026-07-05)
+
+`AddCloudWizard`'s existing page-id scheme (01→10→15→20→25→30→90) gets a new
+id **21**, reached only for the Garmin Connect tile: `AddService::nextId()`
+and `AddConsent::nextId()` branch on `cloudService->id() == "Garmin Connect"`
+to return 21 instead of the generic 20 (every other service's routing is
+byte-for-byte unchanged). Page 21 is `AddGarminAuth`, a TU-local subclass of
+`GarminCredentialsPage` (no new Q_OBJECT — it only overrides `nextId()` to
+mirror `AddAuth`'s `hasAthlete ? 25 : 30` for an Activities-only service).
+
+The wizard lazily builds the production stack on first entry to the Garmin
+path (`AddService::clicked` / edit-mode ctor) via `ensureGarminAuthPage()`:
+constructs a `PyEmbeddedAdapter` (DES-013) and a `GarminAuthChain` (the
+DES-001/DES-001a thread+worker+adapter RAII assembly — new, see below), then
+registers page 21 with `chain->client()`. The wizard owns both and destroys
+them in `~AddCloudWizard()` in DES-001a order (chain/worker before adapter).
+All of this is fenced under `#ifdef GC_WANT_GARMINCONNECT`; no other service's
+code path is touched.
+
+**`GarminAuthChain`** (`src/Cloud/GarminAuthChain.{h,cpp}`, TEST garmin:T-006)
+is the piece DES-001/DES-001a described but didn't name: a small RAII class
+owning the dedicated `QThread`, the `GarminWorker` (moved onto it), and the
+`WorkerAuthClient`, given a non-owned `IGarminPyAdapter*`. Its destructor
+performs DES-001 invariant 3 (`quit()` + bounded `wait()`, `terminate()` only
+as a last resort so shutdown never hangs even if the worker is wedged).
+Python-free by construction (the adapter arrives as an interface pointer), so
+its test runs under `garmin-fast` against `FakePyAdapter` — the same fixture
+TEST-004 already established.
+
+`modulePath` resolves from env `GC_GARMIN_PYPATH` else the compile-time
+`GARMIN_PY_MODULE_DIR` dev default (`src/Python/garminconnect`); the installed
+path is DES-007/NF-Pkg-001 territory, not yet addressed. `tokenstorePath` is
+`<athlete config dir>/garminconnect` — a plain path string forwarded verbatim;
+DES-002 still owns formalizing the directory layout and permission invariants
+under it.
+
+**Known gaps (flagged for A3):** the wizard routing itself (page 21, the
+nextId branches, chain lifecycle across Back/Next) has no automated test —
+only `GarminAuthChain` in isolation does. `AddGarminAuth::nextId()`'s
+`hasAthlete` branch (→25) is currently dead code (`GarminConnect` sets no
+`AthleteID`), live only once a Garmin athlete-select slice exists.
+
 ---
 
 ## DES-003a — `IGarminAuthClient` interface (page ↔ SSO seam)

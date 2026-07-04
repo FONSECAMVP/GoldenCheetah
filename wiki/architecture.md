@@ -15,25 +15,29 @@ C11 Cloud     | CloudService integrations (Strava, Dropbox, TrainerDay, RideWith
 C12 Python    | embedded CPython host (PythonEmbed, SIP bindings, garminconnect/ adapter pkg) | code:src/Python
 
 ## Garmin Connect feature — components (governed, active ledger)
-G1 AddCloudWizard          | UI entry: "Garmin Connect" tile + credentials/MFA pages | gov:DEC-001,004,011,012 | code:src/Gui (AddCloudWizard), src/Cloud/GarminCredentialsPage.{h,cpp}
+G1 AddCloudWizard          | UI entry: "Garmin Connect" tile (page 21) + credentials/MFA pages | gov:DEC-001,004,011,012 | code:src/Cloud/AddCloudWizard.{h,cpp}, src/Cloud/GarminCredentialsPage.{h,cpp}
 G2 GarminConnect           | CloudService subclass (Query\|Download capabilities)    | gov:DEC-005,006 | code:src/Cloud/GarminConnect.{h,cpp}
 G3 GarminWorker            | QObject in QThread; mailbox + cancellation + sole GIL holder | gov:DEC-002,013 | code:src/Cloud/GarminWorker.{h,cpp}
 G4 IGarminAuthClient       | pure-virtual auth-dispatcher seam (credentials page ↔ SSO) | gov:DEC-012 | code:src/Cloud/IGarminAuthClient.h
 G5 IGarminPyAdapter        | pure-virtual worker ↔ Python seam (Auth-only surface GREEN) | gov:DEC-013 | code:src/Cloud/IGarminPyAdapter.h
+G5a PyEmbeddedAdapter      | production IGarminPyAdapter over embedded CPython (GIL RAII, type-then-kind classification) | gov:DES-013 | code:src/Cloud/PyEmbeddedAdapter.{h,cpp}
+G5b GarminAuthChain        | RAII assembly: QThread+GarminWorker+WorkerAuthClient around a non-owned IGarminPyAdapter* | gov:DES-001,001a (impl. note under DES-003) | code:src/Cloud/GarminAuthChain.{h,cpp}
 G6 garmin_client.py (DES-012) | sole module importing `garminconnect`; stable adapter, swap point | gov:DEC-002,DES-012 | code:src/Python/garminconnect/garmin_client.py
 G7 gc_rate.py              | rate-limit + backoff decorator around library calls (planned) | gov:DEC-007,DES-005 | code:src/Python (not yet landed)
 G8 Persistence (atomic writer) | tokens.json / imported-<uid>.json / backfill-state-<uid>.json under per-athlete config dir | gov:DEC-003,DES-002,006 | code:(pending, DES-002)
 
-## Data flow — Garmin Authenticate slice (REQ-002, VAL-006 PASS)
-AddCloudWizard(G1) → GarminCredentialsPage → IGarminAuthClient(G4) → GarminWorker(G3)
-  [Qt signal request(payload), off-GUI-thread] → IGarminPyAdapter(G5) → garmin_client.py(G6, DES-012)
+## Data flow — Garmin Authenticate slice (REQ-002, VAL-007 code-complete)
+AddCloudWizard(G1, page 21) → GarminCredentialsPage → IGarminAuthClient(G4) → GarminAuthChain(G5b)
+  → GarminWorker(G3) [Qt signal request(payload), off-GUI-thread] → IGarminPyAdapter(G5)
+  → PyEmbeddedAdapter(G5a) → garmin_client.py(G6, DES-012)
   → garminconnect / curl_cffi (vendor lib) → HTTPS (OS trust store) → connect.garmin.com
 Result returns via Qt finished(payload) signal delivered to GUI thread event loop.
-Today: production PyEmbeddedAdapter (src/Cloud/PyEmbeddedAdapter.{h,cpp}, DES-013) implements
-IGarminPyAdapter — landed 2026-07-04, TEST-005 GREEN against a scriptable stub module under the
-new `garmin-py` CTest label. Still pending for VAL-007: AddCloudWizard tile-routing + adding the
-chain (GarminCredentialsPage/GarminWorker/WorkerAuthClient/PyEmbeddedAdapter) to the app build's
-GC_WANT_GARMINCONNECT block.
+Today (2026-07-05): the full production chain is wired end-to-end behind `GC_WANT_GARMINCONNECT`
+— PyEmbeddedAdapter (TEST-005 GREEN, `garmin-py` label) and GarminAuthChain (TEST-006 GREEN,
+`garmin-fast` label, FakePyAdapter) both land in commits on master; AddCloudWizard routes the
+Garmin tile to page 21 and owns adapter+chain lifecycle (DES-001a order). VAL-007 CLV pass is
+the immediate next gate — code is complete but not yet cross-layer validated. No automated test
+covers the wizard routing itself (only the chain in isolation) — flagged for A3.
 
 ## Integration points / contracts
 G1↔G4: AddCloudWizard/GarminCredentialsPage inject an IGarminAuthClient; production impl

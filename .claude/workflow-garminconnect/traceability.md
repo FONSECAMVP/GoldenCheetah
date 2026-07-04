@@ -139,6 +139,16 @@ Last updated: 2026-05-24 (Phase 2.2 — REQ-002 C++ wizard-wiring slice TEST-003
 | Scriptable Python stub module | `unittests/Core/garminconnect/pystubs/garmin_client.py` | TEST-005 fixture — mirrors the real DES-012 surface (`GarminClient`, `GarminError.kind`); scenario-driven via `PyRun_SimpleString`. Real adapter behavior stays owned by `src/Python/garminconnect/tests/` (pytest). |
 | TEST-005 CTest wiring | `unittests/Core/garminconnect/CMakeLists.txt` (`testGarminConnectPyAdapter` target, label **`garmin-py`**, links `Python3::Python` via `Development.Embed`) | DEC-008, DEC-010. `garmin-fast` stays Python-free by construction; the new label isolates the embedded-CPython dependency. |
 
+## Phase 2.2 REQ-002 wizard tile-routing slice artifacts (in repo — TEST-006 GREEN, VAL-007 scope)
+
+| Artifact | Path | Serves |
+|----------|------|--------|
+| `GarminAuthChain` RAII assembly | `src/Cloud/GarminAuthChain.{h,cpp}` | DES-003 (impl. note), DES-001 invariant 3, DES-001a lifecycle. Owns QThread+GarminWorker+WorkerAuthClient around a non-owned `IGarminPyAdapter*`; bounded quit()+wait() teardown. Python-free (LSN-007 verified). |
+| TEST-006 chain contract | `unittests/Core/garminconnect/testGarminConnectAuthChain.cpp` | 6 slots GREEN: construction, success round-trip, off-thread adapter call, failure-kind propagation, idle teardown, post-request teardown. `garmin-fast` label, FakePyAdapter (DEC-013). |
+| TEST-006 CTest wiring | `unittests/Core/garminconnect/CMakeLists.txt` (`testGarminConnectAuthChain` target) | DEC-008, DEC-010. |
+| AddCloudWizard Garmin tile-routing | `src/Cloud/AddCloudWizard.{h,cpp}` | DES-003 impl. note. New page id 21 (`AddGarminAuth` : `GarminCredentialsPage`); `AddService`/`AddConsent::nextId()` branch on `cloudService->id() == "Garmin Connect"`; `ensureGarminAuthPage()` lazily builds `PyEmbeddedAdapter`+`GarminAuthChain`; `~AddCloudWizard()` tears down in DES-001a order. All fenced `#ifdef GC_WANT_GARMINCONNECT`; every other service's routing byte-for-byte unchanged. No automated test of the routing itself — flagged for A3. |
+| App-build wiring | `src/CMakeLists.txt` (`if(GC_WANT_GARMINCONNECT)` block only) | DES-007, DES-013. Adds the 6 new Garmin sources to `target_sources`; `find_package(Python3 COMPONENTS Development.Embed)` + `Python3::Python` link (flag-gated); `GARMIN_PY_MODULE_DIR` compile definition (dev default). Verified: 6 flag-ON app objects (AddCloudWizard, GarminAuthChain, PyEmbeddedAdapter, GarminCredentialsPage, GarminWorker, WorkerAuthClient) compile clean under `GC_WANT_GARMINCONNECT=ON`. |
+
 ## Drift / hygiene notes
 
 | # | Drift | Why it matters | Disposition |

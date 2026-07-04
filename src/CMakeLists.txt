@@ -1374,8 +1374,32 @@ if(GC_WANT_GARMINCONNECT)
     target_sources(GoldenCheetah PRIVATE
         Cloud/GarminConnect.cpp
         Cloud/GarminConnect.h
+        Cloud/GarminCredentialsPage.cpp
+        Cloud/GarminCredentialsPage.h
+        Cloud/GarminWorker.cpp
+        Cloud/GarminWorker.h
+        Cloud/WorkerAuthClient.cpp
+        Cloud/WorkerAuthClient.h
+        Cloud/GarminAuthChain.cpp
+        Cloud/GarminAuthChain.h
+        Cloud/PyEmbeddedAdapter.cpp
+        Cloud/PyEmbeddedAdapter.h
+        Cloud/IGarminAuthClient.h
+        Cloud/IGarminPyAdapter.h
     )
     target_compile_definitions(GoldenCheetah PRIVATE GC_WANT_GARMINCONNECT)
+
+    # DES-013: PyEmbeddedAdapter.cpp is the ONLY translation unit that embeds
+    # CPython (headers stay Python-free — LSN-007), but the link dependency is
+    # target-wide once the flag is ON (anticipated by DES-007).
+    find_package(Python3 REQUIRED COMPONENTS Development.Embed)
+    target_link_libraries(GoldenCheetah PRIVATE Python3::Python)
+
+    # Dev default for the garmin_client module directory; the runtime env var
+    # GC_GARMIN_PYPATH overrides it (see AddCloudWizard::ensureGarminAuthPage).
+    # The installed/bundled location is DES-007 / REQ-NF-Pkg-001 territory.
+    target_compile_definitions(GoldenCheetah PRIVATE
+        "GARMIN_PY_MODULE_DIR=\"${CMAKE_SOURCE_DIR}/src/Python/garminconnect\"")
 endif()
 
 # Link Qt libraries

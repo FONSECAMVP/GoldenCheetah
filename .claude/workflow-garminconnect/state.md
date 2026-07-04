@@ -1,11 +1,11 @@
 # State — Garmin Connect Integration
 
-_Updated: 2026-07-04 — DES-013 drafted + built: PyEmbeddedAdapter (production IGarminPyAdapter) GREEN via TEST-005 (10 slots, new `garmin-py` CTest label); garmin-fast baseline intact (4/4). Remaining for VAL-007: AddCloudWizard tile-routing + app-build wiring (TEST-006)._
+_Updated: 2026-07-05 — VAL-007 slice COMPLETE: PyEmbeddedAdapter (DES-013, TEST-005) + GarminAuthChain (impl. note under DES-003, TEST-006) + AddCloudWizard tile-routing (page 21) + app-build wiring, all GREEN. garmin-fast 5/5, garmin-py 1/1; 6 flag-ON app objects independently compiled clean. Ready for VAL-007 CLV pass._
 
 ## phase
 - current: Phase 2.2
 - active feature: REQ-002 (slice: end-to-end Authenticate — **COMPLETE**; next: PyEmbeddedAdapter + AddCloudWizard tile-routing — see state.md ## open)
-- next gate: VAL-007 (PyEmbeddedAdapter slice — production embedded-Python adapter implementing IGarminPyAdapter)
+- next gate: VAL-007 (PyEmbeddedAdapter + wizard tile-routing slice — both halves now GREEN, CLV not yet run)
 - last-clean-VAL: VAL-006 (2026-05-24 — end-to-end Authenticate slice)
 
 ## decs
@@ -48,7 +48,7 @@ _Updated: 2026-07-04 — DES-013 drafted + built: PyEmbeddedAdapter (production 
 | REQ | cat | DECs | DESs | TESTs | status |
 |---|---|---|---|---|---|
 | 001 | must | 001,005,011 | 004 | T-001 | deployed (6381b90f4) |
-| 002 | must | 001,002,004,008,009,010,011,012,013 | 001,001a,003,003a,008,012,013 | T-002 (GREEN, 5), T-003 (GREEN, 13), T-004 (GREEN, 10), T-005 (GREEN, 10) | **VAL-006 PASS** (C++ e2e + production PyEmbeddedAdapter GREEN; wizard tile-routing pending — see ## open) |
+| 002 | must | 001,002,004,008,009,010,011,012,013 | 001,001a,003,003a,008,012,013 | T-002 (GREEN, 5), T-003 (GREEN, 13), T-004 (GREEN, 10), T-005 (GREEN, 10), T-006 (GREEN, 6) | production PyEmbeddedAdapter + wizard tile-routing GREEN; **VAL-007 CLV pending** |
 | 003 | must | 001,002,004 | 001,003,012 | — | not started |
 | 004 | must | 001,003 | 002,006 | — | not started |
 | 005 | must | 001,012 | 003,003a,012 | T-002 (adapter half: password-not-retained); T-003 (wizard side — GREEN) | tested (A3 pending) |
@@ -106,7 +106,7 @@ Full motivation cells and acceptance fragments live in `prd.md`. Use this table 
   - A3-R002-mutmut — evaluate at A3/REQ-007 cycle
   - A3-R002-hypothesis — evaluate at A3/REQ-014 cycle
   - A3-R001-tool — C++ mutation tool (mull-cxx/cosmic-ray-cpp) at Phase 3 entry
-  - **AddCloudWizard tile-routing + app-build wiring → in progress (second half of VAL-007 slice)**. PyEmbeddedAdapter itself landed 2026-07-04 (DES-013, TEST-005 GREEN, `garmin-py` label). Remaining: route the wizard's Garmin tile to GarminCredentialsPage with the real WorkerAuthClient→GarminWorker→PyEmbeddedAdapter chain, and add the chain's sources to the `GC_WANT_GARMINCONNECT` block in src/CMakeLists.txt (Python link dep lands there; mind the Python.h-before-Qt include-order hazard flagged by the T-005 build report).
+  - VAL-007 slice code-complete (2026-07-05); CLV pass is the immediate next action, then A3 against the gaps the builder flagged: no automated test of the wizard routing itself (page 21 / nextId branches / chain lifecycle across Back-Next), `AddGarminAuth::nextId()`'s hasAthlete→25 branch is dead code until an athlete-select slice exists, `GarminAuthChain`'s `terminate()` last-resort path is unverified against a truly wedged (GIL-held) worker, and `GARMIN_PY_MODULE_DIR` bakes a dev-tree absolute path (installed-path handling deferred to DES-007/NF-Pkg-001 — confirm that deferral is still tracked).
 - accept-with-rationale:
   - A2-002 library-tracked SSO risk → REQ-NF-Compat-001 (docs)
   - A2-007 parse cancel
@@ -116,4 +116,4 @@ Full motivation cells and acceptance fragments live in `prd.md`. Use this table 
 
 ## last-clv
 - VAL-006 — 2026-05-24 — PASS (9/9) — REQ-002 end-to-end slice scope
-- next: VAL-007 on PyEmbeddedAdapter slice (production embedded-Python IGarminPyAdapter impl; unblocks REQ-006 + AddCloudWizard tile-routing)
+- next: VAL-007 — PyEmbeddedAdapter + AddCloudWizard tile-routing slice, code-complete 2026-07-05, CLV not yet run

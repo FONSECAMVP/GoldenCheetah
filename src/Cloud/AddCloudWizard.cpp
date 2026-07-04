@@ -26,6 +26,12 @@
 #include "CloudService.h"
 #include "OAuthDialog.h"
 
+#ifdef GC_WANT_GARMINCONNECT
+#include "GarminAuthChain.h"
+#include "GarminCredentialsPage.h"
+#include "PyEmbeddedAdapter.h"
+#endif
+
 #include <QMessageBox>
 #include <QPixmap>
 #include <QRegExp>
@@ -36,10 +42,35 @@
 // 10. Select Cloud Service Type (via CloudServiceFactory)
 // 15. Agree to terms of service (optional)
 // 20. Authenticate Account (URL+Key, OAUTH or User/Pass)
+// 21. Garmin Connect native credentials (GC_WANT_GARMINCONNECT only,
+//     DES-003 — replaces 20 for the Garmin Connect service)
 // 25. Select Athlete [optional]
 // 30. Settings (Folder,sync on startup, sync on import)
 // 90. Finalise (Confirm complete and add)
 //
+
+#ifdef GC_WANT_GARMINCONNECT
+// Page 21 — thin wizard-local wrapper over GarminCredentialsPage (DES-003).
+// Mirrors AddAuth::nextId() semantics for an Activities service: the Garmin
+// tile is Activities-only (never Measures/Calendar), so the 90-branch of
+// AddAuth::nextId() cannot apply — hasAthlete ? 25 : 30.
+// No Q_OBJECT: no new signals/slots, so no moc pass needed for this TU.
+class AddGarminAuth : public GarminCredentialsPage
+{
+    public:
+        AddGarminAuth(AddCloudWizard *wizard, IGarminAuthClient *client)
+            : GarminCredentialsPage(client, wizard), wizard(wizard) {}
+
+        int nextId() const override {
+            bool hasAthlete = wizard->cloudService &&
+                wizard->cloudService->settings.value(CloudService::CloudServiceSetting::AthleteID, "") != "";
+            return hasAthlete ? 25 : 30;
+        }
+
+    private:
+        AddCloudWizard *wizard;
+};
+#endif
 
 // Main wizard - if passed a service name we are in edit mode, not add mode.
 AddCloudWizard::AddCloudWizard(Context *context, QString sname, bool sync) : QWizard(context->mainWindow), context(context), service(sname), fsync(sync)
@@ -76,8 +107,59 @@ AddCloudWizard::AddCloudWizard(Context *context, QString sname, bool sync) : QWi
     setPage(30, new AddSettings(this)); // done
     setPage(90, new AddFinish(this));     // done
 
+#ifdef GC_WANT_GARMINCONNECT
+    // Edit mode for Garmin Connect: page 20 (generic AddAuth) has nothing to
+    // show for the native SSO service, so register page 21 and start there.
+    if (service == "Garmin Connect") {
+        ensureGarminAuthPage();
+        setStartId(21);
+    }
+#endif
+
     done = false;
 }
+
+AddCloudWizard::~AddCloudWizard()
+{
+#ifdef GC_WANT_GARMINCONNECT
+    // DES-001a destruction order: wizard > chain(worker) > adapter. The
+    // chain's destructor stops the worker thread (DES-001 invariant 3:
+    // quit()+wait(), bounded) before the adapter it calls into goes away.
+    // Page 21 holds only a non-owning IGarminAuthClient* and is destroyed
+    // later by ~QObject child cleanup without dereferencing it.
+    delete garminChain;
+    garminChain = nullptr;
+    delete garminAdapter;
+    garminAdapter = nullptr;
+#endif
+}
+
+#ifdef GC_WANT_GARMINCONNECT
+// Lazily build the Garmin auth stack on first entry to the Garmin path and
+// register wizard page 21. Idempotent — routing may pass this way repeatedly
+// (Back/Next, service re-selection).
+void
+AddCloudWizard::ensureGarminAuthPage()
+{
+    if (garminChain) return;
+
+    // modulePath (DES-013): where the garmin_client module lives. Runtime
+    // env override first, else the build-time dev default. The installed
+    // location is DES-007 / REQ-NF-Pkg-001 territory (later slice).
+    QString modulePath = QString::fromLocal8Bit(qgetenv("GC_GARMIN_PYPATH"));
+    if (modulePath.isEmpty()) modulePath = QStringLiteral(GARMIN_PY_MODULE_DIR);
+
+    // tokenstorePath (DEC-003 / DES-002 path root): the per-athlete config
+    // area used by other per-athlete state, with a garminconnect subdir.
+    // Directory layout/permissions machinery is DES-002's slice — we only
+    // pass the path string; the adapter forwards it verbatim.
+    QString tokenstorePath = context->athlete->home->config().absolutePath() + "/garminconnect";
+
+    garminAdapter = new PyEmbeddedAdapter(modulePath, tokenstorePath);
+    garminChain = new GarminAuthChain(garminAdapter);
+    setPage(21, new AddGarminAuth(this, garminChain->client()));
+}
+#endif
 
 /*----------------------------------------------------------------------
  * Wizard Pages
@@ -191,7 +273,13 @@ int AddService::nextId() const
 {
     if (wizard->cloudService) {
         if (wizard->cloudService->settings.value(CloudService::CloudServiceSetting::Consent, "") != "") return 15;
-        else return 20;
+#ifdef GC_WANT_GARMINCONNECT
+        // Garmin Connect uses its own native credentials page (21), not the
+        // generic URL/Key/OAuth page (20). Non-Garmin services fall through
+        // to 20 exactly as before.
+        if (wizard->cloudService->id() == "Garmin Connect") return 21;
+#endif
+        return 20;
     }
 
     // loop round
@@ -207,6 +295,12 @@ AddService::clicked(QString p)
     // instatiate the cloudservice, complete with current configuration etc
     if (wizard->cloudService) delete wizard->cloudService;
     wizard->cloudService = CloudServiceFactory::instance().newService(p, wizard->context);
+
+#ifdef GC_WANT_GARMINCONNECT
+    // first entry to the Garmin path: stand up adapter + chain + page 21
+    // before next() asks nextId() to route there.
+    if (p == "Garmin Connect") wizard->ensureGarminAuthPage();
+#endif
 
     wizard->next();
 }
@@ -241,6 +335,18 @@ void AddConsent::setConsent()
 
     // move on if accepted
     wizard->next();
+}
+
+int AddConsent::nextId() const
+{
+#ifdef GC_WANT_GARMINCONNECT
+    // Garmin Connect routes to its native credentials page (21); everything
+    // else keeps the historical hardcoded 20. (Garmin currently defines no
+    // Consent setting so this page is skipped for it, but if a consent text
+    // is ever added the routing stays correct.)
+    if (wizard->cloudService && wizard->cloudService->id() == "Garmin Connect") return 21;
+#endif
+    return 20;
 }
 
 void AddConsent::initializePage()

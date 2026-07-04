@@ -1,6 +1,6 @@
 # PROJECT WIKI — GoldenCheetah            (the brain · read me first)
 root:  /media/andy/TOSHIBA EXT/Backup2/Documents/GoldenCheetah   schema: wiki-v1
-phase: 2 (Phase 2.2, active feature REQ-002)   live-status → STATE.md (read next)
+phase: 2 (Phase 2.2, active feature REQ-002 — VAL-007 slice code-complete, CLV pending)   live-status → STATE.md (read next)
 
 ## MAP — directory manifest (authoritative; check before creating ANYTHING)
 WIKI.md                     this brain (hub) — read first, every session

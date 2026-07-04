@@ -37,12 +37,18 @@
 
 class SettingCombo;
 
+#ifdef GC_WANT_GARMINCONNECT
+class GarminAuthChain;
+class PyEmbeddedAdapter;
+#endif
+
 class AddCloudWizard : public QWizard
 {
     Q_OBJECT
 
 public:
     AddCloudWizard(Context *context, QString sname="", bool sync=false);
+    ~AddCloudWizard();
     QSize sizeHint() const { return QSize(600,650); }
 
     Context *context;
@@ -59,6 +65,17 @@ public:
 
     // this is cloned for our context
     CloudService *cloudService;
+
+#ifdef GC_WANT_GARMINCONNECT
+    // Garmin Connect native-auth stack (DES-001a lifecycle: the wizard owns
+    // the adapter and the chain; destruction order wizard > chain(worker) >
+    // adapter). Created lazily on first entry to the Garmin path; page 21
+    // (AddGarminAuth, defined in AddCloudWizard.cpp) is registered at the
+    // same moment and receives garminChain->client().
+    void ensureGarminAuthPage();
+    PyEmbeddedAdapter *garminAdapter = nullptr; // owned; destroyed AFTER chain
+    GarminAuthChain *garminChain = nullptr;     // owned; destroyed first
+#endif
 
 public slots:
 
@@ -117,7 +134,7 @@ class AddConsent : public QWizardPage
         void initializePage();
         bool isComplete() const { return consented; }
         //bool isCommitPage() { return true; }
-        int nextId() const { return 20; }
+        int nextId() const; // 20, or 21 for Garmin Connect (GC_WANT_GARMINCONNECT)
 
     public slots:
         void setConsent();

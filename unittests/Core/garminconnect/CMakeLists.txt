@@ -133,6 +133,49 @@ target_compile_features(testGarminConnectAuthClient PRIVATE cxx_std_17)
 add_test(NAME testGarminConnectAuthClient COMMAND testGarminConnectAuthClient)
 set_tests_properties(testGarminConnectAuthClient PROPERTIES LABELS "garmin-fast")
 
+# --- T-006 — VAL-007 second half: GarminAuthChain RAII assembly --------------
+# The chain AddCloudWizard uses to stand up the production auth stack: a
+# dedicated QThread + GarminWorker (moved onto it) + WorkerAuthClient, around
+# an injected IGarminPyAdapter* it does NOT own (DES-001a lifecycle: wizard >
+# chain(worker) > adapter). Teardown per DES-001 invariant 3: quit()+wait(),
+# bounded. FakePyAdapter substitutes for PyEmbeddedAdapter (DEC-013), so this
+# executable stays Python-free under the `garmin-fast` label.
+#
+# RED phase: src/Cloud/GarminAuthChain.{h,cpp} do not exist yet — the
+# executable's compile fails at the test's #include "GarminAuthChain.h" line
+# (right-reason RED). GREEN adds those files AND extends this
+# add_executable() with the chain .cpp + header so AUTOMOC processes the real
+# Q_OBJECTs and the link resolves.
+add_executable(testGarminConnectAuthChain
+    testGarminConnectAuthChain.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminAuthChain.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminAuthChain.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/WorkerAuthClient.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/WorkerAuthClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminAuthClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminPyAdapter.h
+)
+
+set_target_properties(testGarminConnectAuthChain PROPERTIES
+    AUTOMOC ON
+)
+
+target_include_directories(testGarminConnectAuthChain PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+)
+
+target_link_libraries(testGarminConnectAuthChain PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Test
+)
+target_compile_features(testGarminConnectAuthChain PRIVATE cxx_std_17)
+
+add_test(NAME testGarminConnectAuthChain COMMAND testGarminConnectAuthChain)
+set_tests_properties(testGarminConnectAuthChain PROPERTIES LABELS "garmin-fast")
+
 # --- TEST-005 — DES-013 PyEmbeddedAdapter (embedded-CPython bridge) ----------
 # Production side of the DEC-013 seam: PyEmbeddedAdapter implements
 # IGarminPyAdapter against a REAL linked CPython (Python3::Python,
