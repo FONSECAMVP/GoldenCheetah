@@ -88,3 +88,7 @@ qrc_*.cpp
 # API keys — never commit; copy from Secrets.h.template
 src/Coach/Secrets.h
 
+# CTest scratch output (regenerated on every ctest run)
+/Testing/
+build/Testing/
+
