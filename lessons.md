@@ -6,6 +6,7 @@ LSN-003 | op:prd type:underspecified-nfr              | guard    | recur:11 save
 LSN-004 | op:design type:missing-seam                 | guard    | recur:1  saves:0 miss:0  | any call into a mutable third-party library needs its adapter/interface seam defined before first implementation, not retrofitted after review
 LSN-005 | op:design type:security-invariant-on-read   | guard    | recur:1  saves:0 miss:0  | security invariants enforced on write (perms, format) must also be validated on read, not assumed
 LSN-006 | op:code type:error-handling                 | advisory | recur:1  saves:0 miss:0  | exception handlers at adapter/boundary layers must classify by type before a broad except, never swallow-and-misroute
+LSN-007 | op:commit type:hook-mutation-unverified      | guard    | recur:1  saves:0 miss:0  | if a pre-commit hook modifies files, all prior build/test evidence is void — rebuild + re-run affected tests before accepting the commit; protect semantic include order with clang-format off markers
 
 ---
 
@@ -100,6 +101,32 @@ origin: findings.md A2-005 (fix-now) → design.md DES-002 invariant (refuse loa
         wider-than-owner permissions); security-sensitive, high cost → guard on first
         occurrence
 history:migration (2026-07-04): captured at guard level (security-sensitive, high cost)
+
+## LSN-007
+sig:    commit / hook-mutation-unverified / formatter-reorder
+level:  guard      since:P2.2(2026-07-04)   recur:1   saves:0   miss:0
+tags:   op:commit, op:code, type:hook-mutation-unverified, component:build
+trigger:any commit where a pre-commit hook reports "files were modified by this hook";
+        any C++ TU whose include order is semantic (Python.h-before-Qt)
+mistake:committing TEST-005's PyEmbeddedAdapter slice, the clang-format pre-commit hook
+        re-sorted the test TU's includes, moving Python.h AFTER the Qt headers (Qt `slots`
+        macro vs CPython object.h `slots` field → compile break). The files were re-staged
+        and committed; an immediate ctest run even "passed" — against the STALE binary.
+        Only a from-scratch rebuild exposed that the committed code did not compile.
+rule:   (1) a hook that mutates files invalidates every build/test result obtained before
+        the mutation — rebuild and re-run the affected test labels on the post-hook tree
+        before treating the commit as verified; never trust a ctest PASS without a
+        preceding successful build of the same sources. (2) semantically-ordered includes
+        must be fenced with `// clang-format off/on` so formatters cannot reorder them.
+check:  after any "files were modified by this hook" line: `cmake --build` the affected
+        targets (must succeed) then ctest the affected labels, THEN commit. For any TU
+        including Python.h alongside Qt: confirm the fence markers exist.
+origin: commit 0cdcc27eb (initial, broken) — caught by orchestrator re-verify, fixed by
+        amend with clang-format fences in PyEmbeddedAdapter.cpp + testGarminConnectPyAdapter.cpp
+history:2026-07-04: captured at guard level — high cost (broken master commit), silent
+        failure mode (stale-binary PASS masked it); relates to the include-order Watch
+        item in wiki/architecture.md, which predicted the hazard for unity builds but
+        missed the formatter as the reordering agent
 
 ## LSN-006
 sig:    code / error-handling / broad-except-misroute

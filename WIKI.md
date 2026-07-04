@@ -54,11 +54,11 @@ src/*.o,moc_*,qrc_*,*_yacc*,*_lex*   [SKIP] generated in-source qmake build arti
 ## REGISTRIES — what exists (allocate next; never reuse, never re-create)
 REQ  garmin:001–015+NF-*  full:.claude/workflow-garminconnect/prd.md         next:garmin-016
 DEC  garmin:001–013  index:.claude/workflow-garminconnect/decisions.md      next:garmin-014
-DES  garmin:001–012(+001a,003a)  .claude/workflow-garminconnect/design.md   next:garmin-013
-TEST garmin:T-001–T-004  .claude/workflow-garminconnect/traceability.md     next:garmin-T-005
+DES  garmin:001–013(+001a,003a)  .claude/workflow-garminconnect/design.md   next:garmin-014
+TEST garmin:T-001–T-006  .claude/workflow-garminconnect/traceability.md     next:garmin-T-007
 VAL  garmin:001–006  latest:VAL-006 PASS · .claude/workflow-garminconnect/validations/  next:garmin-007
 F    no F-### namespace in use; findings tracked as <cycle>-<seq> (A0-001…, A3-R00x-Mn, D-0x) in findings.md; 0 open blocking   next:n/a (see conventions.md)
-LSN  001–006  active:6 guards:5  lessons.md   next:007
+LSN  001–007  active:7 guards:6  lessons.md   next:008
 -- CLOSED (provenance only, do not extend): aicoach:DEC-001–013, aicoach:REQ-001–020, aicoach:TEST-001–020 — numeric collision with garmin ranges above; always use ledger prefix (coach:DEC-NNN / garmin:DEC-NNN)
 
 ## PAGES — wiki spokes (read the one named; don't explore blindly)

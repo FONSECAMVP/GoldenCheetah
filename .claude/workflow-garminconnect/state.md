@@ -1,6 +1,6 @@
 # State — Garmin Connect Integration
 
-_Updated: 2026-05-24 — VAL-006 PASS (9/9); REQ-002 end-to-end slice COMPLETE (worktree garmin-req002-e2e); GarminWorker + WorkerAuthClient + IGarminPyAdapter shipped; A3 sweep 19 KILLED + 1 accept-with-rationale._
+_Updated: 2026-07-04 — DES-013 drafted + built: PyEmbeddedAdapter (production IGarminPyAdapter) GREEN via TEST-005 (10 slots, new `garmin-py` CTest label); garmin-fast baseline intact (4/4). Remaining for VAL-007: AddCloudWizard tile-routing + app-build wiring (TEST-006)._
 
 ## phase
 - current: Phase 2.2
@@ -42,12 +42,13 @@ _Updated: 2026-05-24 — VAL-006 PASS (9/9); REQ-002 end-to-end slice COMPLETE (
 | 010 | uses DES-001/002/005 (incremental sync) | drafted | 2026-05-17 |
 | 011 | uses DES-001/004/012 (profile auto-fill) | drafted | 2026-05-17 |
 | 012 | adapter seam over python-garminconnect (A2-004 fix) | stub-in-repo (REQ-002 GREEN partial) | 2026-05-23 |
+| 013 | production PyEmbeddedAdapter (DEC-013 production side, DEC-002) | GREEN (Auth surface, TEST-005) | 2026-07-04 |
 
 ## reqs
 | REQ | cat | DECs | DESs | TESTs | status |
 |---|---|---|---|---|---|
 | 001 | must | 001,005,011 | 004 | T-001 | deployed (6381b90f4) |
-| 002 | must | 001,002,004,008,009,010,011,012,013 | 001,001a,003,003a,008,012 | T-002 (GREEN, 5), T-003 (GREEN, 13), T-004 (GREEN, 10) | **VAL-006 PASS** (C++ end-to-end; production PyEmbeddedAdapter pending — see ## open) |
+| 002 | must | 001,002,004,008,009,010,011,012,013 | 001,001a,003,003a,008,012,013 | T-002 (GREEN, 5), T-003 (GREEN, 13), T-004 (GREEN, 10), T-005 (GREEN, 10) | **VAL-006 PASS** (C++ e2e + production PyEmbeddedAdapter GREEN; wizard tile-routing pending — see ## open) |
 | 003 | must | 001,002,004 | 001,003,012 | — | not started |
 | 004 | must | 001,003 | 002,006 | — | not started |
 | 005 | must | 001,012 | 003,003a,012 | T-002 (adapter half: password-not-retained); T-003 (wizard side — GREEN) | tested (A3 pending) |
@@ -105,7 +106,7 @@ Full motivation cells and acceptance fragments live in `prd.md`. Use this table 
   - A3-R002-mutmut — evaluate at A3/REQ-007 cycle
   - A3-R002-hypothesis — evaluate at A3/REQ-014 cycle
   - A3-R001-tool — C++ mutation tool (mull-cxx/cosmic-ray-cpp) at Phase 3 entry
-  - **PyEmbeddedAdapter + AddCloudWizard tile-routing → next slice** (production embedded-Python adapter implementing IGarminPyAdapter; needed for REQ-006 token persistence and for the wizard Garmin tile to actually connect a real account. REQ-002 end-to-end C++ contract is GREEN against FakePyAdapter at the IGarminPyAdapter seam; the same WorkerAuthClient/GarminWorker chain is reused by the production adapter when it lands — no test-shape rework required.)
+  - **AddCloudWizard tile-routing + app-build wiring → in progress (second half of VAL-007 slice)**. PyEmbeddedAdapter itself landed 2026-07-04 (DES-013, TEST-005 GREEN, `garmin-py` label). Remaining: route the wizard's Garmin tile to GarminCredentialsPage with the real WorkerAuthClient→GarminWorker→PyEmbeddedAdapter chain, and add the chain's sources to the `GC_WANT_GARMINCONNECT` block in src/CMakeLists.txt (Python link dep lands there; mind the Python.h-before-Qt include-order hazard flagged by the T-005 build report).
 - accept-with-rationale:
   - A2-002 library-tracked SSO risk → REQ-NF-Compat-001 (docs)
   - A2-007 parse cancel

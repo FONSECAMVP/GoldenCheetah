@@ -132,3 +132,46 @@ target_compile_features(testGarminConnectAuthClient PRIVATE cxx_std_17)
 
 add_test(NAME testGarminConnectAuthClient COMMAND testGarminConnectAuthClient)
 set_tests_properties(testGarminConnectAuthClient PROPERTIES LABELS "garmin-fast")
+
+# --- TEST-005 — DES-013 PyEmbeddedAdapter (embedded-CPython bridge) ----------
+# Production side of the DEC-013 seam: PyEmbeddedAdapter implements
+# IGarminPyAdapter against a REAL linked CPython (Python3::Python,
+# Development.Embed). This target therefore carries the `garmin-py` CTest
+# label and must NEVER carry `garmin-fast` — that label is Python-free by
+# invariant (see testGarminConnectAuthClient above, which fakes this seam).
+#
+# The test drives a scriptable stub module (pystubs/garmin_client.py) whose
+# directory is handed in via the GARMIN_PYSTUBS_DIR compile definition so the
+# test can build the adapter's modulePath without env-var plumbing.
+#
+# RED phase: src/Cloud/PyEmbeddedAdapter.{h,cpp} do not exist yet — the
+# executable's compile fails at the test's #include "PyEmbeddedAdapter.h"
+# line (right-reason RED). GREEN adds those files AND extends this
+# add_executable() with the adapter .cpp + header so the link resolves.
+find_package(Python3 REQUIRED COMPONENTS Development.Embed)
+
+add_executable(testGarminConnectPyAdapter
+    testGarminConnectPyAdapter.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/PyEmbeddedAdapter.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/PyEmbeddedAdapter.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminPyAdapter.h
+)
+
+target_include_directories(testGarminConnectPyAdapter PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+)
+
+target_compile_definitions(testGarminConnectPyAdapter PRIVATE
+    "GARMIN_PYSTUBS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/pystubs\""
+)
+
+target_link_libraries(testGarminConnectPyAdapter PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Test
+    Python3::Python
+)
+target_compile_features(testGarminConnectPyAdapter PRIVATE cxx_std_17)
+
+add_test(NAME testGarminConnectPyAdapter COMMAND testGarminConnectPyAdapter)
+set_tests_properties(testGarminConnectPyAdapter PROPERTIES LABELS "garmin-py")

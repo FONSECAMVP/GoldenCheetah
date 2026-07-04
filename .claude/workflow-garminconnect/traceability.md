@@ -130,6 +130,15 @@ Last updated: 2026-05-24 (Phase 2.2 — REQ-002 C++ wizard-wiring slice TEST-003
 | TEST-003 credentials-page contract | `unittests/Core/garminconnect/testGarminConnectCredentialsPage.cpp` | REQ-002 wizard-side (positive + negative) + REQ-005 wizard-side (mask/IME-hints/post-submit-clear) + REQ-NF-Perf-002 page-side (in-flight disables Next). 9 tests, **GREEN**. |
 | TEST-003 CTest wiring | `unittests/Core/garminconnect/CMakeLists.txt` (`testGarminConnectCredentialsPage` target, `garmin-fast` label, AUTOMOC ON, Qt Widgets linked; page sources added for GREEN) | DEC-008, DEC-010, DEC-012. |
 
+## Phase 2.2 REQ-002 PyEmbeddedAdapter slice artifacts (in repo — TEST-005 GREEN)
+
+| Artifact | Path | Serves |
+|----------|------|--------|
+| `PyEmbeddedAdapter` production bridge | `src/Cloud/PyEmbeddedAdapter.{h,cpp}` | DES-013, DEC-013 (production side), DEC-002. Header Python-free; only the .cpp includes `Python.h` (before Qt headers — `slots` macro clash). GIL via RAII guard; exception classification by type-then-kind (LSN-006 / A3-R002-M6): GarminError.kind 'auth'→AuthFailed, 'connection'→Network, else Unknown; foreign exceptions can never reach AuthFailed. Requires CPython ≥3.12 (`PyErr_GetRaisedException`). |
+| TEST-005 embedded-marshalling suite | `unittests/Core/garminconnect/testGarminConnectPyAdapter.cpp` | REQ-002 production-adapter side. 10 slots GREEN: uninit-interpreter fail-safe, success marshal + ctor-arg fidelity, auth/connection/rate_limit/ValueError classification (negatives assert NOT AuthFailed), missing-module fail-safe, off-main-thread call, GIL balance + unicode round-trip. |
+| Scriptable Python stub module | `unittests/Core/garminconnect/pystubs/garmin_client.py` | TEST-005 fixture — mirrors the real DES-012 surface (`GarminClient`, `GarminError.kind`); scenario-driven via `PyRun_SimpleString`. Real adapter behavior stays owned by `src/Python/garminconnect/tests/` (pytest). |
+| TEST-005 CTest wiring | `unittests/Core/garminconnect/CMakeLists.txt` (`testGarminConnectPyAdapter` target, label **`garmin-py`**, links `Python3::Python` via `Development.Embed`) | DEC-008, DEC-010. `garmin-fast` stays Python-free by construction; the new label isolates the embedded-CPython dependency. |
+
 ## Drift / hygiene notes
 
 | # | Drift | Why it matters | Disposition |

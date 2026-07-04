@@ -29,17 +29,20 @@ AddCloudWizard(G1) → GarminCredentialsPage → IGarminAuthClient(G4) → Garmi
   [Qt signal request(payload), off-GUI-thread] → IGarminPyAdapter(G5) → garmin_client.py(G6, DES-012)
   → garminconnect / curl_cffi (vendor lib) → HTTPS (OS trust store) → connect.garmin.com
 Result returns via Qt finished(payload) signal delivered to GUI thread event loop.
-Today: IGarminPyAdapter is satisfied by FakePyAdapter (test double) for REQ-002 C++ contract;
-production G6 impl exists (Auth-only) but the C++-side embedded-Python adapter that calls it
-(the "PyEmbeddedAdapter") is NEXT_GATE VAL-007 — not yet wired to G5.
+Today: production PyEmbeddedAdapter (src/Cloud/PyEmbeddedAdapter.{h,cpp}, DES-013) implements
+IGarminPyAdapter — landed 2026-07-04, TEST-005 GREEN against a scriptable stub module under the
+new `garmin-py` CTest label. Still pending for VAL-007: AddCloudWizard tile-routing + adding the
+chain (GarminCredentialsPage/GarminWorker/WorkerAuthClient/PyEmbeddedAdapter) to the app build's
+GC_WANT_GARMINCONNECT block.
 
 ## Integration points / contracts
 G1↔G4: AddCloudWizard/GarminCredentialsPage inject an IGarminAuthClient; production impl
         dispatches to G3 (DEC-012, DES-003/003a).
 G3↔G5: GarminWorker calls IGarminPyAdapter.authenticate() off the GUI thread; interface
         locks in `PyAuthOutcome` shape (DEC-013, DES-001/001a).
-G5↔G6: production PyEmbeddedAdapter (pending, VAL-007) will bridge IGarminPyAdapter calls
-        into src/Python/garminconnect/garmin_client.py via the existing PythonEmbed host.
+G5↔G6: PyEmbeddedAdapter (DES-013, src/Cloud/PyEmbeddedAdapter.{h,cpp}) bridges
+        IGarminPyAdapter calls into garmin_client.py — GIL via RAII, classification by
+        type-then-kind (LSN-006). Test-linked CPython today; app-build wiring pending (VAL-007).
 G2↔G8: CloudService capability calls (Query|Download) read/write the atomic-writer
         persistence layer (DES-002/006) — not yet implemented (REQ-004/006/008 not started).
 C10↔C12: AI Coach (Coach) also uses embedded Python via C12's PythonEmbed core — shared
@@ -59,3 +62,8 @@ C10↔C12: AI Coach (Coach) also uses embedded Python via C12's PythonEmbed core
   real contract; do not rely on `__cause__` for control flow.
 - C++ mutation coverage: no mull-cxx/cosmic-ray-cpp yet (A3-R001-tool, deferred to Phase 3
   entry) — REQ-001/REQ-002 C++ mutation confidence today is manual/A3-cycle only.
+- PyEmbeddedAdapter requires CPython ≥3.12 (`PyErr_GetRaisedException`); a 3.11-or-older
+  target needs a `PyErr_Fetch`/Normalize fallback (T-005 build report, 2026-07-04).
+- Include-order hazard: `Python.h` must precede Qt headers in PyEmbeddedAdapter.cpp (Qt
+  `slots` macro clash). Any unity-build/TU-merge when wiring the app-build
+  GC_WANT_GARMINCONNECT block can silently re-trigger this — check at the tile-routing slice.

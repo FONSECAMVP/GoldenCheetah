@@ -780,6 +780,75 @@ If checked + Apply:
 
 ---
 
+## DES-013 — `PyEmbeddedAdapter`: embedded-CPython bridge (production IGarminPyAdapter)
+
+**Implements:** production side of DEC-013 (the seam's real implementation); executes under DEC-002's worker-thread model.
+**Serves:** REQ-002 (production closure of the Authenticate slice), REQ-006 (tokenstore path forwarding), and — additively — every later worker op (REQ-003/007/010/012/014).
+**Composes with:** DES-001 (sole caller is the worker, on the worker thread), DES-001a (implements `IGarminPyAdapter`), DES-012 (calls only `garmin_client.GarminClient`, never `garminconnect`), DES-008 (returns raw kinds + raw messages; no translation).
+
+### Shape
+
+`src/Cloud/PyEmbeddedAdapter.{h,cpp}`. The **header is Python-free** (no `Python.h`,
+no interpreter symbols — same invariant as `IGarminPyAdapter.h`); only the `.cpp`
+includes `Python.h`. Compiled into the app **only when `GC_WANT_GARMINCONNECT=ON`**,
+and links CPython (`Python3::Python`) — the flag gains a Python link dependency here,
+which DES-007's flag section anticipated.
+
+```cpp
+class PyEmbeddedAdapter : public IGarminPyAdapter {
+  public:
+    // modulePath: directory prepended to sys.path so `garmin_client` resolves
+    //             (C++ owns path policy, per DES-012 "what lives where").
+    // tokenstorePath: forwarded verbatim to GarminClient(email, password, tokenstore_path).
+    PyEmbeddedAdapter(const QString& modulePath, const QString& tokenstorePath);
+    PyAuthOutcome authenticate(const QString& email, const QString& password) override;
+};
+```
+
+### `authenticate()` sequence (worker thread)
+
+1. `Py_IsInitialized()` false → return `Unknown` / `"embedded Python unavailable"`
+   (fail-safe; matches DES-001 "init failure → capabilities 0"; never throws).
+2. `PyGILState_Ensure()` via RAII guard — released on **every** exit path.
+3. Prepend `modulePath` to `sys.path` if absent; `import garmin_client`.
+4. `GarminClient(email, password, tokenstorePath)` → `.login()`.
+5. Success dict → `PyAuthOutcome{Success, garmin_user_id, display_name}`.
+6. Exception → classify **by type then kind, never by message** (LSN-006 / A3-R002-M6):
+   - `garmin_client.GarminError` → read `.kind`: `'auth'`→`AuthFailed`,
+     `'connection'`→`Network`, anything else (`'rate_limit'`, `'captcha'`, …)
+     →`Unknown` until its owning slice extends the enum. `.message`→`rawMessage`.
+   - any other Python exception → `Unknown` + `str(e)`. **Never** mapped to
+     `AuthFailed`.
+
+### Interpreter topology (scope note)
+
+Phase-1 slice uses `PyGILState_Ensure` against the **main interpreter** (the
+PythonEmbed host's). Per-feature sub-interpreter isolation is the A2-001 /
+Phase-1.5 hardening follow-up — the adapter's surface does not change when it
+lands, so this is deliberately not blocking VAL-007.
+
+### What this design does NOT cover
+
+- Threading (DES-001 — the worker guarantees non-GUI-thread invocation).
+- Retry/rate-limit (DES-005 — Python-side decorators, invisible here).
+- Token file *layout* (DES-002 — this class only forwards the path string).
+- Message translation (DES-008 — page layer).
+
+### Tests (TEST garmin:T-005)
+
+New CTest executable `testGarminConnectPyAdapter`, label **`garmin-py`** (needs a
+real linked CPython — must NOT carry `garmin-fast`). It initializes CPython in
+`initTestCase`, points `modulePath` at a **scriptable stub** `garmin_client.py`
+fixture (`unittests/Core/garminconnect/pystubs/`), and asserts the marshalling
+matrix: success-dict mapping, `kind='auth'`→`AuthFailed`, `kind='connection'`→
+`Network`, `kind='rate_limit'`→`Unknown` (not `AuthFailed`), `ValueError`→
+`Unknown` (not `AuthFailed`), missing-module→`Unknown`, and GIL-balance across
+repeated calls. The *real* `garmin_client.py` behavior stays covered by its own
+pytest suite (`src/Python/garminconnect/tests/`) — two seams, tested on their
+own sides, meeting at the DES-012 contract.
+
+---
+
 ## Failure modes
 
 | Component | Failure mode | Blast radius | Mitigation |
