@@ -90,5 +90,7 @@ src/Coach/Secrets.h
 
 # CTest scratch output (regenerated on every ctest run)
 /Testing/
-build/Testing/
+
+# Generated CMake/Ninja build tree — machine-specific, never commit
+/build/
 
