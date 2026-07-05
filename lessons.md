@@ -7,6 +7,8 @@ LSN-004 | op:design type:missing-seam                 | guard    | recur:1  save
 LSN-005 | op:design type:security-invariant-on-read   | guard    | recur:1  saves:0 miss:0  | security invariants enforced on write (perms, format) must also be validated on read, not assumed
 LSN-006 | op:code type:error-handling                 | advisory | recur:1  saves:0 miss:0  | exception handlers at adapter/boundary layers must classify by type before a broad except, never swallow-and-misroute
 LSN-007 | op:commit type:hook-mutation-unverified      | guard    | recur:1  saves:0 miss:0  | if a pre-commit hook modifies files, all prior build/test evidence is void — rebuild + re-run affected tests before accepting the commit; protect semantic include order with clang-format off markers
+LSN-008 | op:ledger-update type:index-vs-detail-drift  | guard    | recur:2  saves:1 miss:1  | GUARD: after ANY ledger update, diff every STRUCTURED table cell touching the changed IDs (traceability primary matrix + DES index; state.md ## reqs/## des; root STATE COUNTS) against the actual artifact — not just the prose banner/narrative. A prose summary updated while its own structured index/table stays stale is the recurring drift signature (VAL-007 + VAL-008 both FAILed Check 6 on this). Re-count slots from source; never copy a count between docs.
+LSN-009 | op:test type:loose-timeout-bound-survivor   | advisory | recur:1  saves:1 miss:0  | a bounded-teardown/timeout assertion must be tight enough to FAIL if the graceful fast-path is skipped (assert « the fast-path ceiling, not < the sum of all fallback ceilings) — a loose bound cannot distinguish "worked" from "fell through to the last resort every time"
 
 ---
 
@@ -127,6 +129,62 @@ history:2026-07-04: captured at guard level — high cost (broken master commit)
         failure mode (stale-binary PASS masked it); relates to the include-order Watch
         item in wiki/architecture.md, which predicted the hazard for unity builds but
         missed the formatter as the reordering agent
+
+## LSN-008
+sig:    ledger-update / index-vs-detail-drift / traceability-matrix
+level:  guard     since:P2.2(2026-07-05)   recur:2   saves:1   miss:1   escalated:2026-07-05
+tags:   op:ledger-update, op:byproduct, phase:P2, type:index-vs-detail-drift
+trigger:updating traceability.md (or any index-first ledger) as the byproduct of a slice
+        that added new DES/TEST/commit artifacts
+mistake:the PyEmbeddedAdapter + tile-routing slice appended two fresh detail tables to
+        traceability.md (the "PyEmbeddedAdapter slice artifacts" + "wizard tile-routing
+        slice artifacts" appendices, lines 133-150) and updated state.md/WIKI.md — but the
+        file's OWN primary DES index and REQ-002 REQ→DEC→DES→TEST→COMMIT matrix row were
+        left stale: no DES-013 row, no TEST-005/006, no 212a4c258/e9e017fe1 commit refs, and
+        the banner still read "Last updated: 2026-05-24". VAL-007 Check 6 (LEDGERS) FAILed on
+        the index-vs-digest disagreement.
+rule:   a byproduct ledger update is not complete until the PRIMARY index/matrix rows for the
+        changed IDs are current — appendix/detail tables never substitute for the top-level
+        index. Update index rows + banner date in the same action that adds the detail.
+check:  after any traceability.md edit, grep the new DES/TEST IDs + commit hashes in the
+        PRIMARY DES index and REQ matrix (not just appendices); confirm the banner date
+        matches the slice date.
+origin: VAL-007 (2026-07-05) Check 6 FAIL → orchestrator refreshed traceability.md DES index
+        + REQ-002 matrix row + banner; saves:1 credited to the CLV pass that caught it
+history:2026-07-05: captured at advisory level (VAL-007 Check 6 — traceability primary index
+        vs appendix). ESCALATED to guard the same day (VAL-008 Check 6): recurred in a second
+        location — ledger state.md's own ## reqs structured table left stale (TEST-007 absent,
+        stale T-005/T-006 counts) while its prose banner was updated, PLUS a slot-count miscount
+        (QTest-reported total 9/12 copied where named-slot count 7/10 belonged) propagated into
+        three files. miss:1 recorded — the advisory did not prevent recurrence, so it is now a
+        hard pre-flight guard. Root fix: standardized on named-slot counts with an explicit
+        QTest-total annotation so the two metrics can't be conflated again.
+
+## LSN-009
+sig:    test / loose-timeout-bound-survivor / teardown-assertion
+level:  advisory  since:P2.2(2026-07-05)   recur:1   saves:1   miss:0
+tags:   op:test, phase:P2, type:mutation-survivor, component:C11(Cloud)
+trigger:writing or reviewing a test that bounds a teardown / timeout / retry-with-fallback
+        path by asserting on elapsed time
+mistake:TEST-006's chain-teardown asserts (`elapsed < 3000ms`) were sized as the SUM of both
+        fallback ceilings (kQuitWaitMs=2000 + kTerminateWaitMs). A3 built and ran a real
+        mutant deleting `m_thread.quit();` from `~GarminAuthChain()`: the suite still reported
+        8/8 PASS while runtime went 294ms→12306ms and every teardown logged "Qt has caught an
+        exception thrown from an event handler". The bound could not tell "graceful quit ran"
+        from "always fell through to hard terminate()" — a mutation survivor sitting directly
+        on DES-001 invariant 3.
+rule:   an elapsed-time bound on a path with a graceful fast-path + slower fallback(s) must be
+        asserted WELL UNDER the fast-path ceiling (e.g. < kQuitWaitMs/10), so skipping the
+        fast path makes the test FAIL. A bound at the sum-of-all-fallbacks only catches a true
+        hang, not a skipped-graceful-path regression. Pair it with an explicit test that
+        deterministically forces the fallback and asserts the fallback's own bound.
+check:  for any `QVERIFY(elapsed < N)` on teardown/timeout code, confirm N is below the
+        graceful-path ceiling, not the total of all fallback timeouts.
+origin: A3/REQ-002-TR finding A3-R002-TR-02 (blocking) — empirically executed mutant, not
+        hypothesized; saves:1 credited to the A3 cycle that caught it
+history:2026-07-05: captured at advisory level — first occurrence, portable test-design rule
+        (scope:portable — travels to any future timeout/teardown test); escalate to guard if a
+        second loose-bound survivor appears
 
 ## LSN-006
 sig:    code / error-handling / broad-except-misroute

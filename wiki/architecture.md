@@ -71,3 +71,17 @@ C10↔C12: AI Coach (Coach) also uses embedded Python via C12's PythonEmbed core
 - Include-order hazard: `Python.h` must precede Qt headers in PyEmbeddedAdapter.cpp (Qt
   `slots` macro clash). Any unity-build/TU-merge when wiring the app-build
   GC_WANT_GARMINCONNECT block can silently re-trigger this — check at the tile-routing slice.
+- AddCloudWizard Garmin routing/lifecycle is now guarded by TEST-007 (A3-R002-TR-01, resolved):
+  `nextId()`→page-21 routing, `ensureGarminAuthPage()` idempotency, and the `~AddCloudWizard()`
+  DES-001a teardown order (`delete garminChain` before `delete garminAdapter`) each kill a
+  mutant. The suite exercises the logic directly, NOT via live QWizard navigation — the
+  `AddService::clicked`/back-next wiring that *calls* nextId/ensure is compiled but not driven
+  (residual gap; candidate follow-up).
+- GarminAuthChain last-resort teardown (A3-R002-TR-08, deferred → Phase 1.5 with A2-001): a
+  genuinely uncancellable native busy-loop (no cancellation point) defeats `QThread::terminate()`;
+  `~GarminAuthChain` then destroys a still-running `QThread` → `qFatal` abort. Only reachable via
+  a pure native wedge — realistic wedges (blocking I/O, Python hitting a cancellation point)
+  unwind cleanly, and the graceful `quit()+wait()` bound is now asserted tightly (LSN-009). The
+  benign "Qt caught an exception thrown from an event handler" warning on `terminate()` is the
+  pthread_cancel forced-unwind, not a defect. Harden the dtor (detach/leak rather than destroy a
+  running thread) if Phase 1.5 wedge-recovery doesn't already remove the reachability.

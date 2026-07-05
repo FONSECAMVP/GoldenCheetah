@@ -48,6 +48,16 @@ class GarminClient:
         if SCENARIO == "success_unicode":
             return {"garmin_user_id": "uid-üñî-123",
                     "display_name": "Zoë Åström \U0001f6b4"}
+        # REQ-002 / TEST-005 / A3-R002-TR-05 — malformed-result contract
+        # breaches of the DES-012 seam. login() must return a dict carrying
+        # garmin_user_id + display_name; these two scenarios violate that so the
+        # adapter's defensive branches (PyEmbeddedAdapter.cpp: non-dict result;
+        # dict missing required keys) are exercised. Both must fold to Unknown
+        # with an explanatory message — NEVER a spurious Success.
+        if SCENARIO == "non_dict_result":
+            return ["not", "a", "dict"]  # login() returned a non-dict
+        if SCENARIO == "missing_keys":
+            return {"session": "opaque-token"}  # dict, but no garmin_user_id/display_name
         if SCENARIO == "auth_error":
             raise GarminError("auth", "stub: bad credentials")
         if SCENARIO == "connection_error":

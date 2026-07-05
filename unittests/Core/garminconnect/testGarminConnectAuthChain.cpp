@@ -85,6 +85,49 @@ class FakePyAdapter : public IGarminPyAdapter
 };
 
 // ---------------------------------------------------------------------------
+// REQ-002 / TEST-006 / A3-R002-TR-04 — BusyPyAdapter: a deterministic,
+// Python-free (no CPython, no GIL) adapter whose authenticate() wedges the
+// worker thread in a tight busy-loop. This never returns and never yields to
+// the worker's event loop, so the chain's graceful ~GarminAuthChain path
+// (quit() + wait(kQuitWaitMs)) is GUARANTEED to time out and fall through to
+// the terminate() last-resort branch — giving that branch intentional
+// coverage. `entered` lets the test observe that the worker is actually inside
+// the busy-loop before it tears the chain down.
+// ---------------------------------------------------------------------------
+class BusyPyAdapter : public IGarminPyAdapter
+{
+  public:
+    std::atomic<bool> entered{false};
+    std::atomic<bool> stop{false}; // never set true by the test — terminate() is the only exit
+
+    PyAuthOutcome authenticate(const QString&, const QString&) override
+    {
+        entered.store(true);
+        // Wedge the worker: this slot NEVER returns to the thread's exec()
+        // event loop, so m_thread.quit() (which only takes effect once control
+        // is back in exec()) is ignored and wait(kQuitWaitMs) is forced to time
+        // out — driving ~GarminAuthChain into its terminate() last-resort
+        // branch (the whole point of TR-04). No Python, no GIL: fully
+        // deterministic.
+        //
+        // The 1ms sleep is deliberate and load-bearing: Qt6 (qthread_unix)
+        // starts worker threads with the DEFAULT deferred pthread cancellation
+        // type, so terminate() (pthread_cancel) can only take effect at a POSIX
+        // cancellation point. nanosleep() is such a point; a pure atomic-read
+        // spin-loop is NOT, and under this Qt/glibc terminate() then fails to
+        // cancel it within kTerminateWaitMs, leaving ~QThread to abort with
+        // "QThread: Destroyed while thread is still running". See the TR-04
+        // finding in the build report. This sleep models the realistic wedge
+        // (a blocking call with a cancellation point) so terminate() genuinely
+        // unwinds the worker and the thread finishes.
+        while (!stop.load(std::memory_order_relaxed)) {
+            QThread::msleep(1);
+        }
+        return PyAuthOutcome{};
+    }
+};
+
+// ---------------------------------------------------------------------------
 // Helper — drains the caller thread's event queue until a predicate is true
 // or a timeout elapses (mirrors TEST-004's waitFor).
 // ---------------------------------------------------------------------------
@@ -102,6 +145,11 @@ bool waitFor(Pred p, int timeoutMs = 2000)
     }
     return true;
 }
+
+// REQ-002 / TEST-006 / A3-R002-TR-02 (LSN-009): graceful-teardown watchdog,
+// deliberately WELL UNDER the chain's kQuitWaitMs (=2000ms). See the (e) slot
+// comment for the full mutation-survivor rationale.
+constexpr qint64 kGracefulTeardownBoundMs = 200;
 } // namespace
 
 class TestGarminConnectAuthChain : public QObject
@@ -214,6 +262,16 @@ class TestGarminConnectAuthChain : public QObject
     //     bounded — never hang). Watchdog: elapsed-time bound well below the
     //     chain's internal wait ceiling; a hang would also trip the QTest
     //     watchdog / ctest timeout rather than wedge CI forever.
+    //
+    // REQ-002 / TEST-006 / A3-R002-TR-02 (LSN-009): the graceful-teardown bound
+    // is deliberately WELL UNDER the chain's kQuitWaitMs (=2000ms). An idle
+    // worker's event loop returns from exec() the instant m_thread.quit() posts
+    // its quit event, so wait() unblocks in single-digit milliseconds. The old
+    // 3000ms bound was the SUM of both fallback ceilings and therefore survived
+    // a mutant that deletes m_thread.quit(): without quit() the idle event loop
+    // never returns, wait(kQuitWaitMs) times out and terminate()+wait fires,
+    // yet elapsed (~2.5s) still cleared 3000ms. A bound of 200ms (< kQuitWaitMs/10)
+    // forces that mutant to FAIL: skipping quit() pushes elapsed to ~2000ms+.
     void teardownWhileIdleReturnsPromptly()
     {
         FakePyAdapter fake;
@@ -226,9 +284,11 @@ class TestGarminConnectAuthChain : public QObject
         delete chain; // must quit()+wait() the thread, bounded
         const qint64 elapsed = t.elapsed();
 
-        QVERIFY2(elapsed < 3000, qPrintable(QStringLiteral("destructor took %1 ms — must tear down promptly "
-                                                           "(bounded quit()+wait())")
-                                                .arg(elapsed)));
+        QVERIFY2(elapsed < kGracefulTeardownBoundMs,
+                 qPrintable(QStringLiteral("destructor took %1 ms — graceful teardown must complete well under "
+                                           "kQuitWaitMs (bounded quit()+wait()); a mutant that drops quit() would "
+                                           "time out here")
+                                .arg(elapsed)));
         QVERIFY2(threadGuard.isNull(), "the chain must destroy its owned QThread");
         QCOMPARE(int(fake.callCount.load()), 0); // idle — adapter never touched
     }
@@ -255,7 +315,15 @@ class TestGarminConnectAuthChain : public QObject
         QElapsedTimer t;
         t.start();
         delete chain; // after a completed round-trip
-        QVERIFY2(t.elapsed() < 3000, "post-request teardown must also be bounded");
+        // REQ-002 / TEST-006 / A3-R002-TR-02: same tight graceful bound as (e).
+        // After the round-trip the worker is back idle in exec(); quit() must
+        // still unblock wait() in milliseconds. A dropped-quit() mutant times
+        // out here too (~2s) and trips this bound.
+        const qint64 postElapsed = t.elapsed();
+        QVERIFY2(postElapsed < kGracefulTeardownBoundMs,
+                 qPrintable(QStringLiteral("post-request teardown took %1 ms — must also be bounded well under "
+                                           "kQuitWaitMs")
+                                .arg(postElapsed)));
 
         // Spin the caller's event loop: nothing queued may still deliver.
         QElapsedTimer drain;
@@ -266,6 +334,50 @@ class TestGarminConnectAuthChain : public QObject
         }
         QCOMPARE(deliveries.load(), 1); // no dangling delivery after teardown
         QCOMPARE(int(fake.callCount.load()), 1);
+    }
+
+    // (g) REQ-002 / TEST-006 / A3-R002-TR-04 — the terminate() last-resort
+    //     teardown path (DES-001 invariant 3, second clause). With a worker
+    //     wedged in BusyPyAdapter's busy-loop, quit()+wait(kQuitWaitMs) MUST
+    //     time out and terminate()+wait(kTerminateWaitMs) MUST fire. The chain
+    //     must STILL tear down within its bounded ceiling and must destroy its
+    //     owned QThread cleanly — a QThread destroyed while still running would
+    //     qFatal ("QThread: Destroyed while thread is still running"), so a
+    //     normal return here is itself proof the thread had finished.
+    void teardownWhileWorkerWedgedFallsBackToTerminate()
+    {
+        BusyPyAdapter fake;
+        GarminAuthChain* chain = new GarminAuthChain(&fake);
+        QVERIFY(chain->workerThread()->isRunning());
+        QPointer<QThread> threadGuard(chain->workerThread());
+
+        // Kick off an authenticate that will wedge the worker thread.
+        chain->client()->authenticate(QStringLiteral("e@x"), QStringLiteral("p"), QUuid::createUuid());
+        QVERIFY2(waitFor([&] { return fake.entered.load(); }),
+                 "worker must enter the busy-loop before teardown so quit()+wait() is forced to time out");
+
+        QElapsedTimer t;
+        t.start();
+        delete chain; // graceful wait times out -> terminate() fires
+        const qint64 elapsed = t.elapsed();
+
+        // Lower bound proves the graceful fast-path did NOT return quickly — the
+        // worker was genuinely stuck and the terminate() branch was reached
+        // (kQuitWaitMs=2000; an idle teardown returns in single-digit ms).
+        QVERIFY2(elapsed >= 1900,
+                 qPrintable(QStringLiteral("teardown returned in %1 ms — expected the graceful wait to time out "
+                                           "(~kQuitWaitMs=2000ms) before terminate() fires; the wedged path was "
+                                           "not exercised")
+                                .arg(elapsed)));
+        // Upper bound proves the terminate() path is still bounded — never a
+        // hang (kQuitWaitMs + kTerminateWaitMs = 2500ms, plus scheduling slack).
+        QVERIFY2(elapsed < 4000, qPrintable(QStringLiteral("terminate() teardown took %1 ms — must stay bounded "
+                                                           "(kQuitWaitMs + kTerminateWaitMs)")
+                                                .arg(elapsed)));
+        // Thread actually finished: the chain destroyed its owned QThread, and
+        // the destructor returned normally (no "Destroyed while running" qFatal).
+        QVERIFY2(threadGuard.isNull(),
+                 "the chain must destroy its owned QThread even on the terminate() path (thread finished)");
     }
 };
 

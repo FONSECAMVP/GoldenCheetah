@@ -255,6 +255,43 @@ class TestGarminConnectPyAdapter : public QObject
                  "rawMessage should carry str(e) of the foreign exception");
     }
 
+    // REQ-002 / TEST-005 / A3-R002-TR-05 — malformed login() result branches.
+    // PyEmbeddedAdapter defends against a login() that returns a non-dict, and
+    // against a dict missing garmin_user_id/display_name: both are DES-012
+    // contract breaches, mapped to Unknown + an explanatory message — NEVER a
+    // spurious Success. These two slots exercise those defensive branches
+    // (untested before TR-05) so a mutant deleting either check is killed: with
+    // the checks gone, a non-dict / missing-keys result falls through to a
+    // Success with empty fields, which these asserts reject.
+
+    // (i) login() returns a non-dict -> Unknown, non-empty message, NOT Success.
+    void nonDictLoginResultYieldsUnknownNotSuccess()
+    {
+        setScenario("non_dict_result");
+
+        PyEmbeddedAdapter adapter(kStubsDir, kTokenstore);
+        const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        QVERIFY2(out.kind != PyAuthOutcome::Success, "a non-dict login() result must NOT be reported as Success");
+        QCOMPARE(out.kind, PyAuthOutcome::Unknown);
+        QVERIFY2(!out.rawMessage.isEmpty(), "a non-dict login() result must carry an explanatory message");
+    }
+
+    // (j) login() returns a dict missing the required keys -> Unknown, non-empty
+    // message, NOT Success (empty uid/display_name must never look like a login).
+    void loginResultMissingKeysYieldsUnknownNotSuccess()
+    {
+        setScenario("missing_keys");
+
+        PyEmbeddedAdapter adapter(kStubsDir, kTokenstore);
+        const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        QVERIFY2(out.kind != PyAuthOutcome::Success,
+                 "a login() dict missing required keys must NOT be reported as Success");
+        QCOMPARE(out.kind, PyAuthOutcome::Unknown);
+        QVERIFY2(!out.rawMessage.isEmpty(), "a missing-keys login() result must carry an explanatory message");
+    }
+
     // (g) the exact call pattern production uses: authenticate() invoked from
     // a non-main worker-like thread. PyGILState_Ensure must acquire the GIL
     // there and return the same Success marshalling as on the main thread.

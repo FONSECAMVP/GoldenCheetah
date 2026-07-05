@@ -46,3 +46,11 @@ One row per finding ever raised by any cycle. The source of truth for CLV Check 
 | A3-R002-mutmut | A3/REQ-002 | non-blocking | no Python mutation tool | defer | A3/REQ-007 cycle |
 | D-01 | CLV/VAL-004 | non-blocking | Phase 2.1 bootstrap untracked in git | fix-now | commit e4ac2a88b (staged with REQ-002 RED) |
 | D-02 | CLV/VAL-004 | non-blocking | .venv hygiene (must not enter history) | fix-now | per-directory .gitignore in e4ac2a88b |
+| A3-R002-TR-01 | A3/REQ-002-TR | blocking | AddCloudWizard routing/lifecycle compiled by zero tests | fix-now | TEST-007 testGarminConnectWizardRouting.cpp (4 slots; kills M1/M2 routing, M3 idempotency, M4 dtor order) — working tree |
+| A3-R002-TR-02 | A3/REQ-002-TR | blocking | TEST-006 teardown bound is a proven mutation survivor | fix-now | TEST-006 idle bound tightened to «kQuitWaitMs (LSN-009); kills delete-quit() mutant — working tree |
+| A3-R002-TR-03 | A3/REQ-002-TR | non-blocking | hasAthlete→25 doubly-dead branch (silent landmine) | defer | guarded by TR-01 routing test, then accept-with-note |
+| A3-R002-TR-04 | A3/REQ-002-TR | non-blocking | terminate() last-resort path has no intentional coverage | fix-now | TEST-006 deterministic non-GIL busy-loop terminate() test — working tree |
+| A3-R002-TR-05 | A3/REQ-002-TR | non-blocking | PyEmbeddedAdapter malformed-result branches untested | fix-now | TEST-005 pystub non-dict/missing-key SCENARIOs + Unknown-not-Success asserts — working tree |
+| A3-R002-TR-06 | A3/REQ-002-TR | informational | pystub fidelity vs real module unverified (out of scope) | defer | dedicated fidelity check vs test_adapter_login.py |
+| A3-R002-TR-07 | A3/REQ-002-TR | informational | GARMIN_PY_MODULE_DIR deferral tracked; fail-safe covered | accept | missingModuleYieldsUnknownWithoutCrash (TEST-005) proxy; DES-007/NF-Pkg-001 |
+| A3-R002-TR-08 | Builder/TR-04 | non-blocking | uncancellable native wedge → ~GarminAuthChain aborts (qFatal) | defer | Phase 1.5 with A2-001 (wedged-worker recovery); only pure native loop, realistic wedges unwind |

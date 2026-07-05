@@ -176,6 +176,71 @@ target_compile_features(testGarminConnectAuthChain PRIVATE cxx_std_17)
 add_test(NAME testGarminConnectAuthChain COMMAND testGarminConnectAuthChain)
 set_tests_properties(testGarminConnectAuthChain PROPERTIES LABELS "garmin-fast")
 
+# --- T-007 — REQ-002 / A3-R002-TR-01: AddCloudWizard routing + lifecycle -----
+# Closes finding A3-R002-TR-01. Brings the REAL src/Cloud/AddCloudWizard.cpp
+# under test: AddService/AddConsent nextId() Garmin routing (→ page 21),
+# ensureGarminAuthPage() idempotency (the `if (garminChain) return;` guard) and
+# ~AddCloudWizard() DES-001a teardown order (chain before adapter).
+#
+# The heavyweight GC GUI headers (MainWindow/Athlete/Context/Settings/Colors/
+# CloudService/OAuthDialog/RideMetadata/GoldenCheetah/Serial, plus RideItem/
+# Perspective which moc drags into moc_AddCloudWizard.cpp) are short-circuited
+# by the force-included stubs/WizardStubPreamble.h — same pattern as
+# testGarminConnectTile's GCStubPreamble (a force-include is required because the
+# co-located src/Cloud headers cannot be shadowed on the include path). The REAL
+# Python-free Garmin auth stack (GarminAuthChain/GarminWorker/WorkerAuthClient/
+# GarminCredentialsPage) is linked in; PyEmbeddedAdapter is replaced by a
+# Python-free fake in the preamble, so this target stays on `garmin-fast`.
+#
+# GC_WANT_GARMINCONNECT must be defined for the target so the wizard's Garmin
+# routing/lifecycle branches compile; GARMIN_PY_MODULE_DIR mirrors the src build
+# (used verbatim by ensureGarminAuthPage()). <QRegExp> in AddCloudWizard.cpp
+# resolves via Qt6::Core5Compat, matching the src target. AUTOMOC (global) mocs
+# AddCloudWizard.h's Q_OBJECT pages and this file's test class.
+add_executable(testGarminConnectWizardRouting
+    testGarminConnectWizardRouting.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AddCloudWizard.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AddCloudWizard.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminAuthChain.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminAuthChain.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/WorkerAuthClient.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/WorkerAuthClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminCredentialsPage.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminCredentialsPage.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminAuthClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminPyAdapter.h
+)
+
+target_include_directories(testGarminConnectWizardRouting PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+)
+
+target_compile_definitions(testGarminConnectWizardRouting PRIVATE
+    GC_WANT_GARMINCONNECT
+    "GARMIN_PY_MODULE_DIR=\"${CMAKE_SOURCE_DIR}/src/Python/garminconnect\""
+)
+
+target_compile_options(testGarminConnectWizardRouting PRIVATE
+    "-include${CMAKE_CURRENT_SOURCE_DIR}/stubs/WizardStubPreamble.h"
+)
+
+target_link_libraries(testGarminConnectWizardRouting PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Gui
+    Qt${QT_VERSION_MAJOR}::Widgets
+    Qt${QT_VERSION_MAJOR}::Core5Compat
+    Qt${QT_VERSION_MAJOR}::Test
+)
+target_compile_features(testGarminConnectWizardRouting PRIVATE cxx_std_17)
+
+add_test(NAME testGarminConnectWizardRouting COMMAND testGarminConnectWizardRouting)
+set_tests_properties(testGarminConnectWizardRouting PROPERTIES
+    LABELS "garmin-fast"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # --- TEST-005 — DES-013 PyEmbeddedAdapter (embedded-CPython bridge) ----------
 # Production side of the DEC-013 seam: PyEmbeddedAdapter implements
 # IGarminPyAdapter against a REAL linked CPython (Python3::Python,

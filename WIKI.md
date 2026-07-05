@@ -1,12 +1,12 @@
 # PROJECT WIKI — GoldenCheetah            (the brain · read me first)
 root:  /media/andy/TOSHIBA EXT/Backup2/Documents/GoldenCheetah   schema: wiki-v1
-phase: 2 (Phase 2.2, active feature REQ-002 — VAL-007 slice code-complete, CLV pending)   live-status → STATE.md (read next)
+phase: 2 (Phase 2.2 — REQ-002 PyEmbeddedAdapter + tile-routing slice CLOSED: A3 clean, VAL-008 PASS 9/9; changeset uncommitted, TR-08/TR-06 deferred)   live-status → STATE.md (read next)
 
 ## MAP — directory manifest (authoritative; check before creating ANYTHING)
 WIKI.md                     this brain (hub) — read first, every session
 wiki/                       spokes: architecture.md, conventions.md, glossary.md
 STATE.md                    project cursor (condensed from active ledger)
-lessons.md                  process lessons LSN-001..006 (index + cold entries)
+lessons.md                  process lessons LSN-001..009 (index + cold entries)
 CMakeLists.txt              new CMake build definition (migration in progress alongside qmake)
 CMakePresets.json           CMake configure/build presets
 build.pro, src/src.pro      legacy top-level qmake project files
@@ -55,17 +55,17 @@ src/*.o,moc_*,qrc_*,*_yacc*,*_lex*   [SKIP] generated in-source qmake build arti
 REQ  garmin:001–015+NF-*  full:.claude/workflow-garminconnect/prd.md         next:garmin-016
 DEC  garmin:001–013  index:.claude/workflow-garminconnect/decisions.md      next:garmin-014
 DES  garmin:001–013(+001a,003a)  .claude/workflow-garminconnect/design.md   next:garmin-014
-TEST garmin:T-001–T-006  .claude/workflow-garminconnect/traceability.md     next:garmin-T-007
-VAL  garmin:001–006  latest:VAL-006 PASS · .claude/workflow-garminconnect/validations/  next:garmin-007
-F    no F-### namespace in use; findings tracked as <cycle>-<seq> (A0-001…, A3-R00x-Mn, D-0x) in findings.md; 0 open blocking   next:n/a (see conventions.md)
-LSN  001–007  active:7 guards:6  lessons.md   next:008
+TEST garmin:T-001–T-007  .claude/workflow-garminconnect/traceability.md     next:garmin-T-008
+VAL  garmin:001–008  latest:VAL-008 PASS(9/9) · .claude/workflow-garminconnect/validations/  next:garmin-009
+F    no F-### namespace in use; findings tracked as <cycle>-<seq> (A0-001…, A3-R00x-Mn/TR-nn, D-0x) in findings.md; 0 open blocking (A3-R002-TR-01/-02 fixed; TR-08 defer→Phase 1.5)   next:n/a (see conventions.md)
+LSN  001–009  active:9 guards:7  lessons.md   next:010
 -- CLOSED (provenance only, do not extend): aicoach:DEC-001–013, aicoach:REQ-001–020, aicoach:TEST-001–020 — numeric collision with garmin ranges above; always use ledger prefix (coach:DEC-NNN / garmin:DEC-NNN)
 
 ## PAGES — wiki spokes (read the one named; don't explore blindly)
 wiki/architecture.md — components + Garmin auth data-flow + IGarminAuthClient/IGarminPyAdapter contracts + Watch list · read when touching src/Cloud, src/Python/garminconnect, or the active ledger
 wiki/conventions.md  — canonical locations, per-ledger ID-namespace rule, anti-dup checklist · read before creating any file/dir
 wiki/glossary.md     — project terms (ride/activity, athlete dir, CloudService, worker/adapter seam, ledger, slice, …) · read when a term is unfamiliar
-lessons.md           — checkable process rules (LSN-001..006) · read guards matching current operation before acting
+lessons.md           — checkable process rules (LSN-001..009) · read guards matching current operation before acting
 .claude/workflow-garminconnect/state.md — full live cursor for the active ledger (this WIKI's STATE.md is a condensed pointer to it)
 .claude/workflow-INDEX.md — ledger convention + which ledger is active vs closed
 
