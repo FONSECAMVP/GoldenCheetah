@@ -1,12 +1,12 @@
 # State — Garmin Connect Integration
 
-_Updated: 2026-07-08 — REQ-007 activity-download chain GREEN through the worker + uncommitted (NOT fully deployed). Slice 3: GarminWorker gains `downloadActivity(activityId, fmt, requestId)` slot + `downloaded(id,bytes)`/`downloadFailed(id, GarminDownloadFailure)` signals (GarminDownloadFailure = new metatype-registered value type, Network/RateLimit/Unknown), mapping PyDownloadOutcome→signals off the GUI thread (DES-001). TEST-010 = 6 garmin-fast slots (new testGarminConnectDownloadWorker target); garmin ctest 8/8; clang-format clean. **RE-SCOPED:** the original slice-3 plan (GarminConnect::readFile staging + FIT→TCX fallback, DES-004) is DEFERRED — needs REQ-004/006 worker-in-CloudService + token/session lifecycle, and the fallback trigger ("FIT not available") depends on unvalidated library behaviour (PRD Assumption B). Slices 1+2 (adapter download_activity T-008 6 pytest; PyEmbeddedAdapter marshalling + retained-client session T-009 8 garmin-py) also GREEN + uncommitted. Prior: REQ-002 CLOSED, committed `60a076848`._
+_Updated: 2026-07-08 — REQ-007 activity-download chain GREEN through the worker + committed `1eb5a6a16` (NOT fully deployed; VAL-009 PASS after ledger-record fix). Slice 3: GarminWorker gains `downloadActivity(activityId, fmt, requestId)` slot + `downloaded(id,bytes)`/`downloadFailed(id, GarminDownloadFailure)` signals (GarminDownloadFailure = new metatype-registered value type, Network/RateLimit/Unknown), mapping PyDownloadOutcome→signals off the GUI thread (DES-001). TEST-010 = 6 garmin-fast slots (new testGarminConnectDownloadWorker target); garmin ctest 8/8; clang-format clean. **RE-SCOPED:** the original slice-3 plan (GarminConnect::readFile staging + FIT→TCX fallback, DES-004) is DEFERRED — needs REQ-004/006 worker-in-CloudService + token/session lifecycle, and the fallback trigger ("FIT not available") depends on unvalidated library behaviour (PRD Assumption B). Slices 1+2 (adapter download_activity T-008 6 pytest; PyEmbeddedAdapter marshalling + retained-client session T-009 8 garmin-py) also GREEN + committed. Prior: REQ-002 CLOSED, committed `60a076848`._
 
 ## phase
 - current: Phase 2.2
-- active feature: REQ-007 — activity download. Download chain GREEN adapter→PyEmbeddedAdapter→worker + uncommitted (T-008/009/010); NOT fully deployed. REQ-002 Authenticate flow CLOSED + committed.
-- next gate: commit the REQ-007 download chain when the user asks (cite REQ-007/TEST-008/009/010/DEC-006/DEC-013). REQ-007 CLOSURE is DEFERRED — the readFile staging + FIT→TCX fallback (DES-004) that finishes the acceptance criterion need REQ-004/006 (token storage + worker-in-CloudService lifecycle) first, and the fallback trigger needs PRD-Assumption-B (library FIT-availability signal) validated. Candidate next work: REQ-004/006 (tokens) to unlock REQ-007 closure, or REQ-003 (MFA). An incremental CLV over the REQ-007 changeset is the right gate before moving on.
-- last-clean-VAL: VAL-008 (2026-07-05 — REQ-002 A3 test-hardening changeset, PASS 9/9)
+- active feature: REQ-007 — activity download. Download chain GREEN adapter→PyEmbeddedAdapter→worker + committed `1eb5a6a16` (T-008/009/010); NOT fully deployed. REQ-002 Authenticate flow CLOSED + committed.
+- next gate: REQ-007 download chain committed (`1eb5a6a16`) + VAL-009 PASS. REQ-007 CLOSURE remains DEFERRED — the readFile staging + FIT→TCX fallback (DES-004) that finishes the acceptance criterion need REQ-004/006 (token storage + worker-in-CloudService lifecycle) first, and the fallback trigger needs PRD-Assumption-B (library FIT-availability signal) validated. Candidate next work: REQ-004/006 (tokens) to unlock REQ-007 closure, or REQ-003 (MFA).
+- last-clean-VAL: VAL-009 (2026-07-08 — REQ-007 download-chain changeset, PASS after ledger-record fix)
 - last-cycle: A3 REQ-002 tile-routing (2026-07-05) — FINDINGS then FIXED: TR-01/-02/-04/-05 resolved (TEST-007 + TEST-006/005 strengthening), TR-08 new→defer; see cycles/active/a3-req-002-tile-routing.md
 
 ## decs
@@ -29,8 +29,8 @@ _Updated: 2026-07-08 — REQ-007 activity-download chain GREEN through the worke
 ## des
 | DES | implements | status | last |
 |---|---|---|---|
-| 001 | DEC-002, DEC-013 | drafted (Auth-only subset GREEN) | 2026-05-24 |
-| 001a | DEC-013 | GREEN (Auth-only surface) | 2026-05-24 |
+| 001 | DEC-002, DEC-013 | drafted (Auth subset + REQ-007 download slot GREEN — TEST-010) | 2026-07-08 |
+| 001a | DEC-013 | GREEN (Auth + download seam — TEST-004 + TEST-009) | 2026-07-08 |
 | 002 | DEC-003 | drafted | 2026-05-17 |
 | 003 | DEC-004, DEC-012 | drafted | 2026-05-24 |
 | 003a | DEC-012 | drafted | 2026-05-24 |
@@ -43,7 +43,7 @@ _Updated: 2026-07-08 — REQ-007 activity-download chain GREEN through the worke
 | 010 | uses DES-001/002/005 (incremental sync) | drafted | 2026-05-17 |
 | 011 | uses DES-001/004/012 (profile auto-fill) | drafted | 2026-05-17 |
 | 012 | adapter seam over python-garminconnect (A2-004 fix) | stub-in-repo (REQ-002 GREEN partial) | 2026-05-23 |
-| 013 | production PyEmbeddedAdapter (DEC-013 production side, DEC-002) | GREEN (Auth surface, TEST-005) | 2026-07-04 |
+| 013 | production PyEmbeddedAdapter (DEC-013 production side, DEC-002) | GREEN (Auth + download surfaces, TEST-005 + TEST-009) | 2026-07-08 |
 
 ## reqs
 | REQ | cat | DECs | DESs | TESTs | status |
@@ -54,7 +54,7 @@ _Updated: 2026-07-08 — REQ-007 activity-download chain GREEN through the worke
 | 004 | must | 001,003 | 002,006 | — | not started |
 | 005 | must | 001,012 | 003,003a,012 | T-002 (adapter half: password-not-retained); T-003 (wizard side — GREEN) | tested (A3 pending) |
 | 006 | must | 001,003 | 002,008 | — | not started |
-| 007 | must | 001,002,006,013 | 001,001a,004,012,013 | T-008 (GREEN, 6 pytest — adapter download_activity). T-009 (GREEN, 8 garmin-py — PyEmbeddedAdapter.downloadActivity marshalling). T-010 (GREEN, 6 garmin-fast — GarminWorker DownloadActivity op: Success→downloaded, Network/RateLimit/Unknown→downloadFailed, args forwarded, adapter off-GUI-thread) | download chain GREEN adapter→PyEmbeddedAdapter→worker (uncommitted). **NOT-done (deferred):** GarminConnect::readFile staging garmin-<id>.<ext> + FIT→TCX fallback (DES-004) → needs REQ-004/006 tokens/session + PRD-Assumption-B library validation. REQ-007 NOT fully deployed |
+| 007 | must | 001,002,006,013 | 001,001a,004,012,013 | T-008 (GREEN, 6 pytest — adapter download_activity). T-009 (GREEN, 8 garmin-py — PyEmbeddedAdapter.downloadActivity marshalling). T-010 (GREEN, 6 garmin-fast — GarminWorker DownloadActivity op: Success→downloaded, Network/RateLimit/Unknown→downloadFailed, args forwarded, adapter off-GUI-thread) | download chain GREEN adapter→PyEmbeddedAdapter→worker, committed `1eb5a6a16` (VAL-009 PASS). **NOT-done (deferred):** GarminConnect::readFile staging garmin-<id>.<ext> + FIT→TCX fallback (DES-004) → needs REQ-004/006 tokens/session + PRD-Assumption-B library validation. REQ-007 NOT fully deployed |
 | 008 | must | 001,003,006 | 002,010,012 | — | not started |
 | 009 | must | 001,004 | 003 | — | not started |
 | 010 | must | 001,002,003,007 | 002,009,006,012 | — | not started |
@@ -99,6 +99,7 @@ Full motivation cells and acceptance fragments live in `prd.md`. Use this table 
 | 006 | P2.2 REQ-002 end-to-end slice | PASS | validations/active/val-006.md |
 | 007 | P2.2 REQ-002 PyEmbeddedAdapter + wizard tile-routing slice | PASS (7/9, 2 WARN) | validations/active/val-007.md |
 | 008 | P2.2 REQ-002 A3 test-hardening changeset (TEST-007 + strengthened 005/006) | PASS (9/9) | validations/active/val-008.md |
+| 009 | P2.2 REQ-007 download-chain changeset (commit `1eb5a6a16`) | PASS (after ledger-record fix; first pass FAIL Check 6) | validations/active/val-009.md |
 
 ## open
 - needs-review: none
@@ -123,7 +124,15 @@ Full motivation cells and acceptance fragments live in `prd.md`. Use this table 
 - drift items: D-01 closed by e4ac2a88b; D-02 closed by e4ac2a88b
 
 ## last-clv
-- VAL-008 — 2026-07-05 — PASS (9/9) — REQ-002 A3 test-hardening changeset (TEST-007 new + TEST-005/006 strengthened). First pass FAILed Check 6 (state.md ## reqs stale + named-slot-vs-QTest-total count conflation); fixed by standardizing on named-slot counts with QTest-total annotation, LSN-008 escalated advisory→guard, re-verified clean. Slice CLOSED.
+- VAL-009 — 2026-07-08 — PASS — REQ-007 download-chain changeset (commit `1eb5a6a16`). First pass
+  FAILed Check 6 (LSN-008 class): the committed ledger byproduct still read "uncommitted"/`_pending_`
+  (Commit column, banners) and the DES-001/001a/013 index status cells were left Auth-only despite the
+  prose design.md sections being current; CASCADE note still called IGarminPyAdapter "Auth-only". Fixed
+  by this ledger-record follow-up (Commit columns filled with `1eb5a6a16`, banners flipped, DES index +
+  CASCADE refreshed); LSN-008 escalated (recur:3, miss:2, check broadened to DES-index status cells),
+  new LSN-010 (commit-column-staleness) captured. Re-verified clean → PASS. Code/design/test spine was
+  clean on the first pass (Checks 1-3/8/9); WARN-4 (readFile acceptance untested) is the known deferral.
+- prior: VAL-008 — 2026-07-05 — PASS (9/9) — REQ-002 A3 test-hardening changeset (TEST-007 new + TEST-005/006 strengthened). First pass FAILed Check 6 (state.md ## reqs stale + named-slot-vs-QTest-total count conflation); fixed by standardizing on named-slot counts with QTest-total annotation, LSN-008 escalated advisory→guard, re-verified clean. Slice CLOSED.
 - prior: VAL-007 — 2026-07-05 — PASS (7/9, 2 tracked WARN) — PyEmbeddedAdapter + tile-routing slice.
   First pass FAILed Check 6 (traceability.md primary DES index + REQ-002 matrix row stale vs
   appendix tables); orchestrator refreshed the index/matrix/banner, captured LSN-008

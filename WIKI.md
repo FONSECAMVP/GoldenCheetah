@@ -1,6 +1,6 @@
 # PROJECT WIKI — GoldenCheetah            (the brain · read me first)
 root:  /media/andy/TOSHIBA EXT/Backup2/Documents/GoldenCheetah   schema: wiki-v1
-phase: 2 (Phase 2.2 — REQ-002 CLOSED@60a076848; REQ-007 activity-download download-chain GREEN through the worker (adapter T-008; PyEmbeddedAdapter marshalling T-009; GarminWorker DownloadActivity op T-010), uncommitted. NOT-done: GarminConnect::readFile staging + FIT→TCX fallback — deferred, needs REQ-004/006 tokens/session)   live-status → STATE.md (read next)
+phase: 2 (Phase 2.2 — REQ-002 CLOSED@60a076848; REQ-007 activity-download download-chain GREEN through the worker (adapter T-008; PyEmbeddedAdapter marshalling T-009; GarminWorker DownloadActivity op T-010), committed@1eb5a6a16 + VAL-009 PASS. NOT-done: GarminConnect::readFile staging + FIT→TCX fallback — deferred, needs REQ-004/006 tokens/session)   live-status → STATE.md (read next)
 
 ## MAP — directory manifest (authoritative; check before creating ANYTHING)
 WIKI.md                     this brain (hub) — read first, every session
@@ -56,9 +56,9 @@ REQ  garmin:001–015+NF-*  full:.claude/workflow-garminconnect/prd.md         n
 DEC  garmin:001–013  index:.claude/workflow-garminconnect/decisions.md      next:garmin-014
 DES  garmin:001–013(+001a,003a)  .claude/workflow-garminconnect/design.md   next:garmin-014
 TEST garmin:T-001–T-010  .claude/workflow-garminconnect/traceability.md     next:garmin-T-011
-VAL  garmin:001–008  latest:VAL-008 PASS(9/9) · .claude/workflow-garminconnect/validations/  next:garmin-009
+VAL  garmin:001–009  latest:VAL-009 PASS (REQ-007 chain; FAIL→fixed) · .claude/workflow-garminconnect/validations/  next:garmin-010
 F    no F-### namespace in use; findings tracked as <cycle>-<seq> (A0-001…, A3-R00x-Mn/TR-nn, D-0x) in findings.md; 0 open blocking (A3-R002-TR-01/-02 fixed; TR-08 defer→Phase 1.5)   next:n/a (see conventions.md)
-LSN  001–009  active:9 guards:7  lessons.md   next:010
+LSN  001–010  active:10 guards:7  lessons.md   next:011
 -- CLOSED (provenance only, do not extend): aicoach:DEC-001–013, aicoach:REQ-001–020, aicoach:TEST-001–020 — numeric collision with garmin ranges above; always use ledger prefix (coach:DEC-NNN / garmin:DEC-NNN)
 
 ## PAGES — wiki spokes (read the one named; don't explore blindly)

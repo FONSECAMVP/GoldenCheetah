@@ -7,8 +7,9 @@ LSN-004 | op:design type:missing-seam                 | guard    | recur:1  save
 LSN-005 | op:design type:security-invariant-on-read   | guard    | recur:1  saves:0 miss:0  | security invariants enforced on write (perms, format) must also be validated on read, not assumed
 LSN-006 | op:code type:error-handling                 | advisory | recur:1  saves:0 miss:0  | exception handlers at adapter/boundary layers must classify by type before a broad except, never swallow-and-misroute
 LSN-007 | op:commit type:hook-mutation-unverified      | guard    | recur:1  saves:0 miss:0  | if a pre-commit hook modifies files, all prior build/test evidence is void — rebuild + re-run affected tests before accepting the commit; protect semantic include order with clang-format off markers
-LSN-008 | op:ledger-update type:index-vs-detail-drift  | guard    | recur:2  saves:1 miss:1  | GUARD: after ANY ledger update, diff every STRUCTURED table cell touching the changed IDs (traceability primary matrix + DES index; state.md ## reqs/## des; root STATE COUNTS) against the actual artifact — not just the prose banner/narrative. A prose summary updated while its own structured index/table stays stale is the recurring drift signature (VAL-007 + VAL-008 both FAILed Check 6 on this). Re-count slots from source; never copy a count between docs.
+LSN-008 | op:ledger-update type:index-vs-detail-drift  | guard    | recur:3  saves:1 miss:2  | GUARD: after ANY ledger update, diff every STRUCTURED table cell touching the changed IDs (traceability primary matrix + DES index STATUS cells; state.md ## reqs/## des; root STATE COUNTS/CASCADE) against the actual artifact — not just the prose banner/narrative. A prose/design.md section updated while its own summary index/status cell stays stale is the recurring drift signature (VAL-007 + VAL-008 + VAL-009 all FAILed Check 6 on this). Re-count slots from source; never copy a count between docs.
 LSN-009 | op:test type:loose-timeout-bound-survivor   | advisory | recur:1  saves:1 miss:0  | a bounded-teardown/timeout assertion must be tight enough to FAIL if the graceful fast-path is skipped (assert « the fast-path ceiling, not < the sum of all fallback ceilings) — a loose bound cannot distinguish "worked" from "fell through to the last resort every time"
+LSN-010 | op:commit type:commit-column-staleness      | advisory | recur:1  saves:1 miss:0  | a feature commit that bundles its OWN ledger byproduct necessarily records "uncommitted"/`_pending_` (the hash doesn't exist yet); it MUST be followed immediately by a ledger-record step that fills the traceability Commit column with the just-created hash and flips uncommitted→committed banners, BEFORE the CLV gate. Mechanically checkable: `git log -1` HEAD hash vs the REQ row's Commit-column string.
 
 ---
 
@@ -132,7 +133,7 @@ history:2026-07-04: captured at guard level — high cost (broken master commit)
 
 ## LSN-008
 sig:    ledger-update / index-vs-detail-drift / traceability-matrix
-level:  guard     since:P2.2(2026-07-05)   recur:2   saves:1   miss:1   escalated:2026-07-05
+level:  guard     since:P2.2(2026-07-05)   recur:3   saves:1   miss:2   escalated:2026-07-05
 tags:   op:ledger-update, op:byproduct, phase:P2, type:index-vs-detail-drift
 trigger:updating traceability.md (or any index-first ledger) as the byproduct of a slice
         that added new DES/TEST/commit artifacts
@@ -159,6 +160,14 @@ history:2026-07-05: captured at advisory level (VAL-007 Check 6 — traceability
         three files. miss:1 recorded — the advisory did not prevent recurrence, so it is now a
         hard pre-flight guard. Root fix: standardized on named-slot counts with an explicit
         QTest-total annotation so the two metrics can't be conflated again.
+        2026-07-08 (VAL-009 Check 6): recurred a THIRD time — REQ-007 download-chain byproduct
+        updated the prose banners and the full design.md DES-001a/DES-013 sections, but left the
+        traceability DES-index STATUS cells (DES-001/001a/013 still "Auth-only", no TEST-009/010),
+        the state.md ## des status cells, and the root STATE CASCADE note ("IGarminPyAdapter Auth-
+        only") stale. recur:3/miss:2 — the guard fired the same signature but its CHECK list did not
+        name the DES-index Status column or the CASCADE note. Guard broadened this pass to enumerate
+        DES-index STATUS cells + STATE CASCADE among the structured cells to diff. Promotion candidate:
+        a deterministic pre-CLV lint diffing each changed DES/TEST id against its index status string.
 
 ## LSN-009
 sig:    test / loose-timeout-bound-survivor / teardown-assertion
@@ -205,3 +214,33 @@ origin: findings.md A3-R002-M6 (fix-now) → test_non_auth_exception_is_not_misc
         process failure), so kept at advisory rather than guard
 history:migration (2026-07-04): captured at advisory level (single occurrence, existing A3
         process already catches this class of bug)
+
+## LSN-010
+sig:    commit / commit-column-staleness / self-recording-byproduct
+level:  advisory  since:P2.2(2026-07-08)   recur:1   saves:1   miss:0
+tags:   op:commit, op:byproduct, phase:P2, type:commit-column-staleness
+trigger:committing a feature slice whose changeset INCLUDES its own ledger byproduct
+        (traceability.md/state.md/WIKI.md/STATE.md updated in the same commit as the code)
+mistake:REQ-007's download-chain commit `1eb5a6a16` bundled the ledger byproduct, which — because
+        the commit hash cannot exist until the commit is made — necessarily still read the REQ-007
+        Commit column as `_pending_` and every banner as "uncommitted". No immediate ledger-record
+        follow-up was run, so VAL-009 Check 6 FAILed against a landed-but-unrecorded commit
+        (git HEAD = 1eb5a6a16, traceability said "_pending_ … uncommitted"). REQ-002 handled the
+        same chicken-and-egg correctly via a dedicated follow-up commit `caa5c3e5b`; REQ-007 skipped
+        that step.
+rule:   any commit that bundles its own ledger byproduct MUST be followed immediately by a
+        ledger-record step (amend or a `docs(...): record commit <hash> into ledgers` follow-up,
+        the caa5c3e5b pattern) that fills the traceability Commit column with the just-created hash
+        and flips uncommitted→committed banners — BEFORE the CLV gate runs, so the spine's COMMIT
+        citation is never factually wrong for a landed change.
+check:  before delegating the CLV, run `git log -1 --format=%h` and grep the just-closed REQ's
+        Commit-column cell in traceability.md — the HEAD hash must appear there; no `_pending_`/
+        "uncommitted" string may survive for a change that is already in HEAD.
+origin: VAL-009 (2026-07-08) Check 6 FAIL — the code/design/test spine was clean; the sole FAIL was
+        this recording gap. saves:1 credited to the CLV pass that caught it. Mechanically checkable →
+        promotion candidate to a deterministic pre-CLV lint (HEAD hash vs Commit column).
+history:2026-07-08: captured at advisory level (first isolated occurrence as a distinct step-miss;
+        REQ-002 had done the follow-up, REQ-007 omitted it). Distinct from LSN-008 (which is about
+        STRUCTURED-cell-vs-prose drift within the ledger); LSN-010 is about the ledger-vs-git-HEAD
+        commit-recording step. Escalate to guard if a second self-recording commit ships without its
+        record-commit follow-up. scope:portable — travels to any ledgered project.
