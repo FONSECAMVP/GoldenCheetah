@@ -7,7 +7,8 @@ a community fork is a one-file change here.
 
 Phase 2.2 status (REQ-by-REQ):
   - REQ-002 login / GarminError(kind='auth') translation: GREEN.
-  - REQ-003 / REQ-007 / REQ-008 / REQ-012 / REQ-013: still raise
+  - REQ-007 download_activity (fmt map + connection/rate_limit translation): GREEN.
+  - REQ-003 / REQ-008 / REQ-012 / REQ-013: still raise
     NotImplementedError until their owning slice reaches GREEN.
 
 The wider `_EXCEPTION_MAP` (rate_limit, connection, captcha, mfa_required,
@@ -78,7 +79,28 @@ class GarminClient:
         raise NotImplementedError("REQ-008 GREEN step not yet implemented")
 
     def download_activity(self, activity_id: str, fmt: str = "ORIGINAL") -> bytes:
-        raise NotImplementedError("REQ-007 GREEN step not yet implemented")
+        # REQ-007 / DEC-006: FIT is the default (dl_fmt=ORIGINAL); TCX is the
+        # fallback the C++ readFile requests when Garmin has no FIT original
+        # (DES-004 owns the fallback orchestration — this adapter is a thin,
+        # single-format fetch). Map the GC-stable `fmt` to the library's enum
+        # here so nothing above this seam knows the library's format type.
+        fmt_map = {
+            "ORIGINAL": self._garmin.ActivityDownloadFormat.ORIGINAL,
+            "TCX": self._garmin.ActivityDownloadFormat.TCX,
+        }
+        if fmt not in fmt_map:
+            # Reject before any network call — never forward a garbage dl_fmt.
+            raise GarminError("unknown", f"unsupported download format {fmt!r}")
+        try:
+            # Classify by exception TYPE, then translate (LSN-006): only the
+            # known-transient download errors become GC-stable kinds; anything
+            # else propagates unchanged rather than inheriting a Garmin kind.
+            data: bytes = self._garmin.download_activity(activity_id, dl_fmt=fmt_map[fmt])
+        except _gc.exceptions.GarminConnectConnectionError as e:
+            raise GarminError("connection", str(e) or "Could not reach Garmin Connect", e) from e
+        except _gc.exceptions.GarminConnectTooManyRequestsError as e:
+            raise GarminError("rate_limit", str(e) or "Garmin Connect is rate-limiting downloads", e) from e
+        return data
 
     def get_profile(self) -> dict[str, Any]:
         raise NotImplementedError("REQ-013 GREEN step not yet implemented")

@@ -133,12 +133,29 @@ class IGarminPyAdapter {
     // QObject-inheritance — production PyEmbeddedAdapter does not need to be a
     // QObject, and FakePyAdapter is trivially constructible in unit tests.
     virtual PyAuthOutcome authenticate(const QString& email, const QString& password) = 0;
+
+    // REQ-007 additive extension (slice 2, GREEN). Fetch one activity's bytes in
+    // the requested format ("ORIGINAL" for FIT, "TCX" for the DES-004 fallback);
+    // reuses the session authenticate() established.
+    virtual PyDownloadOutcome downloadActivity(const QString& activityId, const QString& fmt) = 0;
 };
+
+// REQ-007 value type (mirror of PyAuthOutcome one op down):
+//   struct PyDownloadOutcome {
+//       enum Kind { Success, Network, RateLimited, Unknown };
+//       Kind kind = Unknown;
+//       QByteArray data;      // populated only on Success; binary-safe (keeps NUL)
+//       QString  rawMessage;  // non-Success raw library message (DES-008 translates)
+//   };
+// RateLimited is a distinct Kind (not folded to Unknown) so DES-008 rate-limit
+// copy and DES-005/DES-010 pacing can key off it.
 ```
 
 ### Lifecycle and ownership
 
 The wizard creates the production `PyEmbeddedAdapter` once (per-athlete) and passes it to `GarminWorker`'s constructor. The worker stores the raw pointer; it does not own it. Destruction order: wizard outlives worker outlives adapter. In tests, the fake's lifetime is the test slot's.
+
+**REQ-007 session model (slice 2):** because REQ-005 forbids retaining the password, a download cannot construct a fresh authenticated client. The production `PyEmbeddedAdapter` therefore **retains the authenticated Python `GarminClient`** established by a successful `authenticate()` (member `m_client`, owned ref) and `downloadActivity()` reuses it; called before any successful auth it returns `Unknown`/"not authenticated". The adapter is worker-thread-confined (DES-001), so the retained handle has a single-threaded access model; its destructor releases the ref under the GIL only while `Py_IsInitialized()` (a finalized-interpreter DECREF would be use-after-free). This makes the per-athlete adapter the sole holder of the live library session across auth+download.
 
 ### Why an interface, not virtual on `GarminWorker`
 
@@ -417,6 +434,16 @@ public:
 
 - `readFile()` calls `download_activity(id, dl_fmt=ORIGINAL)`. The library returns FIT for nearly all activities; for the small minority where Garmin returns non-FIT (some manually-entered activities), we fall back to TCX via `download_activity(id, dl_fmt=TCX)`.
 - Bytes land in GC's existing import staging dir as `garmin-<activity_id>.<ext>`, where `<ext>` ∈ {`.fit`, `.tcx`}. The existing `FitRideFile` / `TcxRideFile` parsers produce the `RideItem`.
+
+> **Implementation status (REQ-007, 2026-07-08).** The download *chain* is GREEN and tested end to
+> end below the CloudService: `garmin_client.download_activity` (DES-012, TEST-008) → `PyEmbeddedAdapter`
+> bytes-marshalling (DES-013, TEST-009) → `GarminWorker::downloadActivity` op emitting `downloaded`/
+> `downloadFailed` (DES-001, TEST-010). The worker op forwards `fmt` verbatim so a caller can request
+> `ORIGINAL` or `TCX`. **`readFile()` itself and the FIT→TCX fallback orchestration are NOT yet built**
+> (`GarminConnect` is still the REQ-001 tile stub): they require the worker-in-CloudService lifecycle +
+> loaded tokens (REQ-004/006, not started), and the fallback's trigger ("FIT not available") depends on
+> `python-garminconnect`'s behaviour which PRD Assumption B lists as unvalidated. Deferred to a REQ-007
+> closure slice after REQ-004/006 — REQ-007 is therefore not yet fully deployed.
 
 ### Disconnect
 
@@ -843,9 +870,17 @@ class PyEmbeddedAdapter : public IGarminPyAdapter {
     //             (C++ owns path policy, per DES-012 "what lives where").
     // tokenstorePath: forwarded verbatim to GarminClient(email, password, tokenstore_path).
     PyEmbeddedAdapter(const QString& modulePath, const QString& tokenstorePath);
+    ~PyEmbeddedAdapter() override;                 // REQ-007: DECREF m_client under GIL if Py up
     PyAuthOutcome authenticate(const QString& email, const QString& password) override;
+    PyDownloadOutcome downloadActivity(const QString& activityId, const QString& fmt) override; // REQ-007
+  private:
+    PyObject* m_client = nullptr;                  // retained authenticated GarminClient; owned
 };
 ```
+
+The header stays Python-free: `m_client` is declared via an opaque `struct _object;`
+forward-decl (`using PyObject = _object;`), so no `Python.h` leaks into includers.
+Non-copyable (owns a `PyObject*`).
 
 ### `authenticate()` sequence (worker thread)
 
@@ -861,6 +896,30 @@ class PyEmbeddedAdapter : public IGarminPyAdapter {
      →`Unknown` until its owning slice extends the enum. `.message`→`rawMessage`.
    - any other Python exception → `Unknown` + `str(e)`. **Never** mapped to
      `AuthFailed`.
+
+On success (step 5) the client PyObject is **retained** in `m_client` (prior ref
+DECREF'd) so `downloadActivity()` can reuse the session — REQ-005 keeps no password,
+so a fresh per-download client is impossible.
+
+### `downloadActivity()` sequence (REQ-007, worker thread)
+
+1. `Py_IsInitialized()` false → `Unknown` / `"embedded Python unavailable"` (same
+   fail-safe as authenticate; never throws).
+2. `PyGILState_Ensure()` via the same RAII guard.
+3. `m_client == nullptr` (no prior successful auth) → `Unknown` / `"not authenticated"`.
+4. `m_client.download_activity(activityId, fmt)` (positional `"ss"`; `fmt` is the
+   GC-stable string, mapped to the library enum inside `garmin_client` — DES-012).
+5. Exception → classify **by type then kind** (shared `takeRaisedException` helper,
+   same discipline as authenticate step 6): `GarminError` `'connection'`→`Network`,
+   `'rate_limit'`→`RateLimited`, anything else / foreign →`Unknown`; `.message`→`rawMessage`.
+6. Non-`bytes` result → `Unknown` / "returned a non-bytes result" (DES-012 contract
+   breach, never a spurious `Success`).
+7. `bytes` result → `PyDownloadOutcome{Success, data}` via `PyBytes_AsStringAndSize`
+   (ptr,len copy → **binary-safe**, keeps embedded NUL; a strlen copy would truncate).
+
+The **FIT→TCX fallback is NOT here** — DES-004's `readFile` (slice 3) calls this once
+with `"ORIGINAL"` and, on a non-`Success`/empty result, again with `"TCX"`. This method
+is a thin single-format fetch.
 
 ### Interpreter topology (scope note)
 

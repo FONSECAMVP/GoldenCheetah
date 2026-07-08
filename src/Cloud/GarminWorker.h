@@ -24,9 +24,23 @@
 #include "IGarminAuthClient.h"
 #include "IGarminPyAdapter.h"
 
+#include <QByteArray>
 #include <QObject>
 #include <QString>
 #include <QUuid>
+
+// REQ-007 — the failure payload of GarminWorker::downloadFailed. Mirrors
+// GarminAuthFailure one op down; `rawMessage` is the untranslated library
+// message (DES-008 translates at the consumer/ErrorBus layer). Registered as a
+// metatype (below + qRegisterMetaType in the ctor) so it can cross the worker
+// thread boundary via a queued connection.
+struct GarminDownloadFailure
+{
+    enum Kind { Network, RateLimit, Unknown };
+    Kind kind = Unknown;
+    QString rawMessage;
+};
+Q_DECLARE_METATYPE(GarminDownloadFailure)
 
 class GarminWorker : public QObject
 {
@@ -41,11 +55,21 @@ class GarminWorker : public QObject
     // invocation, so the adapter runs on the worker thread (REQ-NF-Threads-001).
     void authenticate(const QString& email, const QString& password, QUuid requestId);
 
+    // REQ-007 — download one activity's bytes in `fmt` ("ORIGINAL" for FIT,
+    // "TCX" for the DES-004 fallback) via the retained adapter session, off the
+    // GUI thread. Emits downloaded() on Success, else downloadFailed(). `fmt`
+    // is forwarded verbatim so the future readFile fallback can drive it.
+    void downloadActivity(const QString& activityId, const QString& fmt, QUuid requestId);
+
   signals:
     // Emitted on the worker thread; cross-thread queued connection delivers
     // them to slots on the GUI thread (e.g. WorkerAuthClient re-emits).
     void finished(QUuid id, GarminAuthSuccess result);
     void failed(QUuid id, GarminAuthFailure error);
+
+    // REQ-007 — download results, same threading contract as above.
+    void downloaded(QUuid id, QByteArray data);
+    void downloadFailed(QUuid id, GarminDownloadFailure error);
 
   private:
     IGarminPyAdapter* m_py; // not owned — caller's lifetime

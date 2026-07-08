@@ -78,6 +78,10 @@ class FakePyAdapter : public IGarminPyAdapter
         callCount.fetch_add(1);
         return scriptedOutcome;
     }
+
+    // REQ-007 seam extension (DEC-013 compile-enforced) — this auth test never
+    // downloads; a default outcome satisfies the interface.
+    PyDownloadOutcome downloadActivity(const QString&, const QString&) override { return {}; }
 };
 
 // ---------------------------------------------------------------------------

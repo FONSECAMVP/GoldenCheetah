@@ -17,10 +17,10 @@ C12 Python    | embedded CPython host (PythonEmbed, SIP bindings, garminconnect/
 ## Garmin Connect feature — components (governed, active ledger)
 G1 AddCloudWizard          | UI entry: "Garmin Connect" tile (page 21) + credentials/MFA pages | gov:DEC-001,004,011,012 | code:src/Cloud/AddCloudWizard.{h,cpp}, src/Cloud/GarminCredentialsPage.{h,cpp}
 G2 GarminConnect           | CloudService subclass (Query\|Download capabilities)    | gov:DEC-005,006 | code:src/Cloud/GarminConnect.{h,cpp}
-G3 GarminWorker            | QObject in QThread; mailbox + cancellation + sole GIL holder | gov:DEC-002,013 | code:src/Cloud/GarminWorker.{h,cpp}
+G3 GarminWorker            | QObject in QThread; sole adapter caller. Ops: authenticate (finished/failed) + downloadActivity (REQ-007: downloaded(id,bytes)/downloadFailed(id,GarminDownloadFailure)), each mapping the adapter outcome→signals off the GUI thread | gov:DEC-002,013 | code:src/Cloud/GarminWorker.{h,cpp}
 G4 IGarminAuthClient       | pure-virtual auth-dispatcher seam (credentials page ↔ SSO) | gov:DEC-012 | code:src/Cloud/IGarminAuthClient.h
-G5 IGarminPyAdapter        | pure-virtual worker ↔ Python seam (Auth-only surface GREEN) | gov:DEC-013 | code:src/Cloud/IGarminPyAdapter.h
-G5a PyEmbeddedAdapter      | production IGarminPyAdapter over embedded CPython (GIL RAII, type-then-kind classification) | gov:DES-013 | code:src/Cloud/PyEmbeddedAdapter.{h,cpp}
+G5 IGarminPyAdapter        | pure-virtual worker ↔ Python seam: authenticate() + downloadActivity() (REQ-007) GREEN; PyAuthOutcome + PyDownloadOutcome value types | gov:DEC-013 | code:src/Cloud/IGarminPyAdapter.h
+G5a PyEmbeddedAdapter      | production IGarminPyAdapter over embedded CPython (GIL RAII, type-then-kind classification via shared takeRaisedException). RETAINS the authenticated GarminClient (m_client) across authenticate→downloadActivity — REQ-005 session model (password not kept); bytes marshalled binary-exact via PyBytes_AsStringAndSize; dtor DECREFs under GIL only if Py_IsInitialized | gov:DES-013 | code:src/Cloud/PyEmbeddedAdapter.{h,cpp}
 G5b GarminAuthChain        | RAII assembly: QThread+GarminWorker+WorkerAuthClient around a non-owned IGarminPyAdapter* | gov:DES-001,001a (impl. note under DES-003) | code:src/Cloud/GarminAuthChain.{h,cpp}
 G6 garmin_client.py (DES-012) | sole module importing `garminconnect`; stable adapter, swap point | gov:DEC-002,DES-012 | code:src/Python/garminconnect/garmin_client.py
 G7 gc_rate.py              | rate-limit + backoff decorator around library calls (planned) | gov:DEC-007,DES-005 | code:src/Python (not yet landed)
@@ -42,8 +42,11 @@ covers the wizard routing itself (only the chain in isolation) — flagged for A
 ## Integration points / contracts
 G1↔G4: AddCloudWizard/GarminCredentialsPage inject an IGarminAuthClient; production impl
         dispatches to G3 (DEC-012, DES-003/003a).
-G3↔G5: GarminWorker calls IGarminPyAdapter.authenticate() off the GUI thread; interface
-        locks in `PyAuthOutcome` shape (DEC-013, DES-001/001a).
+G3↔G5: GarminWorker calls IGarminPyAdapter.authenticate() + downloadActivity() off the GUI
+        thread; interface locks in `PyAuthOutcome` / `PyDownloadOutcome` shapes (DEC-013,
+        DES-001/001a). REQ-007: download reuses the session authenticate() established — the
+        adapter (G5a) is the sole holder of the live Python client, so the worker holds ONE
+        adapter across auth+download (slice 3 wires the worker/CloudService side).
 G5↔G6: PyEmbeddedAdapter (DES-013, src/Cloud/PyEmbeddedAdapter.{h,cpp}) bridges
         IGarminPyAdapter calls into garmin_client.py — GIL via RAII, classification by
         type-then-kind (LSN-006). Test-linked CPython today; app-build wiring pending (VAL-007).
@@ -77,6 +80,23 @@ C10↔C12: AI Coach (Coach) also uses embedded Python via C12's PythonEmbed core
   mutant. The suite exercises the logic directly, NOT via live QWizard navigation — the
   `AddService::clicked`/back-next wiring that *calls* nextId/ensure is compiled but not driven
   (residual gap; candidate follow-up).
+- REQ-007 NOT fully deployed (download chain GREEN adapter→PyEmbeddedAdapter→worker, but the
+  CloudService side is deferred): `GarminConnect` is still the REQ-001 tile stub — no Q_OBJECT, no
+  worker wiring, no `readFile` override. The acceptance-completing pieces (readFile staging bytes as
+  garmin-<id>.<ext> → FitRideFile → RideItem; the FIT→TCX fallback per DES-004) are DEFERRED because
+  (a) readFile needs a worker-in-CloudService lifecycle + loaded tokens (REQ-004/006, not started), and
+  (b) the fallback trigger "FIT not available" depends on unvalidated library behaviour (PRD Assumption
+  B). The worker's downloadActivity op takes `fmt` verbatim so the future fallback drives ORIGINAL→TCX
+  without an API change. Revisit at REQ-004/006.
+- PyEmbeddedAdapter retained-client lifecycle (REQ-007 slice 2, new): the adapter now holds a
+  live PyObject* GarminClient (m_client) across authenticate→downloadActivity. Access is
+  worker-thread-confined by DES-001; the dtor DECREFs under a GIL guard only when
+  Py_IsInitialized() (a finalized-interpreter DECREF would be use-after-free — leak is chosen
+  instead). Watch at slice 3 / A3: (a) real destruction happens on the wizard/GUI thread while the
+  worker thread may have touched m_client — confirm no concurrent access; (b) a failed re-auth
+  currently leaves the prior session in place (does not clear m_client) — verify that is intended
+  when REQ-012 Disconnect lands; (c) TEST-009 exercises dtor-with-interpreter-up only, not the
+  finalized-interpreter leak branch.
 - GarminAuthChain last-resort teardown (A3-R002-TR-08, deferred → Phase 1.5 with A2-001): a
   genuinely uncancellable native busy-loop (no cancellation point) defeats `QThread::terminate()`;
   `~GarminAuthChain` then destroys a still-running `QThread` → `qFatal` abort. Only reachable via

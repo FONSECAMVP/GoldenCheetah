@@ -82,6 +82,10 @@ class FakePyAdapter : public IGarminPyAdapter
         callCount.fetch_add(1);
         return scriptedOutcome;
     }
+
+    // REQ-007 seam extension (DEC-013 compile-enforced) — chain teardown tests
+    // never download; a default outcome satisfies the interface.
+    PyDownloadOutcome downloadActivity(const QString&, const QString&) override { return {}; }
 };
 
 // ---------------------------------------------------------------------------
@@ -125,6 +129,10 @@ class BusyPyAdapter : public IGarminPyAdapter
         }
         return PyAuthOutcome{};
     }
+
+    // REQ-007 seam extension (DEC-013 compile-enforced) — never invoked; the
+    // wedge is in authenticate().
+    PyDownloadOutcome downloadActivity(const QString&, const QString&) override { return {}; }
 };
 
 // ---------------------------------------------------------------------------

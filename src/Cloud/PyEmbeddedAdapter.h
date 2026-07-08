@@ -26,6 +26,11 @@
 
 #include <QString>
 
+// Opaque forward-decl so the header stays Python-free (no Python.h). The
+// retained authenticated client is a PyObject*; only the .cpp knows its type.
+struct _object;
+using PyObject = _object;
+
 class PyEmbeddedAdapter : public IGarminPyAdapter
 {
   public:
@@ -35,13 +40,28 @@ class PyEmbeddedAdapter : public IGarminPyAdapter
     //             GarminClient(email, password, tokenstore_path).
     PyEmbeddedAdapter(const QString& modulePath, const QString& tokenstorePath);
 
+    // Releases the retained authenticated client under the GIL (REQ-007
+    // session model). Safe if the interpreter is already finalized.
+    ~PyEmbeddedAdapter() override;
+
+    // Owns a PyObject* (the retained client) — non-copyable.
+    PyEmbeddedAdapter(const PyEmbeddedAdapter&) = delete;
+    PyEmbeddedAdapter& operator=(const PyEmbeddedAdapter&) = delete;
+
     // Never throws; every failure is folded into PyAuthOutcome (DES-013
     // step 1: interpreter down -> Unknown / "embedded Python unavailable").
+    // On Success the authenticated client is retained for downloadActivity().
     PyAuthOutcome authenticate(const QString& email, const QString& password) override;
+
+    // REQ-007 — download one activity via the retained authenticated client.
+    // Never throws; interpreter-down / no-session / library errors all fold
+    // into a non-Success PyDownloadOutcome (Network/RateLimited/Unknown).
+    PyDownloadOutcome downloadActivity(const QString& activityId, const QString& fmt) override;
 
   private:
     QString modulePath;
     QString tokenstorePath;
+    PyObject* m_client = nullptr; // retained authenticated GarminClient; owned
 };
 
 #endif // GC_PyEmbeddedAdapter_h

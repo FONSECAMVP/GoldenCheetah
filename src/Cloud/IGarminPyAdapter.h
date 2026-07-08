@@ -20,6 +20,7 @@
 #ifndef GC_IGarminPyAdapter_h
 #define GC_IGarminPyAdapter_h
 
+#include <QByteArray>
 #include <QString>
 
 // ---------------------------------------------------------------------------
@@ -46,14 +47,43 @@ struct PyAuthOutcome
 };
 
 // ---------------------------------------------------------------------------
+// PyDownloadOutcome — value type returned by IGarminPyAdapter::downloadActivity()
+// (REQ-007). Mirrors PyAuthOutcome's shape one op down: the worker maps each
+// Kind to the CloudService/ErrorBus surface (DES-004/DES-008). `data` carries
+// the raw activity bytes (FIT or TCX — the caller knows which format it asked
+// for) and is populated ONLY on Success; failures carry the raw library
+// message for DES-008 to translate at the page/ErrorBus layer.
+//
+// RateLimited is a distinct Kind (not folded into Unknown) because DES-008 has
+// dedicated rate-limit copy and DES-005/DES-010 pace backfill/sync off it.
+// ---------------------------------------------------------------------------
+
+struct PyDownloadOutcome
+{
+    enum Kind { Success, Network, RateLimited, Unknown };
+    Kind kind = Unknown;
+
+    // Populated only when kind == Success. Binary-safe (may contain NUL).
+    QByteArray data;
+
+    // Populated for non-Success outcomes. Raw library message — DES-008
+    // translates at the page/ErrorBus layer; the adapter does NOT translate.
+    QString rawMessage;
+};
+
+// ---------------------------------------------------------------------------
 // Interface — header-only, no QObject inheritance. Production
 // PyEmbeddedAdapter holds the embedded-Python sub-interpreter reference and
-// invokes garmin_client.GarminClient.login(); FakePyAdapter records the
-// call and returns a scripted outcome.
+// invokes garmin_client.GarminClient.login() / .download_activity();
+// FakePyAdapter records the call and returns a scripted outcome.
 //
-// authenticate() is synchronous from the worker-thread caller's perspective.
+// Every method is synchronous from the worker-thread caller's perspective.
 // The worker is what makes the call on a non-GUI thread (DES-001 owns the
-// threading model); the GUI thread never invokes this method.
+// threading model); the GUI thread never invokes these methods.
+//
+// New ops extend this interface additively (DEC-013 Option A — compile-enforced
+// seam): a production adapter that forgets to implement a new op is a build
+// break, not a silent runtime no-op. downloadActivity() is the REQ-007 op.
 // ---------------------------------------------------------------------------
 
 class IGarminPyAdapter
@@ -61,6 +91,11 @@ class IGarminPyAdapter
   public:
     virtual ~IGarminPyAdapter() = default;
     virtual PyAuthOutcome authenticate(const QString& email, const QString& password) = 0;
+
+    // REQ-007 — fetch one activity's bytes in the requested format ("ORIGINAL"
+    // for FIT, "TCX" for the fallback). Reuses the session authenticate()
+    // established (REQ-005 forbids retaining the password for a fresh client).
+    virtual PyDownloadOutcome downloadActivity(const QString& activityId, const QString& fmt) = 0;
 };
 
 #endif // GC_IGarminPyAdapter_h

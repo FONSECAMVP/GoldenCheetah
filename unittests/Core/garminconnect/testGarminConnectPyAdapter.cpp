@@ -64,6 +64,7 @@
 #include "IGarminPyAdapter.h"
 #include "PyEmbeddedAdapter.h" // <-- intentionally missing in RED
 
+#include <QByteArray>
 #include <QString>
 #include <QTemporaryDir>
 #include <QtTest/QtTest>
@@ -127,6 +128,13 @@ QString stubAttr(const char* name)
 const QString kStubsDir = QString::fromUtf8(GARMIN_PYSTUBS_DIR);
 const QString kTokenstore = QStringLiteral("/tmp/gc-test-tokens/garmin");
 
+// TEST-009 / REQ-007 — byte-identical to pystubs/garmin_client.py DL_PAYLOAD.
+// Embedded NUL (0x00) mid-buffer + high bytes (0xff/0xfe) prove the marshalling
+// reads the Python bytes by (ptr,len) — a strlen-based copy would truncate at
+// the first NUL and this comparison would fail.
+const unsigned char kDlBytesRaw[] = {0x00, 0x01, 0x02, 'F', 'I', 'T', 0x00, 0xff, 0xfe, 0x0a};
+const QByteArray kExpectedDownload(reinterpret_cast<const char*>(kDlBytesRaw), static_cast<int>(sizeof(kDlBytesRaw)));
+
 } // namespace
 
 class TestGarminConnectPyAdapter : public QObject
@@ -149,6 +157,13 @@ class TestGarminConnectPyAdapter : public QObject
         const PyAuthOutcome out = early.authenticate(QStringLiteral("a@b"), QStringLiteral("pw"));
         QCOMPARE(out.kind, PyAuthOutcome::Unknown);
         QCOMPARE(out.rawMessage, QStringLiteral("embedded Python unavailable"));
+
+        // TEST-009 — the same fail-safe for the download op: before the
+        // interpreter is up, downloadActivity must fold to Unknown /
+        // "embedded Python unavailable" without crashing (DES-013 step 1).
+        const PyDownloadOutcome dOut = early.downloadActivity(QStringLiteral("123"), QStringLiteral("ORIGINAL"));
+        QCOMPARE(dOut.kind, PyDownloadOutcome::Unknown);
+        QCOMPARE(dOut.rawMessage, QStringLiteral("embedded Python unavailable"));
 
         // Now bring the interpreter up and release the GIL from this (main)
         // thread so PyGILState_Ensure works from any thread afterwards.
@@ -342,6 +357,152 @@ class TestGarminConnectPyAdapter : public QObject
         out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
         QCOMPARE(out.kind, PyAuthOutcome::Success);
         QCOMPARE(out.display_name, QStringLiteral("Alice Rider"));
+    }
+
+    // ==================================================================
+    // TEST-009 / REQ-007 — downloadActivity marshalling (DES-013 extension,
+    // same DEC-013 seam one op down). PyEmbeddedAdapter.downloadActivity()
+    // forwards (activity_id, fmt) to the authenticated GarminClient's
+    // download_activity(), marshals a Python `bytes` return into a QByteArray
+    // binary-exact, and classifies failures by exception TYPE then .kind
+    // (LSN-006): connection→Network, rate_limit→RateLimited, foreign /
+    // non-bytes / unknown-kind → Unknown — NEVER a spurious Success.
+    //
+    // Session model (DES-013 refinement): download reuses the client that
+    // authenticate() established and the adapter retains — REQ-005 forbids
+    // keeping the password, so a fresh per-download client is impossible.
+    // Each slot therefore authenticates (success) first.
+    // ==================================================================
+
+    // (a) success: Python `bytes` marshals to a binary-exact QByteArray
+    // (embedded NUL survives), and activity_id + fmt reach the stub verbatim.
+    void downloadSuccessMarshalsBinaryBytesAndRecordsArgs()
+    {
+        PyEmbeddedAdapter adapter(kStubsDir, kTokenstore);
+        setScenario("success");
+        QCOMPARE(adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw")).kind,
+                 PyAuthOutcome::Success);
+
+        setScenario("dl_success");
+        const PyDownloadOutcome out = adapter.downloadActivity(QStringLiteral("987654321"), QStringLiteral("ORIGINAL"));
+
+        QCOMPARE(out.kind, PyDownloadOutcome::Success);
+        QCOMPARE(out.data, kExpectedDownload);
+        QCOMPARE(out.data.size(), kExpectedDownload.size()); // guards NUL-truncation explicitly
+        QCOMPARE(stubAttr("LAST_ACTIVITY_ID"), QStringLiteral("987654321"));
+        QCOMPARE(stubAttr("LAST_FMT"), QStringLiteral("ORIGINAL"));
+    }
+
+    // (b) fmt is forwarded, not hard-coded — 'TCX' reaches the stub as 'TCX'
+    // (kills a mutant that always requests ORIGINAL, breaking DES-004 fallback).
+    void downloadForwardsTcxFmt()
+    {
+        PyEmbeddedAdapter adapter(kStubsDir, kTokenstore);
+        setScenario("success");
+        QCOMPARE(adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw")).kind,
+                 PyAuthOutcome::Success);
+
+        setScenario("dl_success");
+        const PyDownloadOutcome out = adapter.downloadActivity(QStringLiteral("111"), QStringLiteral("TCX"));
+
+        QCOMPARE(out.kind, PyDownloadOutcome::Success);
+        QCOMPARE(stubAttr("LAST_FMT"), QStringLiteral("TCX"));
+    }
+
+    // (c) GarminError kind='connection' → Network, raw message forwarded.
+    void downloadConnectionErrorMapsToNetwork()
+    {
+        PyEmbeddedAdapter adapter(kStubsDir, kTokenstore);
+        setScenario("success");
+        adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        setScenario("dl_connection");
+        const PyDownloadOutcome out = adapter.downloadActivity(QStringLiteral("111"), QStringLiteral("ORIGINAL"));
+
+        QCOMPARE(out.kind, PyDownloadOutcome::Network);
+        QCOMPARE(out.rawMessage, QStringLiteral("stub: download connection refused"));
+    }
+
+    // (d) GarminError kind='rate_limit' → RateLimited — a DISTINCT kind, not
+    // collapsed to Unknown or misrouted to Network (DES-008 rate-limit copy).
+    void downloadRateLimitErrorMapsToRateLimited()
+    {
+        PyEmbeddedAdapter adapter(kStubsDir, kTokenstore);
+        setScenario("success");
+        adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        setScenario("dl_rate_limit");
+        const PyDownloadOutcome out = adapter.downloadActivity(QStringLiteral("111"), QStringLiteral("ORIGINAL"));
+
+        QVERIFY2(out.kind != PyDownloadOutcome::Unknown, "rate_limit must be its own kind, not Unknown");
+        QVERIFY2(out.kind != PyDownloadOutcome::Network, "rate_limit must not be misrouted to Network");
+        QCOMPARE(out.kind, PyDownloadOutcome::RateLimited);
+        QCOMPARE(out.rawMessage, QStringLiteral("stub: download rate-limited"));
+    }
+
+    // (e) a non-GarminError exception (ValueError) → Unknown, NEVER Success
+    // (LSN-006: classify by type; a foreign exception is not a valid download).
+    void downloadForeignExceptionMapsToUnknownNotSuccess()
+    {
+        PyEmbeddedAdapter adapter(kStubsDir, kTokenstore);
+        setScenario("success");
+        adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        setScenario("dl_value_error");
+        const PyDownloadOutcome out = adapter.downloadActivity(QStringLiteral("111"), QStringLiteral("ORIGINAL"));
+
+        QVERIFY2(out.kind != PyDownloadOutcome::Success, "a foreign exception must NOT be reported as a Success");
+        QCOMPARE(out.kind, PyDownloadOutcome::Unknown);
+        QVERIFY2(out.rawMessage.contains(QStringLiteral("not a garmin error (download)")),
+                 "rawMessage should carry str(e) of the foreign exception");
+    }
+
+    // (f) a non-bytes return (contract breach of the DES-012 seam) → Unknown,
+    // NEVER a Success with empty data. Kills a mutant that skips the type check.
+    void downloadNonBytesResultYieldsUnknownNotSuccess()
+    {
+        PyEmbeddedAdapter adapter(kStubsDir, kTokenstore);
+        setScenario("success");
+        adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        setScenario("dl_non_bytes");
+        const PyDownloadOutcome out = adapter.downloadActivity(QStringLiteral("111"), QStringLiteral("ORIGINAL"));
+
+        QVERIFY2(out.kind != PyDownloadOutcome::Success, "a non-bytes result must NOT be reported as Success");
+        QCOMPARE(out.kind, PyDownloadOutcome::Unknown);
+        QVERIFY2(!out.rawMessage.isEmpty(), "a non-bytes result must carry an explanatory message");
+    }
+
+    // (g) download before any successful authenticate → Unknown (no retained
+    // session), never a crash and never a Success. The password cannot be
+    // reused (REQ-005), so there is no client to download through.
+    void downloadWithoutAuthenticateYieldsUnknownNotSuccess()
+    {
+        PyEmbeddedAdapter adapter(kStubsDir, kTokenstore); // never authenticated
+        setScenario("dl_success");
+        const PyDownloadOutcome out = adapter.downloadActivity(QStringLiteral("111"), QStringLiteral("ORIGINAL"));
+
+        QVERIFY2(out.kind != PyDownloadOutcome::Success, "download without a session must NOT succeed");
+        QCOMPARE(out.kind, PyDownloadOutcome::Unknown);
+        QVERIFY2(!out.rawMessage.isEmpty(), "must explain why the download could not run");
+    }
+
+    // (h) the production call pattern: authenticate on this thread, then
+    // download from a non-main worker-like std::thread. PyGILState_Ensure must
+    // acquire the GIL there and marshal the identical bytes.
+    void downloadFromWorkerThreadMarshalsSameBytes()
+    {
+        PyEmbeddedAdapter adapter(kStubsDir, kTokenstore);
+        setScenario("success");
+        adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        setScenario("dl_success");
+        PyDownloadOutcome out;
+        std::thread worker([&] { out = adapter.downloadActivity(QStringLiteral("42"), QStringLiteral("ORIGINAL")); });
+        worker.join();
+
+        QCOMPARE(out.kind, PyDownloadOutcome::Success);
+        QCOMPARE(out.data, kExpectedDownload);
     }
 
     void cleanupTestCase()

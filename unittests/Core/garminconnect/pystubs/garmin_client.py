@@ -24,6 +24,16 @@ LAST_EMAIL = None
 LAST_PASSWORD = None
 LAST_TOKENSTORE = None
 
+# TEST-009 / REQ-007 — download marshalling. download_activity() records its
+# args here so the C++ side can assert verbatim marshalling, and returns this
+# exact binary payload on the "dl_success" scenario. The payload deliberately
+# contains embedded NUL (0x00) and high bytes (0xff/0xfe) so a strlen-based
+# (NUL-truncating) marshalling bug is caught — the C++ test hardcodes the same
+# bytes and asserts full-length QByteArray equality.
+LAST_ACTIVITY_ID = None
+LAST_FMT = None
+DL_PAYLOAD = b"\x00\x01\x02FIT\x00\xff\xfe\x0a"
+
 
 class GarminError(Exception):
     """Shape-compatible with the production GarminError (.kind / .message)."""
@@ -67,3 +77,24 @@ class GarminClient:
         if SCENARIO == "value_error":
             raise ValueError("stub: not a garmin error")
         raise GarminError("unknown", "stub: unrecognized scenario %r" % (SCENARIO,))
+
+    # TEST-009 / REQ-007 — download_activity mirrors garmin_client.GarminClient
+    # as PyEmbeddedAdapter.downloadActivity() calls it: (activity_id, fmt) ->
+    # bytes, raising GarminError(.kind) for translated failures. Behaviour is
+    # switched on dl_* SCENARIO values (disjoint from the login scenarios above,
+    # so a single SCENARIO switch drives both without collision).
+    def download_activity(self, activity_id, fmt="ORIGINAL"):
+        global LAST_ACTIVITY_ID, LAST_FMT
+        LAST_ACTIVITY_ID = activity_id
+        LAST_FMT = fmt
+        if SCENARIO == "dl_success":
+            return DL_PAYLOAD
+        if SCENARIO == "dl_non_bytes":
+            return "i am a str, not bytes"  # contract breach → Unknown, never Success
+        if SCENARIO == "dl_connection":
+            raise GarminError("connection", "stub: download connection refused")
+        if SCENARIO == "dl_rate_limit":
+            raise GarminError("rate_limit", "stub: download rate-limited")
+        if SCENARIO == "dl_value_error":
+            raise ValueError("stub: not a garmin error (download)")
+        raise GarminError("unknown", "stub: unrecognized dl scenario %r" % (SCENARIO,))

@@ -283,3 +283,41 @@ target_compile_features(testGarminConnectPyAdapter PRIVATE cxx_std_17)
 
 add_test(NAME testGarminConnectPyAdapter COMMAND testGarminConnectPyAdapter)
 set_tests_properties(testGarminConnectPyAdapter PROPERTIES LABELS "garmin-py")
+
+# --- TEST-010 — REQ-007 (slice 3/3): GarminWorker DownloadActivity op ---------
+# The worker-side download op, symmetric to TEST-004's authenticate coverage:
+# maps PyDownloadOutcome kinds to downloaded()/downloadFailed() signals and runs
+# the adapter off the GUI thread (REQ-NF-Threads-001). FakeDownloadPyAdapter
+# stands in for PyEmbeddedAdapter (DEC-013 Option A), so this stays Python-free
+# under the `garmin-fast` label (never garmin-py). AUTOMOC processes the new
+# GarminWorker signals and the test class.
+#
+# RED phase: GarminWorker has no downloadActivity slot / downloaded /
+# downloadFailed signals and GarminDownloadFailure does not exist yet — the
+# compile fails at those references (right-reason RED). GREEN adds them to
+# src/Cloud/GarminWorker.{h,cpp}.
+add_executable(testGarminConnectDownloadWorker
+    testGarminConnectDownloadWorker.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminAuthClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminPyAdapter.h
+)
+
+set_target_properties(testGarminConnectDownloadWorker PROPERTIES
+    AUTOMOC ON
+)
+
+target_include_directories(testGarminConnectDownloadWorker PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+)
+
+target_link_libraries(testGarminConnectDownloadWorker PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Test
+)
+target_compile_features(testGarminConnectDownloadWorker PRIVATE cxx_std_17)
+
+add_test(NAME testGarminConnectDownloadWorker COMMAND testGarminConnectDownloadWorker)
+set_tests_properties(testGarminConnectDownloadWorker PROPERTIES LABELS "garmin-fast")

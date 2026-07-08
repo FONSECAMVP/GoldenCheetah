@@ -1,11 +1,11 @@
 # State — Garmin Connect Integration
 
-_Updated: 2026-07-05 — REQ-002 PyEmbeddedAdapter + AddCloudWizard tile-routing slice CLOSED: A3 clean (TR-01/-02/-04/-05 fixed via TEST-007 + strengthened TEST-005/006), VAL-008 PASS 9/9. TR-08 (uncancellable-native-wedge abort) + TR-06 (pystub fidelity) deferred, non-blocking. LSN-008 escalated to guard (2nd ledger-drift). A3 changeset committed `60a076848` (pre-commit clang-format reformatted testGarminConnectAuthChain.cpp → LSN-007 honored: from-scratch rebuild + 9/9 retest before commit). Next: start next REQ (REQ-007 download / REQ-003 MFA)._
+_Updated: 2026-07-08 — REQ-007 activity-download chain GREEN through the worker + uncommitted (NOT fully deployed). Slice 3: GarminWorker gains `downloadActivity(activityId, fmt, requestId)` slot + `downloaded(id,bytes)`/`downloadFailed(id, GarminDownloadFailure)` signals (GarminDownloadFailure = new metatype-registered value type, Network/RateLimit/Unknown), mapping PyDownloadOutcome→signals off the GUI thread (DES-001). TEST-010 = 6 garmin-fast slots (new testGarminConnectDownloadWorker target); garmin ctest 8/8; clang-format clean. **RE-SCOPED:** the original slice-3 plan (GarminConnect::readFile staging + FIT→TCX fallback, DES-004) is DEFERRED — needs REQ-004/006 worker-in-CloudService + token/session lifecycle, and the fallback trigger ("FIT not available") depends on unvalidated library behaviour (PRD Assumption B). Slices 1+2 (adapter download_activity T-008 6 pytest; PyEmbeddedAdapter marshalling + retained-client session T-009 8 garmin-py) also GREEN + uncommitted. Prior: REQ-002 CLOSED, committed `60a076848`._
 
 ## phase
 - current: Phase 2.2
-- active feature: REQ-002 — PyEmbeddedAdapter + AddCloudWizard tile-routing slice **CLOSED** (A3 clean, VAL-008 PASS 9/9); Authenticate flow slices all done. Ready to start next REQ.
-- next gate: REQ-002 PyEmbeddedAdapter + tile-routing slice is CLOSED + COMMITTED (`60a076848`; A3 clean, VAL-008 PASS 9/9). Next: start the next REQ (candidate: REQ-007 activity download, or REQ-003 MFA prompt) via the TDD loop.
+- active feature: REQ-007 — activity download. Download chain GREEN adapter→PyEmbeddedAdapter→worker + uncommitted (T-008/009/010); NOT fully deployed. REQ-002 Authenticate flow CLOSED + committed.
+- next gate: commit the REQ-007 download chain when the user asks (cite REQ-007/TEST-008/009/010/DEC-006/DEC-013). REQ-007 CLOSURE is DEFERRED — the readFile staging + FIT→TCX fallback (DES-004) that finishes the acceptance criterion need REQ-004/006 (token storage + worker-in-CloudService lifecycle) first, and the fallback trigger needs PRD-Assumption-B (library FIT-availability signal) validated. Candidate next work: REQ-004/006 (tokens) to unlock REQ-007 closure, or REQ-003 (MFA). An incremental CLV over the REQ-007 changeset is the right gate before moving on.
 - last-clean-VAL: VAL-008 (2026-07-05 — REQ-002 A3 test-hardening changeset, PASS 9/9)
 - last-cycle: A3 REQ-002 tile-routing (2026-07-05) — FINDINGS then FIXED: TR-01/-02/-04/-05 resolved (TEST-007 + TEST-006/005 strengthening), TR-08 new→defer; see cycles/active/a3-req-002-tile-routing.md
 
@@ -54,7 +54,7 @@ _Updated: 2026-07-05 — REQ-002 PyEmbeddedAdapter + AddCloudWizard tile-routing
 | 004 | must | 001,003 | 002,006 | — | not started |
 | 005 | must | 001,012 | 003,003a,012 | T-002 (adapter half: password-not-retained); T-003 (wizard side — GREEN) | tested (A3 pending) |
 | 006 | must | 001,003 | 002,008 | — | not started |
-| 007 | must | 001,002,006 | 001,004,012 | — | not started |
+| 007 | must | 001,002,006,013 | 001,001a,004,012,013 | T-008 (GREEN, 6 pytest — adapter download_activity). T-009 (GREEN, 8 garmin-py — PyEmbeddedAdapter.downloadActivity marshalling). T-010 (GREEN, 6 garmin-fast — GarminWorker DownloadActivity op: Success→downloaded, Network/RateLimit/Unknown→downloadFailed, args forwarded, adapter off-GUI-thread) | download chain GREEN adapter→PyEmbeddedAdapter→worker (uncommitted). **NOT-done (deferred):** GarminConnect::readFile staging garmin-<id>.<ext> + FIT→TCX fallback (DES-004) → needs REQ-004/006 tokens/session + PRD-Assumption-B library validation. REQ-007 NOT fully deployed |
 | 008 | must | 001,003,006 | 002,010,012 | — | not started |
 | 009 | must | 001,004 | 003 | — | not started |
 | 010 | must | 001,002,003,007 | 002,009,006,012 | — | not started |
