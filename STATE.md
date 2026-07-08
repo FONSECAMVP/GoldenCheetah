@@ -3,8 +3,9 @@
 PHASE: Phase 2.2 — Garmin Connect integration. REQ-002 PyEmbeddedAdapter + AddCloudWizard
 tile-routing slice **CLOSED** (A3 clean, VAL-008 PASS 9/9). Authenticate flow slices all done.
 
-OPEN: nothing blocking. A3 test-hardening changeset (TEST-007 new + strengthened TEST-005/006)
-sits in the working tree, **uncommitted** — commit when ready. Then start the next REQ.
+OPEN: nothing blocking. A3 test-hardening changeset committed as `60a076848` (pre-commit
+clang-format reformatted testGarminConnectAuthChain.cpp — LSN-007 honored: rebuilt from scratch
++ retested 9/9 GREEN before the commit landed). Ready to start the next REQ.
 
 BLOCKING: 0. Deferred, non-blocking: TR-08 (uncancellable-native-wedge → ~GarminAuthChain qFatal
 abort) → Phase 1.5 with A2-001; TR-06 (pystub-vs-real-module fidelity) → dedicated check; TR-03
@@ -23,12 +24,12 @@ NEXT_GATE: none blocking. Commit the working-tree A3 changeset when the user ask
 the next REQ (candidates: REQ-007 activity download, REQ-003 MFA OTP) via the TDD loop.
 
 CHANGESET: commits 212a4c258 (PyEmbeddedAdapter, DES-013, TEST-005) + e9e017fe1
-(GarminAuthChain + AddCloudWizard routing + app-build wiring, TEST-006) on master; PLUS
-uncommitted working tree — A3 hardening: NEW testGarminConnectWizardRouting.cpp (TEST-007) +
-stubs/WizardStubPreamble.h; MODIFIED testGarminConnectAuthChain.cpp, testGarminConnectPyAdapter.cpp,
-pystubs/garmin_client.py, unittests/Core/garminconnect/CMakeLists.txt. garmin-fast 6/6 + garmin-py 1/1
-from-scratch GREEN; production src/Cloud/* untouched. (src/CMakeLists.txt + other root files were
-already modified pre-session.)
+(GarminAuthChain + AddCloudWizard routing + app-build wiring, TEST-006) + 60a076848 (A3 hardening:
+TEST-007 wizard-routing + WizardStubPreamble.h; strengthened TEST-005/006 + pystub + unittests
+CMakeLists; workflow ledgers) on master. garmin-fast 6/6 + garmin-py 1/1 from-scratch GREEN;
+production src/Cloud/* untouched. Unrelated pre-session work (src/Coach/*, src/Gui/*, root
+CMakeLists.txt, vcpkg.json, etc.) deliberately left unstaged. Only a tiny doc-only delta recording
+this hash into the ledgers remains uncommitted.
 
 COUNTS: DEC 13/13 accepted (garmin ns) · DES 13(+2 sub-ids) drafted/GREEN · REQ
 1/22 deployed, REQ-002 Authenticate slices CLOSED (A3 clean, VAL-008 9/9), rest not-started ·

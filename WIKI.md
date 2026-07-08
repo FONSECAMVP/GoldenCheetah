@@ -1,6 +1,6 @@
 # PROJECT WIKI — GoldenCheetah            (the brain · read me first)
 root:  /media/andy/TOSHIBA EXT/Backup2/Documents/GoldenCheetah   schema: wiki-v1
-phase: 2 (Phase 2.2 — REQ-002 PyEmbeddedAdapter + tile-routing slice CLOSED: A3 clean, VAL-008 PASS 9/9; changeset uncommitted, TR-08/TR-06 deferred)   live-status → STATE.md (read next)
+phase: 2 (Phase 2.2 — REQ-002 PyEmbeddedAdapter + tile-routing slice CLOSED: A3 clean, VAL-008 PASS 9/9, committed 60a076848; TR-08/TR-06 deferred)   live-status → STATE.md (read next)
 
 ## MAP — directory manifest (authoritative; check before creating ANYTHING)
 WIKI.md                     this brain (hub) — read first, every session

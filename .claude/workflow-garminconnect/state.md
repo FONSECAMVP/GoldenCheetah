@@ -1,11 +1,11 @@
 # State — Garmin Connect Integration
 
-_Updated: 2026-07-05 — REQ-002 PyEmbeddedAdapter + AddCloudWizard tile-routing slice CLOSED: A3 clean (TR-01/-02/-04/-05 fixed via TEST-007 + strengthened TEST-005/006), VAL-008 PASS 9/9. TR-08 (uncancellable-native-wedge abort) + TR-06 (pystub fidelity) deferred, non-blocking. LSN-008 escalated to guard (2nd ledger-drift). A3 changeset still uncommitted in working tree. Next: commit when user asks, then start next REQ (REQ-007 download / REQ-003 MFA)._
+_Updated: 2026-07-05 — REQ-002 PyEmbeddedAdapter + AddCloudWizard tile-routing slice CLOSED: A3 clean (TR-01/-02/-04/-05 fixed via TEST-007 + strengthened TEST-005/006), VAL-008 PASS 9/9. TR-08 (uncancellable-native-wedge abort) + TR-06 (pystub fidelity) deferred, non-blocking. LSN-008 escalated to guard (2nd ledger-drift). A3 changeset committed `60a076848` (pre-commit clang-format reformatted testGarminConnectAuthChain.cpp → LSN-007 honored: from-scratch rebuild + 9/9 retest before commit). Next: start next REQ (REQ-007 download / REQ-003 MFA)._
 
 ## phase
 - current: Phase 2.2
 - active feature: REQ-002 — PyEmbeddedAdapter + AddCloudWizard tile-routing slice **CLOSED** (A3 clean, VAL-008 PASS 9/9); Authenticate flow slices all done. Ready to start next REQ.
-- next gate: REQ-002 PyEmbeddedAdapter + tile-routing slice is CLOSED (A3 clean, VAL-008 PASS 9/9). Next: commit the working-tree A3 changeset when the user asks, then start the next REQ (candidate: REQ-007 activity download, or REQ-003 MFA prompt) via the TDD loop.
+- next gate: REQ-002 PyEmbeddedAdapter + tile-routing slice is CLOSED + COMMITTED (`60a076848`; A3 clean, VAL-008 PASS 9/9). Next: start the next REQ (candidate: REQ-007 activity download, or REQ-003 MFA prompt) via the TDD loop.
 - last-clean-VAL: VAL-008 (2026-07-05 — REQ-002 A3 test-hardening changeset, PASS 9/9)
 - last-cycle: A3 REQ-002 tile-routing (2026-07-05) — FINDINGS then FIXED: TR-01/-02/-04/-05 resolved (TEST-007 + TEST-006/005 strengthening), TR-08 new→defer; see cycles/active/a3-req-002-tile-routing.md
 
@@ -49,7 +49,7 @@ _Updated: 2026-07-05 — REQ-002 PyEmbeddedAdapter + AddCloudWizard tile-routing
 | REQ | cat | DECs | DESs | TESTs | status |
 |---|---|---|---|---|---|
 | 001 | must | 001,005,011 | 004 | T-001 | deployed (6381b90f4) |
-| 002 | must | 001,002,004,008,009,010,011,012,013 | 001,001a,003,003a,008,012,013 | T-002 (GREEN, 5), T-003 (GREEN, 13), T-004 (GREEN, 10), T-005 (GREEN, 10 slots), T-006 (GREEN, 7 slots), T-007 (GREEN, 4 slots) [slot counts exclude QTest auto init/cleanup] | production PyEmbeddedAdapter + wizard tile-routing GREEN; A3 clean (TEST-007 + strengthened 005/006); **VAL-008 PASS 9/9 — slice CLOSED** (changeset uncommitted; TR-08/TR-06 deferred) |
+| 002 | must | 001,002,004,008,009,010,011,012,013 | 001,001a,003,003a,008,012,013 | T-002 (GREEN, 5), T-003 (GREEN, 13), T-004 (GREEN, 10), T-005 (GREEN, 10 slots), T-006 (GREEN, 7 slots), T-007 (GREEN, 4 slots) [slot counts exclude QTest auto init/cleanup] | production PyEmbeddedAdapter + wizard tile-routing GREEN; A3 clean (TEST-007 + strengthened 005/006); **VAL-008 PASS 9/9 — slice CLOSED + committed `60a076848`** (TR-08/TR-06 deferred) |
 | 003 | must | 001,002,004 | 001,003,012 | — | not started |
 | 004 | must | 001,003 | 002,006 | — | not started |
 | 005 | must | 001,012 | 003,003a,012 | T-002 (adapter half: password-not-retained); T-003 (wizard side — GREEN) | tested (A3 pending) |
@@ -102,7 +102,7 @@ Full motivation cells and acceptance fragments live in `prd.md`. Use this table 
 
 ## open
 - needs-review: none
-- open blocking findings: 0 — A3-R002-TR-01/-02 fixes landed in working tree (TEST-007 new; TEST-006/005 strengthened; all mutants killed, production byte-unchanged, garmin-fast 6/6 + garmin-py 1/1 from-scratch). TR-04/-05 follow-ons done in the same pass. Awaiting VAL-008 drift CLV to close the slice; changeset uncommitted.
+- open blocking findings: 0 — A3-R002-TR-01/-02 fixed (TEST-007 new; TEST-006/005 strengthened; all mutants killed, production byte-unchanged, garmin-fast 6/6 + garmin-py 1/1 from-scratch). TR-04/-05 follow-ons done in the same pass. VAL-008 PASS 9/9; committed `60a076848`. Slice CLOSED.
 - deferred (with tickets):
   - A3-R002-TR-08 (NEW) uncancellable-native-wedge → ~GarminAuthChain destroys running QThread → qFatal abort. Only via a pure native loop (no cancellation point); realistic wedges unwind cleanly. Deferred → Phase 1.5 with A2-001 (wedged-worker recovery: thread-heartbeat + kill-and-recreate, or dtor hardening — detach/leak rather than destroy a running thread).
   - A3-R002-TR-03 hasAthlete→25 dead branch — now guarded by TEST-007 routing coverage; accept-with-note
