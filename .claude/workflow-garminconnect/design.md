@@ -891,8 +891,10 @@ class PyEmbeddedAdapter : public IGarminPyAdapter {
   public:
     // modulePath: directory prepended to sys.path so `garmin_client` resolves
     //             (C++ owns path policy, per DES-012 "what lives where").
-    // tokenstorePath: forwarded verbatim to GarminClient(email, password, tokenstore_path).
-    PyEmbeddedAdapter(const QString& modulePath, const QString& tokenstorePath);
+    // AUTH-ONLY (DEC-014 Option B / REQ-006 Slice B, 3edb705cb): no tokenstore
+    // path — the adapter constructs GarminClient(email, password) so the library
+    // self-writes no token file; C++ owns the 0600 write (GarminTokenStore).
+    explicit PyEmbeddedAdapter(const QString& modulePath);
     ~PyEmbeddedAdapter() override;                 // REQ-007: DECREF m_client under GIL if Py up
     PyAuthOutcome authenticate(const QString& email, const QString& password) override;
     PyDownloadOutcome downloadActivity(const QString& activityId, const QString& fmt) override; // REQ-007
@@ -911,7 +913,7 @@ Non-copyable (owns a `PyObject*`).
    (fail-safe; matches DES-001 "init failure → capabilities 0"; never throws).
 2. `PyGILState_Ensure()` via RAII guard — released on **every** exit path.
 3. Prepend `modulePath` to `sys.path` if absent; `import garmin_client`.
-4. `GarminClient(email, password, tokenstorePath)` → `.login()`.
+4. `GarminClient(email, password)` → `.login()` (AUTH-ONLY, C-API `"ss"` — REQ-006 Slice B).
 5. Success dict → `PyAuthOutcome{Success, garmin_user_id, display_name}`.
 6. Exception → classify **by type then kind, never by message** (LSN-006 / A3-R002-M6):
    - `garmin_client.GarminError` → read `.kind`: `'auth'`→`AuthFailed`,
@@ -955,13 +957,14 @@ lands, so this is deliberately not blocking VAL-007.
 
 - Threading (DES-001 — the worker guarantees non-GUI-thread invocation).
 - Retry/rate-limit (DES-005 — Python-side decorators, invisible here).
-- Token file *layout* (DES-002 owns). **DEC-014 refinement (2026-07-11):** the Option-B **target** is for
-  this class to STOP forwarding a `tokenstorePath` to the library. **REQ-004 status:** that stop-forwarding is
-  DEFERRED (finding B-R004-01, `__init__` reconciliation slice) — the class STILL forwards it today, so the
-  real library still self-writes its own token file. What REQ-004 DID land: on `Success` the class surfaces the
-  session blob via a new `PyAuthOutcome.tokenBlob` field (calling the adapter's `dump_tokens()`), the
-  worker/CloudService persists it via `AtomicFile` at 0600, and on resume the adapter calls `load_tokens(blob)`.
-  The retained `m_client` (REQ-005/REQ-007 session) is unchanged. REQ-004 build slice; tests garmin:T-011/T-012.
+- Token file *layout* (DES-002 owns). **DEC-014 refinement (REQ-006 Slice B, `3edb705cb`):** this class is now
+  constructed AUTH-ONLY — `PyEmbeddedAdapter(modulePath)` (1-arg), C-API `"ss"`, forwarding NO `tokenstorePath`
+  to the library, so the library self-writes no token file (findings B-R004-01 + A3-R004-M3 RESOLVED;
+  REQ-NF-Sec-002 end-to-end MET). On `Success` the class surfaces the session blob via `PyAuthOutcome.tokenBlob`
+  (calling `dump_tokens()`); C++ (GarminTokenStore) owns the single atomic 0600 write, and its load-side
+  refuse-on-wider-than-owner check (loadChecked → TokenPermissionsRejected, TEST-014) is the sole token-file
+  boundary. On resume the adapter calls `load_tokens(blob)`. The retained `m_client` (REQ-005/REQ-007 session)
+  is unchanged. Tests: garmin:T-014 (load-side), T-015/T-016 (auth-only construction).
 - Message translation (DES-008 — page layer).
 
 ### Tests (TEST garmin:T-005)

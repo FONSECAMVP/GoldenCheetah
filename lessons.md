@@ -7,11 +7,12 @@ LSN-004 | op:design type:missing-seam                 | guard    | recur:1  save
 LSN-005 | op:design type:security-invariant-on-read   | guard    | recur:1  saves:0 miss:0  | security invariants enforced on write (perms, format) must also be validated on read, not assumed
 LSN-006 | op:code type:error-handling                 | advisory | recur:1  saves:0 miss:0  | exception handlers at adapter/boundary layers must classify by type before a broad except, never swallow-and-misroute
 LSN-007 | op:commit type:hook-mutation-unverified      | guard    | recur:1  saves:0 miss:0  | if a pre-commit hook modifies files, all prior build/test evidence is void — rebuild + re-run affected tests before accepting the commit; protect semantic include order with clang-format off markers
-LSN-008 | op:ledger-update type:index-vs-detail-drift  | guard    | recur:4  saves:1 miss:3  | GUARD: after ANY ledger update, diff every STRUCTURED table cell touching the changed IDs (traceability primary matrix + DES index STATUS cells; state.md ## reqs/## des; root STATE COUNTS/CASCADE) against the actual artifact — not just the prose banner/narrative. A prose/design.md section updated while its own summary index/status cell stays stale is the recurring drift signature (VAL-007/008/009/010 all FAILed Check 6 on this). Re-count slots from source; never copy a count between docs. See [[LSN-011]] for the sibling "design-note asserts a deferred item as done" signature.
+LSN-008 | op:ledger-update type:index-vs-detail-drift  | guard    | recur:5  saves:2 miss:4  | GUARD (promotion-to-mechanism FLAGGED): after ANY ledger update, diff every STRUCTURED table cell touching the changed IDs (traceability primary REQ matrix + DES index STATUS cells; **the LOCAL `.claude/workflow-<feat>/state.md` ## reqs/## des/## vals/## last-clv** — not just root STATE.md; root STATE COUNTS/CASCADE; design.md class-snippet ctor signatures + ALL "DEC-NNN refinement"/"what this does NOT cover" notes, not just the section last touched; WIKI REGISTRIES "in build"/status strings) against the actual artifact — not just the prose banner/narrative. Updating appendix/detail tables + root STATE while the primary matrix row, DES-index cell, local state.md, and design body stay stale is the recurring signature (VAL-007/008/009/010/011 ALL FAILed Check 6 on this). Re-count slots from source; never copy a count between docs. See [[LSN-011]] for the sibling "design-note asserts a deferred item as done".
 LSN-011 | op:ledger-update type:design-note-false-done | guard    | recur:1  saves:1 miss:0  | any DEC-cascade item written into a design.md "DEC-NNN refinement" note that is still open/deferred in findings.md MUST be in TARGET/DEFERRED tense, never present-tense "already true" — grep DEC-refinement notes for completion verbs (no longer/now/without/stops) and confirm each is not an open findings.md defer row, before the CLV gate
 LSN-009 | op:test type:loose-timeout-bound-survivor   | advisory | recur:1  saves:1 miss:0  | a bounded-teardown/timeout assertion must be tight enough to FAIL if the graceful fast-path is skipped (assert « the fast-path ceiling, not < the sum of all fallback ceilings) — a loose bound cannot distinguish "worked" from "fell through to the last resort every time"
 LSN-010 | op:commit type:commit-column-staleness      | advisory | recur:1  saves:1 miss:0  | a feature commit that bundles its OWN ledger byproduct necessarily records "uncommitted"/`_pending_` (the hash doesn't exist yet); it MUST be followed immediately by a ledger-record step that fills the traceability Commit column with the just-created hash and flips uncommitted→committed banners, BEFORE the CLV gate. Mechanically checkable: `git log -1` HEAD hash vs the REQ row's Commit-column string.
 LSN-012 | op:verify type:builder-lint-dirty-green      | advisory | recur:1  saves:1 miss:0  | a builder GREEN report is not verified until the DEC-009 style gate (ruff/clang-format/mypy) has run on the changeset — the orchestrator Evidence check runs it BEFORE commit, not deferred to the commit hook. A builder with the tooling available (ran pytest via the repo .venv) can still leave lint-dirty code (dead locals, F841) a passing test suite won't surface.
+LSN-013 | op:test type:mask-coverage-gap              | advisory | recur:1  saves:1 miss:0  | a test guarding a security predicate that ORs multiple bit/flag classes (file perms Read/Write/Exec × Group/Other; capability/permission bitmasks) must exercise ≥1 case per bit class NOT already covered by another — two Read-class widened modes (0640/0644) do NOT pin a Read|Write|Exec mask; a mutant dropping the Write*/Exec* bits survives. One case per uncovered class (e.g. 0620 write-only, 0601 exec-only) kills it.
 
 ---
 
@@ -174,6 +175,20 @@ history:2026-07-05: captured at advisory level (VAL-007 Check 6 — traceability
         DES-002/006 index rows but left the DES-012/013 index STATUS rows stale (no DEC-014/dump_tokens/TEST-013,
         no tokenBlob) while design.md/state.md were current. recur:4/miss:3. Co-occurred with a NEW sibling
         signature now split out as [[LSN-011]] (design.md prose ITSELF asserting a deferred item as done).
+        2026-07-12 (VAL-011 Check 6/8): recurred a FIFTH time, WIDEST spread yet — across REQ-004 + REQ-006
+        Slice-A + Slice-B byproduct updates the orchestrator refreshed the appendix artifact tables + root
+        STATE.md/WIKI phase line, but left: (a) the traceability PRIMARY REQ matrix rows for REQ-004 (`_uncommitted_`)
+        AND REQ-006 (all `—`); (b) DES-012/013 index STATUS rows still "DEFERRED"; (c) design.md DES-013 body — the
+        old 2-arg `PyEmbeddedAdapter(...,tokenstorePath)` class snippet + step-4 sequence + a SECOND "DEC-014 note"
+        under "what this does NOT cover" still reading "STILL forwards it today"; (d) the ENTIRE local
+        `.claude/workflow-garminconnect/state.md` (banner 2026-07-08, ## reqs/## des/## vals/## open all pre-REQ-004);
+        (e) WIKI REGISTRIES "T-015/16 … in build" though committed. VAL-011 (validator) caught all of it. recur:5,
+        miss:4, saves:2. The guard's CHECK list has now been broadened four separate times and STILL missed the local
+        state.md + design.md-second-note + primary-matrix — a strong promotion signal: escalate to a DETERMINISTIC
+        pre-CLV/pre-commit lint that, for any commit touching a ledger, diffs each changed REQ/DES/TEST id against its
+        primary-matrix row, DES-index status cell, local state.md row, and design.md refinement notes, failing on any
+        stale "DEFERRED"/`_pending_`/`_uncommitted_`/"in build" string for an id that is committed/resolved. Until that
+        mechanism exists the guard remains advisory-in-practice (it fires post-hoc via the CLV, not pre-commit).
 
 ## LSN-009
 sig:    test / loose-timeout-bound-survivor / teardown-assertion
@@ -306,3 +321,29 @@ origin: REQ-006 Slice B commit — first attempt aborted by ruff F841 (test_adap
 history:2026-07-11: captured at advisory level (first occurrence; deterministic pre-commit gate
         already enforces the floor). scope:portable — travels to any project with a lint/format gate.
         Escalate to guard if a second builder GREEN ships lint-dirty and is caught only at commit time.
+
+## LSN-013
+sig:    test / mask-coverage-gap / security-predicate-bitmask
+level:  advisory  since:P2.2(2026-07-12)   recur:1   saves:1   miss:0
+tags:   op:test, phase:P2, type:mutation-survivor, component:C11(Cloud)
+trigger:writing or reviewing a test for a security/authorization predicate that combines several
+        bit or flag classes with OR (file-mode Read/Write/Exec × Group/Other; a capability or
+        permission bitmask; a set of "any of these forbidden flags" checks)
+mistake:TEST-014's load-side permission refusal only exercised Read-class widened modes (0640, 0644).
+        A3-R006 executed a mutant narrowing the production refusal mask from all six group/other bits
+        to `ReadGroup|ReadOther` only; it SURVIVED the whole garmin-fast suite because no test set a
+        Write-only (e.g. 0620) or Exec-only (e.g. 0601) widened mode — the two bit classes with zero
+        coverage. The production mask was correct; the test simply did not pin it, so a future
+        narrowing regression would pass silently on a security-critical path.
+rule:   for a predicate that ORs N bit/flag classes, the test set must include at least one case per
+        class that is NOT already exercised by another case — verifying each class independently
+        contributes to the decision. Two variants inside one class (0640/0644 are both Read-class) do
+        not substitute for coverage of the other classes.
+check:  enumerate the bit/flag classes the predicate ORs; for each, confirm a test case sets ONLY that
+        class's bit (with the rest owner-only/clear) and asserts the predicate fires. Missing class = gap.
+origin: A3-R006-01 (blocking) — executed mask-narrowing mutant survived TEST-014; closed by two new
+        slots (0620 group-write-only, 0601 other-exec-only), builder demonstrated the kill (narrowed
+        mask → both FAIL → reverted → green). saves:1 credited to the A3 cycle that caught it.
+history:2026-07-12: captured at advisory level, first occurrence. scope:portable — travels to any
+        bitmask/flag-set security predicate. Sibling of [[LSN-009]] (both are "the assertion is too
+        weak to catch a real mutant" test-design rules from executed A3 mutants).

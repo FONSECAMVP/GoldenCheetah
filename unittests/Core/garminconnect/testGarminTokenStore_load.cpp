@@ -101,6 +101,89 @@ class TestGarminTokenStoreLoad : public QObject
         QVERIFY2(r.bytes.isEmpty(), "a world-readable file must NOT return its bytes");
         QCOMPARE(r.path, dest);
     }
+
+    // Case 3a (A3-R006-01, mask completeness — WRITE bit class): a tokens.json
+    // chmod'd 0620 (ReadOwner|WriteOwner|WriteGroup) has NO Read* group/other
+    // bit — only a group-WRITE bit is widened. The refusal mask must still
+    // reject it. This kills the M-A1 mutant that narrows the production mask to
+    // Read-only bits (ReadGroup|ReadOther): under that mutant 0620 has no masked
+    // bit set and would wrongly load as Ok — this assertion then FAILS, killing
+    // the mutant.
+    void groupWriteOnlyWidenedRefused()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QByteArray blob = QByteArrayLiteral("secret-group-write-only");
+        QVERIFY(GarminTokenStore::save(athlete.path(), blob));
+
+        const QString dest = GarminTokenStore::tokenFilePath(athlete.path());
+        QVERIFY2(
+            QFile::setPermissions(dest, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::WriteGroup),
+            "test setup: widen tokens.json to 0620 (group-write-only)");
+
+        const GarminTokenStore::LoadResult r = GarminTokenStore::loadChecked(athlete.path());
+
+        QCOMPARE(r.status, GarminTokenStore::LoadStatus::TokenPermissionsRejected);
+        QVERIFY2(r.isRejected(), "0620 (group-write-only) file must be TokenPermissionsRejected");
+        QVERIFY2(r.bytes.isEmpty(), "a rejected group-write-only file must NOT return its bytes");
+        QCOMPARE(r.path, dest); // offending path exposed to the caller
+    }
+
+    // Case 3b (A3-R006-01, mask completeness — EXEC bit class): a tokens.json
+    // chmod'd 0601 (ReadOwner|WriteOwner|ExeOther) has NO Read*/Write* group or
+    // other bit — only an other-EXEC bit is widened. The refusal mask must still
+    // reject it. Together with 3a this covers the two bit classes (Write, Exec)
+    // that had ZERO coverage, so the Read-only-narrowed mutant cannot survive.
+    void otherExecOnlyWidenedRefused()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QByteArray blob = QByteArrayLiteral("secret-other-exec-only");
+        QVERIFY(GarminTokenStore::save(athlete.path(), blob));
+
+        const QString dest = GarminTokenStore::tokenFilePath(athlete.path());
+        QVERIFY2(QFile::setPermissions(dest, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOther),
+                 "test setup: widen tokens.json to 0601 (other-exec-only)");
+
+        const GarminTokenStore::LoadResult r = GarminTokenStore::loadChecked(athlete.path());
+
+        QCOMPARE(r.status, GarminTokenStore::LoadStatus::TokenPermissionsRejected);
+        QVERIFY2(r.isRejected(), "0601 (other-exec-only) file must be TokenPermissionsRejected");
+        QVERIFY2(r.bytes.isEmpty(), "a rejected other-exec-only file must NOT return its bytes");
+    }
+
+    // Case 6 (A3-R006-02, freshness — M-A4): perms are re-stat'd on EVERY
+    // loadChecked() call, never cached across calls (code comment cites
+    // A3-R004-M1). Save 0600 → first load is Ok; then widen the SAME file in
+    // place to 0640 and load the SAME path AGAIN → it must now be
+    // TokenPermissionsRejected. A mutant that caches the first (Ok) perm decision
+    // would still return Ok on the second call — this assertion then FAILS,
+    // killing the static-cache mutant.
+    void permissionsReReadNotCachedAcrossCalls()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QByteArray blob = QByteArrayLiteral("secret-freshness-restat");
+        QVERIFY(GarminTokenStore::save(athlete.path(), blob));
+
+        const QString dest = GarminTokenStore::tokenFilePath(athlete.path());
+
+        // First call: owner-only 0600 → Ok, exact bytes.
+        const GarminTokenStore::LoadResult first = GarminTokenStore::loadChecked(athlete.path());
+        QCOMPARE(first.status, GarminTokenStore::LoadStatus::Ok);
+        QCOMPARE(first.bytes, blob);
+
+        // Widen the SAME file in place to 0640 (group-readable).
+        QVERIFY2(QFile::setPermissions(dest, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ReadGroup),
+                 "test setup: widen SAME tokens.json to 0640 in place");
+
+        // Second call on the SAME path: perms must be re-read → now rejected.
+        const GarminTokenStore::LoadResult second = GarminTokenStore::loadChecked(athlete.path());
+        QCOMPARE(second.status, GarminTokenStore::LoadStatus::TokenPermissionsRejected);
+        QVERIFY2(second.isRejected(), "widened-in-place file must be rejected on the next load (not cached)");
+        QVERIFY2(second.bytes.isEmpty(), "a rejected (re-stat'd) file must NOT return its bytes");
+        QCOMPARE(second.path, dest);
+    }
 #endif // Q_OS_WIN
 
     // Case 4: an ABSENT tokens.json yields the NotFound outcome — a distinct
