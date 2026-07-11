@@ -52,6 +52,20 @@ class GarminClient:
         LAST_PASSWORD = password
         LAST_TOKENSTORE = tokenstore_path
 
+    # T-013 / REQ-004 / DEC-014 Option B — the adapter exports the authenticated
+    # session as an opaque blob (dump_tokens) which PyEmbeddedAdapter surfaces on
+    # PyAuthOutcome.tokenBlob for C++ to persist (0600). load_tokens restores it.
+    # Canned fixture so a garmin-py C++ test can exercise the blob surfacing.
+    TOKEN_BLOB = '{"oauth1":"OA1-stub","oauth2":"OA2-stub"}'
+
+    def dump_tokens(self):
+        return self.TOKEN_BLOB
+
+    def load_tokens(self, token_str):
+        if SCENARIO == "load_session_expired":
+            raise GarminError("session_expired", "stub: stored session expired")
+        return None
+
     def login(self):
         if SCENARIO == "success":
             return {"garmin_user_id": "uid-123", "display_name": "Alice Rider"}

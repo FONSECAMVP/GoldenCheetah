@@ -30,7 +30,7 @@ unittests/                  QTest units: Core/{coach,garminconnect,season*,signa
 util/                       dev scripts (fit tooling, bundle fixups, safety-check linters, rpi packaging)
 src/ANT/                    ANT+/ANT USB device protocol stack
 src/Charts/                 chart windows & plotting widgets (LTM, histogram, scatter, PMC, etc.)
-src/Cloud/                  CloudService integrations incl. GarminConnect.{h,cpp}, GarminWorker, GarminCredentialsPage, IGarminAuthClient, IGarminPyAdapter — see wiki/architecture.md
+src/Cloud/                  CloudService integrations incl. GarminConnect.{h,cpp}, GarminWorker, GarminCredentialsPage, IGarminAuthClient, IGarminPyAdapter, PyEmbeddedAdapter, GarminAuthChain + AtomicFile.{h,cpp} (DES-006, REQ-004) + GarminTokenStore.{h,cpp} (DES-002, REQ-004/006) — see wiki/architecture.md
 src/Coach/                  AI Coach feature (LLM clients + tool executor) — SHIPPED, workflow-aicoach CLOSED
 src/Core/                   core domain: Athlete, Context, DataFilter (lex/yacc), APIWebService, calendar model
 src/FileIO/                 ride file format parsers/writers (FIT/TCX/GC/CSV/SRM/PWX/WKO/…) + athlete backup
@@ -53,12 +53,12 @@ src/*.o,moc_*,qrc_*,*_yacc*,*_lex*   [SKIP] generated in-source qmake build arti
 
 ## REGISTRIES — what exists (allocate next; never reuse, never re-create)
 REQ  garmin:001–015+NF-*  full:.claude/workflow-garminconnect/prd.md         next:garmin-016
-DEC  garmin:001–013  index:.claude/workflow-garminconnect/decisions.md      next:garmin-014
+DEC  garmin:001–014  index:.claude/workflow-garminconnect/decisions.md      next:garmin-015
 DES  garmin:001–013(+001a,003a)  .claude/workflow-garminconnect/design.md   next:garmin-014
-TEST garmin:T-001–T-010  .claude/workflow-garminconnect/traceability.md     next:garmin-T-011
-VAL  garmin:001–009  latest:VAL-009 PASS (REQ-007 chain; FAIL→fixed) · .claude/workflow-garminconnect/validations/  next:garmin-010
+TEST garmin:T-001–T-013  .claude/workflow-garminconnect/traceability.md     next:garmin-T-014 (T-011 AtomicFile, T-012 GarminTokenStore, T-013 adapter dump/load — allocated to REQ-004 build)
+VAL  garmin:001–010  latest:VAL-010 PASS (REQ-004 write path; FAIL Check 6/9→fixed) · .claude/workflow-garminconnect/validations/  next:garmin-011
 F    no F-### namespace in use; findings tracked as <cycle>-<seq> (A0-001…, A3-R00x-Mn/TR-nn, D-0x) in findings.md; 0 open blocking (A3-R002-TR-01/-02 fixed; TR-08 defer→Phase 1.5)   next:n/a (see conventions.md)
-LSN  001–010  active:10 guards:7  lessons.md   next:011
+LSN  001–011  active:11 guards:8  lessons.md   next:012
 -- CLOSED (provenance only, do not extend): aicoach:DEC-001–013, aicoach:REQ-001–020, aicoach:TEST-001–020 — numeric collision with garmin ranges above; always use ledger prefix (coach:DEC-NNN / garmin:DEC-NNN)
 
 ## PAGES — wiki spokes (read the one named; don't explore blindly)

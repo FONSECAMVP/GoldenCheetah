@@ -821,6 +821,28 @@ DES-008's switch table is keyed on the **GC-stable `kind` values**, not on `garm
 
 With the seam in place, the swap-library cost drops from "5 Python files + 1 C++ file + test churn" to "1 file (the adapter) + the new library's import" — independent of how many call sites accrue in Phase 2/3.
 
+### DEC-014 refinement (2026-07-11) — token persistence moves to C++ (REQ-004/006)
+
+Under DEC-014 (Option B) the **target** is for the adapter, not the library, to own the disk boundary:
+`login()` constructing `GarminClient` auth-only (no `tokenstore` path). **REQ-004 status (2026-07-11):**
+that auth-only construction is DEFERRED — `__init__` still forwards `tokenstore_path` (finding B-R004-01,
+`__init__` reconciliation slice), so with the real library it still self-writes its own token file. What
+REQ-004 landed: the adapter gains two methods so C++ can persist the blob via `AtomicFile` at 0600
+(DES-002/DES-006):
+
+```python
+def dump_tokens(self) -> str: ...        # export the authenticated session as an opaque blob
+def load_tokens(self, token_str: str) -> None: ...  # restore a session on resume, in place of password login
+```
+
+`dump_tokens()` wraps the library's in-memory string export (`dumps()` on the current
+`python-garminconnect` native engine; **OQ1**: confirm the exact name against the bundled wheel —
+tests pin the contract via the pystub, so this is not GREEN-blocking). `load_tokens()` failure when
+Garmin has invalidated the session server-side raises `GarminError(kind='session_expired')`
+(**OQ2**, mapped to REQ-NF-Compat-001(b) "prompt full re-login") — distinct from REQ-006's
+`token_permissions` rejection so DES-008 messages the two differently. Tests: +2 pytest
+(round-trip dump→load; reject-tampered-blob) — garmin:T-013.
+
 ---
 
 ## DES-011 — Optional profile auto-fill
@@ -932,7 +954,13 @@ lands, so this is deliberately not blocking VAL-007.
 
 - Threading (DES-001 — the worker guarantees non-GUI-thread invocation).
 - Retry/rate-limit (DES-005 — Python-side decorators, invisible here).
-- Token file *layout* (DES-002 — this class only forwards the path string).
+- Token file *layout* (DES-002 owns). **DEC-014 refinement (2026-07-11):** the Option-B **target** is for
+  this class to STOP forwarding a `tokenstorePath` to the library. **REQ-004 status:** that stop-forwarding is
+  DEFERRED (finding B-R004-01, `__init__` reconciliation slice) — the class STILL forwards it today, so the
+  real library still self-writes its own token file. What REQ-004 DID land: on `Success` the class surfaces the
+  session blob via a new `PyAuthOutcome.tokenBlob` field (calling the adapter's `dump_tokens()`), the
+  worker/CloudService persists it via `AtomicFile` at 0600, and on resume the adapter calls `load_tokens(blob)`.
+  The retained `m_client` (REQ-005/REQ-007 session) is unchanged. REQ-004 build slice; tests garmin:T-011/T-012.
 - Message translation (DES-008 — page layer).
 
 ### Tests (TEST garmin:T-005)

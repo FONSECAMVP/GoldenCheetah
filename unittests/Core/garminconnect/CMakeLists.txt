@@ -321,3 +321,60 @@ target_compile_features(testGarminConnectDownloadWorker PRIVATE cxx_std_17)
 
 add_test(NAME testGarminConnectDownloadWorker COMMAND testGarminConnectDownloadWorker)
 set_tests_properties(testGarminConnectDownloadWorker PROPERTIES LABELS "garmin-fast")
+
+# --- T-011 — REQ-004 / DES-006: AtomicFile helper (tmp+rename, owner-only) -----
+# Pure-Qt helper (no Python.h) — Python-free `garmin-fast` label. Links only the
+# generic AtomicFile TU; nothing GC-specific, so no stub preamble is needed.
+#
+# RED phase: src/Cloud/AtomicFile.{h,cpp} do not exist yet — the executable's
+# compile fails at the test's #include "AtomicFile.h" (right-reason RED). GREEN
+# adds those files AND extends this add_executable() so the link resolves.
+add_executable(testAtomicFile
+    testAtomicFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.h
+)
+
+target_include_directories(testAtomicFile PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+)
+
+target_link_libraries(testAtomicFile PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Test
+)
+target_compile_features(testAtomicFile PRIVATE cxx_std_17)
+
+add_test(NAME testAtomicFile COMMAND testAtomicFile)
+set_tests_properties(testAtomicFile PROPERTIES LABELS "garmin-fast")
+
+# --- T-012 — REQ-004 write path (DES-002): GarminTokenStore -------------------
+# Per-athlete token storage layer: <athlete>/garminconnect/ (0700 on create) +
+# atomic 0600 tokens.json via AtomicFile. Pure-Qt (no Python.h) — `garmin-fast`
+# label. Links AtomicFile + GarminTokenStore TUs.
+#
+# RED phase: src/Cloud/GarminTokenStore.{h,cpp} do not exist yet — the compile
+# fails at the test's #include "GarminTokenStore.h" (right-reason RED). GREEN
+# adds those files AND extends this add_executable() so the link resolves.
+add_executable(testGarminTokenStore
+    testGarminTokenStore.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminTokenStore.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminTokenStore.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.h
+)
+
+target_include_directories(testGarminTokenStore PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+)
+
+target_link_libraries(testGarminTokenStore PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Test
+)
+target_compile_features(testGarminTokenStore PRIVATE cxx_std_17)
+
+add_test(NAME testGarminTokenStore COMMAND testGarminTokenStore)
+set_tests_properties(testGarminTokenStore PROPERTIES LABELS "garmin-fast")

@@ -267,6 +267,18 @@ PyAuthOutcome PyEmbeddedAdapter::authenticate(const QString& email, const QStrin
     out.kind = PyAuthOutcome::Success;
     out.garmin_user_id = toQString(uid);
     out.display_name = toQString(name);
+
+    // REQ-004 / DEC-014 Option B — export the authenticated session as an
+    // opaque blob so C++ (GarminTokenStore) can own the atomic 0600 write. A
+    // dump failure must NOT fail an otherwise-successful auth: leave tokenBlob
+    // empty and clear any pending error (the worker treats empty as "nothing
+    // to persist"). GIL is held (step 2), so the call is safe.
+    PyRef blob(PyObject_CallMethod(client.get(), "dump_tokens", nullptr));
+    if (blob && PyUnicode_Check(blob.get()))
+        out.tokenBlob = toQString(blob.get());
+    else
+        PyErr_Clear();
+
     return out;
 }
 

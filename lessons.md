@@ -7,7 +7,8 @@ LSN-004 | op:design type:missing-seam                 | guard    | recur:1  save
 LSN-005 | op:design type:security-invariant-on-read   | guard    | recur:1  saves:0 miss:0  | security invariants enforced on write (perms, format) must also be validated on read, not assumed
 LSN-006 | op:code type:error-handling                 | advisory | recur:1  saves:0 miss:0  | exception handlers at adapter/boundary layers must classify by type before a broad except, never swallow-and-misroute
 LSN-007 | op:commit type:hook-mutation-unverified      | guard    | recur:1  saves:0 miss:0  | if a pre-commit hook modifies files, all prior build/test evidence is void — rebuild + re-run affected tests before accepting the commit; protect semantic include order with clang-format off markers
-LSN-008 | op:ledger-update type:index-vs-detail-drift  | guard    | recur:3  saves:1 miss:2  | GUARD: after ANY ledger update, diff every STRUCTURED table cell touching the changed IDs (traceability primary matrix + DES index STATUS cells; state.md ## reqs/## des; root STATE COUNTS/CASCADE) against the actual artifact — not just the prose banner/narrative. A prose/design.md section updated while its own summary index/status cell stays stale is the recurring drift signature (VAL-007 + VAL-008 + VAL-009 all FAILed Check 6 on this). Re-count slots from source; never copy a count between docs.
+LSN-008 | op:ledger-update type:index-vs-detail-drift  | guard    | recur:4  saves:1 miss:3  | GUARD: after ANY ledger update, diff every STRUCTURED table cell touching the changed IDs (traceability primary matrix + DES index STATUS cells; state.md ## reqs/## des; root STATE COUNTS/CASCADE) against the actual artifact — not just the prose banner/narrative. A prose/design.md section updated while its own summary index/status cell stays stale is the recurring drift signature (VAL-007/008/009/010 all FAILed Check 6 on this). Re-count slots from source; never copy a count between docs. See [[LSN-011]] for the sibling "design-note asserts a deferred item as done" signature.
+LSN-011 | op:ledger-update type:design-note-false-done | guard    | recur:1  saves:1 miss:0  | any DEC-cascade item written into a design.md "DEC-NNN refinement" note that is still open/deferred in findings.md MUST be in TARGET/DEFERRED tense, never present-tense "already true" — grep DEC-refinement notes for completion verbs (no longer/now/without/stops) and confirm each is not an open findings.md defer row, before the CLV gate
 LSN-009 | op:test type:loose-timeout-bound-survivor   | advisory | recur:1  saves:1 miss:0  | a bounded-teardown/timeout assertion must be tight enough to FAIL if the graceful fast-path is skipped (assert « the fast-path ceiling, not < the sum of all fallback ceilings) — a loose bound cannot distinguish "worked" from "fell through to the last resort every time"
 LSN-010 | op:commit type:commit-column-staleness      | advisory | recur:1  saves:1 miss:0  | a feature commit that bundles its OWN ledger byproduct necessarily records "uncommitted"/`_pending_` (the hash doesn't exist yet); it MUST be followed immediately by a ledger-record step that fills the traceability Commit column with the just-created hash and flips uncommitted→committed banners, BEFORE the CLV gate. Mechanically checkable: `git log -1` HEAD hash vs the REQ row's Commit-column string.
 
@@ -133,7 +134,7 @@ history:2026-07-04: captured at guard level — high cost (broken master commit)
 
 ## LSN-008
 sig:    ledger-update / index-vs-detail-drift / traceability-matrix
-level:  guard     since:P2.2(2026-07-05)   recur:3   saves:1   miss:2   escalated:2026-07-05
+level:  guard     since:P2.2(2026-07-05)   recur:4   saves:1   miss:3   escalated:2026-07-05
 tags:   op:ledger-update, op:byproduct, phase:P2, type:index-vs-detail-drift
 trigger:updating traceability.md (or any index-first ledger) as the byproduct of a slice
         that added new DES/TEST/commit artifacts
@@ -168,6 +169,10 @@ history:2026-07-05: captured at advisory level (VAL-007 Check 6 — traceability
         name the DES-index Status column or the CASCADE note. Guard broadened this pass to enumerate
         DES-index STATUS cells + STATE CASCADE among the structured cells to diff. Promotion candidate:
         a deterministic pre-CLV lint diffing each changed DES/TEST id against its index status string.
+        2026-07-11 (VAL-010 Check 6): recurred a FOURTH time — the REQ-004 byproduct updated the traceability
+        DES-002/006 index rows but left the DES-012/013 index STATUS rows stale (no DEC-014/dump_tokens/TEST-013,
+        no tokenBlob) while design.md/state.md were current. recur:4/miss:3. Co-occurred with a NEW sibling
+        signature now split out as [[LSN-011]] (design.md prose ITSELF asserting a deferred item as done).
 
 ## LSN-009
 sig:    test / loose-timeout-bound-survivor / teardown-assertion
@@ -244,3 +249,32 @@ history:2026-07-08: captured at advisory level (first isolated occurrence as a d
         STRUCTURED-cell-vs-prose drift within the ledger); LSN-010 is about the ledger-vs-git-HEAD
         commit-recording step. Escalate to guard if a second self-recording commit ships without its
         record-commit follow-up. scope:portable — travels to any ledgered project.
+
+## LSN-011
+sig:    ledger-update / design-note-false-done / dec-cascade-note
+level:  guard      since:P2.2(2026-07-11)   recur:1   saves:1   miss:0
+tags:   op:ledger-update, op:byproduct, phase:P2, type:design-note-false-done
+trigger:drafting a DEC's cascade impact into a target DES design.md entry (a "DEC-NNN refinement"
+        note), ESPECIALLY at decision-acceptance time BEFORE the implementing build has run
+mistake:DEC-014's cascade was written into design.md's DES-012 and DES-013 entries in present tense
+        ("login() is constructed **without** a tokenstore path", "this class no longer forwards a
+        tokenstorePath") at acceptance time. The REQ-004 build then DEFERRED exactly that item
+        (B-R004-01 — __init__ still forwards the path). The notes were left asserting a deferred item
+        as accomplished fact, contradicting the same file's class-shape comment, the code
+        (garmin_client.py:75 + PyEmbeddedAdapter.cpp:235 still forward), and the honest deferral in
+        STATE.md/state.md/findings.md. VAL-010 Check 6+9 FAILed.
+rule:   a cascade item written into a design note must match its findings.md status: if open/deferred,
+        write it as "target / DEFERRED (finding B-R004-01)", never present-tense done. A DEC-refinement
+        note drafted before the build lands uses future/target tense for everything the build hasn't
+        yet delivered.
+check:  before the CLV gate, grep every "DEC-NNN refinement" note in design.md for present-tense
+        completion verbs (no longer / now / constructed without / stops); for each, confirm the item
+        is NOT an open/deferred row in findings.md. Mismatch = drift.
+origin: VAL-010 (2026-07-11) Check 6+9 FAIL → orchestrator rewrote the DES-012/013 refinement notes to
+        DEFERRED tense + synced the traceability DES-012/013 index rows; saves:1 credited to the CLV
+        pass. Related to [[LSN-008]] (index-vs-detail drift) — same "false-done" family, but LSN-008 is
+        stale-STRUCTURED-cell-vs-current-prose, whereas LSN-011 is the current prose ITSELF asserting an
+        unbuilt item as done.
+history:2026-07-11: captured at guard level on first occurrence — high cost (a design doc misrepresenting
+        build state misleads every later reader + the next builder) per lessons-memory escalation rule 4,
+        and it co-occurred with a 4th [[LSN-008]] recurrence. scope:portable.

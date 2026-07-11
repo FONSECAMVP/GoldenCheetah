@@ -41,6 +41,13 @@ struct PyAuthOutcome
     QString garmin_user_id;
     QString display_name;
 
+    // REQ-004 / DEC-014 Option B — populated only when kind == Success: the
+    // opaque OAuth session blob exported by the adapter's dump_tokens(). The
+    // worker hands this to GarminTokenStore, which owns the atomic 0600 write
+    // to <athlete>/garminconnect/tokens.json. Empty if the adapter could not
+    // export a blob (never fails the auth itself).
+    QString tokenBlob;
+
     // Populated for non-Success outcomes. Raw library message — DES-008
     // translates at the page layer; the adapter does NOT translate.
     QString rawMessage;

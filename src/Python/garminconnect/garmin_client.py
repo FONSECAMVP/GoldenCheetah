@@ -60,6 +60,18 @@ class GarminClient:
         # The library's own retention is its contract — DES-012 isolates it.
         # tokenstore_path is forwarded only — the library owns the path; the
         # adapter has no reason to retain it on `self` until REQ-012 needs it.
+        #
+        # NOTE(DEC-014 Option B — reconciliation deferred): under Option B the
+        # library must be constructed AUTH-ONLY (in-memory session, no
+        # tokenstore path) and C++ owns the single atomic 0600 write of the blob
+        # exported by dump_tokens(). Fully removing this path forwarding is a
+        # cross-cutting change (PyEmbeddedAdapter ctor signature, its pystub,
+        # GarminAuthChain/AddCloudWizard wiring, and REQ-002's login tests that
+        # assert the forwarded path) — LARGER than REQ-004's write slice, so it
+        # is left to the __init__ reconciliation slice. REQ-004 adds the
+        # dump/load blob surface (the Option-B mechanism) without leaving the
+        # adapter itself writing anywhere; the library's own on-login write via
+        # this path is what that later slice removes.
         self._garmin = _gc.Garmin(email, password, tokenstore_path)
 
     def login(self) -> dict[str, Any]:
@@ -71,6 +83,42 @@ class GarminClient:
             "garmin_user_id": str(self._garmin.full_name_id),
             "display_name": self._garmin.display_name,
         }
+
+    def dump_tokens(self) -> str:
+        # REQ-004 / DEC-014 Option B: export the authenticated in-memory OAuth
+        # session as an opaque, serializable blob. The adapter does NOT write it
+        # to disk — C++ owns the single atomic 0600 write (DES-002/DES-006).
+        # REQ-005: only OAuth bearer + refresh tokens live in this blob; the
+        # password was handed to the library and never retained here.
+        #
+        # NOTE(DEC-014 OQ1): the exact library export method is unconfirmed
+        # against the not-yet-bundled python-garminconnect wheel (no version pin
+        # in repo; lib absent from .venv). On the current native engine this is
+        # `dumps()`; confirm when the wheel is bundled (DES-007/Pkg). The adapter
+        # contract (return a non-empty str) is pinned by pytest against a fake.
+        return str(self._garmin.dumps())
+
+    def load_tokens(self, token_str: str) -> None:
+        # REQ-004 counterpart of dump_tokens(): restore an authenticated session
+        # from a previously-exported blob (the REQ-006 resume path feeds this).
+        #
+        # NOTE(DEC-014 OQ1): real library import method unconfirmed (see above);
+        # `loads()` on the native engine.
+        #
+        # DEC-014 OQ2 → REQ-NF-Compat-001(b): a tampered or server-side-
+        # invalidated session surfaces from the library as an authentication
+        # error; translate it to GC-stable kind='session_expired' — DISTINCT
+        # from login's 'auth' and from 'token_permissions' — so the resume path
+        # can route it to a re-login prompt. Classify by exception TYPE, never
+        # by message content (LSN-006).
+        try:
+            self._garmin.loads(token_str)
+        except _gc.exceptions.GarminConnectAuthenticationError as e:
+            raise GarminError(
+                "session_expired",
+                str(e) or "Stored Garmin session is expired; please sign in again",
+                e,
+            ) from e
 
     def submit_mfa(self, code: str) -> dict[str, Any]:
         raise NotImplementedError("REQ-003 GREEN step not yet implemented")
