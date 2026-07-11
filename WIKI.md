@@ -56,7 +56,7 @@ REQ  garmin:001–015+NF-*  full:.claude/workflow-garminconnect/prd.md         n
 DEC  garmin:001–014  index:.claude/workflow-garminconnect/decisions.md      next:garmin-015
 DES  garmin:001–013(+001a,003a)  .claude/workflow-garminconnect/design.md   next:garmin-014
 TEST garmin:T-001–T-016  .claude/workflow-garminconnect/traceability.md     next:garmin-T-017 (T-011..T-013 REQ-004; T-014 REQ-006 Slice A load-side perm-refusal committed d86323246; T-015 pytest + T-016 garmin-py REQ-006 Slice B auth-only reconciliation committed 3edb705cb)
-VAL  garmin:001–010  latest:VAL-010 PASS (REQ-004 write path; FAIL Check 6/9→fixed) · .claude/workflow-garminconnect/validations/  next:garmin-011
+VAL  garmin:001–011  latest:VAL-011 REQ-006 re-verify in progress (passes 1-2 FAIL on ledger drift→repaired; code/test spine clean); VAL-010 PASS · .claude/workflow-garminconnect/validations/  next:garmin-012
 F    no F-### namespace in use; findings tracked as <cycle>-<seq> (A0-001…, A3-R00x-Mn/TR-nn, D-0x) in findings.md; 0 open blocking (A3-R006-01/-02 FIXED via T-014 edge-mode+freshness hardening; A3-R004-M3 resolved by REQ-006 Slice B)   next:n/a (see conventions.md)
 LSN  001–013  active:13 guards:8  lessons.md   next:014
 -- CLOSED (provenance only, do not extend): aicoach:DEC-001–013, aicoach:REQ-001–020, aicoach:TEST-001–020 — numeric collision with garmin ranges above; always use ledger prefix (coach:DEC-NNN / garmin:DEC-NNN)

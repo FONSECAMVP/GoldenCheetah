@@ -300,10 +300,11 @@ TEST-004 already established.
 
 `modulePath` resolves from env `GC_GARMIN_PYPATH` else the compile-time
 `GARMIN_PY_MODULE_DIR` dev default (`src/Python/garminconnect`); the installed
-path is DES-007/NF-Pkg-001 territory, not yet addressed. `tokenstorePath` is
-`<athlete config dir>/garminconnect` — a plain path string forwarded verbatim;
-DES-002 still owns formalizing the directory layout and permission invariants
-under it.
+path is DES-007/NF-Pkg-001 territory, not yet addressed. **Updated (REQ-006 Slice B,
+`3edb705cb`):** `PyEmbeddedAdapter` is now constructed with `modulePath` ONLY — no
+`tokenstorePath` is forwarded to the adapter or the library (auth-only, DEC-014 Option B).
+C++ (GarminTokenStore) owns the token path and the single 0600 write; DES-002 owns the
+directory layout and permission invariants under it.
 
 **Known gaps (flagged for A3):** the wizard routing itself (page 21, the
 nextId branches, chain lifecycle across Back/Next) has no automated test —
@@ -776,7 +777,7 @@ class GarminError(Exception):
         super().__init__(message)
 
 class GarminClient:
-    def __init__(self, email: str, password: str, tokenstore_path: str): ...
+    def __init__(self, email: str, password: str): ...    # auth-only (DEC-014 Option B / REQ-006 Slice B 3edb705cb); no tokenstore path
     def login(self) -> dict: ...                          # returns {'garmin_user_id': '...', 'display_name': '...'}
     def submit_mfa(self, code: str) -> dict: ...          # same return shape
     def list_activities_since(self, ts_gmt: str) -> Iterator[dict]: ...
@@ -808,7 +809,7 @@ DES-008's switch table is keyed on the **GC-stable `kind` values**, not on `garm
 | Concrete library import | `garmin_client.py` only | Single point of swap. |
 | Rate-limit + retry decoration | DES-005, applied to adapter methods | Decorator setup doesn't touch the library directly. |
 | Error-class name translation | `_EXCEPTION_MAP` in the adapter | C++ never sees the library's exception names. |
-| Token-store path | C++ → adapter → library via `tokenstore_path` | C++ owns the path; adapter forwards. |
+| Token-store path | C++ (GarminTokenStore) owns the path + the single 0600 write; adapter forwards NONE to the library (auth-only, DEC-014 Option B / REQ-006 Slice B) | library self-writes no token file. |
 | MFA / CAPTCHA detection | Adapter (heuristic over exception message + HTTP body) | Library doesn't surface these cleanly; we centralize the heuristics. |
 
 ### Tests (anticipated, Phase 2)
@@ -875,7 +876,7 @@ If checked + Apply:
 ## DES-013 — `PyEmbeddedAdapter`: embedded-CPython bridge (production IGarminPyAdapter)
 
 **Implements:** production side of DEC-013 (the seam's real implementation); executes under DEC-002's worker-thread model.
-**Serves:** REQ-002 (production closure of the Authenticate slice), REQ-006 (tokenstore path forwarding), and — additively — every later worker op (REQ-003/007/010/012/014).
+**Serves:** REQ-002 (production closure of the Authenticate slice), REQ-006 (auth-only construction — STOPS forwarding the tokenstore path; DEC-014 Option B), and — additively — every later worker op (REQ-003/007/010/012/014).
 **Composes with:** DES-001 (sole caller is the worker, on the worker thread), DES-001a (implements `IGarminPyAdapter`), DES-012 (calls only `garmin_client.GarminClient`, never `garminconnect`), DES-008 (returns raw kinds + raw messages; no translation).
 
 ### Shape
