@@ -172,7 +172,7 @@ Last updated: 2026-07-11 (Phase 2.2 — **REQ-004 token-storage write path GREEN
 | TEST-013 adapter dump/load | `src/Python/garminconnect/tests/test_token_store.py` | DEC-014, REQ-005. pytest. dump→load round-trip, reject-tampered-blob→`session_expired`, `test_dumped_blob_never_contains_the_password`. |
 | Adapter dump/load + tokenBlob | `src/Python/garminconnect/garmin_client.py` (+`dump_tokens`/`load_tokens`, `# NOTE(DEC-014 OQ1)` markers), `src/Cloud/IGarminPyAdapter.h` (`PyAuthOutcome.tokenBlob`), `src/Cloud/PyEmbeddedAdapter.cpp` (surfaces blob post-login), pystub | DEC-014 Option B. **NOT-done:** `__init__` still forwards `tokenstore_path` (B-R004-01 → REQ-006 Slice B). |
 
-## Phase 2.2 REQ-006 artifacts — Slice A (load-side perm refusal, GREEN, uncommitted)
+## Phase 2.2 REQ-006 artifacts — Slice A (load-side perm refusal, GREEN, committed `d86323246`)
 
 REQ-006 → DEC-003/DEC-014 → DES-002 (load invariant) / DES-008 (`TokenPermissionsRejected` key). Slice A = the acceptance criterion proper (C++ load-side). Slice B (the `__init__` auth-only reconciliation / A3-R004-M3 security-close, supersedes B-R004-01) is a SEPARATE later dispatch.
 

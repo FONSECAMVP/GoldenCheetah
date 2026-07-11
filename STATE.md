@@ -7,7 +7,7 @@ PHASE: Phase 2.2 — Garmin Connect integration. REQ-002 Authenticate flow **CLO
 `60a076848`). **REQ-007 activity-download — chain GREEN adapter→PyEmbeddedAdapter→worker, committed
 `1eb5a6a16` + VAL-009 PASS; NOT fully deployed** (readFile staging + FIT→TCX fallback deferred, need REQ-004/006).
 **REQ-004 token write-path GREEN + committed `54b7005e6`** (VAL-010 PASS; style/type gate clean via pre-commit).
-**REQ-006 Slice A (load-side perm refusal) GREEN — uncommitted.** `GarminTokenStore::loadChecked()` refuses wider-than-0600
+**REQ-006 Slice A (load-side perm refusal) GREEN — committed `d86323246`.** `GarminTokenStore::loadChecked()` refuses wider-than-0600
 `tokens.json` with typed `TokenPermissionsRejected` (T-014, garmin-fast 10/10). Verification-Gate PASS. Slice B (the
 `__init__` auth-only reconciliation = A3-R004-M3 security-close, supersedes B-R004-01) is the next dispatch.
 
