@@ -378,3 +378,35 @@ target_compile_features(testGarminTokenStore PRIVATE cxx_std_17)
 
 add_test(NAME testGarminTokenStore COMMAND testGarminTokenStore)
 set_tests_properties(testGarminTokenStore PROPERTIES LABELS "garmin-fast")
+
+# --- T-014 — REQ-006 (Slice A): GarminTokenStore load-side perms enforcement ---
+# The READ-side counterpart of DES-006's owner-only guarantee (DES-002 invariant):
+# on load, a tokens.json whose mode is WIDER than owner-only 0600 is REFUSED —
+# loadChecked() returns a typed TokenPermissionsRejected outcome (naming the path)
+# instead of the bytes, so the caller forces a fresh SSO (REQ-006). A conforming
+# 0600 file loads normally; an absent file is a distinct NotFound outcome.
+#
+# A SEPARATE target from testGarminTokenStore keeps the REQ-004 (write) and
+# REQ-006 (load) suites independently runnable. Pure-Qt (no Python.h) —
+# `garmin-fast` label. Links the same GarminTokenStore + AtomicFile TUs.
+add_executable(testGarminTokenStore_load
+    testGarminTokenStore_load.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminTokenStore.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminTokenStore.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.h
+)
+
+target_include_directories(testGarminTokenStore_load PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+)
+
+target_link_libraries(testGarminTokenStore_load PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Test
+)
+target_compile_features(testGarminTokenStore_load PRIVATE cxx_std_17)
+
+add_test(NAME testGarminTokenStore_load COMMAND testGarminTokenStore_load)
+set_tests_properties(testGarminTokenStore_load PROPERTIES LABELS "garmin-fast")

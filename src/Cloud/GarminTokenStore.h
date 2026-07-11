@@ -27,6 +27,26 @@
 class GarminTokenStore
 {
   public:
+    // REQ-006 / DES-002 — the three mutually-exclusive outcomes of a
+    // permission-enforcing load. A bare bool cannot encode three states, so the
+    // load-side guard reports through this enum + LoadResult.
+    enum class LoadStatus {
+        Ok,                      // file present, owner-only 0600, bytes returned
+        NotFound,                // file absent or plain read error — "no session yet"
+        TokenPermissionsRejected // present but mode/ACL WIDER than owner-only:
+                                 // REFUSED (name matches the DES-008 %1 key);
+                                 // the caller maps this to a forced fresh SSO.
+    };
+
+    struct LoadResult
+    {
+        LoadStatus status = LoadStatus::NotFound;
+        QByteArray bytes; // valid only when status == Ok; empty otherwise
+        QString path;     // the token file path (DES-008 %1 arg), set in every case
+        bool isOk() const { return status == LoadStatus::Ok; }
+        bool isRejected() const { return status == LoadStatus::TokenPermissionsRejected; }
+    };
+
     // <athleteConfigDir>/garminconnect
     static QString directoryFor(const QString& athleteConfigDir);
 
@@ -41,10 +61,23 @@ class GarminTokenStore
     // athlete dirs yield fully independent files.
     static bool save(const QString& athleteConfigDir, const QByteArray& tokenBlob);
 
-    // Minimal plain read of tokens.json (no perms enforcement — that is
-    // REQ-006). Returns the file bytes; on absence/read failure returns an
-    // empty QByteArray and sets *ok (if provided) to false.
+    // Minimal plain read of tokens.json (no perms enforcement). Returns the
+    // file bytes; on absence/read failure returns an empty QByteArray and sets
+    // *ok (if provided) to false. Retained for REQ-004 callers that do not want
+    // enforcement; REQ-006 callers use loadChecked() below.
     static QByteArray load(const QString& athleteConfigDir, bool* ok = nullptr);
+
+    // REQ-006 (DES-002) — permission-enforcing load. Reads the ACTUAL on-disk
+    // mode at load time (never a cached value — cf. A3-R004-M1) and:
+    //   * POSIX: if the file mode is WIDER than owner-only 0600 (any group/other
+    //     bit set), REFUSES to read it and returns TokenPermissionsRejected with
+    //     no bytes and the offending path (the caller emits a DES-008 message
+    //     and forces a fresh SSO). A conforming 0600 file returns Ok + bytes.
+    //   * absent/unreadable file returns NotFound (distinct from rejected).
+    //   * Windows: ACL "only the owning user" check is REQ-NF-Pkg-001 Phase-2 CI
+    //     territory (finding A3-R004-09) — not implemented here; the file opens
+    //     normally. See loadChecked() body for the marked TODO.
+    static LoadResult loadChecked(const QString& athleteConfigDir);
 };
 
 #endif // GC_GarminTokenStore_h

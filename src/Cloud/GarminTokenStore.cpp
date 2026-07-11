@@ -55,3 +55,48 @@ QByteArray GarminTokenStore::load(const QString& athleteConfigDir, bool* ok)
         *ok = true;
     return data;
 }
+
+GarminTokenStore::LoadResult GarminTokenStore::loadChecked(const QString& athleteConfigDir)
+{
+    LoadResult result;
+    result.path = tokenFilePath(athleteConfigDir);
+
+    // Read the ACTUAL on-disk state now, at load time (A3-R004-M1: never a
+    // cached value). A freshly-constructed QFileInfo stats the file once here.
+    const QFileInfo info(result.path);
+    if (!info.exists()) {
+        result.status = LoadStatus::NotFound;
+        return result;
+    }
+
+#ifndef Q_OS_WIN
+    // POSIX (DES-002): refuse if the mode is WIDER than owner-only 0600 — any
+    // group- or other-class bit set. The refusal is decided from the mode bits
+    // directly, so it holds even under a DAC-overriding user (root); an
+    // open()-based check would not (finding A3-R004-08).
+    const QFileDevice::Permissions perms = info.permissions();
+    const QFileDevice::Permissions groupOther = QFileDevice::ReadGroup | QFileDevice::WriteGroup |
+                                                QFileDevice::ExeGroup | QFileDevice::ReadOther |
+                                                QFileDevice::WriteOther | QFileDevice::ExeOther;
+    if ((perms & groupOther) != QFileDevice::Permissions()) {
+        // Do NOT read/return the bytes — the caller forces a fresh SSO.
+        result.status = LoadStatus::TokenPermissionsRejected;
+        return result;
+    }
+#else
+    // TODO(REQ-NF-Pkg-001, A3-R004-09): Windows ACL check — verify the DACL
+    // grants only the owning user before returning bytes; refuse (set
+    // TokenPermissionsRejected) otherwise. Phase-2 CI territory, mirroring the
+    // cross-platform split AtomicFile uses on the write side. Until then the
+    // file opens normally on Windows (no regression to any existing path).
+#endif
+
+    QFile f(result.path);
+    if (!f.open(QIODevice::ReadOnly)) {
+        result.status = LoadStatus::NotFound;
+        return result;
+    }
+    result.bytes = f.readAll();
+    result.status = LoadStatus::Ok;
+    return result;
+}

@@ -161,7 +161,7 @@ Last updated: 2026-07-11 (Phase 2.2 — **REQ-004 token-storage write path GREEN
 | TEST-005 strengthened | `unittests/Core/garminconnect/testGarminConnectPyAdapter.cpp` (8→10 named slots; 12 QTest-reported incl. init/cleanup) + `pystubs/garmin_client.py` | REQ-002 / A3-R002-TR-05. New SCENARIOs (non-dict result; dict missing `garmin_user_id`/`display_name`) + asserts that the outcome is Unknown-with-message, never a spurious Success — kills a delete-both-defensive-checks mutant. |
 | New finding TR-08 (deferred) | `src/Cloud/GarminAuthChain.cpp` (`~GarminAuthChain` last-resort path) | A3-R002-TR-08. A genuinely uncancellable native busy-loop (no cancellation point) defeats `QThread::terminate()`; the dtor then destroys a running `QThread` → `qFatal` abort. Only reachable via a pure native wedge; realistic wedges unwind cleanly. Deferred → Phase 1.5 with A2-001 (wedged-worker recovery). |
 
-## Phase 2.2 REQ-004 artifacts (in repo — write path GREEN, uncommitted)
+## Phase 2.2 REQ-004 artifacts (write path GREEN, committed `54b7005e6`)
 
 | Artifact | Path | Serves |
 |----------|------|--------|
@@ -170,7 +170,16 @@ Last updated: 2026-07-11 (Phase 2.2 — **REQ-004 token-storage write path GREEN
 | TEST-011 AtomicFile suite | `unittests/Core/garminconnect/testAtomicFile.cpp` | REQ-004/NF-Reliab-002. `garmin-fast`. perms-before-rename, failed-write-leaves-dest-intact (`#ifndef Q_OS_WIN`), atomic-no-residue. |
 | TEST-012 GarminTokenStore suite | `unittests/Core/garminconnect/testGarminTokenStore.cpp` | REQ-004. `garmin-fast`. 0700 dir + 0600 file + no .tmp residue + two-athlete independence + `existingDirPermsNotTightened` (DES-002). |
 | TEST-013 adapter dump/load | `src/Python/garminconnect/tests/test_token_store.py` | DEC-014, REQ-005. pytest. dump→load round-trip, reject-tampered-blob→`session_expired`, `test_dumped_blob_never_contains_the_password`. |
-| Adapter dump/load + tokenBlob | `src/Python/garminconnect/garmin_client.py` (+`dump_tokens`/`load_tokens`, `# NOTE(DEC-014 OQ1)` markers), `src/Cloud/IGarminPyAdapter.h` (`PyAuthOutcome.tokenBlob`), `src/Cloud/PyEmbeddedAdapter.cpp` (surfaces blob post-login), pystub | DEC-014 Option B. **NOT-done:** `__init__` still forwards `tokenstore_path` (B-R004-01). |
+| Adapter dump/load + tokenBlob | `src/Python/garminconnect/garmin_client.py` (+`dump_tokens`/`load_tokens`, `# NOTE(DEC-014 OQ1)` markers), `src/Cloud/IGarminPyAdapter.h` (`PyAuthOutcome.tokenBlob`), `src/Cloud/PyEmbeddedAdapter.cpp` (surfaces blob post-login), pystub | DEC-014 Option B. **NOT-done:** `__init__` still forwards `tokenstore_path` (B-R004-01 → REQ-006 Slice B). |
+
+## Phase 2.2 REQ-006 artifacts — Slice A (load-side perm refusal, GREEN, uncommitted)
+
+REQ-006 → DEC-003/DEC-014 → DES-002 (load invariant) / DES-008 (`TokenPermissionsRejected` key). Slice A = the acceptance criterion proper (C++ load-side). Slice B (the `__init__` auth-only reconciliation / A3-R004-M3 security-close, supersedes B-R004-01) is a SEPARATE later dispatch.
+
+| Artifact | Path | Serves |
+|----------|------|--------|
+| Token store load-side perm check | `src/Cloud/GarminTokenStore.{h,cpp}` (+`enum class LoadStatus{Ok,NotFound,TokenPermissionsRejected}`, `struct LoadResult{status,bytes,path,isOk(),isRejected()}`, `static LoadResult loadChecked(athleteConfigDir)`) | DES-002, REQ-006, REQ-NF-Sec-002. POSIX: refuses `tokens.json` with ANY group/other bit set — no bytes returned, path exposed (DES-008 `%1`), caller forces fresh SSO. Perms read at load time (A3-R004-M1); decided from mode bits so it holds under root (A3-R004-08). Plain `load(bool*)` left untouched (REQ-004 callers unchanged). Windows ACL = TODO stub (A3-R004-09, Phase-2 CI). Qt-only, Python-free. |
+| TEST-014 load-side suite | `unittests/Core/garminconnect/testGarminTokenStore_load.cpp` (5 slots, `garmin-fast`) | REQ-006. 0600 loads exact bytes; 0640/0644 refused (typed, no bytes, path); absent→NotFound (distinct); three-state mutual-exclusion anti-mutant guard. garmin-fast 10/10 (was 9). |
 
 ## Drift / hygiene notes
 

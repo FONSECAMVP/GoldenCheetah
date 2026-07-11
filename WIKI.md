@@ -55,7 +55,7 @@ src/*.o,moc_*,qrc_*,*_yacc*,*_lex*   [SKIP] generated in-source qmake build arti
 REQ  garmin:001–015+NF-*  full:.claude/workflow-garminconnect/prd.md         next:garmin-016
 DEC  garmin:001–014  index:.claude/workflow-garminconnect/decisions.md      next:garmin-015
 DES  garmin:001–013(+001a,003a)  .claude/workflow-garminconnect/design.md   next:garmin-014
-TEST garmin:T-001–T-013  .claude/workflow-garminconnect/traceability.md     next:garmin-T-014 (T-011 AtomicFile, T-012 GarminTokenStore, T-013 adapter dump/load — allocated to REQ-004 build)
+TEST garmin:T-001–T-014  .claude/workflow-garminconnect/traceability.md     next:garmin-T-015 (T-011 AtomicFile, T-012 GarminTokenStore, T-013 adapter dump/load — REQ-004; T-014 GarminTokenStore load-side perm-refusal — REQ-006 Slice A, in build)
 VAL  garmin:001–010  latest:VAL-010 PASS (REQ-004 write path; FAIL Check 6/9→fixed) · .claude/workflow-garminconnect/validations/  next:garmin-011
 F    no F-### namespace in use; findings tracked as <cycle>-<seq> (A0-001…, A3-R00x-Mn/TR-nn, D-0x) in findings.md; 0 open blocking (A3-R002-TR-01/-02 fixed; TR-08 defer→Phase 1.5)   next:n/a (see conventions.md)
 LSN  001–011  active:11 guards:8  lessons.md   next:012
