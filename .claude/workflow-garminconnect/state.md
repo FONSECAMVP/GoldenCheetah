@@ -104,7 +104,7 @@ Full motivation cells and acceptance fragments live in `prd.md`. Use this table 
 | 008 | P2.2 REQ-002 A3 test-hardening changeset (TEST-007 + strengthened 005/006) | PASS (9/9) | validations/active/val-008.md |
 | 009 | P2.2 REQ-007 download-chain changeset (commit `1eb5a6a16`) | PASS (after ledger-record fix; first pass FAIL Check 6) | validations/active/val-009.md |
 | 010 | P2.2 REQ-004 token-storage write-path changeset | PASS (after fix; first pass FAIL Check 6+9 — design-note false-done + stale DES-012/013 index → LSN-011/LSN-008) | validations/active/val-010.md |
-| 011 | P2.2 REQ-006 Slices A+B (commits d86323246, 3edb705cb) | first pass FAIL (LSN-008 5th recurrence — stale primary REQ-004/006 matrix rows + DES-012/013 index + design.md DES-013 body/2nd note + entirely-stale local state.md + WIKI "in build"); ledger-repaired, re-verify pending | validations/active/val-011.md |
+| 011 | P2.2 REQ-006 Slices A+B + A3-R006 hardening (commits d86323246, 3edb705cb, 458a72ba7) | passes 1-2 FAIL on ledger drift only (LSN-008 5th+6th recur — primary matrix/DES-index/design-body/local-state.md then root STATE.md CASCADE/NEXT_GATE/COUNTS); code/test spine clean throughout (15/20/10). Repaired; 3rd pass re-verify pending | validations/active/val-011.md |
 
 ## open
 - needs-review: none
