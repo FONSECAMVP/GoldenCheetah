@@ -1,6 +1,6 @@
 # PROJECT WIKI — GoldenCheetah            (the brain · read me first)
 root:  /media/andy/TOSHIBA EXT/Backup2/Documents/GoldenCheetah   schema: wiki-v1
-phase: 2 (Phase 2.2 — REQ-002 CLOSED@60a076848; REQ-007 activity-download download-chain GREEN through the worker (adapter T-008; PyEmbeddedAdapter marshalling T-009; GarminWorker DownloadActivity op T-010), committed@1eb5a6a16 + VAL-009 PASS. NOT-done: GarminConnect::readFile staging + FIT→TCX fallback — deferred, needs REQ-004/006 tokens/session)   live-status → STATE.md (read next)
+phase: 2 (Phase 2.2 — REQ-002 CLOSED@60a076848; REQ-007 activity-download download-chain GREEN through the worker (adapter T-008; PyEmbeddedAdapter marshalling T-009; GarminWorker DownloadActivity op T-010), committed@1eb5a6a16 + VAL-009 PASS; REQ-004 token write-path GREEN committed@54b7005e6 + VAL-010 PASS (AtomicFile T-011, GarminTokenStore T-012, adapter dump/load T-013). NOT-done: GarminConnect::readFile staging + FIT→TCX fallback — deferred, needs REQ-004/006 tokens/session. Next gate: REQ-006 load-side)   live-status → STATE.md (read next)
 
 ## MAP — directory manifest (authoritative; check before creating ANYTHING)
 WIKI.md                     this brain (hub) — read first, every session
