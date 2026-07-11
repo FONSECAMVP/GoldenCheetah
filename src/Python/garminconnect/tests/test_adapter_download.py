@@ -71,10 +71,10 @@ class _FakeGarminBase:
 
     ActivityDownloadFormat = _FmtEnum
 
-    def __init__(self, email: str, password: str, tokenstore: str = "") -> None:
+    def __init__(self, email: str, password: str) -> None:
+        # DEC-014 Option B: AUTH-ONLY construction — no tokenstore path.
         self.email = email
         self.password = password
-        self.tokenstore = tokenstore
 
     def download_activity(self, activity_id: str, dl_fmt: Any = None) -> bytes:
         raise NotImplementedError  # overridden per test
@@ -111,7 +111,7 @@ def test_download_original_forwards_id_and_returns_bytes(tmp_path: Any, monkeypa
 
     _install_fake_gc(monkeypatch, _OkGarmin)
 
-    client = GarminClient("u@x.com", "p", str(tmp_path / "tokens.json"))
+    client = GarminClient("u@x.com", "p")
     data = client.download_activity("987654321")
 
     assert data == payload, "adapter must return the library's bytes verbatim (no re-encoding)"
@@ -134,7 +134,7 @@ def test_download_tcx_maps_to_tcx_format(tmp_path: Any, monkeypatch: pytest.Monk
 
     _install_fake_gc(monkeypatch, _OkGarmin)
 
-    client = GarminClient("u@x.com", "p", str(tmp_path / "tokens.json"))
+    client = GarminClient("u@x.com", "p")
     data = client.download_activity("111", fmt="TCX")
 
     assert data == b"<TrainingCenterDatabase/>"
@@ -151,7 +151,7 @@ def test_download_connection_error_maps_to_kind_connection(tmp_path: Any, monkey
 
     _install_fake_gc(monkeypatch, _ConnGarmin)
 
-    client = GarminClient("u@x.com", "p", str(tmp_path / "tokens.json"))
+    client = GarminClient("u@x.com", "p")
     with pytest.raises(GarminError) as excinfo:
         client.download_activity("111")
 
@@ -170,7 +170,7 @@ def test_download_rate_limit_error_maps_to_kind_rate_limit(tmp_path: Any, monkey
 
     _install_fake_gc(monkeypatch, _RateGarmin)
 
-    client = GarminClient("u@x.com", "p", str(tmp_path / "tokens.json"))
+    client = GarminClient("u@x.com", "p")
     with pytest.raises(GarminError) as excinfo:
         client.download_activity("111")
 
@@ -190,7 +190,7 @@ def test_download_non_library_exception_is_not_misclassified(tmp_path: Any, monk
 
     _install_fake_gc(monkeypatch, _BoomGarmin)
 
-    client = GarminClient("u@x.com", "p", str(tmp_path / "tokens.json"))
+    client = GarminClient("u@x.com", "p")
     with pytest.raises(RuntimeError, match="simulated downstream library bug"):
         client.download_activity("111")
 
@@ -209,7 +209,7 @@ def test_download_unsupported_fmt_rejected_before_library_call(tmp_path: Any, mo
 
     _install_fake_gc(monkeypatch, _TrackGarmin)
 
-    client = GarminClient("u@x.com", "p", str(tmp_path / "tokens.json"))
+    client = GarminClient("u@x.com", "p")
     with pytest.raises(GarminError) as excinfo:
         client.download_activity("111", fmt="GPX")  # not offered in Phase 1 (DEC-006: FIT + TCX)
 

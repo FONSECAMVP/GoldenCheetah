@@ -32,7 +32,8 @@
 // A3-R002-M6: classification is by exception TYPE then .kind, never by
 // message content):
 //   a. success dict  -> Success + garmin_user_id + display_name; ctor args
-//                       (email, password, tokenstorePath) reach the stub verbatim
+//                       (email, password) reach the stub verbatim, and NO
+//                       tokenstore path is forwarded (T-016 / DEC-014 Option B)
 //   b. GarminError kind='auth'       -> AuthFailed (+ stub's message as rawMessage)
 //   c. GarminError kind='connection' -> Network
 //   d. GarminError kind='rate_limit' -> Unknown (explicitly NOT AuthFailed)
@@ -126,7 +127,6 @@ QString stubAttr(const char* name)
 }
 
 const QString kStubsDir = QString::fromUtf8(GARMIN_PYSTUBS_DIR);
-const QString kTokenstore = QStringLiteral("/tmp/gc-test-tokens/garmin");
 
 // TEST-009 / REQ-007 — byte-identical to pystubs/garmin_client.py DL_PAYLOAD.
 // Embedded NUL (0x00) mid-buffer + high bytes (0xff/0xfe) prove the marshalling
@@ -153,7 +153,7 @@ class TestGarminConnectPyAdapter : public QObject
     {
         QVERIFY2(!Py_IsInitialized(), "harness precondition: interpreter must not be up yet");
 
-        PyEmbeddedAdapter early(kStubsDir, kTokenstore);
+        PyEmbeddedAdapter early(kStubsDir);
         const PyAuthOutcome out = early.authenticate(QStringLiteral("a@b"), QStringLiteral("pw"));
         QCOMPARE(out.kind, PyAuthOutcome::Unknown);
         QCOMPARE(out.rawMessage, QStringLiteral("embedded Python unavailable"));
@@ -185,7 +185,7 @@ class TestGarminConnectPyAdapter : public QObject
         QTemporaryDir emptyDir;
         QVERIFY(emptyDir.isValid());
 
-        PyEmbeddedAdapter adapter(emptyDir.path(), kTokenstore);
+        PyEmbeddedAdapter adapter(emptyDir.path());
         const PyAuthOutcome out = adapter.authenticate(QStringLiteral("a@b"), QStringLiteral("pw"));
 
         QCOMPARE(out.kind, PyAuthOutcome::Unknown);
@@ -194,12 +194,13 @@ class TestGarminConnectPyAdapter : public QObject
     }
 
     // (a) success dict marshals to Success + both fields, and the exact
-    // email / password / tokenstorePath strings reach the stub's ctor.
+    // email / password strings reach the stub's ctor — while NO tokenstore
+    // path is forwarded (T-016 / DEC-014 Option B: auth-only construction).
     void successMarshalsFieldsAndCtorArgs()
     {
         setScenario("success");
 
-        PyEmbeddedAdapter adapter(kStubsDir, kTokenstore);
+        PyEmbeddedAdapter adapter(kStubsDir);
         const PyAuthOutcome out =
             adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("p@$$w/rd with spaces"));
 
@@ -210,7 +211,13 @@ class TestGarminConnectPyAdapter : public QObject
         // ctor-arg marshalling — recorded by the stub, read back verbatim.
         QCOMPARE(stubAttr("LAST_EMAIL"), QStringLiteral("rider@example.com"));
         QCOMPARE(stubAttr("LAST_PASSWORD"), QStringLiteral("p@$$w/rd with spaces"));
-        QCOMPARE(stubAttr("LAST_TOKENSTORE"), kTokenstore);
+        // T-016 — REQ-006 / DEC-014 Option B / A3-R004-M3: the adapter must
+        // construct the Python GarminClient AUTH-ONLY, forwarding NO tokenstore
+        // path. The pystub no longer records LAST_TOKENSTORE, so the attribute
+        // is absent/None here — proving no path was forwarded (the inverse of
+        // the old assertion that required the forwarded path).
+        QVERIFY2(stubAttr("LAST_TOKENSTORE").isNull(),
+                 "adapter must forward NO tokenstore path to the Python client (auth-only)");
     }
 
     // (b) GarminError kind='auth' -> AuthFailed, rawMessage carries the
@@ -219,7 +226,7 @@ class TestGarminConnectPyAdapter : public QObject
     {
         setScenario("auth_error");
 
-        PyEmbeddedAdapter adapter(kStubsDir, kTokenstore);
+        PyEmbeddedAdapter adapter(kStubsDir);
         const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("wrong"));
 
         QCOMPARE(out.kind, PyAuthOutcome::AuthFailed);
@@ -232,7 +239,7 @@ class TestGarminConnectPyAdapter : public QObject
     {
         setScenario("connection_error");
 
-        PyEmbeddedAdapter adapter(kStubsDir, kTokenstore);
+        PyEmbeddedAdapter adapter(kStubsDir);
         const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
         QCOMPARE(out.kind, PyAuthOutcome::Network);
@@ -246,7 +253,7 @@ class TestGarminConnectPyAdapter : public QObject
     {
         setScenario("rate_limit_error");
 
-        PyEmbeddedAdapter adapter(kStubsDir, kTokenstore);
+        PyEmbeddedAdapter adapter(kStubsDir);
         const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
         QVERIFY2(out.kind != PyAuthOutcome::AuthFailed, "kind='rate_limit' must NOT be classified as AuthFailed");
@@ -260,7 +267,7 @@ class TestGarminConnectPyAdapter : public QObject
     {
         setScenario("value_error");
 
-        PyEmbeddedAdapter adapter(kStubsDir, kTokenstore);
+        PyEmbeddedAdapter adapter(kStubsDir);
         const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
         QVERIFY2(out.kind != PyAuthOutcome::AuthFailed,
@@ -284,7 +291,7 @@ class TestGarminConnectPyAdapter : public QObject
     {
         setScenario("non_dict_result");
 
-        PyEmbeddedAdapter adapter(kStubsDir, kTokenstore);
+        PyEmbeddedAdapter adapter(kStubsDir);
         const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
         QVERIFY2(out.kind != PyAuthOutcome::Success, "a non-dict login() result must NOT be reported as Success");
@@ -298,7 +305,7 @@ class TestGarminConnectPyAdapter : public QObject
     {
         setScenario("missing_keys");
 
-        PyEmbeddedAdapter adapter(kStubsDir, kTokenstore);
+        PyEmbeddedAdapter adapter(kStubsDir);
         const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
         QVERIFY2(out.kind != PyAuthOutcome::Success,
@@ -314,7 +321,7 @@ class TestGarminConnectPyAdapter : public QObject
     {
         setScenario("success");
 
-        PyEmbeddedAdapter adapter(kStubsDir, kTokenstore);
+        PyEmbeddedAdapter adapter(kStubsDir);
         PyAuthOutcome out;
         std::thread worker(
             [&] { out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("hunter2")); });
@@ -331,7 +338,7 @@ class TestGarminConnectPyAdapter : public QObject
     // non-ASCII email in and a non-ASCII display_name out (UTF-8 both ways).
     void repeatedMixedCallsStayGilBalancedWithUnicode()
     {
-        PyEmbeddedAdapter adapter(kStubsDir, kTokenstore);
+        PyEmbeddedAdapter adapter(kStubsDir);
 
         // 1 — success
         setScenario("success");
@@ -378,7 +385,7 @@ class TestGarminConnectPyAdapter : public QObject
     // (embedded NUL survives), and activity_id + fmt reach the stub verbatim.
     void downloadSuccessMarshalsBinaryBytesAndRecordsArgs()
     {
-        PyEmbeddedAdapter adapter(kStubsDir, kTokenstore);
+        PyEmbeddedAdapter adapter(kStubsDir);
         setScenario("success");
         QCOMPARE(adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw")).kind,
                  PyAuthOutcome::Success);
@@ -397,7 +404,7 @@ class TestGarminConnectPyAdapter : public QObject
     // (kills a mutant that always requests ORIGINAL, breaking DES-004 fallback).
     void downloadForwardsTcxFmt()
     {
-        PyEmbeddedAdapter adapter(kStubsDir, kTokenstore);
+        PyEmbeddedAdapter adapter(kStubsDir);
         setScenario("success");
         QCOMPARE(adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw")).kind,
                  PyAuthOutcome::Success);
@@ -412,7 +419,7 @@ class TestGarminConnectPyAdapter : public QObject
     // (c) GarminError kind='connection' → Network, raw message forwarded.
     void downloadConnectionErrorMapsToNetwork()
     {
-        PyEmbeddedAdapter adapter(kStubsDir, kTokenstore);
+        PyEmbeddedAdapter adapter(kStubsDir);
         setScenario("success");
         adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
@@ -427,7 +434,7 @@ class TestGarminConnectPyAdapter : public QObject
     // collapsed to Unknown or misrouted to Network (DES-008 rate-limit copy).
     void downloadRateLimitErrorMapsToRateLimited()
     {
-        PyEmbeddedAdapter adapter(kStubsDir, kTokenstore);
+        PyEmbeddedAdapter adapter(kStubsDir);
         setScenario("success");
         adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
@@ -444,7 +451,7 @@ class TestGarminConnectPyAdapter : public QObject
     // (LSN-006: classify by type; a foreign exception is not a valid download).
     void downloadForeignExceptionMapsToUnknownNotSuccess()
     {
-        PyEmbeddedAdapter adapter(kStubsDir, kTokenstore);
+        PyEmbeddedAdapter adapter(kStubsDir);
         setScenario("success");
         adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
@@ -461,7 +468,7 @@ class TestGarminConnectPyAdapter : public QObject
     // NEVER a Success with empty data. Kills a mutant that skips the type check.
     void downloadNonBytesResultYieldsUnknownNotSuccess()
     {
-        PyEmbeddedAdapter adapter(kStubsDir, kTokenstore);
+        PyEmbeddedAdapter adapter(kStubsDir);
         setScenario("success");
         adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
@@ -478,7 +485,7 @@ class TestGarminConnectPyAdapter : public QObject
     // reused (REQ-005), so there is no client to download through.
     void downloadWithoutAuthenticateYieldsUnknownNotSuccess()
     {
-        PyEmbeddedAdapter adapter(kStubsDir, kTokenstore); // never authenticated
+        PyEmbeddedAdapter adapter(kStubsDir); // never authenticated
         setScenario("dl_success");
         const PyDownloadOutcome out = adapter.downloadActivity(QStringLiteral("111"), QStringLiteral("ORIGINAL"));
 
@@ -492,7 +499,7 @@ class TestGarminConnectPyAdapter : public QObject
     // acquire the GIL there and marshal the identical bytes.
     void downloadFromWorkerThreadMarshalsSameBytes()
     {
-        PyEmbeddedAdapter adapter(kStubsDir, kTokenstore);
+        PyEmbeddedAdapter adapter(kStubsDir);
         setScenario("success");
         adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 

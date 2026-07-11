@@ -181,6 +181,17 @@ REQ-006 → DEC-003/DEC-014 → DES-002 (load invariant) / DES-008 (`TokenPermis
 | Token store load-side perm check | `src/Cloud/GarminTokenStore.{h,cpp}` (+`enum class LoadStatus{Ok,NotFound,TokenPermissionsRejected}`, `struct LoadResult{status,bytes,path,isOk(),isRejected()}`, `static LoadResult loadChecked(athleteConfigDir)`) | DES-002, REQ-006, REQ-NF-Sec-002. POSIX: refuses `tokens.json` with ANY group/other bit set — no bytes returned, path exposed (DES-008 `%1`), caller forces fresh SSO. Perms read at load time (A3-R004-M1); decided from mode bits so it holds under root (A3-R004-08). Plain `load(bool*)` left untouched (REQ-004 callers unchanged). Windows ACL = TODO stub (A3-R004-09, Phase-2 CI). Qt-only, Python-free. |
 | TEST-014 load-side suite | `unittests/Core/garminconnect/testGarminTokenStore_load.cpp` (5 slots, `garmin-fast`) | REQ-006. 0600 loads exact bytes; 0640/0644 refused (typed, no bytes, path); absent→NotFound (distinct); three-state mutual-exclusion anti-mutant guard. garmin-fast 10/10 (was 9). |
 
+## Phase 2.2 REQ-006 artifacts — Slice B (__init__ auth-only reconciliation, GREEN, uncommitted) — closes NF-Sec-002 end-to-end
+
+A3-R004-M3 security-close (supersedes B-R004-01). Library constructed AUTH-ONLY so it self-writes no 2nd token file; C++-owned 0600 write is the sole token file. Verification-Gate PASS: pytest 15/15, garmin-py 20/20, garmin-fast 10/10.
+
+| Artifact | Path | Serves |
+|----------|------|--------|
+| Adapter auth-only ctor | `src/Python/garminconnect/garmin_client.py` (`__init__(email, password)`; `_gc.Garmin(email, password)`; OQ1 real-lib 2-arg NOTE) | REQ-006, DEC-014 Option B, A3-R004-M3, REQ-NF-Sec-002. Drops all `tokenstore_path` forwarding — library persists nothing. |
+| PyEmbeddedAdapter 1-arg ctor | `src/Cloud/PyEmbeddedAdapter.{h,cpp}` (`PyEmbeddedAdapter(modulePath)` explicit; dropped `tokenstorePath` member; C-API `"sss"`→`"ss"`), `src/Cloud/AddCloudWizard.cpp` (dropped unused `tokenstorePath` local + 2nd ctor arg; C++-persist wiring deferred to REQ-007-closure) | REQ-006 production seam. |
+| TEST-015 auth-only pytest | `src/Python/garminconnect/tests/test_adapter_login.py` (`test_login_happy_path_constructs_auth_only_and_exposes_blob`) | REQ-006/M3. Captures ALL forwarded ctor args, asserts `== (email,password)` + `len==2` (no path), persistence via `dump_tokens()` blob. Replaces old `assert tokenstore.exists()`. |
+| TEST-016 no-path-forwarded garmin-py | `unittests/Core/garminconnect/testGarminConnectPyAdapter.cpp` (`QVERIFY2(stubAttr("LAST_TOKENSTORE").isNull())`) + `pystubs/garmin_client.py` (2-arg ctor, dropped LAST_TOKENSTORE) + `stubs/WizardStubPreamble.h` (1-arg stub ctor) + test_adapter_download.py / test_token_store.py (fakes+call sites → 2-arg) | REQ-006/M3. Inverts the old forwarded-path assertion; 20/20 PyAdapter subtests intact. |
+
 ## Drift / hygiene notes
 
 | # | Drift | Why it matters | Disposition |

@@ -36,9 +36,11 @@ class PyEmbeddedAdapter : public IGarminPyAdapter
   public:
     // modulePath: directory prepended to sys.path so `garmin_client`
     //             resolves (C++ owns path policy, per DES-012).
-    // tokenstorePath: forwarded verbatim to
-    //             GarminClient(email, password, tokenstore_path).
-    PyEmbeddedAdapter(const QString& modulePath, const QString& tokenstorePath);
+    // DEC-014 Option B (A3-R004-M3): the Python GarminClient is constructed
+    // AUTH-ONLY — email+password only, NO tokenstore path. The library holds an
+    // in-memory session and self-writes no token file; C++ (GarminTokenStore)
+    // owns the single atomic 0600 write of the dump_tokens() blob.
+    explicit PyEmbeddedAdapter(const QString& modulePath);
 
     // Releases the retained authenticated client under the GIL (REQ-007
     // session model). Safe if the interpreter is already finalized.
@@ -60,7 +62,6 @@ class PyEmbeddedAdapter : public IGarminPyAdapter
 
   private:
     QString modulePath;
-    QString tokenstorePath;
     PyObject* m_client = nullptr; // retained authenticated GarminClient; owned
 };
 

@@ -46,10 +46,11 @@ class _FakeGarminBase:
     display_name: str = ""
     full_name_id: str = ""
 
-    def __init__(self, email: str, password: str, tokenstore: str = "") -> None:
+    def __init__(self, email: str, password: str) -> None:
+        # DEC-014 Option B: AUTH-ONLY construction — no tokenstore path. The
+        # library holds an in-memory session and self-writes no token file.
         self.email = email
         self.password = password
-        self.tokenstore = tokenstore
 
     def login(self) -> None:  # library returns None on success; adapter reads .display_name
         raise NotImplementedError  # overridden per test
@@ -70,37 +71,61 @@ def _install_fake_gc(monkeypatch: pytest.MonkeyPatch, garmin_cls: type) -> None:
     monkeypatch.setattr(garmin_client, "_gc", fake_mod)
 
 
-def test_login_happy_path_returns_user_identity(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """REQ-002 acceptance — valid creds yield a persisted token file and an
-    identity dict the worker can hand back to the UI.
+def test_login_happy_path_constructs_auth_only_and_exposes_blob(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """T-015 — REQ-006 / DEC-014 Option B / A3-R004-M3 security-close.
+
+    The adapter must construct the underlying library AUTH-ONLY: EXACTLY
+    (email, password), with NO third/tokenstore argument. The library therefore
+    self-writes NO token file — persistence is instead exposed to C++ via
+    dump_tokens() (the opaque blob C++/GarminTokenStore writes 0600). This
+    supersedes the old `assert tokenstore.exists()` acceptance: nothing below
+    the adapter persists any more (T-012/T-014 own and perm-check the C++ write).
     """
-    tokenstore = tmp_path / "tokens.json"
-    captured: dict[str, tuple[str, str, str]] = {}
+    ctor_args: dict[str, tuple[Any, ...]] = {}
 
     class _OkGarmin(_FakeGarminBase):
         display_name = "Test Athlete"
         full_name_id = "1234567"
 
+        # Capture EVERY positional the adapter forwards, so a lingering
+        # tokenstore path (a 3rd arg) is caught, not silently swallowed.
+        def __init__(self, *args: Any) -> None:
+            ctor_args["forwarded"] = args
+            super().__init__(*args[:2])
+
         def login(self) -> None:
-            captured["called_with"] = (self.email, self.password, self.tokenstore)
-            # The real library writes the tokenstore JSON on successful SSO.
-            tokenstore.write_text('{"oauth1":"fake","oauth2":"fake"}')
+            # Auth-only: the library holds an in-memory session; it does NOT
+            # write any token file (no tokenstore path was ever handed to it).
+            pass
+
+        def dumps(self) -> str:
+            return '{"oauth1":"blob","oauth2":"blob"}'
 
     _install_fake_gc(monkeypatch, _OkGarmin)
 
-    client = GarminClient("good@example.com", "goodpass", str(tokenstore))
+    client = GarminClient("good@example.com", "goodpass")
     result = client.login()
 
     assert result == {"garmin_user_id": "1234567", "display_name": "Test Athlete"}, (
         "login() must return the per-DES-012 identity dict so the worker can "
         "resolve per-account sidecar paths (DES-002)"
     )
-    assert captured["called_with"] == (
-        "good@example.com",
-        "goodpass",
-        str(tokenstore),
-    ), "Adapter must forward credentials and the tokenstore path verbatim to the library"
-    assert tokenstore.exists(), "REQ-002 acceptance: a successful login must leave a persisted token file"
+    # (a) auth-only construction — exactly (email, password), NO tokenstore path.
+    assert ctor_args["forwarded"] == ("good@example.com", "goodpass"), (
+        "DEC-014 Option B: the adapter must construct the library AUTH-ONLY, "
+        "forwarding exactly (email, password) and NO tokenstore path"
+    )
+    assert len(ctor_args["forwarded"]) == 2, (
+        "a third (tokenstore) argument would let the library self-write an "
+        "unaudited token file — A3-R004-M3 forbids this"
+    )
+    # (b) persistence is available via the exported blob, not a library-side
+    # file write. C++ (T-012/T-014) owns the single atomic 0600 write.
+    blob = client.dump_tokens()
+    assert isinstance(blob, str) and blob, (
+        "REQ-006: a successful login exposes its session via dump_tokens() for "
+        "C++ to persist 0600 — the library itself writes no token file"
+    )
 
 
 def test_login_bad_credentials_raises_GarminError_kind_auth(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -118,7 +143,7 @@ def test_login_bad_credentials_raises_GarminError_kind_auth(tmp_path: Any, monke
 
     _install_fake_gc(monkeypatch, _BadGarmin)
 
-    client = GarminClient("bad@example.com", "wrong", str(tokenstore))
+    client = GarminClient("bad@example.com", "wrong")
     with pytest.raises(GarminError) as excinfo:
         client.login()
 
@@ -146,7 +171,6 @@ def test_non_auth_exception_is_not_misclassified_as_auth(tmp_path: Any, monkeypa
     REQ-014. Until then, non-auth exceptions propagate unchanged; what they
     must not do is silently inherit 'auth'.
     """
-    tokenstore = tmp_path / "tokens.json"
 
     class _BoomGarmin(_FakeGarminBase):
         def login(self) -> None:
@@ -154,7 +178,7 @@ def test_non_auth_exception_is_not_misclassified_as_auth(tmp_path: Any, monkeypa
 
     _install_fake_gc(monkeypatch, _BoomGarmin)
 
-    client = GarminClient("u@x.com", "p", str(tokenstore))
+    client = GarminClient("u@x.com", "p")
     with pytest.raises(RuntimeError, match="simulated downstream library bug"):
         client.login()
 
@@ -168,7 +192,6 @@ def test_auth_error_with_empty_message_still_yields_displayable_message(
     The adapter must still produce a non-empty `.message` so DES-008's UI
     translation has something to display — never an empty dialog body.
     """
-    tokenstore = tmp_path / "tokens.json"
 
     class _SilentBadGarmin(_FakeGarminBase):
         def login(self) -> None:
@@ -176,7 +199,7 @@ def test_auth_error_with_empty_message_still_yields_displayable_message(
 
     _install_fake_gc(monkeypatch, _SilentBadGarmin)
 
-    client = GarminClient("u@x.com", "p", str(tokenstore))
+    client = GarminClient("u@x.com", "p")
     with pytest.raises(GarminError) as excinfo:
         client.login()
 
@@ -208,7 +231,7 @@ def test_password_not_retained_on_adapter_instance(tmp_path: Any, monkeypatch: p
     _install_fake_gc(monkeypatch, _OkGarmin)
 
     secret = "s3cret-not-retained"
-    client = GarminClient("u@x.com", secret, str(tokenstore))
+    client = GarminClient("u@x.com", secret)
     client.login()
 
     for attr_name, value in vars(client).items():

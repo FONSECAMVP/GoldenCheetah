@@ -149,13 +149,13 @@ AddCloudWizard::ensureGarminAuthPage()
     QString modulePath = QString::fromLocal8Bit(qgetenv("GC_GARMIN_PYPATH"));
     if (modulePath.isEmpty()) modulePath = QStringLiteral(GARMIN_PY_MODULE_DIR);
 
-    // tokenstorePath (DEC-003 / DES-002 path root): the per-athlete config
-    // area used by other per-athlete state, with a garminconnect subdir.
-    // Directory layout/permissions machinery is DES-002's slice — we only
-    // pass the path string; the adapter forwards it verbatim.
-    QString tokenstorePath = context->athlete->home->config().absolutePath() + "/garminconnect";
-
-    garminAdapter = new PyEmbeddedAdapter(modulePath, tokenstorePath);
+    // DEC-014 Option B (A3-R004-M3): the adapter constructs the library
+    // AUTH-ONLY — no tokenstore path is forwarded (the library must self-write
+    // no token file). C++ token persistence (routing the per-athlete config dir
+    // into GarminTokenStore::save) is the deferred worker-in-CloudService
+    // lifecycle, wired in a later REQ-007-closure slice — so no path is computed
+    // here yet.
+    garminAdapter = new PyEmbeddedAdapter(modulePath);
     garminChain = new GarminAuthChain(garminAdapter);
     setPage(21, new AddGarminAuth(this, garminChain->client()));
 }

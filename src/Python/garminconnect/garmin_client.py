@@ -49,7 +49,7 @@ class GarminError(Exception):
 class GarminClient:
     """Adapter — see DES-012 for surface and translation responsibilities."""
 
-    def __init__(self, email: str, password: str, tokenstore_path: str) -> None:
+    def __init__(self, email: str, password: str) -> None:
         if _gc is None:
             raise GarminError(
                 "unknown",
@@ -58,21 +58,20 @@ class GarminClient:
         # Forward `password` straight into the library constructor and drop
         # the local reference; REQ-005 forbids retaining it on this adapter.
         # The library's own retention is its contract — DES-012 isolates it.
-        # tokenstore_path is forwarded only — the library owns the path; the
-        # adapter has no reason to retain it on `self` until REQ-012 needs it.
         #
-        # NOTE(DEC-014 Option B — reconciliation deferred): under Option B the
-        # library must be constructed AUTH-ONLY (in-memory session, no
-        # tokenstore path) and C++ owns the single atomic 0600 write of the blob
-        # exported by dump_tokens(). Fully removing this path forwarding is a
-        # cross-cutting change (PyEmbeddedAdapter ctor signature, its pystub,
-        # GarminAuthChain/AddCloudWizard wiring, and REQ-002's login tests that
-        # assert the forwarded path) — LARGER than REQ-004's write slice, so it
-        # is left to the __init__ reconciliation slice. REQ-004 adds the
-        # dump/load blob surface (the Option-B mechanism) without leaving the
-        # adapter itself writing anywhere; the library's own on-login write via
-        # this path is what that later slice removes.
-        self._garmin = _gc.Garmin(email, password, tokenstore_path)
+        # DEC-014 Option B (A3-R004-M3 security-close): construct the library
+        # AUTH-ONLY — exactly (email, password), NO tokenstore path. Passing a
+        # path here would let the library self-write a SECOND, unaudited token
+        # file whose permissions are never enforced/checked. Under Option B the
+        # session lives in memory; C++ (GarminTokenStore) owns the single atomic
+        # 0600 write of the blob exported by dump_tokens(). Nothing below this
+        # adapter writes a token file.
+        #
+        # NOTE(DEC-014 OQ1): the AUTH-ONLY 2-arg construction is a real-lib
+        # signature item, unconfirmed against the not-yet-bundled
+        # python-garminconnect wheel (like dumps()/loads() below). It is pinned
+        # by the fakes/pystub until the wheel is bundled (DES-007/Pkg).
+        self._garmin = _gc.Garmin(email, password)
 
     def login(self) -> dict[str, Any]:
         try:

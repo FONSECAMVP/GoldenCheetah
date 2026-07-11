@@ -823,12 +823,13 @@ With the seam in place, the swap-library cost drops from "5 Python files + 1 C++
 
 ### DEC-014 refinement (2026-07-11) — token persistence moves to C++ (REQ-004/006)
 
-Under DEC-014 (Option B) the **target** is for the adapter, not the library, to own the disk boundary:
-`login()` constructing `GarminClient` auth-only (no `tokenstore` path). **REQ-004 status (2026-07-11):**
-that auth-only construction is DEFERRED — `__init__` still forwards `tokenstore_path` (finding B-R004-01,
-`__init__` reconciliation slice), so with the real library it still self-writes its own token file. What
-REQ-004 landed: the adapter gains two methods so C++ can persist the blob via `AtomicFile` at 0600
-(DES-002/DES-006):
+Under DEC-014 (Option B) the adapter, not the library, owns the disk boundary:
+`GarminClient` is constructed **auth-only** (no `tokenstore` path). **REQ-006 Slice B status (2026-07-11): DONE.**
+`GarminClient.__init__(email, password)` constructs `_gc.Garmin(email, password)` (C-API `"ss"`);
+`PyEmbeddedAdapter(modulePath)` forwards no path (findings B-R004-01 + A3-R004-M3 RESOLVED). With no
+tokenstore path handed to it, the library self-writes no token file — REQ-NF-Sec-002 is end-to-end MET,
+the C++-owned 0600 write (GarminTokenStore, Slice A perm-checks its load) being the sole token file.
+REQ-004 landed the two methods so C++ can persist the blob via `AtomicFile` at 0600 (DES-002/DES-006):
 
 ```python
 def dump_tokens(self) -> str: ...        # export the authenticated session as an opaque blob

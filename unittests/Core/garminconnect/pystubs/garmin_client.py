@@ -3,15 +3,18 @@
 Consumed by testGarminConnectPyAdapter (garmin-py label). Mirrors the real
 adapter's DES-012 surface exactly as PyEmbeddedAdapter sees it:
 
-  - ``GarminClient(email, password, tokenstore_path)`` ctor shape
+  - ``GarminClient(email, password)`` ctor shape (AUTH-ONLY; DEC-014 Option B /
+    A3-R004-M3 — NO tokenstore path is forwarded, so the library self-writes no
+    token file)
   - ``login() -> {'garmin_user_id': ..., 'display_name': ...}``
   - ``GarminError`` with ``.kind`` / ``.message``
 
 Behavior is switched via the module-level ``SCENARIO`` attribute, driven from
 the C++ test through ``PyRun_SimpleString`` (deterministic; env vars do not
 propagate into os.environ after Py_Initialize). Ctor args are recorded in
-``LAST_EMAIL`` / ``LAST_PASSWORD`` / ``LAST_TOKENSTORE`` so the test can
-assert marshalling verbatim.
+``LAST_EMAIL`` / ``LAST_PASSWORD`` so the test can assert marshalling verbatim;
+there is deliberately NO ``LAST_TOKENSTORE`` — T-016 asserts the adapter
+forwards no such path.
 
 The REAL adapter's behavior stays covered by its own pytest suite
 (src/Python/garminconnect/tests/) — two seams, tested on their own sides,
@@ -22,7 +25,6 @@ SCENARIO = "success"
 
 LAST_EMAIL = None
 LAST_PASSWORD = None
-LAST_TOKENSTORE = None
 
 # TEST-009 / REQ-007 — download marshalling. download_activity() records its
 # args here so the C++ side can assert verbatim marshalling, and returns this
@@ -46,11 +48,13 @@ class GarminError(Exception):
 
 
 class GarminClient:
-    def __init__(self, email, password, tokenstore_path):
-        global LAST_EMAIL, LAST_PASSWORD, LAST_TOKENSTORE
+    def __init__(self, email, password):
+        # AUTH-ONLY (DEC-014 Option B): exactly (email, password); no tokenstore
+        # path is accepted — a 3rd positional would raise TypeError, catching any
+        # adapter that still forwards a path.
+        global LAST_EMAIL, LAST_PASSWORD
         LAST_EMAIL = email
         LAST_PASSWORD = password
-        LAST_TOKENSTORE = tokenstore_path
 
     # T-013 / REQ-004 / DEC-014 Option B — the adapter exports the authenticated
     # session as an opaque blob (dump_tokens) which PyEmbeddedAdapter surfaces on

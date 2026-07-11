@@ -317,7 +317,7 @@ class OAuthDialog : public QDialog
 // ===========================================================================
 // PyEmbeddedAdapter.h (guard: GC_PyEmbeddedAdapter_h) — Python-free fake of the
 // DEC-013 embedded-CPython adapter. Same public surface as the real header
-// (ctor(modulePath, tokenstorePath) + authenticate()), so AddCloudWizard.cpp's
+// (ctor(modulePath) — AUTH-ONLY, DEC-014 Option B — + authenticate()), so AddCloudWizard.cpp's
 // `new PyEmbeddedAdapter(...)` compiles and links with no interpreter. The
 // `observedThread` seam is used only by the destructor-order test (behaviour 3):
 // if this adapter is destroyed while the chain's worker thread is still running,
@@ -335,11 +335,7 @@ inline bool g_pyAdapterDeletedWhileWorkerThreadRunning = false;
 class PyEmbeddedAdapter : public IGarminPyAdapter
 {
   public:
-    PyEmbeddedAdapter(const QString& modulePath, const QString& tokenstorePath)
-        : m_modulePath(modulePath), m_tokenstorePath(tokenstorePath)
-    {
-        ++g_pyAdapterLiveCount;
-    }
+    explicit PyEmbeddedAdapter(const QString& modulePath) : m_modulePath(modulePath) { ++g_pyAdapterLiveCount; }
 
     ~PyEmbeddedAdapter() override
     {
@@ -363,11 +359,9 @@ class PyEmbeddedAdapter : public IGarminPyAdapter
     QPointer<QThread> observedThread;
 
     QString modulePath() const { return m_modulePath; }
-    QString tokenstorePath() const { return m_tokenstorePath; }
 
   private:
     QString m_modulePath;
-    QString m_tokenstorePath;
 };
 #endif // GC_PyEmbeddedAdapter_h
 

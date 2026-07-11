@@ -8,8 +8,11 @@ PHASE: Phase 2.2 — Garmin Connect integration. REQ-002 Authenticate flow **CLO
 `1eb5a6a16` + VAL-009 PASS; NOT fully deployed** (readFile staging + FIT→TCX fallback deferred, need REQ-004/006).
 **REQ-004 token write-path GREEN + committed `54b7005e6`** (VAL-010 PASS; style/type gate clean via pre-commit).
 **REQ-006 Slice A (load-side perm refusal) GREEN — committed `d86323246`.** `GarminTokenStore::loadChecked()` refuses wider-than-0600
-`tokens.json` with typed `TokenPermissionsRejected` (T-014, garmin-fast 10/10). Verification-Gate PASS. Slice B (the
-`__init__` auth-only reconciliation = A3-R004-M3 security-close, supersedes B-R004-01) is the next dispatch.
+`tokens.json` with typed `TokenPermissionsRejected` (T-014, garmin-fast 10/10).
+**REQ-006 Slice B (__init__ auth-only reconciliation) GREEN — uncommitted.** Library constructed AUTH-ONLY (`_gc.Garmin(email,password)`,
+C-API `"ss"`, `PyEmbeddedAdapter(modulePath)`) → no self-written 2nd token file; **REQ-NF-Sec-002 end-to-end MET**. T-015 (pytest) + T-016
+(garmin-py). Verification-Gate PASS on independent re-run: pytest 15/15, garmin-py 20/20, garmin-fast 10/10. Findings B-R004-01 + A3-R004-M3 RESOLVED.
+Next gate: security-close CLV (VAL-011) + A3-R006 hardening on the new slices.
 
 OPEN: REQ-007 download chain GREEN, **committed `1eb5a6a16`** (3 slices):
 · Slice 1 (Python, DES-012): garmin_client.download_activity — fmt ORIGINAL/TCX map, bytes verbatim,
@@ -28,9 +31,8 @@ OPEN: REQ-007 download chain GREEN, **committed `1eb5a6a16`** (3 slices):
 
 BLOCKING: 0 open. A3-R004 M1 (AtomicFile order — order-recording TmpWriter seam) + M2 (load_tokens no-op —
 per-instance fake) **FIXED + Verification-Gate PASS 2026-07-11** (garmin-fast 9/9, pytest 15/15; mutants killed).
-**M3 (REQ-NF-Sec-002 end-to-end UNMET — library self-writes a 2nd unaudited token file) = DEFERRED → bundled with
-REQ-006 (user disp); REQ-004 write-path GREEN but NOT security-closed until that slice rewrites __init__ +
-test_adapter_login.py:103.** Non-blocking: A3-R004-04/05/06 (fault-injection defers), -07 (concurrency, mitigated
+**M3 (REQ-NF-Sec-002 end-to-end) = RESOLVED 2026-07-11 by REQ-006 Slice B** — library now auth-only, no self-written
+2nd token file; C++-owned 0600 write is the sole token file. REQ-006 is security-closed.** Non-blocking: A3-R004-04/05/06 (fault-injection defers), -07 (concurrency, mitigated
 by DES-001 single-worker), -08 (root-run test), -09 (Windows CI). Prior deferred: TR-08 → Phase 1.5 w/ A2-001;
 TR-06 fidelity check; TR-03 guarded by TEST-007. **B-R004-02 CLEARED** — style/type gate ran clean
 (clang-format + ruff + mypy --strict) via pre-commit at `54b7005e6`.

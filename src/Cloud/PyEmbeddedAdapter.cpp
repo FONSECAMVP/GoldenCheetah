@@ -14,7 +14,7 @@
 //   1. Py_IsInitialized() false -> Unknown / "embedded Python unavailable".
 //   2. PyGILState_Ensure via RAII guard, released on every exit path.
 //   3. Prepend modulePath to sys.path if absent; import garmin_client.
-//   4. GarminClient(email, password, tokenstorePath) -> .login().
+//   4. GarminClient(email, password) -> .login() (AUTH-ONLY; DEC-014 Option B).
 //   5. Success dict -> PyAuthOutcome{Success, garmin_user_id, display_name}.
 //   6. Exceptions classified by TYPE then .kind — never by message content
 //      (LSN-006 / A3-R002-M6): GarminError kind 'auth' -> AuthFailed,
@@ -199,8 +199,8 @@ PyDownloadOutcome classifyDownloadException(PyObject* module)
 
 } // namespace
 
-PyEmbeddedAdapter::PyEmbeddedAdapter(const QString& modulePath, const QString& tokenstorePath)
-    : modulePath(modulePath), tokenstorePath(tokenstorePath)
+PyEmbeddedAdapter::PyEmbeddedAdapter(const QString& modulePath)
+    : modulePath(modulePath)
 {
 }
 
@@ -224,15 +224,17 @@ PyAuthOutcome PyEmbeddedAdapter::authenticate(const QString& email, const QStrin
     if (!module)
         return classifyPendingException(nullptr);
 
-    // Step 4 — GarminClient(email, password, tokenstorePath).login()
+    // Step 4 — GarminClient(email, password).login(). AUTH-ONLY construction
+    // (DEC-014 Option B / A3-R004-M3): NO tokenstore path is forwarded, so the
+    // library self-writes no token file; the session stays in memory and is
+    // exported below via dump_tokens() for C++ to persist 0600.
     PyRef clientClass(PyObject_GetAttrString(module.get(), "GarminClient"));
     if (!clientClass)
         return classifyPendingException(module.get());
 
-    PyRef client(PyObject_CallFunction(clientClass.get(), "sss",
+    PyRef client(PyObject_CallFunction(clientClass.get(), "ss",
                                        email.toUtf8().constData(),
-                                       password.toUtf8().constData(),
-                                       tokenstorePath.toUtf8().constData()));
+                                       password.toUtf8().constData()));
     if (!client)
         return classifyPendingException(module.get());
 

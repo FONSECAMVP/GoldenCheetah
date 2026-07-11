@@ -60,7 +60,8 @@ class _FakeGarmin:
 
     _instance_counter = 0
 
-    def __init__(self, email: str, password: str, tokenstore: str = "") -> None:
+    def __init__(self, email: str, password: str) -> None:
+        # DEC-014 Option B: AUTH-ONLY construction — no tokenstore path.
         self.email = email
         self._password = password  # library's own retention; never serialized
         # Per-instance monotonic serial → distinct seeded session per instance,
@@ -112,7 +113,7 @@ def test_dump_then_load_round_trips_the_session_blob(tmp_path: Any, monkeypatch:
     """
     _install_fake_gc(monkeypatch, _FakeGarmin)
 
-    src = GarminClient("a@example.com", "pw", str(tmp_path / "unused.json"))
+    src = GarminClient("a@example.com", "pw")
     blob = src.dump_tokens()
     assert isinstance(blob, str) and blob, "dump_tokens() must return a non-empty opaque string blob"
 
@@ -121,7 +122,7 @@ def test_dump_then_load_round_trips_the_session_blob(tmp_path: Any, monkeypatch:
     # than src's blob. This precondition is what lets the round-trip assertion
     # below detect a no-op load_tokens(): if loads() were never invoked the dst
     # would still hold (and dump) its own untouched session, not src's blob.
-    dst = GarminClient("a@example.com", "pw", str(tmp_path / "unused.json"))
+    dst = GarminClient("a@example.com", "pw")
     assert dst.dump_tokens() != blob, (
         "test precondition — a fresh dst must start with a session distinct from "
         "src's blob, otherwise a no-op load_tokens() would pass vacuously"
@@ -142,7 +143,7 @@ def test_dumped_blob_never_contains_the_password(tmp_path: Any, monkeypatch: pyt
     _install_fake_gc(monkeypatch, _FakeGarmin)
 
     secret = "s3cret-never-persisted"
-    client = GarminClient("a@example.com", secret, str(tmp_path / "unused.json"))
+    client = GarminClient("a@example.com", secret)
     blob = client.dump_tokens()
 
     assert secret not in blob, (
@@ -158,7 +159,7 @@ def test_load_tampered_or_expired_blob_raises_session_expired(tmp_path: Any, mon
     """
     _install_fake_gc(monkeypatch, _FakeGarmin)
 
-    client = GarminClient("a@example.com", "pw", str(tmp_path / "unused.json"))
+    client = GarminClient("a@example.com", "pw")
     with pytest.raises(GarminError) as excinfo:
         client.load_tokens("}{ not valid json — tampered blob")
 
