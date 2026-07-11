@@ -1,6 +1,6 @@
 # PROJECT WIKI — GoldenCheetah            (the brain · read me first)
 root:  /media/andy/TOSHIBA EXT/Backup2/Documents/GoldenCheetah   schema: wiki-v1
-phase: 2 (Phase 2.2 — REQ-002 CLOSED@60a076848; REQ-007 activity-download download-chain GREEN through the worker (adapter T-008; PyEmbeddedAdapter marshalling T-009; GarminWorker DownloadActivity op T-010), committed@1eb5a6a16 + VAL-009 PASS; REQ-004 token write-path GREEN committed@54b7005e6 + VAL-010 PASS (AtomicFile T-011, GarminTokenStore T-012, adapter dump/load T-013); REQ-006 Slice A load-side perm-refusal GREEN committed@d86323246 (T-014), Slice B __init__ auth-only reconciliation GREEN uncommitted (T-015/T-016) → REQ-NF-Sec-002 end-to-end MET, findings B-R004-01+A3-R004-M3 resolved. NOT-done: GarminConnect::readFile staging + FIT→TCX fallback — deferred, needs worker-in-CloudService lifecycle. Next gate: security-close CLV VAL-011 + A3-R006)   live-status → STATE.md (read next)
+phase: 2 (Phase 2.2 — REQ-002 CLOSED@60a076848; REQ-007 activity-download download-chain GREEN through the worker (adapter T-008; PyEmbeddedAdapter marshalling T-009; GarminWorker DownloadActivity op T-010), committed@1eb5a6a16 + VAL-009 PASS; REQ-004 token write-path GREEN committed@54b7005e6 + VAL-010 PASS (AtomicFile T-011, GarminTokenStore T-012, adapter dump/load T-013); REQ-006 Slice A load-side perm-refusal GREEN committed@d86323246 (T-014), Slice B __init__ auth-only reconciliation GREEN committed@3edb705cb (T-015/T-016) → REQ-NF-Sec-002 end-to-end MET, findings B-R004-01+A3-R004-M3 resolved. NOT-done: GarminConnect::readFile staging + FIT→TCX fallback — deferred, needs worker-in-CloudService lifecycle. Next gate: security-close CLV VAL-011 + A3-R006)   live-status → STATE.md (read next)
 
 ## MAP — directory manifest (authoritative; check before creating ANYTHING)
 WIKI.md                     this brain (hub) — read first, every session
@@ -58,7 +58,7 @@ DES  garmin:001–013(+001a,003a)  .claude/workflow-garminconnect/design.md   ne
 TEST garmin:T-001–T-016  .claude/workflow-garminconnect/traceability.md     next:garmin-T-017 (T-011..T-013 REQ-004; T-014 REQ-006 Slice A load-side perm-refusal committed d86323246; T-015 pytest + T-016 garmin-py — REQ-006 Slice B __init__ auth-only reconciliation, in build)
 VAL  garmin:001–010  latest:VAL-010 PASS (REQ-004 write path; FAIL Check 6/9→fixed) · .claude/workflow-garminconnect/validations/  next:garmin-011
 F    no F-### namespace in use; findings tracked as <cycle>-<seq> (A0-001…, A3-R00x-Mn/TR-nn, D-0x) in findings.md; 0 open blocking (A3-R002-TR-01/-02 fixed; TR-08 defer→Phase 1.5)   next:n/a (see conventions.md)
-LSN  001–011  active:11 guards:8  lessons.md   next:012
+LSN  001–012  active:12 guards:8  lessons.md   next:013
 -- CLOSED (provenance only, do not extend): aicoach:DEC-001–013, aicoach:REQ-001–020, aicoach:TEST-001–020 — numeric collision with garmin ranges above; always use ledger prefix (coach:DEC-NNN / garmin:DEC-NNN)
 
 ## PAGES — wiki spokes (read the one named; don't explore blindly)

@@ -9,7 +9,7 @@ PHASE: Phase 2.2 — Garmin Connect integration. REQ-002 Authenticate flow **CLO
 **REQ-004 token write-path GREEN + committed `54b7005e6`** (VAL-010 PASS; style/type gate clean via pre-commit).
 **REQ-006 Slice A (load-side perm refusal) GREEN — committed `d86323246`.** `GarminTokenStore::loadChecked()` refuses wider-than-0600
 `tokens.json` with typed `TokenPermissionsRejected` (T-014, garmin-fast 10/10).
-**REQ-006 Slice B (__init__ auth-only reconciliation) GREEN — uncommitted.** Library constructed AUTH-ONLY (`_gc.Garmin(email,password)`,
+**REQ-006 Slice B (__init__ auth-only reconciliation) GREEN — committed `3edb705cb`.** Library constructed AUTH-ONLY (`_gc.Garmin(email,password)`,
 C-API `"ss"`, `PyEmbeddedAdapter(modulePath)`) → no self-written 2nd token file; **REQ-NF-Sec-002 end-to-end MET**. T-015 (pytest) + T-016
 (garmin-py). Verification-Gate PASS on independent re-run: pytest 15/15, garmin-py 20/20, garmin-fast 10/10. Findings B-R004-01 + A3-R004-M3 RESOLVED.
 Next gate: security-close CLV (VAL-011) + A3-R006 hardening on the new slices.

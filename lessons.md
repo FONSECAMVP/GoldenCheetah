@@ -11,6 +11,7 @@ LSN-008 | op:ledger-update type:index-vs-detail-drift  | guard    | recur:4  sav
 LSN-011 | op:ledger-update type:design-note-false-done | guard    | recur:1  saves:1 miss:0  | any DEC-cascade item written into a design.md "DEC-NNN refinement" note that is still open/deferred in findings.md MUST be in TARGET/DEFERRED tense, never present-tense "already true" — grep DEC-refinement notes for completion verbs (no longer/now/without/stops) and confirm each is not an open findings.md defer row, before the CLV gate
 LSN-009 | op:test type:loose-timeout-bound-survivor   | advisory | recur:1  saves:1 miss:0  | a bounded-teardown/timeout assertion must be tight enough to FAIL if the graceful fast-path is skipped (assert « the fast-path ceiling, not < the sum of all fallback ceilings) — a loose bound cannot distinguish "worked" from "fell through to the last resort every time"
 LSN-010 | op:commit type:commit-column-staleness      | advisory | recur:1  saves:1 miss:0  | a feature commit that bundles its OWN ledger byproduct necessarily records "uncommitted"/`_pending_` (the hash doesn't exist yet); it MUST be followed immediately by a ledger-record step that fills the traceability Commit column with the just-created hash and flips uncommitted→committed banners, BEFORE the CLV gate. Mechanically checkable: `git log -1` HEAD hash vs the REQ row's Commit-column string.
+LSN-012 | op:verify type:builder-lint-dirty-green      | advisory | recur:1  saves:1 miss:0  | a builder GREEN report is not verified until the DEC-009 style gate (ruff/clang-format/mypy) has run on the changeset — the orchestrator Evidence check runs it BEFORE commit, not deferred to the commit hook. A builder with the tooling available (ran pytest via the repo .venv) can still leave lint-dirty code (dead locals, F841) a passing test suite won't surface.
 
 ---
 
@@ -278,3 +279,30 @@ origin: VAL-010 (2026-07-11) Check 6+9 FAIL → orchestrator rewrote the DES-012
 history:2026-07-11: captured at guard level on first occurrence — high cost (a design doc misrepresenting
         build state misleads every later reader + the next builder) per lessons-memory escalation rule 4,
         and it co-occurred with a 4th [[LSN-008]] recurrence. scope:portable.
+
+## LSN-012
+sig:    verify / builder-lint-dirty-green / style-gate-deferred
+level:  advisory  since:P2.2(2026-07-11)   recur:1   saves:1   miss:0
+tags:   op:verify, op:delegate, phase:P2, type:builder-lint-dirty-green
+trigger:running the Verification-Gate Evidence check on a builder GREEN report before committing
+        its changeset, when the DEC-009 style gate (ruff/clang-format/mypy) is available in-env
+mistake:REQ-006 Slice B's builder reported GREEN (pytest 15/15, garmin-py 20/20, garmin-fast 10/10)
+        having run the test suites via the repo .venv, but left two dead `tokenstore` locals
+        (ruff F841) orphaned when their tests dropped the 3rd ctor arg. The orchestrator Evidence
+        check re-ran only the TESTS (green) and relied on the commit-time pre-commit hook to catch
+        lint — which it did, aborting the first commit and forcing a fix-and-recommit cycle.
+rule:   the Evidence check for a builder report includes running the DEC-009 style gate on the
+        changed files (ruff --check + clang-format --dry-run + mypy) BEFORE the commit, not
+        discovering it at commit time. A passing test suite does not imply lint-clean; dead code
+        and unused-import/-local violations survive green tests. Builders should self-run the gate
+        or flag it unrun (cf. finding B-R004-02); the orchestrator verifies it regardless.
+check:  before `git commit` of a builder changeset, run the project's lint/format gate on the FILES
+        list (or `pre-commit run --files <changeset>`); zero diffs / zero errors, else fix + re-verify.
+origin: REQ-006 Slice B commit — first attempt aborted by ruff F841 (test_adapter_login.py:176,198);
+        orchestrator removed the two dead locals, re-verified pytest, recommitted 3edb705cb. saves:1
+        credited to the deterministic pre-commit gate catching it. Distinct from [[LSN-007]] (which is
+        about a hook MUTATING files voiding prior build/test evidence); LSN-012 is about lint-dirty
+        code slipping a green test suite and being caught late rather than during verification.
+history:2026-07-11: captured at advisory level (first occurrence; deterministic pre-commit gate
+        already enforces the floor). scope:portable — travels to any project with a lint/format gate.
+        Escalate to guard if a second builder GREEN ships lint-dirty and is caught only at commit time.
