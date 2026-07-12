@@ -1,12 +1,12 @@
 # State — Garmin Connect Integration
 
-_Updated: 2026-07-12 — **REQ-006 CLOSED, security-closed.** Slice A load-side perm-refusal committed `d86323246` (GarminTokenStore::loadChecked refuses wider-than-0600 tokens.json → typed TokenPermissionsRejected — TEST-014, garmin-fast). Slice B `__init__` auth-only reconciliation committed `3edb705cb` (library `(email,password)` only, no tokenstore path → no self-written 2nd file; C-API `"ss"`, PyEmbeddedAdapter(modulePath) — TEST-015 pytest + TEST-016 garmin-py). **REQ-NF-Sec-002 end-to-end MET;** findings B-R004-01 + A3-R004-M3 (blocking) RESOLVED. Verification-Gate PASS: pytest 15/15, garmin-py 20/20, garmin-fast 10/10. VAL-011 CLV. Prior: REQ-004 write path GREEN committed `54b7005e6` (VAL-010 PASS; B-R004-02 cleared). Prior: REQ-007 download chain GREEN committed `1eb5a6a16` (VAL-009 PASS; readFile/FIT→TCX deferred, NOT fully deployed). Prior: REQ-002 CLOSED `60a076848`._
+_Updated: 2026-07-12 — **REQ-006 CLOSED, security-closed.** Slice A load-side perm-refusal committed `d86323246` (GarminTokenStore::loadChecked refuses wider-than-0600 tokens.json → typed TokenPermissionsRejected — TEST-014, garmin-fast). Slice B `__init__` auth-only reconciliation committed `3edb705cb` (library `(email,password)` only, no tokenstore path → no self-written 2nd file; C-API `"ss"`, PyEmbeddedAdapter(modulePath) — TEST-015 pytest + TEST-016 garmin-py). **REQ-NF-Sec-002 end-to-end MET;** findings B-R004-01 + A3-R004-M3 (blocking) RESOLVED. Verification-Gate PASS: pytest 15/15, garmin-py 20/20, garmin-fast 10/10. VAL-011 PASS. Prior: REQ-004 write path GREEN committed `54b7005e6` (VAL-010 PASS; B-R004-02 cleared). Prior: REQ-007 download chain GREEN committed `1eb5a6a16` (VAL-009 PASS; readFile/FIT→TCX deferred, NOT fully deployed). Prior: REQ-002 CLOSED `60a076848`._
 
 ## phase
 - current: Phase 2.2
 - active feature: REQ-006 — token-file perms (load-side refusal + auth-only reconciliation) GREEN, CLOSED, security-closed. Slice A `d86323246`, Slice B `3edb705cb`; REQ-NF-Sec-002 end-to-end MET. Prior: REQ-004 write path GREEN committed `54b7005e6` (VAL-010 PASS); REQ-007 download chain committed `1eb5a6a16` (NOT fully deployed); REQ-002 CLOSED.
-- next gate: REQ-006 CLOSED, security-closed. A3-R006 test-hardening DONE (T-014 +3 slots, A3-R006-01/-02 FIXED, `458a72ba7`). VAL-011 CLV re-verify in progress (passes 1-2 FAILed on ledger drift = LSN-008 5th+6th recur → repaired). Downstream: REQ-007 CLOSURE (readFile + FIT→TCX, needs worker-in-CloudService lifecycle + PRD-Assumption-B). Alt deferred: REQ-003 (MFA).
-- last-clean-VAL: VAL-010 (2026-07-11 — REQ-004 write-path changeset, PASS after fix). VAL-011 (REQ-006 Slices A+B) passes 1-2 FAILed on ledger drift only (code/test spine clean); repaired, re-verify in progress.
+- next gate: REQ-006 CLOSED, security-closed, **VAL-011 PASS** (4th/closing pass `d69f70673`). A3-R006 hardening DONE (T-014 +3 slots, A3-R006-01/-02 FIXED, `458a72ba7`). Recommended immediate: build the deterministic pre-CLV ledger-drift lint (LSN-008 recur:7 — durable fix). Downstream: REQ-007 CLOSURE (readFile + FIT→TCX, needs worker-in-CloudService lifecycle + PRD-Assumption-B). Alt deferred: REQ-003 (MFA).
+- last-clean-VAL: VAL-011 (2026-07-12 — REQ-006 Slices A+B + A3-R006 hardening, PASS on 4th pass; passes 1-3 FAILed on ledger drift only, code/test spine clean throughout). Prior: VAL-010 (2026-07-11 — REQ-004 write-path, PASS after fix).
 - last-cycle: A3-R006 REQ-006 Slices A+B (2026-07-12) — test-hardening, FINDINGS→FIXED (A3-R006-01 mask-narrowing survivor + A3-R006-02 freshness closed via TEST-014 +3 slots 0620/0601/re-stat, mutant-kill demonstrated; A3-R006-03 informational accept). Prior: A3-R004 REQ-004 write path (2026-07-11) — M1 (AtomicFile order — order-recording TmpWriter seam) + M2 (load_tokens no-op — per-instance fake) FIXED; M3 (REQ-NF-Sec-002 end-to-end) DEFERRED → RESOLVED by REQ-006 Slice B. 6 non-blocking dispositioned. Prior: A3 REQ-002 tile-routing (2026-07-05) FIXED.
 
 ## decs
@@ -54,7 +54,7 @@ _Updated: 2026-07-12 — **REQ-006 CLOSED, security-closed.** Slice A load-side 
 | 003 | must | 001,002,004 | 001,003,012 | — | not started |
 | 004 | must | 001,003,014 | 002,006,012,013 | T-011 (AtomicFile GREEN, garmin-fast), T-012 (GarminTokenStore GREEN, garmin-fast), T-013 (adapter dump/load GREEN, 3 pytest) | write path GREEN, committed `54b7005e6`. VAL-010 PASS; A3-R004 M1/M2 FIXED; style/type gate clean (B-R004-02 CLEARED). M3 (REQ-NF-Sec-002 end-to-end) + B-R004-01 RESOLVED by REQ-006 Slice B `3edb705cb` — REQ-004 now security-closed |
 | 005 | must | 001,012 | 003,003a,012 | T-002 (adapter half: password-not-retained); T-003 (wizard side — GREEN) | tested (A3 pending) |
-| 006 | must | 001,003,014 | 002,008,012,013 | T-014 (Slice A load-side perm-refusal GREEN, garmin-fast), T-015 (Slice B auth-only ctor GREEN, pytest), T-016 (Slice B no-path-forwarded GREEN, garmin-py) | **CLOSED, security-closed.** Slice A `d86323246` (loadChecked refuses wider-than-0600 → TokenPermissionsRejected). Slice B `3edb705cb` (auth-only ctor, no tokenstore path → no self-written 2nd file). REQ-NF-Sec-002 end-to-end MET; findings B-R004-01 + A3-R004-M3 resolved. Verification-Gate PASS (pytest 15/15, garmin-py 20/20, garmin-fast 10/10). VAL-011 CLV. Deferred: C++-persist wiring → REQ-007 closure |
+| 006 | must | 001,003,014 | 002,008,012,013 | T-014 (Slice A load-side perm-refusal GREEN, garmin-fast), T-015 (Slice B auth-only ctor GREEN, pytest), T-016 (Slice B no-path-forwarded GREEN, garmin-py) | **CLOSED, security-closed.** Slice A `d86323246` (loadChecked refuses wider-than-0600 → TokenPermissionsRejected). Slice B `3edb705cb` (auth-only ctor, no tokenstore path → no self-written 2nd file). REQ-NF-Sec-002 end-to-end MET; findings B-R004-01 + A3-R004-M3 resolved. Verification-Gate PASS (pytest 15/15, garmin-py 20/20, garmin-fast 10/10). VAL-011 PASS. Deferred: C++-persist wiring → REQ-007 closure |
 | 007 | must | 001,002,006,013 | 001,001a,004,012,013 | T-008 (GREEN, 6 pytest — adapter download_activity). T-009 (GREEN, 8 garmin-py — PyEmbeddedAdapter.downloadActivity marshalling). T-010 (GREEN, 6 garmin-fast — GarminWorker DownloadActivity op: Success→downloaded, Network/RateLimit/Unknown→downloadFailed, args forwarded, adapter off-GUI-thread) | download chain GREEN adapter→PyEmbeddedAdapter→worker, committed `1eb5a6a16` (VAL-009 PASS). **NOT-done (deferred):** GarminConnect::readFile staging garmin-<id>.<ext> + FIT→TCX fallback (DES-004) → needs REQ-004/006 tokens/session + PRD-Assumption-B library validation. REQ-007 NOT fully deployed |
 | 008 | must | 001,003,006 | 002,010,012 | — | not started |
 | 009 | must | 001,004 | 003 | — | not started |
@@ -104,7 +104,7 @@ Full motivation cells and acceptance fragments live in `prd.md`. Use this table 
 | 008 | P2.2 REQ-002 A3 test-hardening changeset (TEST-007 + strengthened 005/006) | PASS (9/9) | validations/active/val-008.md |
 | 009 | P2.2 REQ-007 download-chain changeset (commit `1eb5a6a16`) | PASS (after ledger-record fix; first pass FAIL Check 6) | validations/active/val-009.md |
 | 010 | P2.2 REQ-004 token-storage write-path changeset | PASS (after fix; first pass FAIL Check 6+9 — design-note false-done + stale DES-012/013 index → LSN-011/LSN-008) | validations/active/val-010.md |
-| 011 | P2.2 REQ-006 Slices A+B + A3-R006 hardening (commits d86323246, 3edb705cb, 458a72ba7) | passes 1-2 FAIL on ledger drift only (LSN-008 5th+6th recur — primary matrix/DES-index/design-body/local-state.md then root STATE.md CASCADE/NEXT_GATE/COUNTS); code/test spine clean throughout (15/20/10). Repaired; 3rd pass re-verify pending | validations/active/val-011.md |
+| 011 | P2.2 REQ-006 Slices A+B + A3-R006 hardening (commits d86323246, 3edb705cb, 458a72ba7) | **PASS (4th/closing pass, HEAD d69f70673)**. Passes 1-3 FAILed on ledger drift only (LSN-008 5th/6th/7th recur — primary matrix/DES-index/design-body/local-state.md → root STATE.md body → prose subsections+slot-count); code/test spine clean throughout (15/20/10). Repaired + grep-swept | validations/active/val-011.md |
 
 ## open
 - needs-review: none
@@ -132,14 +132,12 @@ Full motivation cells and acceptance fragments live in `prd.md`. Use this table 
 - drift items: D-01 closed by e4ac2a88b; D-02 closed by e4ac2a88b
 
 ## last-clv
-- VAL-011 — 2026-07-12 — FAIL (first pass) — REQ-006 Slices A+B (commits `d86323246`, `3edb705cb`). Code/test spine
-  clean; FAIL was pure ledger drift, the LSN-008 signature recurring a 5TH time: the traceability PRIMARY matrix
-  rows for REQ-004 (`_uncommitted_`) and REQ-006 (all `—`) were never updated though the appendix sections were
-  current; DES-012/013 index rows still said "DEFERRED"; design.md DES-013 body kept the old 2-arg ctor snippet +
-  a 2nd DEC-014 note still "STILL forwards it"; the local state.md was entirely stale (2026-07-08); WIKI said T-015/16
-  "in build". Orchestrator ledger-repaired all cells (single-writer byproduct). LSN-008 miss:5, promotion-to-mechanism
-  flagged (deterministic pre-CLV lint diffing primary-matrix/DES-index cells vs any commit touching traceability.md).
-  Re-verify pending. Validator had no exec tool → Check 6 (test run) done by orchestrator instead (10/20/15 green).
+- VAL-011 — 2026-07-12 — **PASS (4th/closing pass, HEAD `d69f70673`)** — REQ-006 Slices A+B + A3-R006 hardening. Code/test
+  spine clean on EVERY pass (orchestrator-run 15/20/10 — validator has no exec tool); passes 1-3 FAILed on LEDGER DRIFT only,
+  the LSN-008 signature recurring across successively deeper loci: 5th (traceability primary matrix REQ-004/006 + DES-012/013
+  index + design.md body + entirely-stale local state.md + WIKI "in build"), 6th (root STATE.md's own CASCADE/NEXT_GATE/COUNTS
+  vs its banner), 7th (design.md/traceability PROSE subsections + a stale TEST-014 slot count). Repaired each pass; 4th clean
+  after a deterministic grep-sweep of the ledger tree. LSN-008 recur:7 miss:6 — deterministic pre-CLV lint is the flagged fix.
 - prior: VAL-009 — 2026-07-08 — PASS — REQ-007 download-chain changeset (commit `1eb5a6a16`). First pass
   FAILed Check 6 (LSN-008 class): the committed ledger byproduct still read "uncommitted"/`_pending_`
   (Commit column, banners) and the DES-001/001a/013 index status cells were left Auth-only despite the
