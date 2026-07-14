@@ -134,7 +134,7 @@ class IGarminPyAdapter {
     // QObject, and FakePyAdapter is trivially constructible in unit tests.
     virtual PyAuthOutcome authenticate(const QString& email, const QString& password) = 0;
 
-    // REQ-007 additive extension (slice 2, GREEN). Fetch one activity's bytes in
+    // REQ-007 additive extension (slice 2). Fetch one activity's bytes in
     // the requested format ("ORIGINAL" for FIT, "TCX" for the DES-004 fallback);
     // reuses the session authenticate() established.
     virtual PyDownloadOutcome downloadActivity(const QString& activityId, const QString& fmt) = 0;
@@ -318,7 +318,7 @@ only `GarminAuthChain` in isolation does. `AddGarminAuth::nextId()`'s
 
 **Implements:** DEC-012.
 **Serves:** REQ-002 (wizard-side acceptance), REQ-005 (wizard-side enforcement — pairs with the page's password-mask + IME-hints + post-submit-clear).
-**Composes with:** DES-001 (concrete `WorkerAuthClient` adapter lives there in GREEN), DES-003 (every page that needs SSO takes this interface), DES-008 (the `translatedMessage` field is already DES-008-translated before reaching the page).
+**Composes with:** DES-001 (concrete `WorkerAuthClient` adapter lives there), DES-003 (every page that needs SSO takes this interface), DES-008 (the `translatedMessage` field is DES-008-translated before reaching the page).
 
 ### Header location
 
@@ -436,15 +436,14 @@ public:
 - `readFile()` calls `download_activity(id, dl_fmt=ORIGINAL)`. The library returns FIT for nearly all activities; for the small minority where Garmin returns non-FIT (some manually-entered activities), we fall back to TCX via `download_activity(id, dl_fmt=TCX)`.
 - Bytes land in GC's existing import staging dir as `garmin-<activity_id>.<ext>`, where `<ext>` ∈ {`.fit`, `.tcx`}. The existing `FitRideFile` / `TcxRideFile` parsers produce the `RideItem`.
 
-> **Implementation status (REQ-007, 2026-07-08).** The download *chain* is GREEN and tested end to
-> end below the CloudService: `garmin_client.download_activity` (DES-012, TEST-008) → `PyEmbeddedAdapter`
-> bytes-marshalling (DES-013, TEST-009) → `GarminWorker::downloadActivity` op emitting `downloaded`/
-> `downloadFailed` (DES-001, TEST-010). The worker op forwards `fmt` verbatim so a caller can request
-> `ORIGINAL` or `TCX`. **`readFile()` itself and the FIT→TCX fallback orchestration are NOT yet built**
-> (`GarminConnect` is still the REQ-001 tile stub): they require the worker-in-CloudService lifecycle +
-> loaded tokens (REQ-004/006, not started), and the fallback's trigger ("FIT not available") depends on
-> `python-garminconnect`'s behaviour which PRD Assumption B lists as unvalidated. Deferred to a REQ-007
-> closure slice after REQ-004/006 — REQ-007 is therefore not yet fully deployed.
+> **Download path (REQ-007) — design.** The chain below the CloudService is:
+> `garmin_client.download_activity` (DES-012) → `PyEmbeddedAdapter` bytes-marshalling (DES-013) →
+> `GarminWorker::downloadActivity` op emitting `downloaded`/`downloadFailed` (DES-001), with `fmt`
+> forwarded verbatim so a caller may request `ORIGINAL` or `TCX`. `readFile()` stages the returned
+> bytes as `garmin-<id>.<ext>` and applies the FIT→TCX fallback (DES-004); the fallback trigger
+> ("FIT not available") depends on `python-garminconnect` behaviour that PRD Assumption B flags as
+> unvalidated, and the path requires the worker-in-CloudService lifecycle + loaded tokens
+> (REQ-004/006). Build/deployment status for these slices lives in the traceability matrix, not here.
 
 ### Disconnect
 
@@ -1015,7 +1014,7 @@ own sides, meeting at the DES-012 contract.
 |--------|-------|--------|------------|
 | **S**poofing | User's Garmin account | DNS hijack / MITM impersonates `connect.garmin.com` | HTTPS via `curl_cffi` against OS trust store (REQ-NF-Sec-003). `verify=False` forbidden, enforced by grep audit. |
 | **T**ampering | tokens.json on disk | Crash mid-write → corrupted file → load fails open with empty creds | Atomic tmp-and-rename (DES-006) + read-side validation. |
-| **T**ampering | Token replay by same-user malware | Another process running as same user reads `tokens.json` | File permissions 0600/owner-only (REQ-NF-Sec-002). **Residual risk: same-user malware** — documented in README + first-connect notice (REQ-NF-Sec-004). OS-keychain integration deferred to Phase 1.5 if beta surfaces concerns. |
+| **T**ampering | Token replay by same-user malware | Another process running as same user reads `tokens.json` | File permissions 0600/owner-only (REQ-NF-Sec-002). **Residual risk: same-user malware** — documented in README + first-connect notice (REQ-NF-Sec-004). OS-keychain integration left to Phase 1.5 if beta surfaces concerns. |
 | **R**epudiation | N/A — single-user desktop tool, no audit-log requirement | — | Out of scope. |
 | **I**nformation disclosure | Garmin password | Held in memory during SSO; never persisted (REQ-005). | Zeroed after SSO completes; not logged; not written to ErrorBus. |
 | **I**nformation disclosure | Activity contents in staging dir | Same-user read access | Acceptable — activity files already live in GC's existing staging dir with the same exposure as Strava/Dropbox/etc. |
@@ -1042,7 +1041,7 @@ own sides, meeting at the DES-012 contract.
 | Sidecar read time + entry count | DES-002 on every sync | `qDebug` structured | No | **[A2-003 fix]** beta-watch metric: read-time > 500 ms or entry-count > 10 000 is the early-warning signal for the sqlite-sidecar Phase 1.5 trigger |
 | Sidecar file size | DES-002 on every write | `qDebug` structured | No | **[A2-003 fix]** same trigger; size > 5 MB is the watch threshold |
 | Token-permission rejection | DES-002 → DES-008 | ErrorBus Error | No | **[A2-005 fix]** non-zero in steady state suggests a backup tool widening files; surface to user with the specific message |
-| Wedged sub-interpreter (Phase 1.5) | DES-001 heartbeat | not yet implemented | n/a | **[A2-001 deferred to Phase 1.5]** |
+| Wedged sub-interpreter (Phase 1.5) | DES-001 heartbeat | not yet implemented | n/a | **[A2-001 → Phase 1.5]** |
 
 **Aggregation:** Phase 1 has no centralized telemetry — observability is local-only (logs + ErrorBus). Phase 2+ may add opt-in anonymized metrics once we know what to look at; that's a separate DEC.
 

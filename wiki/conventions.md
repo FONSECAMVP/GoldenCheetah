@@ -7,8 +7,9 @@ subagents (live)     → .claude/agents/qgdw-{scout,builder,adversary,validator,
 hook wiring          → .claude/settings.json (PreToolUse) + .claude/hooks/anti_duplication_guard.py
 ledger index         → .claude/workflow-INDEX.md — always read this before assuming "the" ledger; this
                         project has TWO ledgers, one active one closed (see below)
+live cursor          → root STATE.md — the SOLE cursor (DEC-015; no per-ledger state.md)
 active feature ledger → .claude/workflow-garminconnect/ (Garmin Connect integration, Phase 2.2)
-  - live status      → state.md          - decisions            → decisions.md (+ index head)
+  - per-id status    → traceability.md   - decisions            → decisions.md (+ index head)
   - requirements     → prd.md            - design                → design.md
   - traceability     → traceability.md   - findings register     → findings.md
   - ambiguities      → ambiguities.md    - definition of done    → dod.md
@@ -55,6 +56,36 @@ docs (current)       → docs/*.md      docs (legacy/asset archive) → doc/ (do
 - LSN ids (process lessons) are project-global (one lessons.md at root), not per-ledger —
   they describe agent/process mistakes, not feature content.
 - Allocate every id from WIKI.md REGISTRIES.next (ledger-qualified); bump next after use.
+
+## Ledger status — one fact, one home (DEC-015, retires LSN-008)
+A per-id lifecycle status is a SINGLE logical fact and MUST live in exactly one place.
+Duplicating it across files is what caused LSN-008 (recur:7). Rules:
+- **Canonical homes (the ONLY files that pair an id with a status token):**
+  - REQ / DES / TEST / VAL status → `.claude/workflow-<feature>/traceability.md`
+    (primary REQ→DEC→DES→TEST→COMMIT matrix; DES index Status cells; Validations table).
+  - DEC status → `.claude/workflow-<feature>/decisions.md` per-DEC `Status:` field.
+    (The traceability DEC-index carries Question+Date only — drill decisions.md for status.)
+- **Everywhere else in the live governance set** (`STATE.md`, `WIKI.md`, `design.md`,
+  `wiki/*`) an id may be *referenced* but MUST NOT appear on the same line as a lifecycle-
+  status token. Root `STATE.md` is the sole live **cursor** (there is NO per-ledger
+  `state.md` — deleted in DEC-015): it names the current gate, changeset (commit hashes =
+  provenance), and open findings, and points to traceability for per-id status.
+- **`design.md` describes design INTENT** (target shape), never live status — write DES
+  bodies and "DEC-NNN refinement" notes in target tense, never "DONE"/"still forwards"
+  (this also subsumes LSN-011).
+- **Provenance is not status.** Dated per-slice "artifacts" appendix tables and commit
+  hashes record what was built at a point in time; they are excluded from the status rule
+  and MUST carry an `<!-- provenance: dated; excluded from status-lint -->` marker.
+- **Controlled vocabulary + state machine (never invent synonyms; re-count from source,
+  never copy a count between docs):**
+  `drafted → GREEN → committed → CLOSED`, with `deferred` as an orthogonal tag on a
+  not-yet-built slice. DEC-status uses `accepted (X)` / `superseded` / `[retired]`.
+- **Enforcement:** the absence-check `ledger_drift_lint.py` (installed via
+  `install_hook.py`, runs pre-commit + in the CLV) fails if any status token pairs with an
+  id in the NON-canonical governance set (`STATE.md`, `WIKI.md`, `wiki/*.md`, `design.md`).
+  The canonical ledgers (`traceability.md`, `decisions.md`) are the source of truth and are
+  NOT scanned — they legitimately co-locate ids with status (the REQ→DEC→DES→TEST matrix,
+  DEC cascade-notes). It is the mechanism LSN-008 was promoted into.
 
 ## Before creating a file or folder — anti-duplication checklist
 1 In WIKI MAP? → open the existing file. Done.

@@ -19,7 +19,7 @@ G1 AddCloudWizard          | UI entry: "Garmin Connect" tile (page 21) + credent
 G2 GarminConnect           | CloudService subclass (Query\|Download capabilities)    | gov:DEC-005,006 | code:src/Cloud/GarminConnect.{h,cpp}
 G3 GarminWorker            | QObject in QThread; sole adapter caller. Ops: authenticate (finished/failed) + downloadActivity (REQ-007: downloaded(id,bytes)/downloadFailed(id,GarminDownloadFailure)), each mapping the adapter outcome→signals off the GUI thread | gov:DEC-002,013 | code:src/Cloud/GarminWorker.{h,cpp}
 G4 IGarminAuthClient       | pure-virtual auth-dispatcher seam (credentials page ↔ SSO) | gov:DEC-012 | code:src/Cloud/IGarminAuthClient.h
-G5 IGarminPyAdapter        | pure-virtual worker ↔ Python seam: authenticate() + downloadActivity() (REQ-007) GREEN; PyAuthOutcome + PyDownloadOutcome value types | gov:DEC-013 | code:src/Cloud/IGarminPyAdapter.h
+G5 IGarminPyAdapter        | pure-virtual worker ↔ Python seam: authenticate() + downloadActivity() (REQ-007); PyAuthOutcome + PyDownloadOutcome value types | gov:DEC-013 | code:src/Cloud/IGarminPyAdapter.h
 G5a PyEmbeddedAdapter      | production IGarminPyAdapter over embedded CPython (GIL RAII, type-then-kind classification via shared takeRaisedException). RETAINS the authenticated GarminClient (m_client) across authenticate→downloadActivity — REQ-005 session model (password not kept); bytes marshalled binary-exact via PyBytes_AsStringAndSize; dtor DECREFs under GIL only if Py_IsInitialized | gov:DES-013 | code:src/Cloud/PyEmbeddedAdapter.{h,cpp}
 G5b GarminAuthChain        | RAII assembly: QThread+GarminWorker+WorkerAuthClient around a non-owned IGarminPyAdapter* | gov:DES-001,001a (impl. note under DES-003) | code:src/Cloud/GarminAuthChain.{h,cpp}
 G6 garmin_client.py (DES-012) | sole module importing `garminconnect`; stable adapter, swap point | gov:DEC-002,DES-012 | code:src/Python/garminconnect/garmin_client.py
@@ -33,10 +33,10 @@ AddCloudWizard(G1, page 21) → GarminCredentialsPage → IGarminAuthClient(G4) 
   → garminconnect / curl_cffi (vendor lib) → HTTPS (OS trust store) → connect.garmin.com
 Result returns via Qt finished(payload) signal delivered to GUI thread event loop.
 Today (2026-07-05): the full production chain is wired end-to-end behind `GC_WANT_GARMINCONNECT`
-— PyEmbeddedAdapter (TEST-005 GREEN, `garmin-py` label) and GarminAuthChain (TEST-006 GREEN,
-`garmin-fast` label, FakePyAdapter) both land in commits on master; AddCloudWizard routes the
-Garmin tile to page 21 and owns adapter+chain lifecycle (DES-001a order). VAL-007 CLV pass is
-the immediate next gate — code is complete but not yet cross-layer validated. No automated test
+— PyEmbeddedAdapter (TEST-005, `garmin-py` label) and GarminAuthChain (TEST-006,
+`garmin-fast` label, FakePyAdapter) land in commits on master; AddCloudWizard routes the
+Garmin tile to page 21 and owns adapter+chain lifecycle (DES-001a order). Per-id build/validation
+status lives in the traceability matrix + STATE cursor, not here. No automated test
 covers the wizard routing itself (only the chain in isolation) — flagged for A3.
 
 ## Integration points / contracts
@@ -80,10 +80,10 @@ C10↔C12: AI Coach (Coach) also uses embedded Python via C12's PythonEmbed core
   mutant. The suite exercises the logic directly, NOT via live QWizard navigation — the
   `AddService::clicked`/back-next wiring that *calls* nextId/ensure is compiled but not driven
   (residual gap; candidate follow-up).
-- REQ-007 NOT fully deployed (download chain GREEN adapter→PyEmbeddedAdapter→worker, but the
-  CloudService side is deferred): `GarminConnect` is still the REQ-001 tile stub — no Q_OBJECT, no
-  worker wiring, no `readFile` override. The acceptance-completing pieces (readFile staging bytes as
-  garmin-<id>.<ext> → FitRideFile → RideItem; the FIT→TCX fallback per DES-004) are DEFERRED because
+- REQ-007 download path (architectural gap): the download chain (adapter→PyEmbeddedAdapter→worker)
+  is wired, but the CloudService side is not: `GarminConnect` is still the REQ-001 tile stub — no
+  Q_OBJECT, no worker wiring, no `readFile` override. The acceptance-completing pieces (readFile staging
+  bytes as garmin-<id>.<ext> → FitRideFile → RideItem; the FIT→TCX fallback per DES-004) are not yet built because
   (a) readFile needs a worker-in-CloudService lifecycle + loaded tokens (REQ-004/006, not started), and
   (b) the fallback trigger "FIT not available" depends on unvalidated library behaviour (PRD Assumption
   B). The worker's downloadActivity op takes `fmt` verbatim so the future fallback drives ORIGINAL→TCX

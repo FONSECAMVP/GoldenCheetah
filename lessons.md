@@ -7,12 +7,14 @@ LSN-004 | op:design type:missing-seam                 | guard    | recur:1  save
 LSN-005 | op:design type:security-invariant-on-read   | guard    | recur:1  saves:0 miss:0  | security invariants enforced on write (perms, format) must also be validated on read, not assumed
 LSN-006 | op:code type:error-handling                 | advisory | recur:1  saves:0 miss:0  | exception handlers at adapter/boundary layers must classify by type before a broad except, never swallow-and-misroute
 LSN-007 | op:commit type:hook-mutation-unverified      | guard    | recur:1  saves:0 miss:0  | if a pre-commit hook modifies files, all prior build/test evidence is void — rebuild + re-run affected tests before accepting the commit; protect semantic include order with clang-format off markers
-LSN-008 | op:ledger-update type:index-vs-detail-drift  | guard    | recur:7  saves:4 miss:6  | GUARD (promotion-to-mechanism REQUIRED — 7 recurrences; standing remediation until the lint exists: after any ledger repair, GREP the whole tree incl. PROSE for the old fact's literal string, not just index cells): after ANY ledger update, diff every STRUCTURED table cell touching the changed IDs (traceability primary REQ matrix + DES index STATUS cells; **the LOCAL `.claude/workflow-<feat>/state.md` ## reqs/## des/## vals/## last-clv** — not just root STATE.md; root STATE COUNTS/CASCADE; design.md class-snippet ctor signatures + ALL "DEC-NNN refinement"/"what this does NOT cover" notes, not just the section last touched; WIKI REGISTRIES "in build"/status strings) against the actual artifact — not just the prose banner/narrative. Updating appendix/detail tables + root STATE while the primary matrix row, DES-index cell, local state.md, and design body stay stale is the recurring signature (VAL-007/008/009/010/011 ALL FAILed Check 6 on this). Re-count slots from source; never copy a count between docs. See [[LSN-011]] for the sibling "design-note asserts a deferred item as done".
+LSN-008 | op:ledger-update type:index-vs-detail-drift  | MECHANISM | recur:7  saves:5 miss:6  | **PROMOTED TO MECHANISM 2026-07-13 (DEC-015 → `.claude/hooks/ledger_drift_lint.py`, TEST-017).** Root cause retired by SSOT: per-id lifecycle status is now single-homed in `traceability.md` (REQ/DES/TEST/VAL) + `decisions.md` (DEC) and STRIPPED from the non-canonical set (STATE.md/WIKI.md/wiki/*/design.md); the per-ledger `state.md` was deleted (one cursor). The absence-check lint (pre-commit + CLV) deterministically fails any id+status pairing outside a canonical home — the cross-file duplication class that drove all 7 recurrences can no longer occur. **Residual (NOT covered by the lint, stays a CLV concern):** drift INSIDE the canonical files themselves and in pointer/index files the lint doesn't scan — see [[LSN-015]]. Design principle: [[LSN-014]]. Sibling: [[LSN-011]] (design-note false-done, subsumed by the design.md status-strip).
 LSN-011 | op:ledger-update type:design-note-false-done | guard    | recur:1  saves:1 miss:0  | any DEC-cascade item written into a design.md "DEC-NNN refinement" note that is still open/deferred in findings.md MUST be in TARGET/DEFERRED tense, never present-tense "already true" — grep DEC-refinement notes for completion verbs (no longer/now/without/stops) and confirm each is not an open findings.md defer row, before the CLV gate
 LSN-009 | op:test type:loose-timeout-bound-survivor   | advisory | recur:1  saves:1 miss:0  | a bounded-teardown/timeout assertion must be tight enough to FAIL if the graceful fast-path is skipped (assert « the fast-path ceiling, not < the sum of all fallback ceilings) — a loose bound cannot distinguish "worked" from "fell through to the last resort every time"
 LSN-010 | op:commit type:commit-column-staleness      | advisory | recur:1  saves:1 miss:0  | a feature commit that bundles its OWN ledger byproduct necessarily records "uncommitted"/`_pending_` (the hash doesn't exist yet); it MUST be followed immediately by a ledger-record step that fills the traceability Commit column with the just-created hash and flips uncommitted→committed banners, BEFORE the CLV gate. Mechanically checkable: `git log -1` HEAD hash vs the REQ row's Commit-column string.
 LSN-012 | op:verify type:builder-lint-dirty-green      | advisory | recur:1  saves:1 miss:0  | a builder GREEN report is not verified until the DEC-009 style gate (ruff/clang-format/mypy) has run on the changeset — the orchestrator Evidence check runs it BEFORE commit, not deferred to the commit hook. A builder with the tooling available (ran pytest via the repo .venv) can still leave lint-dirty code (dead locals, F841) a passing test suite won't surface.
 LSN-013 | op:test type:mask-coverage-gap              | advisory | recur:1  saves:1 miss:0  | a test guarding a security predicate that ORs multiple bit/flag classes (file perms Read/Write/Exec × Group/Other; capability/permission bitmasks) must exercise ≥1 case per bit class NOT already covered by another — two Read-class widened modes (0640/0644) do NOT pin a Read|Write|Exec mask; a mutant dropping the Write*/Exec* bits survives. One case per uncovered class (e.g. 0620 write-only, 0601 exec-only) kills it.
+LSN-014 | op:ledger-design type:status-duplication   | guard scope:portable | recur:n/a saves:0 miss:0 | ONE logical fact = ONE storage location. A per-id lifecycle status lives in exactly one canonical file and is never restated in cursors/design/wiki; and a project has exactly ONE live cursor (no per-ledger cursor + root cursor duplicate). "Condensed copy" and "full copy" of the same status are two things that drift — collapse them. Enforce absence elsewhere with a deterministic lint; keep design docs in INTENT tense (target shape), not live status. This is the SSOT design that retired [[LSN-008]]; see also [[LSN-015]] for verifying the migration that establishes it.
+LSN-015 | op:cascade type:named-target-unverified    | guard scope:portable | recur:1  saves:0 miss:1  | when a DEC/cascade NAMES specific files to edit or repoint, grep-verify EACH named target was actually changed before declaring the cascade done — never infer completeness from the changeset file-list (a path-based grep also misses RELATIVE references, e.g. a pointer to `state.md` rather than `.claude/workflow-x/state.md`). Corollary: a deterministic lint scoped to a NON-canonical set proves nothing about content INSIDE the canonical files or in pointer/index files it doesn't scan — those need an explicit CLV check. Both misses (dangling `state.md` pointers in conventions.md/workflow-INDEX.md + an un-dropped DEC-index Status column) were caught by the DEC-015 closing CLV, not the lint — which is exactly why the CLV gate exists alongside the mechanism.
 
 ---
 
@@ -211,6 +213,19 @@ history:2026-07-05: captured at advisory level (VAL-007 Check 6 — traceability
         manual proxy for the not-yet-built lint; the lint must scan prose subsections + per-REQ artifact tables, not only
         index cells. Sibling test-count-drift rule folded in: when a test file gains N slots (A3 hardening), grep every
         artifact table for the pre-hardening count in the same commit.
+        2026-07-13: **PROMOTED TO MECHANISM (DEC-015).** The manual CHECK list was broadened 4× across VAL-007…011 and
+        STILL missed (recur:7, miss:6) — proving the manual control cannot be the enforcement. Root-caused as a DATA-MODEL
+        defect, not a diligence defect: the same status fact was physically stored in ~7 places, so every byproduct update
+        had to hand-sync all of them. Fix = SSOT: status single-homed in traceability.md (REQ/DES/TEST/VAL) + decisions.md
+        (DEC); stripped from the non-canonical set (STATE.md/WIKI.md/wiki/*/design.md); the per-ledger state.md deleted
+        (root STATE.md is the sole cursor — see [[LSN-014]]). Enforcement = `.claude/hooks/ledger_drift_lint.py` (TEST-017,
+        absence-check, pre-commit + CLV): it deterministically fails any id+status pairing outside a canonical home, so the
+        cross-file duplication class is now impossible to reintroduce silently. Verified: lint drove 108 live findings → 0
+        tree-wide; full CLV PASS (9/9) after a repair pass. **Residual (the lint does NOT cover):** (a) drift INSIDE the
+        canonical files themselves; (b) pointer/index files outside the scan set (conventions.md/workflow-INDEX.md). Both
+        were caught by the closing CLV, not the lint — the reason the CLV gate remains alongside the mechanism. That
+        verification discipline is captured as [[LSN-015]]. This lesson is now level:MECHANISM; the manual grep-sweep
+        remediation above is retained only as the fallback when the hook/runtime is unavailable.
 
 ## LSN-009
 sig:    test / loose-timeout-bound-survivor / teardown-assertion
@@ -369,3 +384,58 @@ origin: A3-R006-01 (blocking) — executed mask-narrowing mutant survived TEST-0
 history:2026-07-12: captured at advisory level, first occurrence. scope:portable — travels to any
         bitmask/flag-set security predicate. Sibling of [[LSN-009]] (both are "the assertion is too
         weak to catch a real mutant" test-design rules from executed A3 mutants).
+
+## LSN-014
+sig:    ledger-design / status-duplication / single-source-of-truth
+level:  guard  scope:portable   since:P2.2(2026-07-13, DEC-015)   recur:n/a   saves:0   miss:0
+tags:   op:ledger-design, op:ledger-update, type:status-duplication, scope:portable
+trigger:designing or maintaining the governance/ledger memory of a project — deciding WHERE a
+        per-id status, a phase, or a "where are we" cursor is written.
+mistake:(root cause of [[LSN-008]], recur:7) the same logical fact — a REQ/DES/TEST/VAL's lifecycle
+        status — was physically stored in ~7 files (traceability primary matrix + DES/DEC index cells,
+        per-slice appendix tables, a per-ledger state.md, the root STATE.md body, design.md prose, WIKI
+        REGISTRIES). Every byproduct update had to hand-sync all copies; with context lost between turns
+        the sync was lossy, so one copy always drifted. Two cursors (a "condensed" root + a "full"
+        per-ledger state.md) is the same defect at the cursor layer.
+rule:   ONE logical fact = ONE storage location. (1) Per-id lifecycle status lives in exactly one
+        canonical file (here: traceability.md for REQ/DES/TEST/VAL, decisions.md for DEC) and is NEVER
+        restated elsewhere. (2) A project has exactly ONE live cursor — no per-ledger cursor AND a root
+        cursor. (3) Design docs describe INTENT (target shape), not live status. (4) Non-canonical files
+        reference ids WITHOUT a status token.
+check:  before adding a status/phase string to any governance file, ask "is this the canonical home for
+        this fact?" If not, reference the id and point to the canonical home instead. Enforce mechanically
+        with an absence-check lint over the non-canonical set (see the [[LSN-008]] mechanism).
+origin: DEC-015 (2026-07-13) — the SSOT redesign that promoted [[LSN-008]] to mechanism. Captured at
+        guard because the design rule must hold for every future ledger, not just this one.
+history:2026-07-13: captured as the durable design principle behind the LSN-008 promotion. scope:portable
+        — a hard-won governance rule that travels to any future project's memory design. Verify the
+        migration that establishes it with [[LSN-015]].
+
+## LSN-015
+sig:    cascade / named-target-unverified / migration-completeness
+level:  guard  scope:portable   since:P2.2(2026-07-13, DEC-015)   recur:1   saves:0   miss:1
+tags:   op:cascade, op:ledger-migration, type:incomplete-cascade, scope:portable
+trigger:executing a DEC cascade or a governance migration whose text NAMES specific dependent files to
+        edit, repoint, or delete-and-repoint.
+mistake:DEC-015's cascade text explicitly named the files to repoint after deleting the per-ledger
+        state.md ("all pointers — WIKI PAGES, workflow-INDEX, any 'full live cursor' refs — repointed").
+        The orchestrator repointed the ones found by a PATH-based grep (`workflow-garminconnect/state.md`)
+        but missed two files that referenced the cursor by its RELATIVE name (`state.md`): wiki/conventions.md
+        and workflow-INDEX.md. Separately, DEC-015 promised to drop the traceability DEC-index Status column
+        and did not. Both were declared-done-but-not-done; the absence-lint (scoped to the non-canonical set)
+        could not see either, since one was in canonical/pointer files and the other was a structural shape.
+rule:   when a cascade/DEC NAMES targets, grep-verify EACH named target actually changed before declaring
+        the cascade complete — never infer completeness from the changeset file-list. Search by BOTH the full
+        path AND the bare basename (relative references hide from a path-only grep). Corollary: a deterministic
+        lint over a NON-canonical subset proves nothing about content INSIDE canonical files or about pointer/
+        index files it doesn't scan — gate those with an explicit CLV check, not the lint alone.
+check:  after a named cascade: for each named target, `grep` the changed file for the old string (must be
+        absent) and the new (must be present); for a delete-and-repoint, `grep -rn` the tree for BOTH the full
+        path and the basename of the deleted file — any live pointer is an incomplete cascade.
+origin: DEC-015 closing CLV (2026-07-13) — the validator caught both misses (dangling state.md pointers +
+        un-dropped DEC-index Status column) after the orchestrator declared the migration done. miss:1 credited:
+        the cascade was declared complete while two named targets were stale; the CLV gate (not the mechanism)
+        caught it.
+history:2026-07-13: captured at guard, first occurrence, from the DEC-015 migration. scope:portable — applies
+        to any named cascade/migration in any project. Directly complements [[LSN-014]] (the design) and closes
+        the loop on [[LSN-008]] (the mechanism does not replace the CLV; it narrows what the CLV must still catch).

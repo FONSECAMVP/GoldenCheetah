@@ -34,42 +34,49 @@ Last updated: 2026-07-12 (Phase 2.2 — **REQ-006 CLOSED, security-closed**). Sl
 
 ## DEC index
 
-| DEC | Question | Status | Date |
-|-----|----------|--------|------|
-| DEC-001 | Solution shape: monolithic vs staged vs adapter | accepted | 2026-05-17 |
-| DEC-002 | Python integration mechanism (direct / mailbox / per-request thread) | accepted (B) | 2026-05-17 |
-| DEC-003 | Token + sidecar on-disk layout | accepted (B) | 2026-05-17 |
-| DEC-004 | Credentials + MFA dialog UX shape | accepted (B) | 2026-05-17 |
-| DEC-005 | Phase-1 CloudService capabilities (Query\|Download) | accepted | 2026-05-17 |
-| DEC-006 | Activity file format + staging path (FIT default) | accepted | 2026-05-17 |
-| DEC-007 | Rate-limit + retry placement (Python-side worker decorator) | accepted (B) | 2026-05-17 |
-| DEC-008 | Testing toolchain (QTest+CTest C++ / pytest+coverage.py Python) | accepted (A) | 2026-05-17 |
-| DEC-009 | Style/quality toolchain (existing clang-format/clang-tidy / ruff + mypy --strict Python) | accepted (A) | 2026-05-17 |
-| DEC-010 | Pre-commit automation (pre-commit framework, scoped to new Garmin paths) | accepted (A) | 2026-05-17 |
-| DEC-011 | Phase-1 rollout (CMake flag GC_WANT_GARMINCONNECT, default OFF) | accepted | 2026-05-17 |
-| DEC-012 | Auth-dispatcher seam between `GarminCredentialsPage` and SSO layer (Option A — inject `IGarminAuthClient`) | accepted (A) | 2026-05-24 |
-| DEC-013 | Worker ↔ Python adapter seam (Option A — inject `IGarminPyAdapter`) | accepted (A) | 2026-05-24 |
-| DEC-014 | Token persistence: library-write vs GC-owned atomic write + perms | accepted (B — C++ owns atomic 0600 write; adapter dumps()/loads()) | 2026-07-11 |
+> DEC **status** is single-homed in `decisions.md` (each DEC's `Status:` field) — DEC-015 SSOT.
+> This index carries Question + Date only; drill `decisions.md` for a DEC's accepted-option/status.
+
+| DEC | Question | Date |
+|-----|----------|------|
+| DEC-001 | Solution shape: monolithic vs staged vs adapter | 2026-05-17 |
+| DEC-002 | Python integration mechanism (direct / mailbox / per-request thread) | 2026-05-17 |
+| DEC-003 | Token + sidecar on-disk layout | 2026-05-17 |
+| DEC-004 | Credentials + MFA dialog UX shape | 2026-05-17 |
+| DEC-005 | Phase-1 CloudService capabilities (Query\|Download) | 2026-05-17 |
+| DEC-006 | Activity file format + staging path (FIT default) | 2026-05-17 |
+| DEC-007 | Rate-limit + retry placement (Python-side worker decorator) | 2026-05-17 |
+| DEC-008 | Testing toolchain (QTest+CTest C++ / pytest+coverage.py Python) | 2026-05-17 |
+| DEC-009 | Style/quality toolchain (existing clang-format/clang-tidy / ruff + mypy --strict Python) | 2026-05-17 |
+| DEC-010 | Pre-commit automation (pre-commit framework, scoped to new Garmin paths) | 2026-05-17 |
+| DEC-011 | Phase-1 rollout (CMake flag GC_WANT_GARMINCONNECT, default OFF) | 2026-05-17 |
+| DEC-012 | Auth-dispatcher seam between `GarminCredentialsPage` and SSO layer (Option A — inject `IGarminAuthClient`) | 2026-05-24 |
+| DEC-013 | Worker ↔ Python adapter seam (Option A — inject `IGarminPyAdapter`) | 2026-05-24 |
+| DEC-014 | Token persistence: library-write vs GC-owned atomic write + perms | 2026-07-11 |
+| DEC-015 | Ledger status: single canonical source + absence-check drift lint (LSN-008 promotion) | 2026-07-12 |
 
 ## DES index
 
+> Status cells use the controlled vocabulary (DEC-015): `drafted | GREEN | committed | CLOSED`
+> (+`deferred` tag) led first; the design narrative lives in each DES body in `design.md`.
+
 | DES | Component | Implements | Status |
 |-----|-----------|------------|--------|
-| DES-001 | GarminWorker: worker thread + mailbox transport | DEC-002, DEC-013 | drafted (Auth subset GREEN — REQ-002 e2e; + REQ-007 `downloadActivity` slot/`downloaded`/`downloadFailed` GREEN — TEST-010, `1eb5a6a16`) |
-| DES-001a | `IGarminPyAdapter` pure-virtual interface (worker ↔ Python seam) | DEC-013 | GREEN (Auth + download seam — TEST-004 `authenticate()`/`PyAuthOutcome`; TEST-009 `downloadActivity()`/`PyDownloadOutcome`) |
-| DES-002 | Per-athlete storage layer (tokens, sidecar, backfill state) | DEC-003, DEC-014 | write+read path GREEN (GarminTokenStore: 0700 dir + 0600 atomic tokens.json — TEST-012; load-side refuse-on-wider-than-owner via loadChecked()→TokenPermissionsRejected — TEST-014, REQ-006; DEC-014 literal, no amendment). Sidecar/backfill-state layers still drafted |
+| DES-001 | GarminWorker: worker thread + mailbox transport | DEC-002, DEC-013 | GREEN (Auth + REQ-007 download slots — TEST-004/TEST-010); further slots drafted |
+| DES-001a | `IGarminPyAdapter` pure-virtual interface (worker ↔ Python seam) | DEC-013 | GREEN (Auth + download seam — TEST-004/TEST-009) |
+| DES-002 | Per-athlete storage layer (tokens, sidecar, backfill state) | DEC-003, DEC-014 | GREEN (write + load-side refusal — TEST-012/TEST-014); sidecar/backfill drafted |
 | DES-003 | AddCloudWizard pages (credentials, MFA, CAPTCHA, ToS, backfill) | DEC-004 | drafted |
 | DES-004 | Cloud/GarminConnect CloudService subclass | DEC-001, DEC-005, DEC-006 | drafted |
 | DES-005 | gc_rate.py: Python-side rate-limit + retry decorator | DEC-007 | drafted |
-| DES-006 | Atomic-write helper (tmp + fsync + rename) | (cross-cutting) | GREEN (`src/Cloud/AtomicFile.{h,cpp}`: writeOver perms-before-rename, flush+fsync, native atomic rename — TEST-011, `garmin-fast`, Qt-only). A3-R004-M1 FIXED: order-recording `TmpWriter` test-seam (null-in-production; writeOver signature/behaviour unchanged) pins perms-set-before-first-byte-write (REQ-NF-Sec-002 no-world-readable-window) |
+| DES-006 | Atomic-write helper (tmp + fsync + rename) | (cross-cutting) | GREEN (AtomicFile — TEST-011) |
 | DES-007 | CMake feature flag + installer manifest | DEC-011 | drafted |
 | DES-008 | Error translation + ErrorBus integration | (cross-cutting) | drafted |
 | DES-009 | Bulk backfill controller | (uses DES-001/002/005/006) | drafted |
 | DES-010 | Incremental sync flow | (uses DES-001/002/005) | drafted |
 | DES-011 | Optional profile auto-fill | (uses DES-001/004/012) | drafted |
-| DES-012 | garmin_client.py adapter (stable seam over python-garminconnect) | (cross-cutting — A2-004 fix; DEC-014) | login/download GREEN; DEC-014 `dump_tokens`/`load_tokens` + `session_expired` GREEN (TEST-013); **`__init__` auth-only construction DONE** (`3edb705cb`, REQ-006 Slice B — `(email,password)`, no tokenstore path forwarded; B-R004-01 resolved). REQ-003/008/012/013 still NotImplementedError |
-| DES-003a | `IGarminAuthClient` pure-virtual interface (page ↔ SSO seam) | DEC-012 | drafted (Phase 2.2 — RED only; GREEN adds the header + concrete `WorkerAuthClient`) |
-| DES-013 | `PyEmbeddedAdapter`: production `IGarminPyAdapter` over embedded CPython | DEC-013 (production side), DEC-002, DEC-014 | GREEN (Auth + download surfaces — TEST-005 `authenticate` + TEST-009 `downloadActivity` binary-exact marshalling over retained session, `src/Cloud/PyEmbeddedAdapter.{h,cpp}`; GIL RAII, type-then-kind classification). DEC-014: surfaces `PyAuthOutcome.tokenBlob` on Success (GREEN); **stop-forwarding-`tokenstorePath` DONE** (`3edb705cb`, REQ-006 Slice B — 1-arg ctor `PyEmbeddedAdapter(modulePath)`, C-API `"ss"`; B-R004-01/A3-R004-M3 resolved) |
+| DES-012 | garmin_client.py adapter (stable seam over python-garminconnect) | (cross-cutting — A2-004 fix; DEC-014) | GREEN (login/download + dump/load/session_expired + auth-only __init__ — TEST-013); REQ-003/008/012/013 drafted |
+| DES-003a | `IGarminAuthClient` pure-virtual interface (page ↔ SSO seam) | DEC-012 | drafted (RED only) |
+| DES-013 | `PyEmbeddedAdapter`: production `IGarminPyAdapter` over embedded CPython | DEC-013 (production side), DEC-002, DEC-014 | GREEN (Auth + download + tokenBlob + auth-only ctor — TEST-005/TEST-009) |
 
 ## Cycles run
 
@@ -84,12 +91,22 @@ Last updated: 2026-07-12 (Phase 2.2 — **REQ-006 CLOSED, security-closed**). Sl
 
 ## Validations run
 
+This table is the canonical VAL history (DEC-015 — VAL status single-homed here).
+
 | Validation | Trigger | Result | File |
 |------------|---------|--------|------|
-| 001 | Phase 0 exit | PASS | validations/validation-001.md |
-| 002 | Phase 1 exit (after A2 iter 2 clean) | PASS | validations/validation-002.md |
-| 003 | Phase 2.2 per-feature exit (REQ-001 / TEST-001) | PASS | validations/validation-003.md |
-| 004 | Phase 2.2 per-feature exit (REQ-002 / TEST-002 — adapter slice) | PASS | validations/validation-004.md |
+| 001 | Phase 0 exit | PASS | validations/archive/val-001.md |
+| 002 | Phase 1 exit (after A2 iter 2 clean) | PASS | validations/archive/val-002.md |
+| 003 | Phase 2.2 per-feature exit (REQ-001 / TEST-001) | PASS | validations/archive/val-003.md |
+| 004 | Phase 2.2 REQ-002 adapter slice | PASS | validations/active/val-004.md |
+| 005 | Phase 2.2 REQ-002 wizard-wiring slice | PASS | validations/active/val-005.md |
+| 006 | Phase 2.2 REQ-002 end-to-end slice | PASS | validations/active/val-006.md |
+| 007 | Phase 2.2 REQ-002 PyEmbeddedAdapter + tile-routing slice | PASS (7/9, 2 tracked WARN) | validations/active/val-007.md |
+| 008 | Phase 2.2 REQ-002 A3 test-hardening changeset | PASS (9/9) | validations/active/val-008.md |
+| 009 | Phase 2.2 REQ-007 download-chain changeset (`1eb5a6a16`) | PASS (after ledger-record fix) | validations/active/val-009.md |
+| 010 | Phase 2.2 REQ-004 token write-path changeset (`54b7005e6`) | PASS (after fix) | validations/active/val-010.md |
+| 011 | Phase 2.2 REQ-006 Slices A+B + A3-R006 hardening | PASS (4th/closing pass, `d69f70673`) | validations/active/val-011.md |
+| 012 | DEC-015 governance migration (status SSOT + drift lint) | PASS (full 9-check, after 1 repair pass) | validations/active/val-012.md |
 
 ## Phase 2.1 bootstrap artifacts (in repo)
 

@@ -1,81 +1,52 @@
-# STATE — project cursor            (condensed from active ledger; read WIKI.md first)
+# STATE — project cursor            (the live cursor; read WIKI.md first, then this)
+# Per-id lifecycle status lives ONLY in the traceability matrix (DEC-015 SSOT). This file names
+# WHERE we are — the active gate, blockers, recent commits — not the status of every id.
+# For "is REQ-x done?" read .claude/workflow-garminconnect/traceability.md.
 
 TEAM: on (5 agents: scout, builder, adversary, validator, librarian)
-RIGOR: FULL (Phase 0 backfill 2026-07-11; project already ran A0–A5 + STRIDE + per-slice CLV = FULL de facto)
+RIGOR: FULL (Phase 0 backfill 2026-07-11; project ran A0–A5 + STRIDE + per-slice CLV = FULL de facto)
 
-PHASE: Phase 2.2 — Garmin Connect integration. REQ-002 Authenticate flow **CLOSED** (committed
-`60a076848`). **REQ-007 activity-download — chain GREEN adapter→PyEmbeddedAdapter→worker, committed
-`1eb5a6a16` + VAL-009 PASS; NOT fully deployed** (readFile staging + FIT→TCX fallback deferred, need REQ-004/006).
-**REQ-004 token write-path GREEN + committed `54b7005e6`** (VAL-010 PASS; style/type gate clean via pre-commit).
-**REQ-006 Slice A (load-side perm refusal) GREEN — committed `d86323246`.** `GarminTokenStore::loadChecked()` refuses wider-than-0600
-`tokens.json` with typed `TokenPermissionsRejected` (T-014, garmin-fast 10/10).
-**REQ-006 Slice B (__init__ auth-only reconciliation) GREEN — committed `3edb705cb`.** Library constructed AUTH-ONLY (`_gc.Garmin(email,password)`,
-C-API `"ss"`, `PyEmbeddedAdapter(modulePath)`) → no self-written 2nd token file; **REQ-NF-Sec-002 end-to-end MET**. T-015 (pytest) + T-016
-(garmin-py). Verification-Gate PASS on independent re-run: pytest 15/15, garmin-py 20/20, garmin-fast 10/10. Findings B-R004-01 + A3-R004-M3 RESOLVED.
-A3-R006 hardening DONE (T-014 +3 slots; A3-R006-01/-02 FIXED, `458a72ba7`). **VAL-011 PASS (4th/closing pass, HEAD `d69f70673`)**
-— passes 1-3 FAILed on ledger drift only (code/test spine clean throughout), repaired. **REQ-006 fully CLOSED, security-closed, validated.**
+PHASE: Phase 2.2 — Garmin Connect integration. Per-REQ/DES/TEST/VAL status → traceability.md.
 
-OPEN: REQ-007 download chain GREEN, **committed `1eb5a6a16`** (3 slices):
-· Slice 1 (Python, DES-012): garmin_client.download_activity — fmt ORIGINAL/TCX map, bytes verbatim,
-  connection/rate_limit by exception TYPE (LSN-006), unsupported-fmt rejected. TEST-008 = 6 pytest.
-· Slice 2 (C++ seam, DEC-013/DES-001a/DES-013): IGarminPyAdapter pure-virtual downloadActivity;
-  PyEmbeddedAdapter marshals Python bytes→QByteArray binary-exact, reuses the RETAINED authenticated
-  client (REQ-005 session), classifies connection→Network / rate_limit→RateLimited / foreign+non-bytes→
-  Unknown via shared takeRaisedException(). TEST-009 = 8 garmin-py; testGarminConnectPyAdapter 20/20.
-· Slice 3 (worker, DES-001): GarminWorker `downloadActivity(activityId, fmt, requestId)` slot +
-  `downloaded(id,bytes)` / `downloadFailed(id, GarminDownloadFailure)` signals (new metatype-registered
-  failure type), mapping PyDownloadOutcome→signals off the GUI thread. TEST-010 = 6 garmin-fast slots
-  (new testGarminConnectDownloadWorker target).
-· DEFERRED (REQ-007 not fully deployed): GarminConnect::readFile staging garmin-<id>.<ext> + FIT→TCX
-  fallback (DES-004) — needs REQ-004/006 tokens/worker-in-CloudService lifecycle; fallback trigger
-  depends on unvalidated library behaviour (PRD Assumption B).
+CURRENT: **DEC-015 (ledger status SSOT + absence-check lint) — COMPLETE, VAL-012 PASS.** The lint
+(TEST-017, 15/15) is built + installed (`.claude/hooks/ledger_drift_lint.py` + a pre-commit local
+hook); the non-canonical governance set (STATE.md / WIKI.md / wiki/* / design.md) carries NO per-id
+status token (lint exit 0 tree-wide); the per-ledger `state.md` is deleted (root STATE.md is the
+sole cursor); LSN-008 promoted to MECHANISM; LSN-014 (SSOT design) + LSN-015 (cascade verification)
+captured. The whole DEC-015 delta is on disk but **not yet committed** (see CHANGESET).
 
-BLOCKING: 0 open. A3-R004 M1 (AtomicFile order — order-recording TmpWriter seam) + M2 (load_tokens no-op —
-per-instance fake) **FIXED + Verification-Gate PASS 2026-07-11** (garmin-fast 9/9, pytest 15/15; mutants killed).
-**M3 (REQ-NF-Sec-002 end-to-end) = RESOLVED 2026-07-11 by REQ-006 Slice B** — library now auth-only, no self-written
-2nd token file; C++-owned 0600 write is the sole token file. REQ-006 is security-closed.** Non-blocking: A3-R004-04/05/06 (fault-injection defers), -07 (concurrency, mitigated
-by DES-001 single-worker), -08 (root-run test), -09 (Windows CI). Prior deferred: TR-08 → Phase 1.5 w/ A2-001;
-TR-06 fidelity check; TR-03 guarded by TEST-007. **B-R004-02 CLEARED** — style/type gate ran clean
-(clang-format + ruff + mypy --strict) via pre-commit at `54b7005e6`.
+NEXT_GATE: commit the DEC-015 governance delta (awaiting user go-ahead), then the feature queue:
+REQ-007 CLOSURE (GarminConnect::readFile staging garmin-<id>.<ext> + FIT→TCX fallback DES-004 —
+needs the worker-in-CloudService lifecycle + PRD-Assumption-B library validation) OR REQ-003 (MFA).
+Carried: DEC-014 OQ1 (real-lib dumps/loads + 2-arg `Garmin(email,password)` signatures) as a build
+NOTE pending the bundled wheel; OQ2 → REQ-NF-Compat-001(b) `session_expired`.
 
-CASCADE: DEC-014 (token persistence) fully propagated + committed; no stale dependents:
-DES-002 (write+read GREEN — GarminTokenStore save + loadChecked refuse-on-wider-than-owner), DES-006 (AtomicFile GREEN),
-DES-012 (dump_tokens/load_tokens/session_expired + `__init__` auth-only construction DONE), DES-013 (PyAuthOutcome.tokenBlob +
-1-arg auth-only ctor / stop-forwarding-tokenstorePath DONE, `3edb705cb`), REQ-004 (write path committed `54b7005e6`),
-REQ-006 (load-side + auth-only reconciliation CLOSED, security-closed, `d86323246`+`3edb705cb`). Prior: DEC-012/013 seams GREEN.
+BLOCKING: 0 open. Non-blocking carries: A3-R004-04/05/06 (fault-injection), -07 (concurrency,
+mitigated by the DES-001 single-worker), -08 (root-run test), -09 (Windows CI); TR-08 → Phase 1.5
+with A2-001; TR-06 fidelity check; TR-03 guarded by TEST-007. Finding disposition detail (incl.
+A3-R004 M1/M2/M3 + A3-R006-01/-02 resolutions) → findings.md.
 
-LAST_CLV: VAL-011 — 2026-07-12 — **PASS (4th/closing pass, HEAD `d69f70673`)** — REQ-006 Slices A+B + A3-R006 hardening.
-Code/test spine clean on EVERY pass (pytest 15/15, garmin-py 20/20, garmin-fast 10/10); passes 1-3 FAILed on LEDGER DRIFT
-only — the LSN-008 signature recurring across successively deeper loci (5th: primary matrix rows/DES index/design body/local
-state.md; 6th: root STATE.md's own CASCADE/NEXT_GATE/COUNTS vs its banner; 7th: prose subsections + a stale slot count).
-Repaired each pass; 4th pass clean after a deterministic grep-sweep of the ledger tree. LSN-008 recur:7 miss:6 → deterministic
-pre-CLV lint flagged as the required fix. Prior: VAL-010 — 2026-07-11 — PASS — REQ-004 write path. VAL-009 — 2026-07-08 — PASS — REQ-007 chain.
-LAST_CYCLE: A3-R006 REQ-006 Slices A+B — 2026-07-12 — FINDINGS (real manual mutants) → FIXED: A3-R006-01 (mask-narrowing
-survivor — T-014 only exercised Read-class modes) + A3-R006-02 (perms-cache) closed by TEST-014 +3 slots (0620/0601/re-stat;
-mutant-kill demonstrated); A3-R006-03 informational accept (T-016 masked, T-015 the real guard). M-A2/A3/B1/B2/B3 killed;
-REQ-005 reconfirmed intact. Prior: A3-R004 REQ-004 write path (2026-07-11) — M1/M2 FIXED; M3 resolved by REQ-006 Slice B.
+CASCADE: DEC-015 (status SSOT) fully propagated — traceability.md/decisions.md (canonical status),
+design.md/STATE.md/WIKI.md/wiki/* (status stripped), local state.md (deleted), ledger_drift_lint.py +
+install_hook.py + .pre-commit-config.yaml (mechanism), lessons.md (LSN-008→MECHANISM, LSN-014/015). No
+stale dependents (VAL-012 confirmed). Prior: DEC-014 fully propagated + committed.
 
-NEXT_GATE: REQ-006 CLOSED, security-closed, VAL-011 PASS; 0 open blocking. Recommended immediate: build the deterministic
-pre-CLV ledger-drift lint (LSN-008 recur:7 — the durable fix). Then the queue: REQ-007 CLOSURE
-(GarminConnect::readFile staging garmin-<id>.<ext> + FIT→TCX fallback DES-004 — needs worker-in-CloudService lifecycle +
-PRD-Assumption-B library validation) OR REQ-003 (MFA). DEC-014 OQ1 (real-lib dumps/loads + 2-arg `Garmin(email,password)`
-signatures) carried as a build NOTE pending the bundled wheel; OQ2 resolved → REQ-NF-Compat-001(b) `session_expired`.
+CHANGESET (recent commits — provenance): REQ-006 `d86323246` (Slice A) + `3edb705cb` (Slice B) +
+`458a72ba7` (A3-R006 hardening) + docs-record `808fda03a`/`04ab54d63`; REQ-004 `54b7005e6`
+(+`b67767380`); REQ-007 `1eb5a6a16`; REQ-002 `60a076848`. **The DEC-015 governance delta (new lint +
+its test + install/pre-commit wiring + the whole ledger normalization + state.md deletion) is on disk,
+NOT yet committed** — awaiting user go-ahead. Production `src/Cloud/GarminConnect.*` untouched (readFile
+is a later slice). Unrelated pre-session work (`src/Coach/*`, `src/Gui/*`, root `CMakeLists.txt`,
+`vcpkg.json`) still unstaged. Housekeeping: `scripts/__pycache__/` should be gitignored.
 
-CHANGESET: REQ-006 landed on master in four commits + this repair:
-· `d86323246` Slice A — NEW src/Cloud/GarminTokenStore loadChecked (LoadStatus/LoadResult) + NEW testGarminTokenStore_load.cpp (T-014) + CMake target.
-· `3edb705cb` Slice B — MODIFIED garmin_client.py (`__init__(email,password)`), PyEmbeddedAdapter.{h,cpp} (1-arg ctor, C-API "ss"),
-  AddCloudWizard.cpp (drop tokenstore arg), pystubs/garmin_client.py + WizardStubPreamble.h (narrowed ctors), testGarminConnectPyAdapter.cpp (T-016),
-  test_adapter_login.py (T-015) + test_adapter_download.py + test_token_store.py (2-arg call sites).
-· `458a72ba7` A3-R006 hardening — testGarminTokenStore_load.cpp +3 slots (0620/0601/re-stat) + the VAL-011 ledger-drift repair (this delta).
-· Docs-record follow-ups `808fda03a` (Slice A) + `04ab54d63` (Slice B + LSN-012).
-Prior: REQ-004 committed `54b7005e6` (+`b67767380`); REQ-007 `1eb5a6a16`; REQ-002 `60a076848`. production src/Cloud/GarminConnect.*
-still untouched (readFile deferred). Unrelated pre-session work (src/Coach/*, src/Gui/*, root CMakeLists.txt, vcpkg.json) still unstaged.
+LAST_CLV: VAL-012 — 2026-07-13 — PASS (full 9-check, DEC-015 status-SSOT migration; PASS on the
+re-verification pass after a 1-pass repair — dangling state.md pointers + DEC-index Status column,
+both outside the lint's scope → LSN-015). Prior: VAL-011 — 2026-07-12 (REQ-006); VAL-010 — 2026-07-11
+(REQ-004). Full canonical VAL table → traceability.md ## Validations run.
+LAST_CYCLE: A3-R006 (REQ-006) — 2026-07-12 — findings fixed (A3-R006-01 mask-narrowing + -02
+perms-cache, via TEST-014 +3 slots; mutant-kill demonstrated). Prior: A3-R004 (REQ-004) —
+2026-07-11 (M1/M2 fixed; M3 resolved by REQ-006 Slice B). Cycle narratives → cycles/.
 
-COUNTS: DEC 14/14 accepted (garmin ns) · DES 13(+2 sub-ids); GREEN: DES-001a/002/006/012/013 · REQ 1/22 deployed (REQ-001);
-CLOSED: REQ-002 (Authenticate), REQ-006 (token perms, security-closed); GREEN-committed: REQ-004 (write path `54b7005e6`),
-REQ-007 (download chain `1eb5a6a16`, not fully deployed — readFile deferred); rest not-started · VAL 11/11 PASS (VAL-011 PASS
-on 4th pass, REQ-006) · TEST T-001..T-016 all GREEN (T-014 GarminTokenStore load-side 8 slots incl. A3-R006
-0620/0601/re-stat; T-015 pytest auth-only; T-016 garmin-py no-path-forwarded); testGarminConnectPyAdapter 20/20; Python adapter suite 15/15
-
-Full detail lives in the active ledger: .claude/workflow-garminconnect/state.md
-(workflow-aicoach/ is CLOSED — provenance only, see .claude/workflow-INDEX.md)
+Detail lives in: traceability.md (per-id status spine) · findings.md (finding disposition) ·
+decisions.md (DEC entries) · validations/ + cycles/ (evidence). workflow-aicoach/ is a retired
+ledger (provenance only, see .claude/workflow-INDEX.md).

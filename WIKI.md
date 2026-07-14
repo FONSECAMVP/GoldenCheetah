@@ -1,12 +1,12 @@
 # PROJECT WIKI — GoldenCheetah            (the brain · read me first)
 root:  /media/andy/TOSHIBA EXT/Backup2/Documents/GoldenCheetah   schema: wiki-v1
-phase: 2 (Phase 2.2 — REQ-002 CLOSED@60a076848; REQ-007 activity-download download-chain GREEN through the worker (adapter T-008; PyEmbeddedAdapter marshalling T-009; GarminWorker DownloadActivity op T-010), committed@1eb5a6a16 + VAL-009 PASS; REQ-004 token write-path GREEN committed@54b7005e6 + VAL-010 PASS (AtomicFile T-011, GarminTokenStore T-012, adapter dump/load T-013); REQ-006 Slice A load-side perm-refusal GREEN committed@d86323246 (T-014), Slice B __init__ auth-only reconciliation GREEN committed@3edb705cb (T-015/T-016) → REQ-NF-Sec-002 end-to-end MET, findings B-R004-01+A3-R004-M3 resolved. NOT-done: GarminConnect::readFile staging + FIT→TCX fallback — deferred, needs worker-in-CloudService lifecycle. REQ-006 FULLY CLOSED, security-closed, validated: A3-R006 hardening DONE (T-014 +3 slots pin the full mask + freshness, mutant-kill demonstrated) + VAL-011 PASS (4th/closing pass, `d69f70673`; passes 1-3 FAILed on ledger drift only — LSN-008 recur:7, deterministic pre-CLV lint flagged as the durable fix). Next gate: REQ-007 CLOSURE (readFile + FIT→TCX) or REQ-003 (MFA))   live-status → STATE.md (read next)
+phase: 2 · Phase 2.2 — Garmin Connect integration (per-id status lives in the traceability matrix — DEC-015 SSOT; do NOT restate it here)   live-status + current gate → STATE.md (read next)
 
 ## MAP — directory manifest (authoritative; check before creating ANYTHING)
 WIKI.md                     this brain (hub) — read first, every session
 wiki/                       spokes: architecture.md, conventions.md, glossary.md
-STATE.md                    project cursor (condensed from active ledger)
-lessons.md                  process lessons LSN-001..009 (index + cold entries)
+STATE.md                    project cursor — the SOLE live cursor (DEC-015; no per-ledger state.md). Names the gate/blockers/commits, not per-id status (→ traceability.md)
+lessons.md                  process lessons LSN-001..015 (index + cold entries); LSN-008 promoted to MECHANISM (DEC-015 lint)
 CMakeLists.txt              new CMake build definition (migration in progress alongside qmake)
 CMakePresets.json           CMake configure/build presets
 build.pro, src/src.pro      legacy top-level qmake project files
@@ -44,8 +44,9 @@ src/Train/                  trainer/device control (BT40, Kettler, Computrainer,
 src/*.o,moc_*,qrc_*,*_yacc*,*_lex*   [SKIP] generated in-source qmake build artifacts (untracked/gitignored)
 .claude/settings.json       PreToolUse hook wiring (Write|Edit|MultiEdit|Bash → anti_duplication_guard.py)
 .claude/hooks/anti_duplication_guard.py   deterministic anti-dup guard, enforces LSN-001
+.claude/hooks/ledger_drift_lint.py        installed copy of the DEC-015 status-drift lint (source in skills/.../scripts/); pre-commit + CLV call it
 .claude/agents/             5 qgdw subagent defs (scout, builder, adversary, validator, librarian) — canonical loaded copies; install-source duplicates live under skills/
-.claude/skills/quality-gated-dev-workflow/   SKILL.md + agents/(install source) + references/*.md (methodology) + scripts/(hook + installer)
+.claude/skills/quality-gated-dev-workflow/   SKILL.md + agents/(install source) + references/*.md (methodology) + scripts/(anti_duplication_guard.py + install_hook.py + ledger_drift_lint.py + test_ledger_drift_lint.py — DEC-015 status-drift lint, TEST-017)
 .claude/skills/test-driven-development/SKILL.md   TDD skill
 .claude/workflow-INDEX.md   one-ledger-per-feature index; names active ledger
 .claude/workflow-garminconnect/   ACTIVE ledger (Garmin Connect, Phase 2.2) — file-by-file breakdown → wiki/conventions.md
@@ -53,20 +54,20 @@ src/*.o,moc_*,qrc_*,*_yacc*,*_lex*   [SKIP] generated in-source qmake build arti
 
 ## REGISTRIES — what exists (allocate next; never reuse, never re-create)
 REQ  garmin:001–015+NF-*  full:.claude/workflow-garminconnect/prd.md         next:garmin-016
-DEC  garmin:001–014  index:.claude/workflow-garminconnect/decisions.md      next:garmin-015
+DEC  garmin:001–015  index:.claude/workflow-garminconnect/decisions.md      next:garmin-016
 DES  garmin:001–013(+001a,003a)  .claude/workflow-garminconnect/design.md   next:garmin-014
-TEST garmin:T-001–T-016  .claude/workflow-garminconnect/traceability.md     next:garmin-T-017 (T-011..T-013 REQ-004; T-014 REQ-006 Slice A load-side perm-refusal committed d86323246; T-015 pytest + T-016 garmin-py REQ-006 Slice B auth-only reconciliation committed 3edb705cb)
-VAL  garmin:001–011  latest:VAL-011 PASS (REQ-006, 4th/closing pass; passes 1-3 FAIL on ledger drift only→repaired, code/test spine clean throughout); VAL-010 PASS · .claude/workflow-garminconnect/validations/  next:garmin-012
-F    no F-### namespace in use; findings tracked as <cycle>-<seq> (A0-001…, A3-R00x-Mn/TR-nn, D-0x) in findings.md; 0 open blocking (A3-R006-01/-02 FIXED via T-014 edge-mode+freshness hardening; A3-R004-M3 resolved by REQ-006 Slice B)   next:n/a (see conventions.md)
-LSN  001–013  active:13 guards:8  lessons.md   next:014
--- CLOSED (provenance only, do not extend): aicoach:DEC-001–013, aicoach:REQ-001–020, aicoach:TEST-001–020 — numeric collision with garmin ranges above; always use ledger prefix (coach:DEC-NNN / garmin:DEC-NNN)
+TEST garmin:T-001–T-017  .claude/workflow-garminconnect/traceability.md     next:garmin-T-018 (T-011..T-013 REQ-004; T-014 REQ-006 Slice A load-side perm-refusal committed d86323246; T-015 pytest + T-016 garmin-py REQ-006 Slice B auth-only reconciliation committed 3edb705cb; T-017 ledger_drift_lint.py unittest suite — DEC-015)
+VAL  garmin:001–012  latest:VAL-012 PASS (DEC-015 status-SSOT migration, full 9-check after 1 repair pass); VAL-011 PASS (REQ-006) · full canonical VAL table → traceability.md ## Validations run; files → .claude/workflow-garminconnect/validations/  next:garmin-013
+F    no F-### namespace in use; findings tracked as <cycle>-<seq> (A0-001…, A3-R00x-Mn/TR-nn, D-0x, W-DEC003) in findings.md; 0 open blocking   next:n/a (see conventions.md)
+LSN  001–015  active:15 guards:9 mech:2 (LSN-001 anti-dup hook, LSN-008 ledger-drift lint)  lessons.md   next:016
+-- retired ledger (provenance only, do not extend): aicoach:DEC-001–013, aicoach:REQ-001–020, aicoach:TEST-001–020 — numeric collision with garmin ranges above; always use ledger prefix (coach:DEC-NNN / garmin:DEC-NNN)
 
 ## PAGES — wiki spokes (read the one named; don't explore blindly)
 wiki/architecture.md — components + Garmin auth data-flow + IGarminAuthClient/IGarminPyAdapter contracts + Watch list · read when touching src/Cloud, src/Python/garminconnect, or the active ledger
 wiki/conventions.md  — canonical locations, per-ledger ID-namespace rule, anti-dup checklist · read before creating any file/dir
 wiki/glossary.md     — project terms (ride/activity, athlete dir, CloudService, worker/adapter seam, ledger, slice, …) · read when a term is unfamiliar
-lessons.md           — checkable process rules (LSN-001..009) · read guards matching current operation before acting
-.claude/workflow-garminconnect/state.md — full live cursor for the active ledger (this WIKI's STATE.md is a condensed pointer to it)
+lessons.md           — checkable process rules (LSN-001..015) · read guards matching current operation before acting
+(no per-ledger state.md — DEC-015 deleted it; root STATE.md is the SOLE live cursor. Per-id status → traceability.md)
 .claude/workflow-INDEX.md — ledger convention + which ledger is active vs closed
 
 ## ORIENTATION PROTOCOL
