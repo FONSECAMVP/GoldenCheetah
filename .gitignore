@@ -85,6 +85,10 @@ _pch/
 *_yacc.h
 qrc_*.cpp
 
+# Python bytecode caches (workflow tooling under .claude/)
+__pycache__/
+*.pyc
+
 # API keys — never commit; copy from Secrets.h.template
 src/Coach/Secrets.h
 

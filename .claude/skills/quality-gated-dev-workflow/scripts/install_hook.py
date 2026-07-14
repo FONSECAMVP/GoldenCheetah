@@ -23,13 +23,65 @@ MATCHER = "Write|Edit|MultiEdit|Bash"
 COMMAND = 'python3 "${CLAUDE_PROJECT_DIR}/.claude/hooks/anti_duplication_guard.py"'
 
 
+def copy_lint(project, here):
+    """Copy the DEC-015 ledger-drift lint next to the guard in .claude/hooks/.
+    Idempotent. The pre-commit-framework local hook + the CLV step both call this
+    installed copy at a stable path. Returns True on success, False if source missing."""
+    src_lint = os.path.join(here, "ledger_drift_lint.py")
+    if not os.path.isfile(src_lint):
+        print(f"warn: no ledger_drift_lint.py next to installer ({src_lint}); "
+              f"skipping lint install", file=sys.stderr)
+        return False
+    hooks_dir = os.path.join(project, ".claude", "hooks")
+    os.makedirs(hooks_dir, exist_ok=True)
+    dst_lint = os.path.join(hooks_dir, "ledger_drift_lint.py")
+    shutil.copyfile(src_lint, dst_lint)
+    os.chmod(dst_lint, 0o755)
+    print(f"✓ ledger-drift lint → {os.path.relpath(dst_lint, project)} "
+          f"(wire as a pre-commit local hook; see .pre-commit-config.yaml)")
+    return True
+
+
 def main() -> int:
-    project = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else ".")
+    # Optional: --mode {full|deny-only|off}. Default full. deny-only = never interrupt
+    # the dev loop for new files; only block real clobbers.
+    argv = [a for a in sys.argv[1:]]
+    mode = "full"
+    lint_only = False
+    rest = []
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--mode" and i + 1 < len(argv):
+            mode = argv[i + 1].strip().lower()
+            i += 2
+            continue
+        if argv[i] == "--lint-only":
+            lint_only = True
+            i += 1
+            continue
+        rest.append(argv[i])
+        i += 1
+    if mode not in ("full", "deny-only", "off"):
+        print(f"error: --mode must be full|deny-only|off (got {mode})", file=sys.stderr)
+        return 1
+
+    project = os.path.abspath(rest[0] if rest else ".")
     if not os.path.isdir(project):
         print(f"error: not a directory: {project}", file=sys.stderr)
         return 1
 
     here = os.path.dirname(os.path.abspath(__file__))
+
+    # --lint-only: install just the DEC-015 lint (no guard/agents/settings churn).
+    if lint_only:
+        return 0 if copy_lint(project, here) else 1
+
+    # Build the hook command, prefixing the mode env var when not the default.
+    global COMMAND
+    if mode != "full":
+        COMMAND = ('env QGDW_GUARD_MODE=' + mode +
+                   ' python3 "${CLAUDE_PROJECT_DIR}/.claude/hooks/anti_duplication_guard.py"')
+
     src_script = os.path.join(here, "anti_duplication_guard.py")
     if not os.path.isfile(src_script):
         print(f"error: cannot find guard script next to installer: {src_script}",
@@ -42,6 +94,9 @@ def main() -> int:
     shutil.copyfile(src_script, dst_script)
     os.chmod(dst_script, 0o755)
     print(f"✓ guard script → {os.path.relpath(dst_script, project)}")
+
+    # DEC-015 ledger-drift lint, installed alongside the guard.
+    copy_lint(project, here)
 
     # Install subagent definitions (agents/ ships next to scripts/ in the skill)
     src_agents = os.path.join(os.path.dirname(here), "agents")

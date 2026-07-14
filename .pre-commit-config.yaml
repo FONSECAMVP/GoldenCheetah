@@ -38,6 +38,20 @@ repos:
         args: [--strict, --config-file=src/Python/garminconnect/pyproject.toml]
         additional_dependencies: []
 
+  # -------- Ledger status-drift (DEC-015, retires LSN-008) ---------------
+  # Whole-tree absence check: no per-id status token may appear in the
+  # non-canonical governance set (STATE.md / WIKI.md / wiki/*.md / design.md).
+  # Triggers only when a governance file is staged, but scans the whole tree
+  # (pass_filenames: false, root '.'). Stdlib-only; no extra deps.
+  - repo: local
+    hooks:
+      - id: ledger-drift-lint
+        name: ledger status drift (DEC-015)
+        entry: python3 .claude/hooks/ledger_drift_lint.py .
+        language: system
+        pass_filenames: false
+        files: '^(STATE\.md|WIKI\.md|wiki/.*\.md|\.claude/workflow-[^/]+/(design|traceability|decisions)\.md)$'
+
 # Secret scanning (DEC-003 threat model) is enabled in Phase 2.2 once the
 # first Garmin source file lands and a `.secrets.baseline` can be generated
 # against real content via `detect-secrets scan > .secrets.baseline`. Wiring
