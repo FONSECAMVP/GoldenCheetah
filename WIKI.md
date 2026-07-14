@@ -56,7 +56,7 @@ src/*.o,moc_*,qrc_*,*_yacc*,*_lex*   [SKIP] generated in-source qmake build arti
 REQ  garmin:001–015+NF-*  full:.claude/workflow-garminconnect/prd.md         next:garmin-016
 DEC  garmin:001–015  index:.claude/workflow-garminconnect/decisions.md      next:garmin-016
 DES  garmin:001–013(+001a,003a)  .claude/workflow-garminconnect/design.md   next:garmin-014
-TEST garmin:T-001–T-017  .claude/workflow-garminconnect/traceability.md     next:garmin-T-018 (T-011..T-013 REQ-004; T-014 REQ-006 Slice A load-side perm-refusal committed d86323246; T-015 pytest + T-016 garmin-py REQ-006 Slice B auth-only reconciliation committed 3edb705cb; T-017 ledger_drift_lint.py unittest suite — DEC-015)
+TEST garmin:T-001–T-017  .claude/workflow-garminconnect/traceability.md     next:garmin-T-018 (T-011..T-013 REQ-004; T-014 REQ-006 Slice A load-side perm-refusal committed d86323246; T-015 pytest + T-016 garmin-py REQ-006 Slice B auth-only reconciliation committed 3edb705cb; T-017 ledger_drift_lint.py unittest suite — DEC-015, committed 88d4ea402; migration committed 2520ed034)
 VAL  garmin:001–012  latest:VAL-012 PASS (DEC-015 status-SSOT migration, full 9-check after 1 repair pass); VAL-011 PASS (REQ-006) · full canonical VAL table → traceability.md ## Validations run; files → .claude/workflow-garminconnect/validations/  next:garmin-013
 F    no F-### namespace in use; findings tracked as <cycle>-<seq> (A0-001…, A3-R00x-Mn/TR-nn, D-0x, W-DEC003) in findings.md; 0 open blocking   next:n/a (see conventions.md)
 LSN  001–015  active:15 guards:9 mech:2 (LSN-001 anti-dup hook, LSN-008 ledger-drift lint)  lessons.md   next:016

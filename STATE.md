@@ -13,9 +13,11 @@ CURRENT: **DEC-015 (ledger status SSOT + absence-check lint) — COMPLETE, VAL-0
 hook); the non-canonical governance set (STATE.md / WIKI.md / wiki/* / design.md) carries NO per-id
 status token (lint exit 0 tree-wide); the per-ledger `state.md` is deleted (root STATE.md is the
 sole cursor); LSN-008 promoted to MECHANISM; LSN-014 (SSOT design) + LSN-015 (cascade verification)
-captured. The whole DEC-015 delta is on disk but **not yet committed** (see CHANGESET).
+captured. The whole DEC-015 delta is now **committed to master** — `88d4ea402` (lint mechanism
++ TEST-017 + wiring + gitignore) + `2520ed034` (ledger normalization + local state.md deletion) —
+see CHANGESET.
 
-NEXT_GATE: commit the DEC-015 governance delta (awaiting user go-ahead), then the feature queue:
+NEXT_GATE: feature queue (DEC-015 delta committed `88d4ea402`+`2520ed034`):
 REQ-007 CLOSURE (GarminConnect::readFile staging garmin-<id>.<ext> + FIT→TCX fallback DES-004 —
 needs the worker-in-CloudService lifecycle + PRD-Assumption-B library validation) OR REQ-003 (MFA).
 Carried: DEC-014 OQ1 (real-lib dumps/loads + 2-arg `Garmin(email,password)` signatures) as a build
@@ -33,11 +35,13 @@ stale dependents (VAL-012 confirmed). Prior: DEC-014 fully propagated + committe
 
 CHANGESET (recent commits — provenance): REQ-006 `d86323246` (Slice A) + `3edb705cb` (Slice B) +
 `458a72ba7` (A3-R006 hardening) + docs-record `808fda03a`/`04ab54d63`; REQ-004 `54b7005e6`
-(+`b67767380`); REQ-007 `1eb5a6a16`; REQ-002 `60a076848`. **The DEC-015 governance delta (new lint +
-its test + install/pre-commit wiring + the whole ledger normalization + state.md deletion) is on disk,
-NOT yet committed** — awaiting user go-ahead. Production `src/Cloud/GarminConnect.*` untouched (readFile
-is a later slice). Unrelated pre-session work (`src/Coach/*`, `src/Gui/*`, root `CMakeLists.txt`,
-`vcpkg.json`) still unstaged. Housekeeping: `scripts/__pycache__/` should be gitignored.
+(+`b67767380`); REQ-007 `1eb5a6a16`; REQ-002 `60a076848`. **DEC-015 governance delta committed to
+master:** `88d4ea402` (drift lint + TEST-017 + install/pre-commit wiring + `__pycache__/` gitignore) +
+`2520ed034` (ledger normalization + local state.md deletion + WIKI/STATE/conventions). Production
+`src/Cloud/GarminConnect.*` untouched (readFile is a later slice). Still unstaged (out of DEC-015 scope):
+pre-session work (`src/Coach/*`, `src/Gui/*`, root `CMakeLists.txt`, `vcpkg.json`) + broader
+skill-methodology edits (`.claude/skills/**`, `.claude/agents/*`, `anti_duplication_guard.py`).
+Housekeeping: `scripts/__pycache__/` now gitignored (C1).
 
 LAST_CLV: VAL-012 — 2026-07-13 — PASS (full 9-check, DEC-015 status-SSOT migration; PASS on the
 re-verification pass after a 1-pass repair — dangling state.md pointers + DEC-index Status column,
