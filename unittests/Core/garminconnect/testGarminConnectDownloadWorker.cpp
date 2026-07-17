@@ -67,6 +67,11 @@ class FakeDownloadPyAdapter : public IGarminPyAdapter
 
     PyAuthOutcome authenticate(const QString&, const QString&) override { return {}; }
 
+    // REQ-007 closure (Slice 1) seam extension (DEC-013 compile-enforced) — this
+    // download-worker test never restores a session; a default outcome satisfies
+    // the interface so the target still compiles. No assertion added/changed.
+    PyLoadTokensOutcome loadTokens(const QString&) override { return {}; }
+
     PyDownloadOutcome downloadActivity(const QString& activityId, const QString& fmt) override
     {
         lastActivityId = activityId;

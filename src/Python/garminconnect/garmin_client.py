@@ -97,6 +97,29 @@ class GarminClient:
         # contract (return a non-empty str) is pinned by pytest against a fake.
         return str(self._garmin.dumps())
 
+    @classmethod
+    def from_tokens(cls, token_str: str) -> GarminClient:
+        # REQ-007 closure (Slice 1) / REQ-005 / REQ-NF-Compat-001(b): restore an
+        # authenticated session from a stored OAuth blob WITHOUT a password. A
+        # fresh CloudService open() has no password (REQ-005 forbids persisting
+        # it), so silent reauth MUST come from the stored TOKENS only. The library
+        # is constructed password-free and the blob loaded; a tampered/expired
+        # blob surfaces from load_tokens() as GarminError(kind='session_expired').
+        #
+        # NOTE(DEC-014 OQ1): the password-free `_gc.Garmin()` construction is a
+        # real-lib signature item, unconfirmed against the not-yet-bundled
+        # python-garminconnect wheel (like dumps()/loads()). Pinned by the
+        # pystub/fake until the wheel is bundled (DES-007/Pkg).
+        if _gc is None:
+            raise GarminError(
+                "unknown",
+                "python-garminconnect is not installed; cannot restore GarminClient",
+            )
+        self = cls.__new__(cls)
+        self._garmin = _gc.Garmin()
+        self.load_tokens(token_str)
+        return self
+
     def load_tokens(self, token_str: str) -> None:
         # REQ-004 counterpart of dump_tokens(): restore an authenticated session
         # from a previously-exported blob (the REQ-006 resume path feeds this).

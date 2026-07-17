@@ -60,6 +60,14 @@ class PyEmbeddedAdapter : public IGarminPyAdapter
     // into a non-Success PyDownloadOutcome (Network/RateLimited/Unknown).
     PyDownloadOutcome downloadActivity(const QString& activityId, const QString& fmt) override;
 
+    // REQ-007 closure (Slice 1) — restore a session from a stored OAuth blob via
+    // garmin_client.GarminClient.load_tokens(). Constructs a fresh client
+    // WITHOUT a password (REQ-005 / REQ-NF-Compat-001(b)) and retains it for
+    // downloadActivity() on Success. Never throws; interpreter-down / expired /
+    // library errors fold into PyLoadTokensOutcome (SessionExpired/Network/
+    // Unknown), classified by exception TYPE + .kind (LSN-006).
+    PyLoadTokensOutcome loadTokens(const QString& tokenBlob) override;
+
   private:
     QString modulePath;
     PyObject* m_client = nullptr; // retained authenticated GarminClient; owned

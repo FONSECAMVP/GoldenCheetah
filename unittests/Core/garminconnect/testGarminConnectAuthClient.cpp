@@ -82,6 +82,11 @@ class FakePyAdapter : public IGarminPyAdapter
     // REQ-007 seam extension (DEC-013 compile-enforced) — this auth test never
     // downloads; a default outcome satisfies the interface.
     PyDownloadOutcome downloadActivity(const QString&, const QString&) override { return {}; }
+
+    // REQ-007 closure (Slice 1) seam extension (DEC-013 compile-enforced) — this
+    // auth-only test never restores a session; a default outcome satisfies the
+    // interface so the target still compiles.
+    PyLoadTokensOutcome loadTokens(const QString&) override { return {}; }
 };
 
 // ---------------------------------------------------------------------------

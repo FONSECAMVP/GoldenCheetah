@@ -24,29 +24,57 @@ add_test(NAME testGarminConnectSmoke COMMAND testGarminConnectSmoke)
 set_tests_properties(testGarminConnectSmoke PROPERTIES LABELS "garmin-fast")
 
 # --- TEST-001 — REQ-001 tile contract ---------------------------------------
+# REQ-007 closure grew GarminConnect.cpp to own the download/restore host +
+# adapter and implement open()/close()/readFile() (ZIP unwrap via contrib/qzip).
+# The tile test still only asserts the REQ-001 tile contract, but it compiles the
+# real GarminConnect.cpp, so it now links the same Python-free host stack + qzip
+# and uses the ReadFileStubPreamble (superset of the old GCStubPreamble: adds the
+# open/close/readFile virtuals + the Python-free PyEmbeddedAdapter fake). AUTOMOC
+# is required now that the linked host TUs (GarminWorker/…Client) carry Q_OBJECT.
 add_executable(testGarminConnectTile
     testGarminConnectTile.cpp
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminConnect.cpp
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminConnect.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadChain.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadChain.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadClient.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminTokenStore.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminTokenStore.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminDownloadClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminAuthClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminPyAdapter.h
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zip.cpp
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipreader.h
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipwriter.h
 )
+
+set_target_properties(testGarminConnectTile PROPERTIES AUTOMOC ON)
 
 target_include_directories(testGarminConnectTile PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/Cloud
+    ${CMAKE_SOURCE_DIR}/contrib/qzip
 )
 
-# Force-include the stub preamble before every .cpp so that when
-# GarminConnect.cpp pulls CloudService.h (and transitively Context.h /
-# Athlete.h / Settings.h), the real headers' guards are already defined
-# and only the lightweight stubs are visible.
+# Force-include the stub preamble before every .cpp so that when GarminConnect.cpp
+# pulls CloudService.h (and transitively Context/Athlete/Settings) and
+# PyEmbeddedAdapter.h, the real headers' guards are already defined and only the
+# lightweight (Python-free) stubs are visible.
 target_compile_options(testGarminConnectTile PRIVATE
-    "-include${CMAKE_CURRENT_SOURCE_DIR}/stubs/GCStubPreamble.h"
+    "-include${CMAKE_CURRENT_SOURCE_DIR}/stubs/ReadFileStubPreamble.h"
 )
 
+find_package(ZLIB REQUIRED)
 target_link_libraries(testGarminConnectTile PRIVATE
     Qt${QT_VERSION_MAJOR}::Core
     Qt${QT_VERSION_MAJOR}::Gui
     Qt${QT_VERSION_MAJOR}::Test
+    ZLIB::ZLIB
 )
 target_compile_features(testGarminConnectTile PRIVATE cxx_std_17)
 
@@ -410,3 +438,156 @@ target_compile_features(testGarminTokenStore_load PRIVATE cxx_std_17)
 
 add_test(NAME testGarminTokenStore_load COMMAND testGarminTokenStore_load)
 set_tests_properties(testGarminTokenStore_load PROPERTIES LABELS "garmin-fast")
+
+# --- T-018 — REQ-007 closure (Slice 1/3): GarminWorker session-restore seam -----
+# The worker-side restore op, symmetric to TEST-004 (authenticate) and TEST-010
+# (download): maps PyLoadTokensOutcome kinds to sessionRestored()/restoreFailed()
+# and runs the adapter off the GUI thread (REQ-NF-Threads-001).
+# FakeRestorePyAdapter stands in for PyEmbeddedAdapter (DEC-013 Option A) → this
+# stays Python-free under the `garmin-fast` label (never garmin-py). AUTOMOC
+# processes the new GarminWorker signals and the test class.
+#
+# RED phase: GarminWorker has no restoreSession slot / sessionRestored /
+# restoreFailed signals and GarminRestoreFailure + PyLoadTokensOutcome do not
+# exist yet — the compile fails at those references (right-reason RED). GREEN
+# adds them to src/Cloud/IGarminPyAdapter.h + src/Cloud/GarminWorker.{h,cpp}.
+add_executable(testGarminConnectRestoreWorker
+    testGarminConnectRestoreWorker.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminAuthClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminPyAdapter.h
+)
+
+set_target_properties(testGarminConnectRestoreWorker PROPERTIES
+    AUTOMOC ON
+)
+
+target_include_directories(testGarminConnectRestoreWorker PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+)
+
+target_link_libraries(testGarminConnectRestoreWorker PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Test
+)
+target_compile_features(testGarminConnectRestoreWorker PRIVATE cxx_std_17)
+
+add_test(NAME testGarminConnectRestoreWorker COMMAND testGarminConnectRestoreWorker)
+set_tests_properties(testGarminConnectRestoreWorker PROPERTIES LABELS "garmin-fast")
+
+# --- T-019 — REQ-007 closure (Slice 2/3): GarminConnect open()/close() lifecycle -
+# Brings the REAL src/Cloud/GarminConnect.cpp under test for the worker-in-
+# CloudService lifecycle: open() resolves the config dir, loadChecked()s the
+# tokens (REQ-006) and restores the session via the host; a permission-refused
+# LoadResult returns false + labelled error and attempts NO download. The
+# heavyweight GC headers (CloudService/Context/Athlete) are short-circuited by
+# the force-included ReadFileStubPreamble.h, which ALSO replaces the embedded-
+# Python PyEmbeddedAdapter with a Python-free fake so this stays `garmin-fast`.
+# A fake IGarminDownloadClient is injected; the REAL (pure-Qt) GarminTokenStore +
+# AtomicFile + the Python-free GarminDownloadChain/Client/Worker are linked.
+#
+# RED phase: GarminConnect has no open/close override, no injecting ctor, and
+# IGarminDownloadClient/GarminDownloadChain do not exist yet — the compile fails
+# at those references (right-reason RED). GREEN adds them.
+add_executable(testGarminConnectOpen
+    testGarminConnectOpen.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminConnect.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminConnect.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadChain.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadChain.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadClient.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminTokenStore.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminTokenStore.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminDownloadClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminAuthClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminPyAdapter.h
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zip.cpp
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipreader.h
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipwriter.h
+)
+
+set_target_properties(testGarminConnectOpen PROPERTIES AUTOMOC ON)
+
+target_include_directories(testGarminConnectOpen PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+    ${CMAKE_SOURCE_DIR}/contrib/qzip
+)
+
+target_compile_options(testGarminConnectOpen PRIVATE
+    "-include${CMAKE_CURRENT_SOURCE_DIR}/stubs/ReadFileStubPreamble.h"
+)
+
+find_package(ZLIB REQUIRED)
+target_link_libraries(testGarminConnectOpen PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Gui
+    Qt${QT_VERSION_MAJOR}::Test
+    ZLIB::ZLIB
+)
+target_compile_features(testGarminConnectOpen PRIVATE cxx_std_17)
+
+add_test(NAME testGarminConnectOpen COMMAND testGarminConnectOpen)
+set_tests_properties(testGarminConnectOpen PROPERTIES LABELS "garmin-fast")
+
+# --- T-020..T-023 — REQ-007 closure (Slice 3/3): GarminConnect::readFile --------
+# The DEC-016 retry table under test: ORIGINAL(FIT) unzip+sniff → garmin-<id>.fit;
+# RateLimited fail-fast (no retry); Network/Unknown/not-FIT → retry once as TCX →
+# garmin-<id>.tcx. Same Python-free stubbing as testGarminConnectOpen, PLUS the
+# real contrib/qzip ZipReader/ZipWriter (zip.cpp + ZLIB) so the ZIP unwrap is
+# exercised for real. A fake IGarminDownloadClient scripts per-fmt responses.
+#
+# RED phase: GarminConnect has no readFile override / injecting ctor — the
+# compile fails at those references (right-reason RED). GREEN adds them.
+add_executable(testGarminConnectReadFile
+    testGarminConnectReadFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminConnect.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminConnect.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadChain.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadChain.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadClient.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminTokenStore.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminTokenStore.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminDownloadClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminAuthClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminPyAdapter.h
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zip.cpp
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipreader.h
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipwriter.h
+)
+
+set_target_properties(testGarminConnectReadFile PROPERTIES AUTOMOC ON)
+
+target_include_directories(testGarminConnectReadFile PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+    ${CMAKE_SOURCE_DIR}/contrib/qzip
+)
+
+target_compile_options(testGarminConnectReadFile PRIVATE
+    "-include${CMAKE_CURRENT_SOURCE_DIR}/stubs/ReadFileStubPreamble.h"
+)
+
+find_package(ZLIB REQUIRED)
+target_link_libraries(testGarminConnectReadFile PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Gui
+    Qt${QT_VERSION_MAJOR}::Test
+    ZLIB::ZLIB
+)
+target_compile_features(testGarminConnectReadFile PRIVATE cxx_std_17)
+
+add_test(NAME testGarminConnectReadFile COMMAND testGarminConnectReadFile)
+set_tests_properties(testGarminConnectReadFile PROPERTIES LABELS "garmin-fast")

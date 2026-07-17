@@ -197,6 +197,23 @@ PyDownloadOutcome classifyDownloadException(PyObject* module)
     return out;
 }
 
+// loadTokens() classification (REQ-007 closure / REQ-NF-Compat-001(b)):
+// session_expired -> SessionExpired (route to fresh SSO, DISTINCT from a
+// transient dip), connection -> Network, anything else / foreign -> Unknown.
+PyLoadTokensOutcome classifyLoadTokensException(PyObject* module)
+{
+    const RaisedExc e = takeRaisedException(module);
+    PyLoadTokensOutcome out;
+    out.rawMessage = e.message;
+    if (e.isGarminError && e.kind == QStringLiteral("session_expired"))
+        out.kind = PyLoadTokensOutcome::SessionExpired;
+    else if (e.isGarminError && e.kind == QStringLiteral("connection"))
+        out.kind = PyLoadTokensOutcome::Network;
+    else
+        out.kind = PyLoadTokensOutcome::Unknown;
+    return out;
+}
+
 } // namespace
 
 PyEmbeddedAdapter::PyEmbeddedAdapter(const QString& modulePath)
@@ -336,6 +353,49 @@ PyDownloadOutcome PyEmbeddedAdapter::downloadActivity(const QString& activityId,
 
     out.kind = PyDownloadOutcome::Success;
     out.data = QByteArray(buf, static_cast<int>(len)); // (ptr,len) copy — binary-safe, keeps NULs
+    return out;
+}
+
+PyLoadTokensOutcome PyEmbeddedAdapter::loadTokens(const QString& tokenBlob)
+{
+    PyLoadTokensOutcome out;
+
+    // Step 1 — fail-safe before touching any interpreter API. Never throws.
+    if (!Py_IsInitialized()) {
+        out.kind = PyLoadTokensOutcome::Unknown;
+        out.rawMessage = QStringLiteral("embedded Python unavailable");
+        return out;
+    }
+
+    // GIL held from here; the guard releases on every return below.
+    GilGuard gil;
+
+    // Path policy + import.
+    prependToSysPathIfAbsent(modulePath);
+    PyRef module(PyImport_ImportModule("garmin_client"));
+    if (!module)
+        return classifyLoadTokensException(nullptr);
+
+    // REQ-005 / REQ-NF-Compat-001(b): restore a session from the opaque OAuth
+    // blob WITHOUT a password. GarminClient.from_tokens(blob) constructs the
+    // library password-free and restores; a tampered/expired blob surfaces as
+    // GarminError(kind='session_expired') (garmin_client classifies by exception
+    // TYPE, LSN-006). Mirrors authenticate()'s class-then-call shape.
+    PyRef clientClass(PyObject_GetAttrString(module.get(), "GarminClient"));
+    if (!clientClass)
+        return classifyLoadTokensException(module.get());
+
+    PyRef client(PyObject_CallMethod(clientClass.get(), "from_tokens", "s", tokenBlob.toUtf8().constData()));
+    if (!client)
+        return classifyLoadTokensException(module.get());
+
+    // Retain the restored client so downloadActivity() reuses the session
+    // (same session model as authenticate()). GIL held (above), refcount safe.
+    Py_XDECREF(m_client); // drop any prior session
+    m_client = client.get();
+    Py_INCREF(m_client);
+
+    out.kind = PyLoadTokensOutcome::Success;
     return out;
 }
 

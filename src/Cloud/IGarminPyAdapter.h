@@ -79,6 +79,29 @@ struct PyDownloadOutcome
 };
 
 // ---------------------------------------------------------------------------
+// PyLoadTokensOutcome — value type returned by IGarminPyAdapter::loadTokens()
+// (REQ-007 closure, Slice 1 — session-restore seam). Mirrors PyAuthOutcome's
+// shape: the worker maps each Kind onto the GarminWorker::restoreSession result
+// (Success -> sessionRestored; every failure -> restoreFailed with a matching
+// kind). The Python garmin_client.load_tokens() classifies a tampered/expired
+// blob by exception TYPE (LSN-006) as GarminError kind='session_expired'
+// (REQ-NF-Compat-001(b) — a stored session that no longer works forces a fresh
+// SSO, NEVER a stored password). A coarse network failure is Network; anything
+// else / foreign is Unknown. loadTokens() itself NEVER retains a password
+// (REQ-005) — it restores a session from the opaque OAuth blob only.
+// ---------------------------------------------------------------------------
+
+struct PyLoadTokensOutcome
+{
+    enum Kind { Success, SessionExpired, Network, Unknown };
+    Kind kind = Unknown;
+
+    // Populated for non-Success outcomes. Raw library message — DES-008
+    // translates at the page/ErrorBus layer; the adapter does NOT translate.
+    QString rawMessage;
+};
+
+// ---------------------------------------------------------------------------
 // Interface — header-only, no QObject inheritance. Production
 // PyEmbeddedAdapter holds the embedded-Python sub-interpreter reference and
 // invokes garmin_client.GarminClient.login() / .download_activity();
@@ -103,6 +126,15 @@ class IGarminPyAdapter
     // for FIT, "TCX" for the fallback). Reuses the session authenticate()
     // established (REQ-005 forbids retaining the password for a fresh client).
     virtual PyDownloadOutcome downloadActivity(const QString& activityId, const QString& fmt) = 0;
+
+    // REQ-007 closure (Slice 1) — restore an authenticated session from a
+    // previously-exported opaque token blob (garmin_client.load_tokens). This is
+    // the seam a fresh CloudService session uses to become download-capable
+    // WITHOUT a password (REQ-NF-Compat-001(b) silent reauth is from stored
+    // TOKENS only; REQ-005 forbids a stored password). On Success the adapter
+    // holds a live session for downloadActivity(); failures fold into
+    // PyLoadTokensOutcome (SessionExpired / Network / Unknown). Never throws.
+    virtual PyLoadTokensOutcome loadTokens(const QString& tokenBlob) = 0;
 };
 
 #endif // GC_IGarminPyAdapter_h

@@ -70,6 +70,23 @@ class GarminClient:
             raise GarminError("session_expired", "stub: stored session expired")
         return None
 
+    # REQ-007 closure (Slice 1) — password-free restore counterpart of the real
+    # adapter's classmethod. PyEmbeddedAdapter.loadTokens() calls
+    # GarminClient.from_tokens(blob); this stub records the blob and honours the
+    # load_session_expired / connection scenarios so a garmin-py C++ test could
+    # exercise the SessionExpired / Network / Success branches.
+    LAST_TOKEN_BLOB = None
+
+    @classmethod
+    def from_tokens(cls, token_str):
+        global LAST_TOKEN_BLOB
+        LAST_TOKEN_BLOB = token_str
+        if SCENARIO == "load_connection":
+            raise GarminError("connection", "stub: restore connection refused")
+        self = cls.__new__(cls)
+        self.load_tokens(token_str)
+        return self
+
     def login(self):
         if SCENARIO == "success":
             return {"garmin_user_id": "uid-123", "display_name": "Alice Rider"}

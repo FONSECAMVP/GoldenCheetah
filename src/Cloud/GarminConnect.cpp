@@ -18,18 +18,71 @@
 
 #include "GarminConnect.h"
 
+#include "GarminDownloadChain.h"
+#include "GarminTokenStore.h"
+#include "IGarminDownloadClient.h"
+#include "PyEmbeddedAdapter.h"
+#include "zipreader.h"
+
+#include <QBuffer>
 #include <QColor>
+#include <QEventLoop>
+#include <QTimer>
+#include <QUuid>
+
+#include <memory>
+
+namespace {
+// Generous bounds so production never wedges the GUI thread; unit tests reply
+// on the first event-loop turn and never approach these.
+constexpr int kRestoreTimeoutMs = 30000;
+constexpr int kDownloadTimeoutMs = 60000;
+
+// FIT signature: the ASCII bytes ".FIT" live at offset 8 in the FIT file header
+// (DEC-016). A shorter buffer, an HTML error page, or a TCX/GPX payload all fail
+// this and route to the TCX fallback.
+bool looksLikeFit(const QByteArray& b)
+{
+    return b.size() >= 12 && b.mid(8, 4) == QByteArrayLiteral(".FIT");
+}
+
+// ORIGINAL downloads are ZIP-wrapped (DEC-016). Unwrap the first entry in
+// memory (no temp file) via ZipReader's QIODevice ctor. Returns false for any
+// non-ZIP / unreadable / empty input — the caller then treats it as "not FIT".
+bool unzipFirstEntry(const QByteArray& zipped, QByteArray* out)
+{
+    QByteArray work = zipped; // ZipReader's QBuffer needs a non-const backing store
+    auto buf = std::make_unique<QBuffer>(&work);
+    if (!buf->open(QIODevice::ReadOnly))
+        return false;
+    ZipReader reader(std::move(buf));
+    if (!reader.isReadable() || reader.count() < 1)
+        return false;
+    const ZipReader::FileInfo info = reader.entryInfoAt(0);
+    if (!info.isValid() || !info.isFile)
+        return false;
+    *out = reader.fileData(info.filePath);
+    return true;
+}
+} // namespace
 
 GarminConnect::GarminConnect(Context* c) : CloudService(c) {}
 
-GarminConnect::~GarminConnect() {}
+GarminConnect::GarminConnect(Context* c, IGarminDownloadClient* injectedClient, const QString& configDirOverride)
+    : CloudService(c), m_client(injectedClient), m_injectedClient(true), m_configDirOverride(configDirOverride)
+{
+}
+
+GarminConnect::~GarminConnect()
+{
+    // DES-001a destruction order: host (worker) before adapter. Injected client
+    // (tests) is not owned — m_chain/m_adapter are null there, so this is safe.
+    delete m_chain;
+    delete m_adapter;
+}
 
 QImage GarminConnect::logo() const
 {
-    // Production builds link the application qrc and resolve the branded PNG.
-    // Headless / unit-test builds do not load qrc resources, so fall back to
-    // an in-code placeholder. Either way the contract — "logo() is non-null
-    // and has positive dimensions" — holds.
     QImage img(QStringLiteral(":images/services/garminconnect.png"));
     if (!img.isNull())
         return img;
@@ -37,6 +90,241 @@ QImage GarminConnect::logo() const
     QImage fallback(64, 64, QImage::Format_ARGB32);
     fallback.fill(QColor(0, 122, 195)); // Garmin brand blue
     return fallback;
+}
+
+IGarminDownloadClient* GarminConnect::ensureClient()
+{
+    if (m_client)
+        return m_client;
+
+    // Production lazy construction (DES-013 modulePath resolution mirrors
+    // AddCloudWizard::ensureGarminAuthPage): runtime env override first, else the
+    // build-time dev default. DES-001a: GarminConnect owns adapter + chain.
+    QString modulePath = QString::fromLocal8Bit(qgetenv("GC_GARMIN_PYPATH"));
+#ifdef GARMIN_PY_MODULE_DIR
+    if (modulePath.isEmpty())
+        modulePath = QStringLiteral(GARMIN_PY_MODULE_DIR);
+#endif
+    m_adapter = new PyEmbeddedAdapter(modulePath);
+    m_chain = new GarminDownloadChain(m_adapter);
+    m_client = m_chain->client();
+    return m_client;
+}
+
+QString GarminConnect::resolveConfigDir() const
+{
+    if (!m_configDirOverride.isEmpty())
+        return m_configDirOverride;
+    if (context && context->athlete && context->athlete->home)
+        return context->athlete->home->config().absolutePath();
+    return QString();
+}
+
+bool GarminConnect::blockingRestore(const QString& tokenBlob)
+{
+    IGarminDownloadClient* client = m_client;
+    if (!client)
+        return false;
+
+    const QUuid reqId = QUuid::createUuid();
+    QEventLoop loop;
+    bool done = false;
+    bool ok = false;
+
+    const QMetaObject::Connection c1 =
+        QObject::connect(client, &IGarminDownloadClient::sessionRestored, &loop, [&](QUuid id) {
+            if (done || id != reqId)
+                return;
+            done = true;
+            ok = true;
+            loop.quit();
+        });
+    const QMetaObject::Connection c2 =
+        QObject::connect(client, &IGarminDownloadClient::restoreFailed, &loop, [&](QUuid id, GarminRestoreFailure) {
+            if (done || id != reqId)
+                return;
+            done = true;
+            ok = false;
+            loop.quit();
+        });
+    QTimer::singleShot(kRestoreTimeoutMs, &loop, [&]() {
+        if (!done) {
+            done = true;
+            loop.quit();
+        }
+    });
+
+    client->restoreSession(tokenBlob, reqId);
+    loop.exec();
+
+    QObject::disconnect(c1);
+    QObject::disconnect(c2);
+    return ok;
+}
+
+GarminConnect::DownloadResult GarminConnect::blockingDownload(const QString& fmt, const QString& remoteid)
+{
+    DownloadResult res;
+    IGarminDownloadClient* client = m_client;
+    if (!client)
+        return res;
+
+    const QUuid reqId = QUuid::createUuid();
+    QEventLoop loop;
+    bool done = false;
+
+    const QMetaObject::Connection c1 =
+        QObject::connect(client, &IGarminDownloadClient::downloaded, &loop, [&](QUuid id, QByteArray data) {
+            if (done || id != reqId)
+                return;
+            done = true;
+            res.ok = true;
+            res.bytes = data;
+            loop.quit();
+        });
+    const QMetaObject::Connection c2 =
+        QObject::connect(client, &IGarminDownloadClient::downloadFailed, &loop, [&](QUuid id, GarminDownloadFailure e) {
+            if (done || id != reqId)
+                return;
+            done = true;
+            res.ok = false;
+            res.failureKind = e.kind;
+            loop.quit();
+        });
+    QTimer::singleShot(kDownloadTimeoutMs, &loop, [&]() {
+        if (!done) {
+            done = true;
+            loop.quit();
+        }
+    });
+
+    client->downloadActivity(remoteid, fmt, reqId);
+    loop.exec();
+
+    QObject::disconnect(c1);
+    QObject::disconnect(c2);
+    return res;
+}
+
+bool GarminConnect::open(QStringList& errors)
+{
+    IGarminDownloadClient* client = ensureClient();
+    if (!client) {
+        errors << tr("Garmin Connect: no embedded session is available.");
+        return false;
+    }
+
+    const QString dir = resolveConfigDir();
+    const GarminTokenStore::LoadResult r = GarminTokenStore::loadChecked(dir);
+
+    // REQ-006: a token file wider than owner-only 0600 is REFUSED — force a
+    // fresh SSO (do NOT attempt a download with an unsafe session).
+    if (r.isRejected()) {
+        errors << tr("Garmin Connect: the stored session file '%1' has unsafe permissions; please sign in again.")
+                      .arg(r.path);
+        return false;
+    }
+    // No stored session yet — the caller must run the credentials wizard.
+    if (!r.isOk()) {
+        errors << tr("Garmin Connect: no stored session found; please sign in again.");
+        return false;
+    }
+
+    // REQ-005 / REQ-NF-Compat-001(b): silent reauth from the stored TOKENS only.
+    if (!blockingRestore(QString::fromUtf8(r.bytes))) {
+        errors << tr("Garmin Connect: could not restore the stored session; please sign in again.");
+        return false;
+    }
+    return true;
+}
+
+bool GarminConnect::close()
+{
+    // Bounded teardown of the owned host (the chain dtor quit()+wait()s its
+    // thread — never terminate() from here). Tokens persist on disk. An injected
+    // client (tests) is NOT owned, so it is left intact.
+    delete m_chain;
+    m_chain = nullptr;
+    delete m_adapter;
+    m_adapter = nullptr;
+    if (!m_injectedClient)
+        m_client = nullptr; // production seam pointed into the (now-gone) chain
+    return true;
+}
+
+bool GarminConnect::readFile(QByteArray* data, QString remotename, QString remoteid)
+{
+    Q_UNUSED(remotename);
+    if (data == nullptr || m_client == nullptr)
+        return false;
+
+    // DEC-016 attempt 1 — request ORIGINAL (FIT); the payload is ZIP-wrapped.
+    const DownloadResult original = blockingDownload(QStringLiteral("ORIGINAL"), remoteid);
+    if (original.ok) {
+        QByteArray inner;
+        if (unzipFirstEntry(original.bytes, &inner) && looksLikeFit(inner)) {
+            *data = inner; // stage the UNZIPPED FIT bytes
+            postReadComplete(data, QStringLiteral("garmin-%1.fit").arg(remoteid));
+            return true;
+        }
+        // 200 but not FIT (ZIP wrapping tcx/gpx, empty bytes, HTML page): fall
+        // through to the TCX retry (content-sniff backstop).
+    } else if (original.failureKind == GarminDownloadFailure::RateLimit) {
+        // DEC-016: RateLimited → FAIL fast. NO second request (anti retry-storm).
+        return false;
+    }
+    // Network / Unknown (DEC-016 Assumption-B: Network legitimately conflates a
+    // real network failure with a 404 "no FIT original"), or a non-FIT 200 →
+    // retry once as TCX.
+
+    const DownloadResult tcx = blockingDownload(QStringLiteral("TCX"), remoteid);
+    if (tcx.ok) {
+        *data = tcx.bytes; // TCX is raw XML, not ZIP-wrapped
+        postReadComplete(data, QStringLiteral("garmin-%1.tcx").arg(remoteid));
+        return true;
+    }
+    return false;
+}
+
+// B-R007-01 / REQ-NF-Perf-003: deliver readComplete as a QUEUED self-post rather
+// than synchronously inside readFile()'s call frame. The CloudService auto-download
+// caller sets up a QEventLoop and only *then* calls loop.exec(); a synchronous emit
+// arrives before the loop runs, where quit() is a no-op, so the caller blocks its
+// full 30s watchdog per activity. Deferring the emit onto the event queue lets the
+// caller's loop observe it promptly. DES-014: GarminConnect is intentionally NOT its
+// own Q_OBJECT and this adds none.
+//
+// The post is queued through m_completionContext — a bare QObject member of this
+// GarminConnect (A3-R007-01). The context object is what determines both (1) the
+// event loop the post is delivered on and (2) when a still-pending post is
+// cancelled. m_completionContext is constructed with GarminConnect on the CALLING
+// thread and never moveToThread'd, so its thread affinity is the caller's event
+// loop — the same loop m_client lives on (in production only the worker crosses to
+// the download thread; the client and this stay on the caller). So the post lands
+// on the same loop a `this`-context or m_client-context post would.
+//
+// Why NOT m_client as the context: Qt cancels a pending queued invoke only when its
+// *context* object is destroyed, never when a merely-captured object (`this`) is.
+// m_client is injected and unowned; a GarminConnect destroyed while m_client
+// outlives it, with a post in flight, would leave a lambda that dereferences the
+// freed GarminConnect (use-after-free). Binding the context to a member ties the
+// pending post to GarminConnect's own lifetime: the member is destroyed during
+// ~GarminConnect (before the CloudService base is torn down), so Qt cancels the
+// post BEFORE `this` is gone. (`this` itself cannot be the context: the readFile
+// unit test's stub CloudService is deliberately non-QObject, so `this` is not a
+// QObject in that TU.) DES-014: GarminConnect is still NOT its own Q_OBJECT — a
+// plain QObject member adds no signals/slots and no moc obligation.
+//
+// Lifetime: `data` is a raw QByteArray* owned by the caller and preallocated before
+// readFile(); the caller does not free it before its loop.exec() runs the post, so
+// the captured pointer stays valid. We capture the pointer (and the computed name)
+// by value — never a reference to anything with a shorter lifetime than the post.
+void GarminConnect::postReadComplete(QByteArray* data, const QString& name)
+{
+    const QString message = tr("Completed.");
+    QMetaObject::invokeMethod(
+        &m_completionContext, [this, data, name, message]() { notifyReadComplete(data, name, message); },
+        Qt::QueuedConnection);
 }
 
 // Static-init registration, mirroring the precedent in Selfloops.cpp /

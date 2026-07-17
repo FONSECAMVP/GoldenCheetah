@@ -42,6 +42,21 @@ struct GarminDownloadFailure
 };
 Q_DECLARE_METATYPE(GarminDownloadFailure)
 
+// REQ-007 closure (Slice 1) — the failure payload of GarminWorker::restoreFailed.
+// Mirrors GarminDownloadFailure one op sideways; `rawMessage` is the untranslated
+// library message (DES-008 translates at the consumer/ErrorBus layer).
+// SessionExpired is a DISTINCT kind (not folded into Unknown) because
+// REQ-NF-Compat-001(b) routes a stale stored session to a fresh SSO prompt,
+// separately from a transient network dip. Registered as a metatype (below +
+// qRegisterMetaType in the ctor) so it can cross the worker thread boundary.
+struct GarminRestoreFailure
+{
+    enum Kind { SessionExpired, Network, Unknown };
+    Kind kind = Unknown;
+    QString rawMessage;
+};
+Q_DECLARE_METATYPE(GarminRestoreFailure)
+
 class GarminWorker : public QObject
 {
     Q_OBJECT
@@ -61,6 +76,13 @@ class GarminWorker : public QObject
     // is forwarded verbatim so the future readFile fallback can drive it.
     void downloadActivity(const QString& activityId, const QString& fmt, QUuid requestId);
 
+    // REQ-007 closure (Slice 1) — restore an authenticated session from a stored
+    // OAuth blob (REQ-006 tokens) via the adapter's loadTokens(), off the GUI
+    // thread. Emits sessionRestored() on Success, else restoreFailed(). The blob
+    // is forwarded verbatim (no re-encoding). This is the download-capable
+    // session seam for a fresh CloudService open() with no password (REQ-005).
+    void restoreSession(const QString& tokenBlob, QUuid requestId);
+
   signals:
     // Emitted on the worker thread; cross-thread queued connection delivers
     // them to slots on the GUI thread (e.g. WorkerAuthClient re-emits).
@@ -70,6 +92,10 @@ class GarminWorker : public QObject
     // REQ-007 — download results, same threading contract as above.
     void downloaded(QUuid id, QByteArray data);
     void downloadFailed(QUuid id, GarminDownloadFailure error);
+
+    // REQ-007 closure (Slice 1) — restore results, same threading contract.
+    void sessionRestored(QUuid id);
+    void restoreFailed(QUuid id, GarminRestoreFailure error);
 
   private:
     IGarminPyAdapter* m_py; // not owned — caller's lifetime

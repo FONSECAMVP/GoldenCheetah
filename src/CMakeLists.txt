@@ -1382,9 +1382,22 @@ if(GC_WANT_GARMINCONNECT)
         Cloud/WorkerAuthClient.h
         Cloud/GarminAuthChain.cpp
         Cloud/GarminAuthChain.h
+        Cloud/GarminDownloadChain.cpp
+        Cloud/GarminDownloadChain.h
+        Cloud/GarminDownloadClient.cpp
+        Cloud/GarminDownloadClient.h
         Cloud/PyEmbeddedAdapter.cpp
         Cloud/PyEmbeddedAdapter.h
+        # REQ-007 closure: GarminConnect::open() calls GarminTokenStore::loadChecked
+        # (REQ-006), which uses AtomicFile (REQ-004/DES-006). Both must link into the
+        # main binary or GC_WANT_GARMINCONNECT builds fail with an undefined reference
+        # to GarminTokenStore::loadChecked (B-R007-03).
+        Cloud/GarminTokenStore.cpp
+        Cloud/GarminTokenStore.h
+        Cloud/AtomicFile.cpp
+        Cloud/AtomicFile.h
         Cloud/IGarminAuthClient.h
+        Cloud/IGarminDownloadClient.h
         Cloud/IGarminPyAdapter.h
     )
     target_compile_definitions(GoldenCheetah PRIVATE GC_WANT_GARMINCONNECT)

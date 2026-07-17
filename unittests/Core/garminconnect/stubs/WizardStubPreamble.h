@@ -355,6 +355,10 @@ class PyEmbeddedAdapter : public IGarminPyAdapter
     // test drives auth lifecycle only; a default outcome satisfies the seam.
     PyDownloadOutcome downloadActivity(const QString&, const QString&) override { return {}; }
 
+    // REQ-007 closure (Slice 1) seam extension (DEC-013 compile-enforced) — the
+    // wizard-routing test never restores a session; a default outcome suffices.
+    PyLoadTokensOutcome loadTokens(const QString&) override { return {}; }
+
     // Set by the destructor-order test to the chain's worker thread.
     QPointer<QThread> observedThread;
 
