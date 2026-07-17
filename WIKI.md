@@ -30,7 +30,7 @@ unittests/                  QTest units: Core/{coach,garminconnect,season*,signa
 util/                       dev scripts (fit tooling, bundle fixups, safety-check linters, rpi packaging)
 src/ANT/                    ANT+/ANT USB device protocol stack
 src/Charts/                 chart windows & plotting widgets (LTM, histogram, scatter, PMC, etc.)
-src/Cloud/                  CloudService integrations incl. GarminConnect.{h,cpp}, GarminWorker, GarminCredentialsPage, IGarminAuthClient, IGarminPyAdapter, PyEmbeddedAdapter, GarminAuthChain + AtomicFile.{h,cpp} (DES-006, REQ-004) + GarminTokenStore.{h,cpp} (DES-002, REQ-004/006) — see wiki/architecture.md
+src/Cloud/                  CloudService integrations incl. GarminConnect.{h,cpp} (open/close/readFile — REQ-007, DES-004/016), GarminWorker, GarminCredentialsPage, IGarminAuthClient, IGarminPyAdapter, PyEmbeddedAdapter, GarminAuthChain, IGarminDownloadClient.h + GarminDownloadClient.{h,cpp} + GarminDownloadChain.{h,cpp} (download+restore seam+host, DES-014) + AtomicFile.{h,cpp} (DES-006, REQ-004) + GarminTokenStore.{h,cpp} (DES-002, REQ-004/006) — see wiki/architecture.md
 src/Coach/                  AI Coach feature (LLM clients + tool executor) — SHIPPED, workflow-aicoach CLOSED
 src/Core/                   core domain: Athlete, Context, DataFilter (lex/yacc), APIWebService, calendar model
 src/FileIO/                 ride file format parsers/writers (FIT/TCX/GC/CSV/SRM/PWX/WKO/…) + athlete backup
@@ -54,12 +54,12 @@ src/*.o,moc_*,qrc_*,*_yacc*,*_lex*   [SKIP] generated in-source qmake build arti
 
 ## REGISTRIES — what exists (allocate next; never reuse, never re-create)
 REQ  garmin:001–015+NF-*  full:.claude/workflow-garminconnect/prd.md         next:garmin-016
-DEC  garmin:001–015  index:.claude/workflow-garminconnect/decisions.md      next:garmin-016
-DES  garmin:001–013(+001a,003a)  .claude/workflow-garminconnect/design.md   next:garmin-014
-TEST garmin:T-001–T-017  .claude/workflow-garminconnect/traceability.md     next:garmin-T-018 (T-011..T-013 REQ-004; T-014 REQ-006 Slice A load-side perm-refusal committed d86323246; T-015 pytest + T-016 garmin-py REQ-006 Slice B auth-only reconciliation committed 3edb705cb; T-017 ledger_drift_lint.py unittest suite — DEC-015, committed 88d4ea402; migration committed 2520ed034)
-VAL  garmin:001–012  latest:VAL-012 PASS (DEC-015 status-SSOT migration, full 9-check after 1 repair pass); VAL-011 PASS (REQ-006) · full canonical VAL table → traceability.md ## Validations run; files → .claude/workflow-garminconnect/validations/  next:garmin-013
+DEC  garmin:001–016  index:.claude/workflow-garminconnect/decisions.md      next:garmin-017
+DES  garmin:001–014(+001a,003a)  .claude/workflow-garminconnect/design.md   next:garmin-015
+TEST garmin:T-001–T-026  .claude/workflow-garminconnect/traceability.md     next:garmin-T-027 (T-027 was reserved for a real-signal caller test, NOT built — A3-R007-02 accepted residual; id reusable) (T-018 restoreSession; T-019 GarminConnect open/close; T-020..023 readFile DEC-016 FIT/TCX table; T-024 readFile queued-not-synchronous completion — B-R007-01 regression; T-025 completion-context cancels pending post on destroy — A3-R007-01 UAF guard; T-026 readFile null-guard — A3-R007-03; working tree, ctest garmin 14/14 / readFile exe 13/13; T-011..T-013 REQ-004; T-014 REQ-006 Slice A load-side perm-refusal committed d86323246; T-015 pytest + T-016 garmin-py REQ-006 Slice B auth-only reconciliation committed 3edb705cb; T-017 ledger_drift_lint.py unittest suite — DEC-015, committed 88d4ea402; migration committed 2520ed034)
+VAL  garmin:001–013  latest:VAL-013 (B-R007-01 fix; incremental — FAIL on merge-lag only, code checks PASS, remediated → PASS-after-remediation); VAL-012 PASS (DEC-015 status-SSOT migration) · full canonical VAL table → traceability.md ## Validations run; files → .claude/workflow-garminconnect/validations/  next:garmin-014
 F    no F-### namespace in use; findings tracked as <cycle>-<seq> (A0-001…, A3-R00x-Mn/TR-nn, D-0x, W-DEC003) in findings.md; 0 open blocking   next:n/a (see conventions.md)
-LSN  001–015  active:15 guards:9 mech:2 (LSN-001 anti-dup hook, LSN-008 ledger-drift lint)  lessons.md   next:016
+LSN  001–018  active:18 guards:9 mech:2 (LSN-001 anti-dup hook, LSN-008 ledger-drift lint)  lessons.md   next:019
 -- retired ledger (provenance only, do not extend): aicoach:DEC-001–013, aicoach:REQ-001–020, aicoach:TEST-001–020 — numeric collision with garmin ranges above; always use ledger prefix (coach:DEC-NNN / garmin:DEC-NNN)
 
 ## PAGES — wiki spokes (read the one named; don't explore blindly)

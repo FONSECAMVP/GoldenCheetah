@@ -444,6 +444,33 @@ public:
 > ("FIT not available") depends on `python-garminconnect` behaviour that PRD Assumption B flags as
 > unvalidated, and the path requires the worker-in-CloudService lifecycle + loaded tokens
 > (REQ-004/006). Build/deployment status for these slices lives in the traceability matrix, not here.
+>
+> **DEC-016 resolution (Option C — the readFile retry table).** readFile requests ORIGINAL (FIT)
+> via the worker, then: on `downloadFailed` — `RateLimited` fails fast (no retry, anti retry-storm);
+> `Network`/`Unknown` retry once as TCX (the coarse library exception taxonomy makes `Network`
+> legitimately conflate a real network failure with a 404 "no FIT original" — a documented LSN-006
+> deviation). On success — the ORIGINAL payload is ZIP-wrapped, so readFile unzips (via `ZipReader`,
+> `src/qzip`) and sniffs FIT magic (".FIT" at byte offset 8); FIT stages `garmin-<id>.fit`, anything
+> else retries once as TCX (content-sniff backstop) and stages `garmin-<id>.tcx`.
+>
+> **Completion contract (readFile ↔ CloudService caller).** The CloudService auto-download caller
+> connects `readComplete → loop.quit()` and starts a 30 s watchdog *before* calling readFile, then
+> blocks on `loop.exec()`. readFile's `readComplete` notification MUST therefore be delivered *after*
+> that event loop begins — a synchronous emit issued before `exec()` is ignored by Qt and wedges the
+> caller to its timeout. The intended design is a queued/deferred completion (a self-posted notify on
+> the CloudService QObject) so per-item download latency meets REQ-NF-Perf-003. See the traceability
+> matrix / findings for which slice carries this.
+
+### The download-client seam (DES-014)
+
+readFile/open reach the worker through a dedicated download+restore seam (`IGarminDownloadClient`),
+mirroring how the credentials page reaches auth through `IGarminAuthClient` (DES-003a). `GarminConnect`
+owns a `PyEmbeddedAdapter` and a `GarminDownloadChain` (RAII: QThread + `GarminWorker` +
+`GarminDownloadClient` around the non-owned adapter; bounded `quit()`+`wait()` teardown per DES-001
+invariant 3, destruction order host(worker) before adapter per DES-001a). `open()` restores an
+authenticated session from the stored token blob (`GarminTokenStore::loadChecked` →
+`IGarminPyAdapter::loadTokens` → Python `GarminClient.from_tokens`, password-free per REQ-005), so no
+password is ever needed for download. The seam and host are Python-free (LSN-007).
 
 ### Disconnect
 
