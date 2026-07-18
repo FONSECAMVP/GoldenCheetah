@@ -266,6 +266,24 @@ PyAuthOutcome PyEmbeddedAdapter::authenticate(const QString& email, const QStrin
         out.rawMessage = QStringLiteral("garmin_client.login() returned a non-dict result");
         return out;
     }
+
+    // REQ-003 (MFA) Slice A — MFA-required sentinel: garmin_client.login()
+    // returns {"mfa_required": True} (instead of an identity dict) when Garmin
+    // needs a 6-digit OTP. Retain the SAME client so submitMfa() can resume this
+    // pending session, and surface MfaRequired (no identity, no failure). The
+    // Python side classifies the needs-MFA signal by shape (LSN-006); here we
+    // only read the stable sentinel key.
+    PyObject* mfaFlag = PyDict_GetItemString(result.get(), "mfa_required"); // borrowed
+    if (mfaFlag != nullptr && PyObject_IsTrue(mfaFlag) == 1) {
+        Py_XDECREF(m_client); // drop any prior session
+        m_client = client.get();
+        Py_INCREF(m_client); // keep the pending-MFA client beyond this call
+        out.kind = PyAuthOutcome::MfaRequired;
+        PyErr_Clear();
+        return out;
+    }
+    PyErr_Clear(); // PyObject_IsTrue may have set an error on a weird object
+
     PyObject* uid = PyDict_GetItemString(result.get(), "garmin_user_id"); // borrowed
     PyObject* name = PyDict_GetItemString(result.get(), "display_name"); // borrowed
     if (uid == nullptr || name == nullptr) {
@@ -293,6 +311,72 @@ PyAuthOutcome PyEmbeddedAdapter::authenticate(const QString& email, const QStrin
     // empty and clear any pending error (the worker treats empty as "nothing
     // to persist"). GIL is held (step 2), so the call is safe.
     PyRef blob(PyObject_CallMethod(client.get(), "dump_tokens", nullptr));
+    if (blob && PyUnicode_Check(blob.get()))
+        out.tokenBlob = toQString(blob.get());
+    else
+        PyErr_Clear();
+
+    return out;
+}
+
+PyAuthOutcome PyEmbeddedAdapter::submitMfa(const QString& code)
+{
+    PyAuthOutcome out;
+
+    // Step 1 — fail-safe before touching any interpreter API. Never throws.
+    if (!Py_IsInitialized()) {
+        out.kind = PyAuthOutcome::Unknown;
+        out.rawMessage = QStringLiteral("embedded Python unavailable");
+        return out;
+    }
+
+    // GIL held from here; the guard releases on every return below.
+    GilGuard gil;
+
+    // No retained client -> authenticate() never established a pending MFA
+    // session. This is a contract/order error, NOT bad credentials: Unknown.
+    if (m_client == nullptr) {
+        out.kind = PyAuthOutcome::Unknown;
+        out.rawMessage = QStringLiteral("no pending MFA session");
+        return out;
+    }
+
+    // garmin_client is needed only to resolve the GarminError type for
+    // classification; it is already imported/cached from authenticate().
+    prependToSysPathIfAbsent(modulePath);
+    PyRef module(PyImport_ImportModule("garmin_client"));
+
+    // Resume the pending MFA session on the SAME retained client. A bad/expired
+    // code surfaces as GarminError kind 'auth' (classified by TYPE, LSN-006);
+    // classifyPendingException maps auth -> AuthFailed, connection -> Network,
+    // anything else / foreign -> Unknown (NEVER a spurious Success).
+    PyRef result(PyObject_CallMethod(m_client, "submit_mfa", "s", code.toUtf8().constData()));
+    if (!result)
+        return classifyPendingException(module.get());
+
+    // Marshal the success dict — mirrors authenticate() step 5.
+    if (!PyDict_Check(result.get())) {
+        out.kind = PyAuthOutcome::Unknown;
+        out.rawMessage = QStringLiteral("garmin_client.submit_mfa() returned a non-dict result");
+        return out;
+    }
+    PyObject* uid = PyDict_GetItemString(result.get(), "garmin_user_id"); // borrowed
+    PyObject* name = PyDict_GetItemString(result.get(), "display_name"); // borrowed
+    if (uid == nullptr || name == nullptr) {
+        out.kind = PyAuthOutcome::Unknown;
+        out.rawMessage = QStringLiteral("garmin_client.submit_mfa() result missing required keys");
+        PyErr_Clear();
+        return out;
+    }
+
+    out.kind = PyAuthOutcome::Success;
+    out.garmin_user_id = toQString(uid);
+    out.display_name = toQString(name);
+
+    // REQ-004 / DEC-014 Option B — a completed MFA auth yields a session to
+    // persist, exactly like a no-MFA auth. Export the opaque blob; a dump
+    // failure must NOT fail an otherwise-successful auth (leave tokenBlob empty).
+    PyRef blob(PyObject_CallMethod(m_client, "dump_tokens", nullptr));
     if (blob && PyUnicode_Check(blob.get()))
         out.tokenBlob = toQString(blob.get());
     else

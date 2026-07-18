@@ -55,6 +55,15 @@ class PyEmbeddedAdapter : public IGarminPyAdapter
     // On Success the authenticated client is retained for downloadActivity().
     PyAuthOutcome authenticate(const QString& email, const QString& password) override;
 
+    // REQ-003 (MFA) Slice A — resume the pending MFA session established by a
+    // prior authenticate() that returned PyAuthOutcome::MfaRequired. Calls
+    // garmin_client.GarminClient.submit_mfa() on the SAME retained client; on
+    // Success populates garmin_user_id/display_name/tokenBlob exactly like
+    // authenticate(). Never throws; a bad/expired code (GarminError kind 'auth')
+    // folds to AuthFailed, other library errors to Network/Unknown, and a
+    // missing pending session to Unknown.
+    PyAuthOutcome submitMfa(const QString& code) override;
+
     // REQ-007 — download one activity via the retained authenticated client.
     // Never throws; interpreter-down / no-session / library errors all fold
     // into a non-Success PyDownloadOutcome (Network/RateLimited/Unknown).

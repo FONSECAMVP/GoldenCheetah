@@ -24,17 +24,20 @@
 #include <QString>
 
 // ---------------------------------------------------------------------------
-// PyAuthOutcome — value type returned by IGarminPyAdapter::authenticate().
-// The worker maps each Kind to either GarminAuthSuccess (Success) or a
-// GarminAuthFailure with a matching Kind (AuthFailed → Auth, Network →
-// Network, Unknown → Unknown). MFA / CAPTCHA / RateLimit / TokenPermissions
-// outcomes arrive in later slices (REQ-003, REQ-015) and extend this enum
-// additively without re-shaping existing call sites.
+// PyAuthOutcome — value type returned by IGarminPyAdapter::authenticate() and
+// IGarminPyAdapter::submitMfa(). The worker maps each Kind to either
+// GarminAuthSuccess (Success) or a GarminAuthFailure with a matching Kind
+// (AuthFailed → Auth, Network → Network, Unknown → Unknown). MfaRequired is the
+// REQ-003 outcome: authenticate() returns it (instead of Success/AuthFailed)
+// when Garmin needs a 6-digit OTP — the worker emits a distinct mfaRequired
+// signal for it, and a later submitMfa() resumes the SAME session. CAPTCHA /
+// RateLimit / TokenPermissions outcomes arrive in later slices (REQ-015) and
+// extend this enum additively without re-shaping existing call sites.
 // ---------------------------------------------------------------------------
 
 struct PyAuthOutcome
 {
-    enum Kind { Success, AuthFailed, Network, Unknown };
+    enum Kind { Success, AuthFailed, Network, Unknown, MfaRequired };
     Kind kind = Unknown;
 
     // Populated only when kind == Success.
@@ -121,6 +124,16 @@ class IGarminPyAdapter
   public:
     virtual ~IGarminPyAdapter() = default;
     virtual PyAuthOutcome authenticate(const QString& email, const QString& password) = 0;
+
+    // REQ-003 (MFA) Slice A — resume the pending MFA session established by a
+    // prior authenticate() that returned PyAuthOutcome::MfaRequired. Same value
+    // shape as authenticate(): on Success it populates garmin_user_id /
+    // display_name / tokenBlob; a bad/expired code folds to AuthFailed, other
+    // failures to Network / Unknown with rawMessage. The adapter retains the
+    // pending-MFA state across the two calls (garmin_client.submit_mfa); a
+    // production adapter that forgets this op is a build break (DEC-013 Option
+    // A — compile-enforced seam).
+    virtual PyAuthOutcome submitMfa(const QString& code) = 0;
 
     // REQ-007 — fetch one activity's bytes in the requested format ("ORIGINAL"
     // for FIT, "TCX" for the fallback). Reuses the session authenticate()

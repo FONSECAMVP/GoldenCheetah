@@ -72,12 +72,32 @@ class GarminClient:
         # python-garminconnect wheel (like dumps()/loads() below). It is pinned
         # by the fakes/pystub until the wheel is bundled (DES-007/Pkg).
         self._garmin = _gc.Garmin(email, password)
+        # REQ-003 — retained pending-MFA state (the library's client_state) set
+        # by login() when Garmin requires an OTP; consumed by submit_mfa(). None
+        # until/unless the MFA path is entered. Holds no password (REQ-005).
+        self._pending_mfa: Any = None
 
     def login(self) -> dict[str, Any]:
         try:
-            self._garmin.login()
+            result = self._garmin.login()
         except _gc.exceptions.GarminConnectAuthenticationError as e:
             raise GarminError("auth", str(e) or "Authentication failed", e) from e
+        # REQ-003 — MFA-required signal. python-garminconnect/garth's login()
+        # returns a ("needs_mfa", client_state) sentinel (instead of raising)
+        # when the account needs a 6-digit OTP. Detect it by SHAPE, never by
+        # message content (LSN-006); retain the client_state so submit_mfa() can
+        # resume the SAME session, and surface a stable {"mfa_required": True}
+        # sentinel to the worker adapter instead of a success identity. The
+        # no-MFA return below is unchanged byte-for-byte (library returns None
+        # / a non-sentinel on plain success -> falls through).
+        #
+        # NOTE(DEC-014 OQ1): the exact needs-MFA sentinel and resume_login()
+        # signature are unconfirmed against the not-yet-bundled
+        # python-garminconnect wheel (like dumps()/loads() above); pinned here by
+        # the fake/pystub until the wheel is bundled (DES-007/Pkg).
+        if isinstance(result, tuple) and len(result) == 2 and result[0] == "needs_mfa":
+            self._pending_mfa = result[1]
+            return {"mfa_required": True}
         return {
             "garmin_user_id": str(self._garmin.full_name_id),
             "display_name": self._garmin.display_name,
@@ -143,7 +163,40 @@ class GarminClient:
             ) from e
 
     def submit_mfa(self, code: str) -> dict[str, Any]:
-        raise NotImplementedError("REQ-003 GREEN step not yet implemented")
+        # REQ-003 — resume the pending-MFA session established by a prior login()
+        # that returned {"mfa_required": True}. Two-step flow: login() retained a
+        # client_state; resume_login(code, client_state) completes auth on the
+        # SAME session and populates the identity the same way login() does.
+        #
+        # NOTE(DEC-014 OQ1): the resume_login() call signature is unconfirmed
+        # against the not-yet-bundled python-garminconnect wheel (like
+        # dumps()/loads()); pinned here by the fake/pystub until the wheel is
+        # bundled (DES-007/Pkg).
+        pending = getattr(self, "_pending_mfa", None)
+        if pending is None:
+            # Called out of order (no prior login() MFA outcome). This is a
+            # programming/contract error, NOT an authentication failure —
+            # kind='unknown' so DES-008 never routes "wrong code" copy for it.
+            raise GarminError(
+                "unknown",
+                "submit_mfa() called with no pending MFA session; call login() first",
+            )
+        try:
+            self._garmin.resume_login(code, pending)
+        except _gc.exceptions.GarminConnectAuthenticationError as e:
+            # Bad/expired OTP. Classify by exception TYPE (LSN-006) as
+            # kind='auth' so the Slice-B page can re-prompt (up to 3 attempts —
+            # REQ-003). The pending state is deliberately RETAINED so a retry
+            # resumes the SAME session.
+            raise GarminError("auth", str(e) or "Invalid MFA code", e) from e
+        # Success — clear the pending state and return the SAME identity dict
+        # shape login() returns on a no-MFA success (byte-for-byte parity so the
+        # worker's Success mapping is identical for both paths).
+        self._pending_mfa = None
+        return {
+            "garmin_user_id": str(self._garmin.full_name_id),
+            "display_name": self._garmin.display_name,
+        }
 
     def list_activities_since(self, ts_gmt: str) -> Iterator[dict[str, Any]]:
         raise NotImplementedError("REQ-008 GREEN step not yet implemented")

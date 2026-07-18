@@ -367,6 +367,67 @@ class TestGarminConnectPyAdapter : public QObject
     }
 
     // ==================================================================
+    // T-036 / REQ-003 (MFA) — real embedded-Python MFA bridge coverage
+    // (A3-R003-01). Exercises the PRODUCTION PyEmbeddedAdapter MFA path against
+    // the real CPython bridge (not the Python-free fake used on garmin-fast):
+    //   - authenticate() where the stub login() returns the
+    //     {"mfa_required": True} sentinel exercises the real
+    //     PyDict_GetItemString(...,"mfa_required") detection + m_client retention
+    //     (Py_INCREF/XDECREF) → PyAuthOutcome::MfaRequired.
+    //   - submitMfa("…") on the SAME adapter exercises the real submit_mfa
+    //     marshalling + refcounting → Success with the identity fields, or
+    //     AuthFailed when the stub raises GarminError(kind='auth').
+    //   - submitMfa with no retained session → the mapped Unknown failure.
+    // These are coverage of already-shipped code: passing first run means the
+    // bridge is sound; a failure would expose a latent refcount/dict-key bug.
+    // ==================================================================
+
+    // authenticate() MFA sentinel → MfaRequired, and submitMfa() success on the
+    // retained client marshals the identity + records the code verbatim.
+    void mfaRequiredSentinelThenSubmitMfaSuccessMarshalsIdentity()
+    {
+        setScenario("mfa_required");
+        PyEmbeddedAdapter adapter(kStubsDir);
+        const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+        QCOMPARE(out.kind, PyAuthOutcome::MfaRequired);
+        QVERIFY2(out.garmin_user_id.isEmpty(), "MfaRequired carries no identity yet");
+
+        setScenario("mfa_success");
+        const PyAuthOutcome ok = adapter.submitMfa(QStringLiteral("246810"));
+        QCOMPARE(ok.kind, PyAuthOutcome::Success);
+        QCOMPARE(ok.garmin_user_id, QStringLiteral("uid-mfa-77"));
+        QCOMPARE(ok.display_name, QStringLiteral("MFA Rider"));
+        QCOMPARE(stubAttr("LAST_MFA_CODE"), QStringLiteral("246810"));
+    }
+
+    // submitMfa() where the stub raises GarminError(kind='auth') → AuthFailed
+    // (classified by exception TYPE, LSN-006), raw message forwarded untranslated.
+    void submitMfaAuthErrorMapsToAuthFailed()
+    {
+        setScenario("mfa_required");
+        PyEmbeddedAdapter adapter(kStubsDir);
+        QCOMPARE(adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw")).kind,
+                 PyAuthOutcome::MfaRequired);
+
+        setScenario("mfa_auth_error");
+        const PyAuthOutcome out = adapter.submitMfa(QStringLiteral("000000"));
+        QCOMPARE(out.kind, PyAuthOutcome::AuthFailed);
+        QCOMPARE(out.rawMessage, QStringLiteral("stub: invalid one-time code"));
+    }
+
+    // submitMfa() with NO retained session (authenticate never established one) →
+    // Unknown (a contract/order error, NEVER a spurious Success), no crash.
+    void submitMfaWithoutPendingSessionMapsToUnknownNotSuccess()
+    {
+        setScenario("mfa_success");
+        PyEmbeddedAdapter adapter(kStubsDir); // never authenticated → no retained client
+        const PyAuthOutcome out = adapter.submitMfa(QStringLiteral("123456"));
+        QVERIFY2(out.kind != PyAuthOutcome::Success, "submitMfa without a pending session must NOT succeed");
+        QCOMPARE(out.kind, PyAuthOutcome::Unknown);
+        QVERIFY2(!out.rawMessage.isEmpty(), "must explain why the OTP could not be submitted");
+    }
+
+    // ==================================================================
     // TEST-009 / REQ-007 — downloadActivity marshalling (DES-013 extension,
     // same DEC-013 seam one op down). PyEmbeddedAdapter.downloadActivity()
     // forwards (activity_id, fmt) to the authenticated GarminClient's

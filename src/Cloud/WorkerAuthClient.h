@@ -32,11 +32,19 @@ class WorkerAuthClient : public IGarminAuthClient
 
     void authenticate(const QString& email, const QString& password, QUuid requestId) override;
 
+    // REQ-003 (MFA) Slice A — dispatch the OTP onto the worker thread, mirroring
+    // authenticate(): emit dispatchSubmitMfa() (queued → GarminWorker::submitMfa).
+    void submitMfa(const QString& code, QUuid requestId) override;
+
   signals:
     // Internal — connected to GarminWorker::authenticate as a queued slot so
     // the call dispatches onto the worker thread regardless of which thread
     // invoked WorkerAuthClient::authenticate().
     void dispatchAuthenticate(QString email, QString password, QUuid requestId);
+
+    // REQ-003 (MFA) Slice A — internal, connected to GarminWorker::submitMfa
+    // with the SAME Qt::AutoConnection semantics as dispatchAuthenticate.
+    void dispatchSubmitMfa(QString code, QUuid requestId);
 
   private:
     GarminWorker* m_worker; // not owned — caller's lifetime

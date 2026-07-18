@@ -119,6 +119,44 @@ target_compile_features(testGarminConnectCredentialsPage PRIVATE cxx_std_17)
 add_test(NAME testGarminConnectCredentialsPage COMMAND testGarminConnectCredentialsPage)
 set_tests_properties(testGarminConnectCredentialsPage PROPERTIES LABELS "garmin-fast")
 
+# --- T-032..T-034 — REQ-003 (MFA) Slice B: GarminMfaPage ---------------------
+# C++ wizard-page slice for REQ-003 (MFA), sibling to TEST-003's credentials
+# page. Pure unit test of GarminMfaPage under DEC-012 Option A (inject
+# IGarminAuthClient); does NOT drag in the embedded-Python worker. AUTOMOC
+# processes the page's Q_OBJECT and the test file's FakeAuthClient. Pulls in Qt
+# Widgets for QWizardPage/QLineEdit/QLabel.
+#
+# RED phase: src/Cloud/GarminMfaPage.{h,cpp} do not exist yet — the executable's
+# *compile* fails at the test's #include "GarminMfaPage.h" line (right-reason
+# RED). GREEN adds those files AND keeps the page .cpp + header in this
+# add_executable() so AUTOMOC processes the real Q_OBJECT and the link resolves.
+add_executable(testGarminConnectMfaPage
+    testGarminConnectMfaPage.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminMfaPage.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminMfaPage.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminAuthClient.h
+)
+
+set_target_properties(testGarminConnectMfaPage PROPERTIES
+    AUTOMOC ON
+)
+
+target_include_directories(testGarminConnectMfaPage PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+)
+
+target_link_libraries(testGarminConnectMfaPage PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Gui
+    Qt${QT_VERSION_MAJOR}::Widgets
+    Qt${QT_VERSION_MAJOR}::Test
+)
+target_compile_features(testGarminConnectMfaPage PRIVATE cxx_std_17)
+
+add_test(NAME testGarminConnectMfaPage COMMAND testGarminConnectMfaPage)
+set_tests_properties(testGarminConnectMfaPage PROPERTIES LABELS "garmin-fast")
+
 # --- TEST-004 — REQ-002 end-to-end (worker + WorkerAuthClient) --------------
 # REQ-002 closure slice: GarminWorker on a dedicated QThread + WorkerAuthClient
 # adapter (IGarminAuthClient impl) bridging the page to the worker, with a
@@ -237,6 +275,8 @@ add_executable(testGarminConnectWizardRouting
     ${CMAKE_SOURCE_DIR}/src/Cloud/WorkerAuthClient.h
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminCredentialsPage.cpp
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminCredentialsPage.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminMfaPage.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminMfaPage.h
     ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminAuthClient.h
     ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminPyAdapter.h
 )

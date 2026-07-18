@@ -25,6 +25,28 @@ void GarminWorker::authenticate(const QString& email, const QString& password, Q
 {
     const PyAuthOutcome outcome = m_py->authenticate(email, password);
 
+    // REQ-003 (MFA) Slice A — an MFA-required outcome is NOT a success and NOT a
+    // failure: surface it as a distinct signal so the consumer opens the MFA
+    // dialog and (Slice B) drives submitMfa(). Every other outcome flows through
+    // the shared mapping below, byte-for-byte unchanged from the pre-MFA path.
+    if (outcome.kind == PyAuthOutcome::MfaRequired) {
+        emit mfaRequired(requestId);
+        return;
+    }
+    emitAuthOutcome(outcome, requestId);
+}
+
+void GarminWorker::submitMfa(const QString& code, QUuid requestId)
+{
+    // REQ-003 (MFA) Slice A — resume the pending MFA session with the OTP. The
+    // adapter (garmin_client.submit_mfa) resolves it to the SAME PyAuthOutcome
+    // shape authenticate() returns; reuse the identical Success/failure mapping.
+    const PyAuthOutcome outcome = m_py->submitMfa(code);
+    emitAuthOutcome(outcome, requestId);
+}
+
+void GarminWorker::emitAuthOutcome(const PyAuthOutcome& outcome, QUuid requestId)
+{
     switch (outcome.kind) {
     case PyAuthOutcome::Success: {
         GarminAuthSuccess result;
@@ -48,7 +70,11 @@ void GarminWorker::authenticate(const QString& email, const QString& password, Q
         return;
     }
     case PyAuthOutcome::Unknown:
+    case PyAuthOutcome::MfaRequired:
     default: {
+        // MfaRequired is handled by authenticate() before it reaches here; if a
+        // submitMfa() outcome ever carried it (contract breach) fold to Unknown
+        // rather than silently drop it.
         GarminAuthFailure err;
         err.kind = GarminAuthFailure::Unknown;
         err.translatedMessage = outcome.rawMessage;

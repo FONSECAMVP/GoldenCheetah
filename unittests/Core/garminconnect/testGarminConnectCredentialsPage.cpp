@@ -68,8 +68,16 @@ class FakeAuthClient : public IGarminAuthClient
         calls.append(Call{email, password, requestId});
     }
 
+    // REQ-003 (MFA) Slice A seam extension (DEC-012 compile-enforced) — this
+    // credentials-page test does not drive the MFA flow (that is Slice B's
+    // GarminMfaPage); a no-op override satisfies the seam so the target compiles.
+    void submitMfa(const QString&, QUuid) override {}
+
     void synthFinished(QUuid id, GarminAuthSuccess r) { emit finished(id, r); }
     void synthFailed(QUuid id, GarminAuthFailure e) { emit failed(id, e); }
+    // REQ-003 (MFA) hardening — the credentials page latches MfaRequired on this
+    // signal; used by the T-039/T-041 re-entry / late-delivery guards below.
+    void synthMfaRequired(QUuid id) { emit mfaRequired(id); }
 };
 
 class TestGarminConnectCredentialsPage : public QObject
@@ -342,6 +350,58 @@ class TestGarminConnectCredentialsPage : public QObject
         // Now deliver the real reply — page must advance.
         fake.synthFinished(fake.calls.first().requestId, result);
         QVERIFY2(page.validatePage(), "After the matching 'finished' reply, validatePage() must return true");
+    }
+
+    // T-041 — A3-R003-06: once the credentials page has latched MfaRequired, a
+    // late/duplicate finished() on the SAME (pending) id must NOT clobber it to
+    // Success (which would misroute the wizard away from the MFA page 22 to the
+    // post-auth 25/30). Without the `if (m_state != InFlight) return;` guard in
+    // onAuthFinished the late finished overwrites the state (RED: mfaPending()
+    // flips false).
+    void lateFinishedDoesNotClobberMfaRequired()
+    {
+        FakeAuthClient fake;
+        GarminCredentialsPage page(&fake);
+        populate(page, QStringLiteral("rider@example.com"), QStringLiteral("hunter2"));
+        QVERIFY(!page.validatePage()); // dispatch; pendingId set; InFlight
+        QCOMPARE(fake.calls.size(), 1);
+        const QUuid id = fake.calls.first().requestId;
+
+        fake.synthMfaRequired(id); // latch MfaRequired
+        QVERIFY2(page.mfaPending(), "credentials page must latch MfaRequired on the matching id");
+
+        // The worker's eventual authenticate outcome arrives late on the SAME id.
+        GarminAuthSuccess ghost{QStringLiteral("uid-late"), QStringLiteral("Ghost")};
+        fake.synthFinished(id, ghost);
+        QVERIFY2(page.mfaPending(),
+                 "A3-R003-06: a late finished on the pending id must NOT clobber the latched MfaRequired state");
+    }
+
+    // T-039 — A3-R003-05: initializePage() (Back-then-Next re-entry) resets the
+    // MfaRequired latch so a re-submit dispatches a FRESH authenticate instead of
+    // early-returning true on the stale terminal state. Without the
+    // initializePage() override the base no-op leaves MfaRequired latched (RED at
+    // the first assertion) and validatePage() early-returns true without
+    // dispatching.
+    void reentryResetsMfaRequiredAndRedispatches()
+    {
+        FakeAuthClient fake;
+        GarminCredentialsPage page(&fake);
+        populate(page, QStringLiteral("rider@example.com"), QStringLiteral("hunter2"));
+        QVERIFY(!page.validatePage()); // dispatch
+        QCOMPARE(fake.calls.size(), 1);
+        fake.synthMfaRequired(fake.calls.first().requestId);
+        QVERIFY(page.mfaPending());
+
+        // Re-entry resets the async latch.
+        page.initializePage();
+        QVERIFY2(!page.mfaPending(), "re-entry must clear the MfaRequired latch so inputs are re-read");
+
+        // Re-populate (password was zeroed at dispatch) and re-submit → a FRESH
+        // authenticate is dispatched, not an early-return true on stale state.
+        populate(page, QStringLiteral("rider@example.com"), QStringLiteral("hunter2"));
+        QVERIFY2(!page.validatePage(), "re-submit after re-entry must dispatch (defer), not early-return true");
+        QCOMPARE(fake.calls.size(), 2);
     }
 };
 

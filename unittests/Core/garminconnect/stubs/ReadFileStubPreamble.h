@@ -197,6 +197,7 @@ class PyEmbeddedAdapter : public IGarminPyAdapter
     explicit PyEmbeddedAdapter(const QString& modulePath) : m_modulePath(modulePath) {}
     ~PyEmbeddedAdapter() override = default;
     PyAuthOutcome authenticate(const QString&, const QString&) override { return {}; }
+    PyAuthOutcome submitMfa(const QString&) override { return {}; }
     PyDownloadOutcome downloadActivity(const QString&, const QString&) override { return {}; }
     PyLoadTokensOutcome loadTokens(const QString&) override { return {}; }
     QString modulePath() const { return m_modulePath; }

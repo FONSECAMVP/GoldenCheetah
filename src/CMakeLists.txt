@@ -1376,6 +1376,11 @@ if(GC_WANT_GARMINCONNECT)
         Cloud/GarminConnect.h
         Cloud/GarminCredentialsPage.cpp
         Cloud/GarminCredentialsPage.h
+        # REQ-003 (MFA) Slice B: AddCloudWizard constructs GarminMfaPage (page 22),
+        # so the main binary needs this .cpp or the link fails with an undefined
+        # reference to GarminMfaPage's ctor/vtable/aborted() (LSN-018).
+        Cloud/GarminMfaPage.cpp
+        Cloud/GarminMfaPage.h
         Cloud/GarminWorker.cpp
         Cloud/GarminWorker.h
         Cloud/WorkerAuthClient.cpp

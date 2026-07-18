@@ -36,6 +36,12 @@ LAST_ACTIVITY_ID = None
 LAST_FMT = None
 DL_PAYLOAD = b"\x00\x01\x02FIT\x00\xff\xfe\x0a"
 
+# T-036 / REQ-003 (MFA) — submit_mfa() records the OTP it saw so the C++ side can
+# assert verbatim marshalling through the REAL bridge (PyEmbeddedAdapter.submitMfa
+# → m_client.submit_mfa). Disjoint mfa_* SCENARIO values drive login()'s
+# mfa_required sentinel and submit_mfa()'s success / auth-error branches.
+LAST_MFA_CODE = None
+
 
 class GarminError(Exception):
     """Shape-compatible with the production GarminError (.kind / .message)."""
@@ -103,6 +109,12 @@ class GarminClient:
             return ["not", "a", "dict"]  # login() returned a non-dict
         if SCENARIO == "missing_keys":
             return {"session": "opaque-token"}  # dict, but no garmin_user_id/display_name
+        # T-036 / REQ-003 — MFA-required sentinel: login() returns
+        # {"mfa_required": True} (instead of an identity dict) so the real bridge
+        # exercises PyEmbeddedAdapter's PyDict_GetItemString(...,"mfa_required")
+        # detection + retained-client path. submit_mfa() (below) then resumes.
+        if SCENARIO == "mfa_required":
+            return {"mfa_required": True}
         if SCENARIO == "auth_error":
             raise GarminError("auth", "stub: bad credentials")
         if SCENARIO == "connection_error":
@@ -112,6 +124,19 @@ class GarminClient:
         if SCENARIO == "value_error":
             raise ValueError("stub: not a garmin error")
         raise GarminError("unknown", "stub: unrecognized scenario %r" % (SCENARIO,))
+
+    # T-036 / REQ-003 (MFA) — resume the pending MFA session on the SAME retained
+    # client (PyEmbeddedAdapter.submitMfa calls m_client.submit_mfa(code)). Mirrors
+    # the production adapter's success/auth-error surface; the code is recorded so
+    # the C++ side can assert verbatim marshalling through the real bridge.
+    def submit_mfa(self, code):
+        global LAST_MFA_CODE
+        LAST_MFA_CODE = code
+        if SCENARIO == "mfa_success":
+            return {"garmin_user_id": "uid-mfa-77", "display_name": "MFA Rider"}
+        if SCENARIO == "mfa_auth_error":
+            raise GarminError("auth", "stub: invalid one-time code")
+        raise GarminError("unknown", "stub: unrecognized mfa scenario %r" % (SCENARIO,))
 
     # TEST-009 / REQ-007 — download_activity mirrors garmin_client.GarminClient
     # as PyEmbeddedAdapter.downloadActivity() calls it: (activity_id, fmt) ->

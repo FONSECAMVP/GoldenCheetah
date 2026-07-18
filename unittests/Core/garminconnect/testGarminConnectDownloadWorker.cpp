@@ -67,6 +67,11 @@ class FakeDownloadPyAdapter : public IGarminPyAdapter
 
     PyAuthOutcome authenticate(const QString&, const QString&) override { return {}; }
 
+    // REQ-003 (MFA) Slice A seam extension (DEC-013 compile-enforced) — this
+    // download-worker test never submits an OTP; a default outcome satisfies the
+    // interface so the target still compiles. No assertion added/changed.
+    PyAuthOutcome submitMfa(const QString&) override { return {}; }
+
     // REQ-007 closure (Slice 1) seam extension (DEC-013 compile-enforced) — this
     // download-worker test never restores a session; a default outcome satisfies
     // the interface so the target still compiles. No assertion added/changed.

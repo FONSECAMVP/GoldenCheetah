@@ -40,12 +40,29 @@ class GarminCredentialsPage : public QWizardPage
     bool isComplete() const override;
     bool validatePage() override;
 
+    // REQ-003 (MFA) hardening (A3-R003-05) — reset the async state machine on
+    // (re-)entry so a Back-then-Next after a terminal state (Success / Error /
+    // MfaRequired) re-dispatches a FRESH authenticate on re-submit instead of
+    // early-returning on the stale latched outcome. QWizard invokes this each
+    // time the page is (re-)shown.
+    void initializePage() override;
+
+    // REQ-003 (MFA) Slice B — true once the auth client answered mfaRequired for
+    // the in-flight request. The wizard's AddGarminAuth::nextId() reads this to
+    // route to the MFA page (id 22) instead of the post-auth 25/30.
+    bool mfaPending() const { return m_state == MfaRequired; }
+
   private slots:
     void onAuthFinished(QUuid id, GarminAuthSuccess result);
     void onAuthFailed(QUuid id, GarminAuthFailure error);
 
+    // REQ-003 (MFA) Slice B — Garmin demands a 6-digit OTP for the in-flight
+    // request: latch MfaRequired so Next is allowed to advance (the wizard's
+    // nextId() then routes to the MFA page).
+    void onMfaRequired(QUuid id);
+
   private:
-    enum State { Idle, InFlight, Success, Error };
+    enum State { Idle, InFlight, Success, Error, MfaRequired };
 
     IGarminAuthClient* m_auth;
     QLineEdit* m_email = nullptr;

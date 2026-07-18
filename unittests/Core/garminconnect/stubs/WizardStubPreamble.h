@@ -351,6 +351,10 @@ class PyEmbeddedAdapter : public IGarminPyAdapter
         return o;
     }
 
+    // REQ-003 (MFA) Slice A seam extension (DEC-013 compile-enforced) — the
+    // wizard-routing test drives auth lifecycle only; a default outcome suffices.
+    PyAuthOutcome submitMfa(const QString&) override { return {}; }
+
     // REQ-007 seam extension (DEC-013 compile-enforced) — the wizard-routing
     // test drives auth lifecycle only; a default outcome satisfies the seam.
     PyDownloadOutcome downloadActivity(const QString&, const QString&) override { return {}; }

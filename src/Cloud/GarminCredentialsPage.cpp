@@ -39,13 +39,18 @@ GarminCredentialsPage::GarminCredentialsPage(IGarminAuthClient* authClient, QWid
     connect(m_password, &QLineEdit::textChanged, this, [this](const QString&) { emit completeChanged(); });
     connect(m_auth, &IGarminAuthClient::finished, this, &GarminCredentialsPage::onAuthFinished);
     connect(m_auth, &IGarminAuthClient::failed, this, &GarminCredentialsPage::onAuthFailed);
+    // REQ-003 (MFA) Slice B — a mid-auth MFA challenge latches MfaRequired; the
+    // wizard's nextId() then routes to the MFA page (id 22).
+    connect(m_auth, &IGarminAuthClient::mfaRequired, this, &GarminCredentialsPage::onMfaRequired);
 }
 
 bool GarminCredentialsPage::isComplete() const
 {
     if (m_state == InFlight)
         return false;
-    if (m_state == Success)
+    // Success or MfaRequired both allow Next to advance (the wizard routes to the
+    // MFA page for the latter via nextId()).
+    if (m_state == Success || m_state == MfaRequired)
         return true;
     // Idle or Error: fields must both be populated.
     return !m_email->text().isEmpty() && !m_password->text().isEmpty();
@@ -53,7 +58,8 @@ bool GarminCredentialsPage::isComplete() const
 
 bool GarminCredentialsPage::validatePage()
 {
-    if (m_state == Success)
+    // Success or MfaRequired: allow the wizard to advance (nextId() decides where).
+    if (m_state == Success || m_state == MfaRequired)
         return true;
     if (m_state == InFlight)
         return false;
@@ -72,10 +78,27 @@ bool GarminCredentialsPage::validatePage()
     return false;
 }
 
+void GarminCredentialsPage::initializePage()
+{
+    // A3-R003-05 — reset the async state on (re-)entry so a Back-then-Next after
+    // a terminal state (Success / Error / MfaRequired) starts a fresh dispatch
+    // instead of early-returning on the stale latch. The email field is left
+    // intact (Back navigation should preserve it); the password was already
+    // zeroed at dispatch time (REQ-005), and the inline message is cleared.
+    m_state = Idle;
+    m_pendingId = QUuid();
+    if (m_message != nullptr)
+        m_message->clear();
+    emit completeChanged();
+}
+
 void GarminCredentialsPage::onAuthFinished(QUuid id, GarminAuthSuccess)
 {
     if (id != m_pendingId)
         return; // stale reply guard.
+    if (m_state != InFlight)
+        return; // A3-R003-06 — a duplicate/late finished must NOT clobber a
+                // latched terminal state (e.g. MfaRequired → routed to page 22).
     m_state = Success;
     emit completeChanged();
 }
@@ -84,7 +107,17 @@ void GarminCredentialsPage::onAuthFailed(QUuid id, GarminAuthFailure error)
 {
     if (id != m_pendingId)
         return; // stale reply guard.
+    if (m_state != InFlight)
+        return; // A3-R003-06 — ignore a duplicate/late failure once terminal.
     m_state = Error;
     m_message->setText(error.translatedMessage);
+    emit completeChanged();
+}
+
+void GarminCredentialsPage::onMfaRequired(QUuid id)
+{
+    if (id != m_pendingId)
+        return; // stale reply guard.
+    m_state = MfaRequired;
     emit completeChanged();
 }

@@ -55,9 +55,23 @@ class IGarminAuthClient : public QObject
     // replies (e.g. a slow previous attempt arriving after the user has retried).
     virtual void authenticate(const QString& email, const QString& password, QUuid requestId) = 0;
 
+    // REQ-003 (MFA) Slice A — submit the 6-digit OTP for the pending MFA session
+    // established when authenticate() answered with mfaRequired(). Correlated by
+    // the same requestId. Completes (finished) or fails (failed) auth on the
+    // SAME session; a bad code fails with GarminAuthFailure::Auth so the
+    // (Slice-B) page can re-prompt. A production client that forgets this op is
+    // a build break (DEC-012 Option A — compile-enforced seam).
+    virtual void submitMfa(const QString& code, QUuid requestId) = 0;
+
   signals:
     void finished(QUuid id, GarminAuthSuccess result);
     void failed(QUuid id, GarminAuthFailure error);
+
+    // REQ-003 (MFA) Slice A — emitted when authenticate() determines Garmin
+    // needs a 6-digit OTP. The (Slice-B) GarminMfaPage opens its modal dialog in
+    // response and then drives submitMfa(); until then no consumer subscribes
+    // and the no-MFA flow never emits this.
+    void mfaRequired(QUuid requestId);
 };
 
 // Cross-thread signal marshalling: GarminWorker (on a worker thread) emits

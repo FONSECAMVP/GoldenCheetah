@@ -87,6 +87,10 @@ class FakePyAdapter : public IGarminPyAdapter
     // never download; a default outcome satisfies the interface.
     PyDownloadOutcome downloadActivity(const QString&, const QString&) override { return {}; }
 
+    // REQ-003 (MFA) Slice A seam extension (DEC-013 compile-enforced) — chain
+    // teardown tests never submit an OTP; a default outcome satisfies the seam.
+    PyAuthOutcome submitMfa(const QString&) override { return {}; }
+
     // REQ-007 closure (Slice 1) seam extension (DEC-013 compile-enforced) — never
     // restores a session here; a default outcome satisfies the interface.
     PyLoadTokensOutcome loadTokens(const QString&) override { return {}; }
@@ -137,6 +141,10 @@ class BusyPyAdapter : public IGarminPyAdapter
     // REQ-007 seam extension (DEC-013 compile-enforced) — never invoked; the
     // wedge is in authenticate().
     PyDownloadOutcome downloadActivity(const QString&, const QString&) override { return {}; }
+
+    // REQ-003 (MFA) Slice A seam extension (DEC-013 compile-enforced) — never
+    // invoked; the wedge is in authenticate().
+    PyAuthOutcome submitMfa(const QString&) override { return {}; }
 
     // REQ-007 closure (Slice 1) seam extension (DEC-013 compile-enforced) — never
     // invoked; the wedge is in authenticate().

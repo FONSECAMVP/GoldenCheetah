@@ -29,6 +29,7 @@
 #ifdef GC_WANT_GARMINCONNECT
 #include "GarminAuthChain.h"
 #include "GarminCredentialsPage.h"
+#include "GarminMfaPage.h"
 #include "PyEmbeddedAdapter.h"
 #endif
 
@@ -44,6 +45,8 @@
 // 20. Authenticate Account (URL+Key, OAUTH or User/Pass)
 // 21. Garmin Connect native credentials (GC_WANT_GARMINCONNECT only,
 //     DES-003 — replaces 20 for the Garmin Connect service)
+// 22. Garmin Connect MFA OTP (GC_WANT_GARMINCONNECT only, DES-003 — conditional,
+//     pushed by page 21 when Garmin answers mfaRequired; REQ-003)
 // 25. Select Athlete [optional]
 // 30. Settings (Folder,sync on startup, sync on import)
 // 90. Finalise (Confirm complete and add)
@@ -60,6 +63,31 @@ class AddGarminAuth : public GarminCredentialsPage
     public:
         AddGarminAuth(AddCloudWizard *wizard, IGarminAuthClient *client)
             : GarminCredentialsPage(client, wizard), wizard(wizard) {}
+
+        int nextId() const override {
+            // REQ-003 (MFA) Slice B — if Garmin answered mfaRequired for the
+            // in-flight credentials request, route to the conditional MFA page
+            // (21 → 22, DES-003). Otherwise continue the post-auth flow.
+            if (mfaPending()) return 22;
+            bool hasAthlete = wizard->cloudService &&
+                wizard->cloudService->settings.value(CloudService::CloudServiceSetting::AthleteID, "") != "";
+            return hasAthlete ? 25 : 30;
+        }
+
+    private:
+        AddCloudWizard *wizard;
+};
+
+// Page 22 — thin wizard-local wrapper over GarminMfaPage (DES-003), mirroring
+// AddGarminAuth. Post-MFA the flow continues identically to the post-auth path
+// (hasAthlete ? 25 : 30) — a valid OTP simply resumes the same session.
+// No Q_OBJECT: it adds no signals/slots (aborted() lives on the GarminMfaPage
+// base), so no moc pass is needed for this TU.
+class AddGarminMfa : public GarminMfaPage
+{
+    public:
+        AddGarminMfa(AddCloudWizard *wizard, IGarminAuthClient *client)
+            : GarminMfaPage(client, wizard), wizard(wizard) {}
 
         int nextId() const override {
             bool hasAthlete = wizard->cloudService &&
@@ -158,6 +186,15 @@ AddCloudWizard::ensureGarminAuthPage()
     garminAdapter = new PyEmbeddedAdapter(modulePath);
     garminChain = new GarminAuthChain(garminAdapter);
     setPage(21, new AddGarminAuth(this, garminChain->client()));
+
+    // REQ-003 (MFA) Slice B — the conditional MFA page (DES-003). Registered on
+    // the SAME non-owning client as page 21 (both drive the one auth session).
+    // Guarded by the same `if (garminChain) return;` above, so it is registered
+    // exactly once. Its aborted() (3 invalid OTPs, non-retry) closes the wizard:
+    // the terminal error is already shown on the page before aborted() fires.
+    AddGarminMfa *mfaPage = new AddGarminMfa(this, garminChain->client());
+    setPage(22, mfaPage);
+    connect(mfaPage, &GarminMfaPage::aborted, this, &AddCloudWizard::reject);
 }
 #endif
 

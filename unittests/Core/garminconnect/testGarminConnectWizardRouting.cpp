@@ -34,7 +34,11 @@
 
 #include "AddCloudWizard.h"
 #include "GarminAuthChain.h"
+#include "GarminCredentialsPage.h"
+#include "GarminMfaPage.h"
+#include "WorkerAuthClient.h"
 
+#include <QSignalSpy>
 #include <QtTest/QtTest>
 
 // -----------------------------------------------------------------------------
@@ -190,6 +194,73 @@ class TestGarminConnectWizardRouting : public QObject
                  "(chain must be deleted before adapter)");
         // And nothing leaked.
         QCOMPARE(g_pyAdapterLiveCount, 0);
+    }
+
+    // --- Behaviour 4: REQ-003 (MFA) Slice B routing to page 22 -----------
+    //
+    // T-035 — DES-003 conditional MFA page: ensureGarminAuthPage() registers the
+    // MFA page as id 22 (idempotently); when the credentials page (21) receives
+    // mfaRequired(id) it reports mfaPending() and AddGarminAuth::nextId() routes
+    // to 22 (instead of the post-auth 25/30); the MFA page's own nextId()
+    // continues the flow (hasAthlete ? 25 : 30); and the MFA page's aborted()
+    // (3-strikes non-retry) is connected so it closes the wizard.
+    //
+    // Mutation kills:
+    //   M-MFA-1  removing the `mfaPending() ? 22 :` branch → nextId stays 25/30.
+    //   M-MFA-2  not registering page 22 → wizard.page(22) null.
+    //   M-MFA-3  dropping the page-22 idempotency guard → a 2nd ensure re-registers.
+    //   M-MFA-4  not connecting aborted() → wizard never rejects on 3-strikes.
+    void garminMfaRequiredRoutesToPage22()
+    {
+        WizardFixture fx;
+        AddCloudWizard wizard(&fx.ctx);
+        wizard.ensureGarminAuthPage();
+
+        QWizardPage* page21 = wizard.page(21);
+        QVERIFY2(page21 != nullptr, "ensureGarminAuthPage must register the credentials page as id 21");
+        QWizardPage* page22 = wizard.page(22);
+        QVERIFY2(page22 != nullptr, "M-MFA-2: ensureGarminAuthPage must register the MFA page as id 22");
+
+        // Idempotency: a second ensure must NOT re-register / duplicate page 22.
+        wizard.ensureGarminAuthPage();
+        QCOMPARE(wizard.page(22), page22); // M-MFA-3
+
+        // Before any MFA challenge, the credentials page routes onward (no athlete
+        // configured in the fixture → 30), NOT to the MFA page.
+        QVERIFY2(!static_cast<GarminCredentialsPage*>(page21)->mfaPending(),
+                 "credentials page must not be MFA-pending before any challenge");
+        QCOMPARE(page21->nextId(), 30);
+
+        // Drive the credentials page to MFA-required. B-R003-03 hardening — the
+        // former version dispatched a REAL authenticate (queued onto the worker
+        // thread) purely to seed the page's pending id, then emitted
+        // mfaRequired(thatId). That left a live queued authenticate whose eventual
+        // outcome (the fake adapter returns Unknown → failed) could be delivered
+        // by any later processEvents and CLOBBER the latched MfaRequired — a
+        // timing-dependent fragility. Here we drive onMfaRequired deterministically
+        // with NO worker dispatch: a freshly-(re)entered credentials page has a
+        // null default pending id, so emitting mfaRequired(QUuid()) on the same
+        // client the page is wired to matches the page's onMfaRequired guard and
+        // latches MfaRequired synchronously, with no worker thread in play. This
+        // still reproduces the seam's re-emit (WorkerAuthClient re-emits
+        // GarminWorker::mfaRequired) and keeps every routing assertion intact.
+        auto* client = static_cast<WorkerAuthClient*>(wizard.garminChain->client());
+        auto* creds = static_cast<GarminCredentialsPage*>(page21);
+        QVERIFY2(!creds->mfaPending(), "precondition: no MFA challenge dispatched yet");
+
+        emit client->mfaRequired(QUuid()); // matches the page's default (null) pending id
+
+        QVERIFY2(creds->mfaPending(), "after mfaRequired, the credentials page must report mfaPending()");
+        QCOMPARE(page21->nextId(), 22); // M-MFA-1
+
+        // The MFA page continues the flow exactly as the post-auth path does:
+        // hasAthlete ? 25 : 30. The fixture configures no athlete → 30.
+        QCOMPARE(page22->nextId(), 30);
+
+        // The MFA page's 3-strikes abort must close the wizard (reject()).
+        QSignalSpy rejectedSpy(&wizard, &QDialog::rejected);
+        emit static_cast<GarminMfaPage*>(page22)->aborted();
+        QCOMPARE(rejectedSpy.count(), 1); // M-MFA-4
     }
 };
 

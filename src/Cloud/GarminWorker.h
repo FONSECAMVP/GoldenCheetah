@@ -83,11 +83,23 @@ class GarminWorker : public QObject
     // session seam for a fresh CloudService open() with no password (REQ-005).
     void restoreSession(const QString& tokenBlob, QUuid requestId);
 
+    // REQ-003 (MFA) Slice A — resume the pending MFA session established when a
+    // prior authenticate() emitted mfaRequired(). Calls the adapter's
+    // submitMfa() off the GUI thread and maps the outcome with the SAME
+    // Success/failure mapping authenticate() uses: Success → finished(),
+    // failure → failed(). `code` is the 6-digit OTP forwarded verbatim.
+    void submitMfa(const QString& code, QUuid requestId);
+
   signals:
     // Emitted on the worker thread; cross-thread queued connection delivers
     // them to slots on the GUI thread (e.g. WorkerAuthClient re-emits).
     void finished(QUuid id, GarminAuthSuccess result);
     void failed(QUuid id, GarminAuthFailure error);
+
+    // REQ-003 (MFA) Slice A — authenticate() emits this (INSTEAD of finished/
+    // failed) when the adapter reports PyAuthOutcome::MfaRequired, so the
+    // consumer opens the (Slice-B) MFA dialog and later calls submitMfa().
+    void mfaRequired(QUuid id);
 
     // REQ-007 — download results, same threading contract as above.
     void downloaded(QUuid id, QByteArray data);
@@ -98,6 +110,13 @@ class GarminWorker : public QObject
     void restoreFailed(QUuid id, GarminRestoreFailure error);
 
   private:
+    // Shared Success/failure mapping used by BOTH authenticate() (for its
+    // non-MFA outcomes) and submitMfa(): Success → finished(), AuthFailed →
+    // failed{Auth}, Network → failed{Network}, anything else → failed{Unknown}.
+    // Centralizing it keeps the two entry points from drifting apart (REQ-003:
+    // "the SAME mapping authenticate() already uses").
+    void emitAuthOutcome(const PyAuthOutcome& outcome, QUuid requestId);
+
     IGarminPyAdapter* m_py; // not owned — caller's lifetime
 };
 
