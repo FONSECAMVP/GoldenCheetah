@@ -216,7 +216,7 @@ All paths are rooted at `<athlete-config-dir>` (the same directory used by other
 **Implements:** DEC-004, DEC-012 (seam to SSO layer).
 **Serves:** REQ-001, REQ-002, REQ-003, REQ-009, REQ-014, REQ-015.
 
-**Seam to SSO layer (DEC-012):** Each wizard page that talks to SSO (`GarminCredentialsPage`, future `GarminMfaPage`, `GarminCaptchaPage`) takes an `IGarminAuthClient*` via its constructor (see **DES-003a** below). Pages never reference `GarminWorker` directly — this is what keeps the `garmin-fast` CTest label Python-free and lets the C++ page tests run in milliseconds without the embedded interpreter. In production the worker (DES-001) ships a concrete `WorkerAuthClient : IGarminAuthClient` adapter that forwards `authenticate(...)` to `enqueue(Authenticate{...})` and re-emits the worker's `finished`/`error` signals through the interface's signals.
+**Seam to SSO layer (DEC-012):** Each wizard page that talks to SSO (`GarminCredentialsPage`, `GarminMfaPage` [realized REQ-003 Slice B — see the "Realized MFA seam" note under DES-003a], and the future `GarminCaptchaPage`) takes an `IGarminAuthClient*` via its constructor (see **DES-003a** below). Pages never reference `GarminWorker` directly — this is what keeps the `garmin-fast` CTest label Python-free and lets the C++ page tests run in milliseconds without the embedded interpreter. In production the worker (DES-001) ships a concrete `WorkerAuthClient : IGarminAuthClient` adapter that forwards `authenticate(...)` to `enqueue(Authenticate{...})` and re-emits the worker's `finished`/`error` signals through the interface's signals.
 
 ### Page flow
 
@@ -371,6 +371,18 @@ signals:
     //   void captchaDetected(QUuid requestId);
 };
 ```
+
+### Realized MFA seam (REQ-003 Slice A — D-R003-01)
+
+The surface above sketched MFA as a `GarminAuthFailure::MfaRequired` *kind*. The
+realized seam instead routes MFA-required through a **dedicated `mfaRequired(QUuid)`
+signal** (added to both `IGarminAuthClient` and `GarminWorker`) plus a
+`submitMfa(const QString& code, QUuid requestId)` dispatch method — so an
+MFA challenge is neither a "success" nor a "failure" but its own outcome the
+(Slice-B) page reacts to by pushing `GarminMfaPage`. `GarminAuthFailure::Kind`
+was therefore left `{Auth, Network, Unknown}` and NOT grown with `MfaRequired`;
+a *bad* OTP surfaces as an ordinary `kind=Auth` failure so the page re-prompts.
+The commented `//   void mfaRequired(QUuid requestId);` in the sketch is now live.
 
 ### Why an interface, not a Qt-signal-only seam
 

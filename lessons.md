@@ -18,6 +18,11 @@ LSN-015 | op:cascade type:named-target-unverified    | guard scope:portable | re
 LSN-016 | op:delegate type:clv-before-merge          | advisory | recur:1  saves:0 miss:0  | when incremental CLV is dispatched BEFORE the builder's byproduct is merged, its missing-row / stale-findings FAILs are self-inflicted MERGE-LAG, not code defects — the fix's TEST-id is absent from traceability, the WIKI registry `next` is unconsumed, and the fixed finding still reads "open." Either merge byproducts (TEST rows + registry bump + findings disposition) FIRST then validate, or brief the validator that those rows are pending-merge so it scopes them out. Never let a merge-lag FAIL be read (or recorded) as a substantive code FAIL — separate the two in the VAL line. (VAL-013, B-R007-01 fix.)
 LSN-017 | op:test type:queued-self-post-captures-this | advisory scope:portable | recur:1  saves:0 miss:0  | a queued/deferred self-post (`QMetaObject::invokeMethod`/`singleShot(0,…)`) whose lambda captures an object OTHER than the QObject passed as the connection CONTEXT is use-after-free-unsafe: Qt auto-cancels a pending post only when its CONTEXT object is destroyed, so if the captured object can outlive-or-predecease independently it can dispatch into freed memory. FIX: make the context an owned QObject member whose lifetime == the captured object's (a bare `QObject` member needs no Q_OBJECT and preserves a non-Q_OBJECT class contract; declare it so it destroys before the base the lambda calls into). Add a test that destroys the capturing object FIRST (opposite of natural RAII/declaration order) with the post still pending and assert no UAF / post cancelled. Corollary: when the regression test lives in a lightweight NON-QObject stub, note in the test which real Qt mechanics (signal emit, AutoConnection resolution, `QEventLoop::quit`) the stub cannot exercise — stub-recorder coverage ≠ real-caller proof. (A3-R007-01/-02; fixed via `m_completionContext` owned member, DES-014 preserved.)
 LSN-018 | op:build type:main-binary-link-gap        | advisory scope:portable | recur:2  saves:0 miss:0  | GREEN unit tests do NOT prove the application links: a unit-test target compiles its OWN curated source subset, so a new production .cpp that calls into another module (e.g. GarminConnect::open()→GarminTokenStore::loadChecked→AtomicFile) can pass every test while the MAIN binary fails with `undefined reference` because that module's .cpp is absent from the app's source list. When a production TU adds a cross-module call, grep the MAIN binary's target_sources for EACH referenced module's .cpp (not just the test target's) before calling the feature done — and run one actual app-config/link build at the feature gate. (B-R007-03: src/CMakeLists.txt GC_WANT_GARMINCONNECT had GarminConnect.cpp but omitted GarminTokenStore.cpp + AtomicFile.cpp; latent across slices, flagged by two builders, masked by all-green ctest.)
+LSN-019 | op:delegate type:briefing-symbol-claim-unverified | advisory scope:portable | recur:1  saves:0 miss:1  | a builder briefing that asserts an existing code symbol ("enum X already has value Y", "field Z exists") MUST be grep-verified against the actual header on disk before it ships — design.md/DES ledgers describe TARGET shape and run AHEAD of code ([[LSN-014]]), so a symbol drawn from the design sketch may not exist yet. Corollary of LSN-014 at the delegation layer: quote design for INTENT, quote disk for FACT. (REQ-003 Slice A: the briefing claimed `GarminAuthFailure::MfaRequired` "ALREADY exists" from the DES-003a sketch; the on-disk enum was `{Auth,Network,Unknown}`. Harmless — the builder grepped, flagged it (D-R003-01), and correctly left the enum alone — but the false claim was avoidable with one grep at brief time.)
+LSN-020 | op:test type:real-bridge-uncovered-behind-fake | guard scope:portable | recur:1  saves:0 miss:1  | when a slice adds an OP to an embedded-interpreter/FFI adapter seam (IGarminPyAdapter-style: a C++ interface with a Fake impl AND a real CPython/marshalling impl), the FakeXxx tests prove only the C++ contract SHAPE — they never touch the production bridge (dict-key detection, Py_INCREF/XDECREF refcounting, method-name strings). The real-bridge test fixture (here the `garmin-py` pystub scenario + its C++ test) MUST gain a scenario for the new op in the SAME slice, exactly like every sibling op already has. Check: for each new adapter op, grep the real-bridge pystub + its test for the op name; empty = untested production code. (A3-R003-01, blocking: PyEmbeddedAdapter's dict-sentinel MFA detection + ~65-line submitMfa refcounting shipped with ZERO garmin-py coverage while login/download/load_tokens all had pystub scenarios.)
+LSN-021 | op:design type:wizard-page-state-not-reset-on-reentry | guard scope:portable | recur:1  saves:0 miss:1  | a QWizardPage (or any reusable multi-step UI page) that holds an async state machine (Idle→InFlight→Success/Error/terminal) MUST override initializePage()/cleanupPage() to reset that state on re-entry, OR carry an explicit test proving Back-then-retry is intentionally a no-op. Absent both, Back-navigation leaves a terminal state latched: a `validatePage()` that early-returns true on a cached Success/terminal state skips re-reading edited fields and silently discards the user's correction. Check: any page with a member state enum + validatePage() early-return-on-terminal needs an initializePage reset or a documented no-op test. (A3-R003-05: after MFA, Back to the credentials page kept `MfaRequired`, so an edited email/password was discarded with no re-auth.)
+LSN-023 | op:delegate type:readonly-agent-git-blind | guard scope:portable | recur:1  saves:0 miss:1  | a read-only agent (validator/adversary/scout — Read/Glob/Grep only, NO git tools) whose verdict depends on working-tree/commit state CANNOT see live git; and the session-start git-status snapshot in the harness prompt is FROZEN (it predates this session's work). So when a CLV/commit-gate dispatch turns on "is X committed / what's dirty", the orchestrator MUST paste a FRESH `git status --porcelain` + relevant `git log --oneline -- <paths>` into the briefing — else the agent reasons off the stale snapshot and raises a false git-state FAIL. Orchestrator owns git-truth (it has the shell); agents own content. (VAL-015: the final REQ-003 CLV FAILed the commit-scope check purely because it couldn't corroborate "uncommitted" — all 9 content checks passed; live git confirmed the ledger. The validator's own "CLV-git-truth" candidate is the same insight from its side.)
+LSN-022 | op:test type:tautological-assertion | advisory scope:portable | recur:1  saves:0 miss:1  | a test assertion that is unconditionally true — `QVERIFY2(X || true, …)`, `assert x or True`, `expect(true)`, `QCOMPARE(a||1, …)` — verifies NOTHING and gives false coverage confidence; it is the classic reason a "covered" line still lets a mutant survive. Treat any `|| true` / `or True` / literal-true disjunction in an assertion as a review-lint failure (mechanizable as a grep gate). Check at test review: grep the changeset's test files for `\|\| true`, `or True`, `QVERIFY2?\([^,]*\|\|`. (A3-R003-07: TEST-034's `QVERIFY2(…isEmpty()==false || true, …)` never fails and is exactly why mutant M1 — dropping the stale-id guard in onAuthFailed — survived.)
 
 ---
 
@@ -442,3 +447,125 @@ origin: DEC-015 closing CLV (2026-07-13) — the validator caught both misses (d
 history:2026-07-13: captured at guard, first occurrence, from the DEC-015 migration. scope:portable — applies
         to any named cascade/migration in any project. Directly complements [[LSN-014]] (the design) and closes
         the loop on [[LSN-008]] (the mechanism does not replace the CLV; it narrows what the CLV must still catch).
+
+## LSN-019
+sig:    delegate / briefing-symbol-claim-unverified / design-ahead-of-code
+level:  advisory  scope:portable   since:P2.2(2026-07-18, REQ-003 Slice A)   recur:1   saves:0   miss:1
+tags:   op:delegate, type:briefing-symbol-claim-unverified, scope:portable
+trigger:writing a builder/agent briefing that asserts an EXISTING code symbol as fact — "enum X already
+        has value Y", "field/method Z already exists", "this is already wired" — especially when the claim
+        is drawn from a design/DES entry rather than the source file.
+mistake:the REQ-003 Slice A briefing stated `GarminAuthFailure::MfaRequired` "ALREADY exists — do not
+        re-add", taken from the DES-003a code sketch (which listed the full eventual enum). The on-disk
+        enum was `{Auth, Network, Unknown}` — the value had never been added. Per [[LSN-014]] design docs
+        describe TARGET shape and run ahead of code, so the sketch was intent, not fact.
+rule:   in a briefing, quote design for INTENT and disk for FACT. Any assertion that a concrete symbol
+        already exists must be grep-verified against the actual header/source before the briefing ships —
+        never carry a symbol claim straight from design.md into an instruction to "not re-add" it.
+check:  before sending a briefing, for each "already exists / already has / already wired" claim, run one
+        grep against the real file (e.g. `grep -n 'MfaRequired' src/Cloud/IGarminAuthClient.h`); if absent,
+        reword to "add it" or drop the claim. Corollary of [[LSN-014]] at the delegation layer.
+origin: REQ-003 Slice A (2026-07-18). Harmless in effect — the builder grepped, flagged the discrepancy
+        (D-R003-01), and correctly left the enum untouched (MFA routes via the dedicated `mfaRequired(QUuid)`
+        signal, not a failure kind) — but the false claim was avoidable with one grep at brief time.
+        miss:1 credited: the inaccurate claim shipped in the briefing and was caught downstream by the
+        Verification Gate / builder diligence, not prevented at source.
+history:2026-07-18: captured at advisory, first occurrence, from the REQ-003 MFA seam build. scope:portable
+        — applies to any delegated briefing in any project. Directly extends [[LSN-014]] (design = intent).
+
+## LSN-020
+sig:    test / real-bridge-uncovered-behind-fake / adapter-op-coverage
+level:  guard  scope:portable   since:P2.2(2026-07-18, A3-R003-01)   recur:1   saves:0   miss:1
+tags:   op:test, type:real-bridge-uncovered, scope:portable
+trigger:a slice adds a new OP to an adapter seam that has TWO implementations — a Fake (for fast contract
+        tests) and a real embedded-interpreter/FFI bridge (CPython marshalling, refcounting, dict-key parsing).
+mistake:REQ-003 added `submitMfa` + a dict-sentinel MFA branch to `authenticate`. The C++ FakePyAdapter tests
+        (T-029..031) and the wizard tests all passed, but PyEmbeddedAdapter.cpp's REAL bridge — the
+        `mfa_required` dict-key detection and the ~65-line submitMfa with manual Py_INCREF/Py_XDECREF of
+        m_client across the two-call flow — got ZERO tests: the `garmin-py` pystub had no MFA scenario and
+        testGarminConnectPyAdapter.cpp never mentioned mfa, even though login/download/load_tokens each had a
+        dedicated pystub scenario. A refcount bug, wrong dict key, or method-name typo would ship undetected.
+rule:   for every new adapter-seam op, the real-bridge fixture (the pystub scenario + its C++ test under the
+        `garmin-py`/real label) MUST gain a scenario in the SAME slice — the Fake test proves contract SHAPE,
+        not the production marshalling. Parity with sibling ops is the bar.
+check:  after adding an adapter op, `grep -i <opname>` BOTH the real-bridge pystub and its C++ test; empty =
+        untested production code = blocking. Verify the new op has a pystub scenario matching the sibling ops'
+        pattern in the same file.
+origin: A3-R003 (2026-07-18) rated this blocking. miss:1: the untested bridge shipped through the builder's
+        GREEN + the orchestrator Verification Gate (which re-ran the Fake-backed suites, not the real bridge)
+        and was caught only by the adversary's coverage audit — which is why A3 exists alongside the gate.
+history:2026-07-18: captured at guard, first occurrence. scope:portable — any Fake+real dual-impl seam
+        (FFI, embedded interpreter, mocked network client) has this exact blind spot.
+
+## LSN-021
+sig:    design / wizard-page-state-not-reset-on-reentry / back-navigation-leak
+level:  guard  scope:portable   since:P2.2(2026-07-18, A3-R003-05)   recur:1   saves:0   miss:1
+tags:   op:design, op:test, type:ui-state-leak, scope:portable
+trigger:a reusable multi-step UI page (QWizardPage or equivalent) holds an async state machine
+        (Idle→InFlight→Success/Error/terminal) as member state, and the container allows Back/re-entry.
+mistake:GarminCredentialsPage/GarminMfaPage never override initializePage()/cleanupPage(), so m_state,
+        m_attempts, m_pendingId and the message label persist across Back within one wizard instance. Concrete
+        leak: creds A → mfaRequired → page 22 → 1 wrong OTP (attempts=1) → Back to page 21, whose m_state is
+        still MfaRequired, so isComplete()==true and validatePage() returns true on its FIRST line before ever
+        re-reading the (now-edited) email/password → the correction is silently discarded and routing returns
+        to the SAME page-22 instance with stale attempts/message.
+rule:   any reusable page with a member state machine MUST reset that state on re-entry (override
+        initializePage()/cleanupPage()), OR carry an explicit test asserting Back-then-retry is an intentional
+        no-op. A validatePage()/isComplete() that early-returns on a cached terminal state without re-reading
+        inputs is the smell.
+check:  for each page class with a `State`/`m_state` member + a validatePage()/isComplete() early-return on a
+        terminal value, grep for an `initializePage`/`cleanupPage` override; absent both that AND a
+        back-navigation test = state leak.
+origin: A3-R003-05 (2026-07-18) — found by code-trace; no existing test drove a Back-then-Next sequence.
+        miss:1: the leak shipped in Slice B, caught by the adversary not the builder/gate.
+history:2026-07-18: captured at guard, first occurrence. scope:portable — applies to any wizard/stepper UI
+        with reusable stateful pages in any Qt (or analogous) project.
+
+## LSN-022
+sig:    test / tautological-assertion / always-true-guard
+level:  advisory  scope:portable   since:P2.2(2026-07-18, A3-R003-07)   recur:1   saves:0   miss:1
+tags:   op:test, type:tautological-assertion, scope:portable
+trigger:writing or reviewing a test assertion whose boolean can never be false.
+mistake:TEST-034's stale-reply guard check was `QVERIFY2(codeField(page)->text().isEmpty() == false || true,
+        "stale failure changes nothing observable here")` — the `|| true` makes it unconditionally pass. It
+        was the ONLY assertion meant to cover the stale-failure branch of onAuthFailed, so mutant M1 (dropping
+        the `id != m_pendingId` guard inside GarminMfaPage::onAuthFailed) survived the whole suite: the stale
+        event corrupted the attempt counter, but no assertion inspected it.
+rule:   an assertion that is structurally always-true (`X || true`, `or True`, `expect(true)`, a disjunction
+        with a literal truth) verifies nothing and must be treated as a review-lint FAILURE — replace it with
+        the real observable it was meant to check (here: the attempt counter is unchanged after a stale event).
+check:  grep the changeset's test files for `\|\| true`, `\| \|true`, `or True`, and `QVERIFY2?\([^,]*\|\|`
+        before merge; each hit is a dead assertion. Mechanizable as a pre-commit/CLV grep gate (promotion path
+        if it recurs).
+origin: A3-R003-07 (2026-07-18), tied to surviving mutant M1. miss:1: shipped in Slice B's T-034, caught by
+        the adversary's mutation probe.
+history:2026-07-18: captured at advisory, first occurrence. scope:portable — dead/tautological assertions are
+        a universal test smell; candidate for mechanization (grep lint) if it recurs. Sibling of [[LSN-009]]
+        (a bound too loose to fail) — both are "assertions that cannot distinguish pass from fail."
+
+## LSN-023
+sig:    delegate / readonly-agent-git-blind / stale-status-snapshot
+level:  guard  scope:portable   since:P2.2(2026-07-19, VAL-015)   recur:1   saves:0   miss:1
+tags:   op:delegate, op:verify, type:readonly-agent-git-blind, scope:portable
+trigger:dispatching a read-only agent (qgdw-validator/adversary/scout — Read/Glob/Grep, no Bash/git) for a
+        task whose verdict depends on working-tree or commit state ("is REQ-x committed?", "what's dirty?",
+        "is the commit path-scoped?"), i.e. any CLV run that gates a commit decision.
+mistake:the final REQ-003 CLV briefing did not include a live `git status`; the validator has no git tools,
+        so it fell back to the harness's session-START git-status snapshot — which is FROZEN at session start
+        and predates every REQ-003 file the builders created this session. Seeing no Garmin paths in that
+        stale list, it (correctly, given its evidence) raised a FAIL on the "uncommitted working tree" premise
+        it could not corroborate. All 9 CONTENT checks passed; the FAIL was purely evidence-blocked. The
+        orchestrator resolved it in seconds with `git status --porcelain`/`git log` (which it alone can run).
+rule:   the orchestrator owns git-truth (it has the shell); read-only agents own content. When a dispatch's
+        verdict turns on VCS state, paste a FRESH `git status --porcelain` + relevant `git log --oneline --
+        <paths>` INTO the briefing. Never let a read-only agent infer commit/dirty state from the frozen
+        session-start snapshot — it is stale by construction the moment any file changes.
+check:  before dispatching a commit-gate/working-tree-dependent CLV: does the briefing contain a git-status
+        block captured THIS turn? If not, run it and paste it. On return, treat any git-state finding from a
+        git-less agent as advisory-until-the-orchestrator-confirms-with-real-tooling, never as a hard FAIL.
+origin: VAL-015 (2026-07-19). miss:1: the briefing omission shipped and produced a false FAIL at the commit
+        gate; caught+resolved by the orchestrator's direct git inspection, not prevented at brief time. The
+        validator independently proposed the same rule ("CLV-git-truth") from its side.
+history:2026-07-19: captured at guard, first occurrence. scope:portable — applies to any read-only delegated
+        role whose judgement depends on live VCS state, in any project. Related: [[LSN-016]] (merge-lag vs
+        real defect — another "separate the evidence artifact from the true finding" rule at the CLV gate).
