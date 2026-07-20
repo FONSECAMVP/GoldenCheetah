@@ -65,6 +65,15 @@ class FakeDownloadPyAdapter : public IGarminPyAdapter
     std::atomic<int> callCount{0};
     QThread* threadSeen = nullptr;
 
+    // TEST-044 / REQ-008 Slice A — scriptable listing outcome + the args/thread
+    // the listActivitiesSince() call saw, so the ListActivities-op slots can
+    // drive Success/Network/RateLimit/Unknown and assert verbatim forwarding +
+    // the worker-thread threading invariant.
+    PyListOutcome scriptedListOutcome;
+    QString lastSinceGmt;
+    std::atomic<int> listCallCount{0};
+    QThread* listThreadSeen = nullptr;
+
     PyAuthOutcome authenticate(const QString&, const QString&) override { return {}; }
 
     // REQ-003 (MFA) Slice A seam extension (DEC-013 compile-enforced) — this
@@ -84,6 +93,16 @@ class FakeDownloadPyAdapter : public IGarminPyAdapter
         threadSeen = QThread::currentThread();
         callCount.fetch_add(1);
         return scriptedOutcome;
+    }
+
+    // TEST-044 / REQ-008 Slice A — records the since-timestamp verbatim + the
+    // thread it ran on, and returns the scripted listing outcome.
+    PyListOutcome listActivitiesSince(const QString& sinceGmt) override
+    {
+        lastSinceGmt = sinceGmt;
+        listThreadSeen = QThread::currentThread();
+        listCallCount.fetch_add(1);
+        return scriptedListOutcome;
     }
 };
 
@@ -240,6 +259,188 @@ class TestGarminConnectDownloadWorker : public QObject
         QVERIFY2(fake.threadSeen != nullptr && fake.threadSeen != QThread::currentThread(),
                  "REQ-NF-Threads-001: adapter.downloadActivity must run on the worker thread, not the test thread");
         QVERIFY(fake.threadSeen == &workerThread);
+
+        workerThread.quit();
+        QVERIFY(workerThread.wait(2000));
+    }
+
+    // ==================================================================
+    // TEST-044 — REQ-008 Slice A: GarminWorker ListActivities op. Symmetric to
+    // the DownloadActivity op above (TEST-010): a listActivities(sinceGmt,
+    // requestId) slot forwards to the adapter off the GUI thread and maps
+    // PyListOutcome::Kind to either activitiesListed(id, summaries) (Success) or
+    // listFailed(id, GarminListFailure) (Network / RateLimit / Unknown). The same
+    // requestId round-trips so the future incremental-sync caller (DES-010) can
+    // correlate the async reply. `sinceGmt` is Garmin's server-side timestamp
+    // (DES-010) forwarded verbatim.
+    // ==================================================================
+
+    // Success outcome maps to activitiesListed(uuid, summaries) with the SAME
+    // requestId and the summaries forwarded verbatim (activityId + startTimeGMT
+    // exact), and NO listFailed emission.
+    void listSuccessEmitsActivitiesListedWithSameRequestIdAndSummaries()
+    {
+        FakeDownloadPyAdapter fake;
+        fake.scriptedListOutcome.kind = PyListOutcome::Success;
+        GarminActivitySummary a1;
+        a1.activityId = QStringLiteral("1001");
+        a1.startTimeGMT = QStringLiteral("2026-07-01 06:30:00");
+        GarminActivitySummary a2;
+        a2.activityId = QStringLiteral("1002");
+        a2.startTimeGMT = QStringLiteral("2026-07-03 18:05:11");
+        fake.scriptedListOutcome.activities = {a1, a2};
+        GarminWorker worker(&fake);
+
+        QSignalSpy listedSpy(&worker, &GarminWorker::activitiesListed);
+        QSignalSpy failedSpy(&worker, &GarminWorker::listFailed);
+
+        const QUuid id = QUuid::createUuid();
+        worker.listActivities(QStringLiteral("2026-06-30 00:00:00"), id);
+
+        QCOMPARE(listedSpy.size(), 1);
+        QCOMPARE(failedSpy.size(), 0);
+        QCOMPARE(listedSpy.first().at(0).toUuid(), id);
+        const QVector<GarminActivitySummary> got = listedSpy.first().at(1).value<QVector<GarminActivitySummary>>();
+        QCOMPARE(got.size(), 2);
+        QCOMPARE(got.at(0).activityId, QStringLiteral("1001"));
+        QCOMPARE(got.at(0).startTimeGMT, QStringLiteral("2026-07-01 06:30:00"));
+        QCOMPARE(got.at(1).activityId, QStringLiteral("1002"));
+        QCOMPARE(got.at(1).startTimeGMT, QStringLiteral("2026-07-03 18:05:11"));
+    }
+
+    // The since-timestamp reaches the adapter verbatim (DES-010 — no mangling,
+    // no local-clock substitution). Catches an argument-swap or a hard-coded
+    // timestamp mutant.
+    void sinceTimestampForwardedToAdapterVerbatim()
+    {
+        FakeDownloadPyAdapter fake;
+        fake.scriptedListOutcome.kind = PyListOutcome::Success;
+        GarminWorker worker(&fake);
+
+        worker.listActivities(QStringLiteral("2026-06-30 00:00:00"), QUuid::createUuid());
+
+        QCOMPARE(fake.lastSinceGmt, QStringLiteral("2026-06-30 00:00:00"));
+        QCOMPARE(int(fake.listCallCount.load()), 1);
+    }
+
+    // An empty listing on Success is a NORMAL result (DES-009/DES-010): it emits
+    // activitiesListed with an EMPTY vector, NOT listFailed.
+    void emptyListingIsSuccessNotFailure()
+    {
+        FakeDownloadPyAdapter fake;
+        fake.scriptedListOutcome.kind = PyListOutcome::Success;
+        fake.scriptedListOutcome.activities = {};
+        GarminWorker worker(&fake);
+
+        QSignalSpy listedSpy(&worker, &GarminWorker::activitiesListed);
+        QSignalSpy failedSpy(&worker, &GarminWorker::listFailed);
+
+        const QUuid id = QUuid::createUuid();
+        worker.listActivities(QStringLiteral("2026-06-30 00:00:00"), id);
+
+        QCOMPARE(failedSpy.size(), 0);
+        QCOMPARE(listedSpy.size(), 1);
+        QCOMPARE(listedSpy.first().at(0).toUuid(), id);
+        QVERIFY(listedSpy.first().at(1).value<QVector<GarminActivitySummary>>().isEmpty());
+    }
+
+    // Network outcome maps to listFailed(uuid, {Network, rawMsg}) and NOT
+    // activitiesListed.
+    void networkOutcomeEmitsListFailedNetwork()
+    {
+        FakeDownloadPyAdapter fake;
+        fake.scriptedListOutcome.kind = PyListOutcome::Network;
+        fake.scriptedListOutcome.rawMessage = QStringLiteral("connection refused");
+        GarminWorker worker(&fake);
+
+        QSignalSpy listedSpy(&worker, &GarminWorker::activitiesListed);
+        QSignalSpy failedSpy(&worker, &GarminWorker::listFailed);
+
+        const QUuid id = QUuid::createUuid();
+        worker.listActivities(QStringLiteral("2026-06-30 00:00:00"), id);
+
+        QCOMPARE(listedSpy.size(), 0);
+        QCOMPARE(failedSpy.size(), 1);
+        QCOMPARE(failedSpy.first().at(0).toUuid(), id);
+        const GarminListFailure emitted = failedSpy.first().at(1).value<GarminListFailure>();
+        QCOMPARE(emitted.kind, GarminListFailure::Network);
+        QCOMPARE(emitted.rawMessage, QStringLiteral("connection refused"));
+    }
+
+    // RateLimited maps to a DISTINCT listFailed kind (RateLimit), not Network and
+    // not Unknown — DES-008 has dedicated rate-limit copy (DES-005/DES-010 pace
+    // sync off it).
+    void rateLimitOutcomeEmitsListFailedRateLimit()
+    {
+        FakeDownloadPyAdapter fake;
+        fake.scriptedListOutcome.kind = PyListOutcome::RateLimited;
+        fake.scriptedListOutcome.rawMessage = QStringLiteral("429 slow down");
+        GarminWorker worker(&fake);
+        QSignalSpy failedSpy(&worker, &GarminWorker::listFailed);
+
+        worker.listActivities(QStringLiteral("2026-06-30 00:00:00"), QUuid::createUuid());
+
+        QCOMPARE(failedSpy.size(), 1);
+        const GarminListFailure emitted = failedSpy.first().at(1).value<GarminListFailure>();
+        QVERIFY2(emitted.kind != GarminListFailure::Network, "rate limit must not be misrouted to Network");
+        QCOMPARE(emitted.kind, GarminListFailure::RateLimit);
+        QCOMPARE(emitted.rawMessage, QStringLiteral("429 slow down"));
+    }
+
+    // Unknown maps to listFailed{Unknown} — catches a default-case mutant that
+    // collapses Unknown into another kind.
+    void unknownOutcomeEmitsListFailedUnknown()
+    {
+        FakeDownloadPyAdapter fake;
+        fake.scriptedListOutcome.kind = PyListOutcome::Unknown;
+        fake.scriptedListOutcome.rawMessage = QStringLiteral("library exploded");
+        GarminWorker worker(&fake);
+        QSignalSpy failedSpy(&worker, &GarminWorker::listFailed);
+
+        worker.listActivities(QStringLiteral("2026-06-30 00:00:00"), QUuid::createUuid());
+
+        QCOMPARE(failedSpy.size(), 1);
+        const GarminListFailure emitted = failedSpy.first().at(1).value<GarminListFailure>();
+        QCOMPARE(emitted.kind, GarminListFailure::Unknown);
+        QCOMPARE(emitted.rawMessage, QStringLiteral("library exploded"));
+    }
+
+    // REQ-NF-Threads-001: when the worker is moved to a QThread and the slot is
+    // invoked via a queued connection, the adapter's listActivitiesSince() must
+    // run on the worker thread, NOT the caller/test thread — and
+    // activitiesListed() must still reach a test-thread QSignalSpy.
+    void listAdapterRunsOnWorkerThreadNotCaller()
+    {
+        FakeDownloadPyAdapter fake;
+        fake.scriptedListOutcome.kind = PyListOutcome::Success;
+        GarminActivitySummary a1;
+        a1.activityId = QStringLiteral("1001");
+        a1.startTimeGMT = QStringLiteral("2026-07-01 06:30:00");
+        fake.scriptedListOutcome.activities = {a1};
+
+        QThread workerThread;
+        GarminWorker worker(&fake);
+        worker.moveToThread(&workerThread);
+        workerThread.start();
+
+        QSignalSpy listedSpy(&worker, &GarminWorker::activitiesListed);
+        const QUuid id = QUuid::createUuid();
+        const bool queued =
+            QMetaObject::invokeMethod(&worker, "listActivities", Qt::QueuedConnection,
+                                      Q_ARG(QString, QStringLiteral("2026-06-30 00:00:00")), Q_ARG(QUuid, id));
+        QVERIFY2(queued, "listActivities must be an invokable slot for the queued cross-thread dispatch");
+
+        QVERIFY2(waitFor([&] { return listedSpy.size() >= 1; }),
+                 "activitiesListed() must reach the test-thread spy after the worker-thread listing");
+        QCOMPARE(int(fake.listCallCount.load()), 1);
+        QVERIFY2(fake.listThreadSeen != nullptr && fake.listThreadSeen != QThread::currentThread(),
+                 "REQ-NF-Threads-001: adapter.listActivitiesSince must run on the worker thread, not the test thread");
+        QVERIFY(fake.listThreadSeen == &workerThread);
+        // The summaries still round-trip verbatim across the queued connection.
+        const QVector<GarminActivitySummary> got = listedSpy.first().at(1).value<QVector<GarminActivitySummary>>();
+        QCOMPARE(got.size(), 1);
+        QCOMPARE(got.at(0).activityId, QStringLiteral("1001"));
+        QCOMPARE(got.at(0).startTimeGMT, QStringLiteral("2026-07-01 06:30:00"));
 
         workerThread.quit();
         QVERIFY(workerThread.wait(2000));

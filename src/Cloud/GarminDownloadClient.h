@@ -34,12 +34,14 @@ class GarminDownloadClient : public IGarminDownloadClient
 
     void restoreSession(const QString& tokenBlob, QUuid requestId) override;
     void downloadActivity(const QString& activityId, const QString& fmt, QUuid requestId) override;
+    void listActivities(const QString& sinceGmt, QUuid requestId) override;
 
   signals:
     // Internal — connected to the worker's slots as queued dispatches so the
     // call runs on the worker thread regardless of which thread invoked us.
     void dispatchRestore(QString tokenBlob, QUuid requestId);
     void dispatchDownload(QString activityId, QString fmt, QUuid requestId);
+    void dispatchList(QString sinceGmt, QUuid requestId);
 
   private:
     GarminWorker* m_worker; // not owned — caller's lifetime

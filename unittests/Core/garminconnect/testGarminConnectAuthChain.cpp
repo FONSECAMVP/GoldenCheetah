@@ -94,6 +94,11 @@ class FakePyAdapter : public IGarminPyAdapter
     // REQ-007 closure (Slice 1) seam extension (DEC-013 compile-enforced) — never
     // restores a session here; a default outcome satisfies the interface.
     PyLoadTokensOutcome loadTokens(const QString&) override { return {}; }
+
+    // REQ-008 Slice A seam extension (DEC-013 compile-enforced) — this auth
+    // test never lists activities; a default outcome satisfies the interface so
+    // the target still compiles. No assertion added/changed.
+    PyListOutcome listActivitiesSince(const QString&) override { return {}; }
 };
 
 // ---------------------------------------------------------------------------
@@ -149,6 +154,11 @@ class BusyPyAdapter : public IGarminPyAdapter
     // REQ-007 closure (Slice 1) seam extension (DEC-013 compile-enforced) — never
     // invoked; the wedge is in authenticate().
     PyLoadTokensOutcome loadTokens(const QString&) override { return {}; }
+
+    // REQ-008 Slice A seam extension (DEC-013 compile-enforced) — this auth
+    // test never lists activities; a default outcome satisfies the interface so
+    // the target still compiles. No assertion added/changed.
+    PyListOutcome listActivitiesSince(const QString&) override { return {}; }
 };
 
 // ---------------------------------------------------------------------------

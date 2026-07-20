@@ -67,6 +67,12 @@ class GarminMfaPage : public QWizardPage
     // error. The wizard connects this to reject() so the attempt ends.
     void aborted();
 
+    // REQ-008 (DEC-garmin-019 Option C, stale-reply option b) — emitted EXACTLY
+    // when this page reaches its id-gated terminal Success (the post-MFA path).
+    // Wired alongside GarminCredentialsPage::succeeded so BOTH auth paths persist;
+    // gated by the same m_pendingId guard, so a stale/late reply cannot persist.
+    void succeeded(GarminAuthSuccess result);
+
   private slots:
     void onAuthFinished(QUuid id, GarminAuthSuccess result);
     void onAuthFailed(QUuid id, GarminAuthFailure error);

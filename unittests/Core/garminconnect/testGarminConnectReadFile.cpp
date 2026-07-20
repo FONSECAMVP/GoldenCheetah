@@ -79,6 +79,10 @@ class FakeDownloadClient : public IGarminDownloadClient
         QMetaObject::invokeMethod(this, [this, id]() { emit sessionRestored(id); }, Qt::QueuedConnection);
     }
 
+    // REQ-008 Slice C seam extension (IGarminDownloadClient gained a pure-virtual
+    // list op). The readFile tests never list; a no-op satisfies the interface.
+    void listActivities(const QString& /*sinceGmt*/, QUuid /*id*/) override {}
+
     void downloadActivity(const QString& /*activityId*/, const QString& fmt, QUuid id) override
     {
         downloadFmts << fmt;

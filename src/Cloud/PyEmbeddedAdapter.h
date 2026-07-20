@@ -69,6 +69,13 @@ class PyEmbeddedAdapter : public IGarminPyAdapter
     // into a non-Success PyDownloadOutcome (Network/RateLimited/Unknown).
     PyDownloadOutcome downloadActivity(const QString& activityId, const QString& fmt) override;
 
+    // REQ-008 Slice A — list activities newer than `sinceGmt` via the retained
+    // authenticated client (calls garmin_client.GarminClient.list_activities_since).
+    // Never throws; interpreter-down / no-session / library errors all fold into
+    // a non-Success PyListOutcome (Network/RateLimited/Unknown). Classified by
+    // exception TYPE + .kind (LSN-006), same as downloadActivity().
+    PyListOutcome listActivitiesSince(const QString& sinceGmt) override;
+
     // REQ-007 closure (Slice 1) — restore a session from a stored OAuth blob via
     // garmin_client.GarminClient.load_tokens(). Constructs a fresh client
     // WITHOUT a password (REQ-005 / REQ-NF-Compat-001(b)) and retains it for

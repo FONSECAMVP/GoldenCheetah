@@ -53,6 +53,15 @@ class GarminTokenStore
     // <athleteConfigDir>/garminconnect/tokens.json
     static QString tokenFilePath(const QString& athleteConfigDir);
 
+    // REQ-008 Slice D / DEC-garmin-018 (Option B) — the SEPARATE, account-agnostic
+    // pointer file <athleteConfigDir>/garminconnect/active-account.json that
+    // records which garmin_user_id is currently connected as {"garmin_user_id":
+    // "<uid>"}. It is deliberately NOT inside tokens.json (whose schema is
+    // security-locked by REQ-006/007 — it carries only the raw garth OAuth blob):
+    // resolveGarminUserId() reads THIS file, tokens.json stays the sole home of
+    // the opaque blob.
+    static QString activeAccountFilePath(const QString& athleteConfigDir);
+
     // Ensures <athleteConfigDir>/garminconnect/ exists (created 0700 POSIX /
     // owner-only if ABSENT — an existing dir's perms are NOT tightened, per
     // DES-002), then writes `tokenBlob` to tokens.json via
@@ -60,6 +69,36 @@ class GarminTokenStore
     // failure without corrupting a pre-existing token file. Two distinct
     // athlete dirs yield fully independent files.
     static bool save(const QString& athleteConfigDir, const QByteArray& tokenBlob);
+
+    // REQ-008 Slice D / DEC-garmin-018 — write active-account.json =
+    // {"garmin_user_id": garminUserId} via AtomicFile (owner-only 0600, tmp+rename),
+    // creating garminconnect/ 0700 if absent (same as save()). Returns false on any
+    // failure without corrupting a pre-existing file.
+    static bool saveActiveAccount(const QString& athleteConfigDir, const QString& garminUserId);
+
+    // REQ-008 Slice D — read the connected garmin_user_id from active-account.json.
+    // Tolerant: a missing / unreadable / torn / non-object file yields an EMPTY
+    // string (the existing graceful "no connected account" behaviour — readdir then
+    // no-ops rather than keying a mis-named sidecar). No perms enforcement (the file
+    // is a non-secret account pointer, not the OAuth blob).
+    static QString loadActiveAccountUserId(const QString& athleteConfigDir);
+
+    // REQ-008 Slice D — the connect-success PRODUCER (closes A3-R008-01). Persists a
+    // successful connect atomically: writes tokens.json FIRST (the opaque blob, 0600
+    // via save()), THEN active-account.json (0600 via saveActiveAccount()). The
+    // ordering is per DEC-garmin-018's crash-risk note: a crash between the two
+    // leaves at worst a missing active-account.json (-> empty uid -> a safe no-op),
+    // never a token file pointing at the WRONG active account. Returns true only if
+    // BOTH writes succeed.
+    static bool persistConnectSuccess(const QString& athleteConfigDir, const QString& garminUserId,
+                                      const QByteArray& tokenBlob);
+
+    // REQ-008 Slice D — Disconnect (DES-002): delete tokens.json + active-account.json
+    // so the account is no longer connected, while PRESERVING the per-account
+    // sidecars imported-<uid>.json / backfill-state-<uid>.json (REQ-012 — imported/
+    // backfill history survives a disconnect). Absent files are not an error.
+    // Returns false only if an existing target could not be removed.
+    static bool clearAccount(const QString& athleteConfigDir);
 
     // Minimal plain read of tokens.json (no perms enforcement). Returns the
     // file bytes; on absence/read failure returns an empty QByteArray and sets

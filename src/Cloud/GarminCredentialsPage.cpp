@@ -92,7 +92,7 @@ void GarminCredentialsPage::initializePage()
     emit completeChanged();
 }
 
-void GarminCredentialsPage::onAuthFinished(QUuid id, GarminAuthSuccess)
+void GarminCredentialsPage::onAuthFinished(QUuid id, GarminAuthSuccess result)
 {
     if (id != m_pendingId)
         return; // stale reply guard.
@@ -101,6 +101,9 @@ void GarminCredentialsPage::onAuthFinished(QUuid id, GarminAuthSuccess)
                 // latched terminal state (e.g. MfaRequired → routed to page 22).
     m_state = Success;
     emit completeChanged();
+    // REQ-008 (DEC-garmin-019 C) — only a FRESH, id-gated success reaches here, so
+    // this drives the wizard's persist without ever acting on a stale/late reply.
+    emit succeeded(result);
 }
 
 void GarminCredentialsPage::onAuthFailed(QUuid id, GarminAuthFailure error)

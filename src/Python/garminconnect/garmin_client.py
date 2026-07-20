@@ -199,7 +199,41 @@ class GarminClient:
         }
 
     def list_activities_since(self, ts_gmt: str) -> Iterator[dict[str, Any]]:
-        raise NotImplementedError("REQ-008 GREEN step not yet implemented")
+        # REQ-008 Slice A (DES-010 step 4 / DES-012). List the activities whose
+        # Garmin server-side startTimeGMT is newer than ts_gmt. `ts_gmt` is
+        # Garmin's SERVER-SIDE timestamp, NOT the local clock (DES-010 — protects
+        # against clock-skew duplicates), and it is forwarded to the library
+        # VERBATIM (no reformatting, no local-clock substitution). Dedup and
+        # download are later slices (B/C) — this is a thin list+translate.
+        #
+        # Error translation mirrors download_activity(): classify by exception
+        # TYPE, then re-raise as a GC-stable GarminError kind (LSN-006). Only the
+        # known-transient listing errors become kinds; anything else (a foreign
+        # exception, or a malformed activity record → KeyError) propagates
+        # unchanged rather than inheriting a Garmin kind. Translation is EAGER
+        # (the summaries are built here, not lazily inside a generator) so a
+        # caller sees connection/rate_limit at call time exactly like the sibling
+        # methods; the return is still a true Iterator (DES-012 signature).
+        #
+        # NOTE(DEC-014 OQ1): the exact python-garminconnect listing signature
+        # (get_activities_by_date vs get_activities, and its date/paging bounds)
+        # is unconfirmed against the not-yet-bundled wheel (like dumps()/loads()
+        # elsewhere in this module); the since-timestamp is forwarded verbatim and
+        # the surface is pinned by the fakes/pystub until the wheel is bundled
+        # (DES-007/Pkg). Swapping it is a one-line change here (DES-012 is the
+        # single point of underlying-library knowledge).
+        try:
+            raw = self._garmin.get_activities_by_date(ts_gmt)
+        except _gc.exceptions.GarminConnectConnectionError as e:
+            raise GarminError("connection", str(e) or "Could not reach Garmin Connect", e) from e
+        except _gc.exceptions.GarminConnectTooManyRequestsError as e:
+            raise GarminError("rate_limit", str(e) or "Garmin Connect is rate-limiting listing", e) from e
+        # Normalize each library record to the GC-stable summary shape carrying at
+        # least activityId + startTimeGMT (as strings, matching what the C++ seam
+        # marshals). Extra library keys are dropped; a record missing either key
+        # is a library contract breach whose KeyError propagates unclassified.
+        summaries = [{"activityId": str(a["activityId"]), "startTimeGMT": str(a["startTimeGMT"])} for a in raw]
+        return iter(summaries)
 
     def download_activity(self, activity_id: str, fmt: str = "ORIGINAL") -> bytes:
         # REQ-007 / DEC-006: FIT is the default (dl_fmt=ORIGINAL); TCX is the

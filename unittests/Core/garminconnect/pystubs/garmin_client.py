@@ -42,6 +42,17 @@ DL_PAYLOAD = b"\x00\x01\x02FIT\x00\xff\xfe\x0a"
 # mfa_required sentinel and submit_mfa()'s success / auth-error branches.
 LAST_MFA_CODE = None
 
+# T-043 / REQ-008 Slice A — list_activities_since() records the since-timestamp
+# it saw so the C++ side can assert verbatim forwarding through the REAL bridge
+# (PyEmbeddedAdapter.listActivitiesSince → m_client.list_activities_since). The
+# canned summaries carry activityId + startTimeGMT (the two keys the C++ marshaller
+# reads); an int activityId proves the marshaller str()-normalizes non-unicode.
+LAST_SINCE_GMT = None
+LIST_SUMMARIES = [
+    {"activityId": 1001, "startTimeGMT": "2026-07-01 06:30:00"},
+    {"activityId": 1002, "startTimeGMT": "2026-07-03 18:05:11"},
+]
+
 
 class GarminError(Exception):
     """Shape-compatible with the production GarminError (.kind / .message)."""
@@ -158,3 +169,33 @@ class GarminClient:
         if SCENARIO == "dl_value_error":
             raise ValueError("stub: not a garmin error (download)")
         raise GarminError("unknown", "stub: unrecognized dl scenario %r" % (SCENARIO,))
+
+    # T-043 / REQ-008 Slice A — list_activities_since mirrors the production
+    # garmin_client.GarminClient as PyEmbeddedAdapter.listActivitiesSince() calls
+    # it: (ts_gmt) -> Iterator[dict], raising GarminError(.kind) for translated
+    # failures. Behaviour is switched on list_* SCENARIO values (disjoint from the
+    # login/dl scenarios above, so a single SCENARIO switch drives them all). The
+    # since-timestamp is recorded verbatim; on success an ITERATOR (not a list) is
+    # returned so the C++ side proves it marshals via the iterator protocol.
+    def list_activities_since(self, ts_gmt):
+        global LAST_SINCE_GMT
+        LAST_SINCE_GMT = ts_gmt
+        if SCENARIO == "list_success":
+            return iter(LIST_SUMMARIES)
+        if SCENARIO == "list_empty":
+            return iter([])
+        if SCENARIO == "list_non_iterable":
+            return 42  # contract breach → Unknown, never Success
+        if SCENARIO == "list_bad_item":
+            # TEST-053 / F3 — the list IS iterable but yields a NON-dict item
+            # (a valid dict first, then an int). PyEmbeddedAdapter's per-item
+            # PyDict_Check guard must fold the WHOLE listing to Unknown, never a
+            # partial Success carrying a phantom empty-id/empty-timestamp row.
+            return iter([{"activityId": 1001, "startTimeGMT": "2026-07-01 06:30:00"}, 42])
+        if SCENARIO == "list_connection":
+            raise GarminError("connection", "stub: listing connection refused")
+        if SCENARIO == "list_rate_limit":
+            raise GarminError("rate_limit", "stub: listing rate-limited")
+        if SCENARIO == "list_value_error":
+            raise ValueError("stub: not a garmin error (listing)")
+        raise GarminError("unknown", "stub: unrecognized list scenario %r" % (SCENARIO,))

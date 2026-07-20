@@ -76,6 +76,10 @@ class FakeRestoreClient : public IGarminDownloadClient
             Qt::QueuedConnection);
     }
 
+    // REQ-008 Slice C seam extension (IGarminDownloadClient gained a pure-virtual
+    // list op). The open()/close() tests never list; a no-op satisfies the interface.
+    void listActivities(const QString&, QUuid) override {}
+
     void downloadActivity(const QString&, const QString& fmt, QUuid id) override
     {
         ++downloadCalls; // open() must NEVER reach here on the failure paths

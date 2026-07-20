@@ -1399,6 +1399,13 @@ if(GC_WANT_GARMINCONNECT)
         # to GarminTokenStore::loadChecked (B-R007-03).
         Cloud/GarminTokenStore.cpp
         Cloud/GarminTokenStore.h
+        # REQ-008 Slice B (DEC-017 A): per-account sidecar store (imported-<uid>.json
+        # dedup map + backfill-state-<uid>.json resume cursor). Pure-Qt, uses
+        # AtomicFile for the atomic 0600 writes. Must link into the main binary or
+        # GC_WANT_GARMINCONNECT builds fail with an undefined reference once Slice C
+        # wires it into the download flow (LSN-018).
+        Cloud/GarminSidecarStore.cpp
+        Cloud/GarminSidecarStore.h
         Cloud/AtomicFile.cpp
         Cloud/AtomicFile.h
         Cloud/IGarminAuthClient.h

@@ -15,9 +15,11 @@
 #define _GC_GARMIN_READFILE_STUB_PREAMBLE_H
 
 #include <QByteArray>
+#include <QDateTime>
 #include <QDir>
 #include <QHash>
 #include <QImage>
+#include <QList>
 #include <QString>
 #include <QStringList>
 #include <QVariant>
@@ -66,9 +68,26 @@ class Context
 #ifndef GC_CloudService_h
 #    define GC_CloudService_h
 
-class CloudServiceEntry;
 class RideItem;
 class RideFile;
+
+// Minimal CloudServiceEntry mirroring the real one's fields that GarminConnect's
+// readdir populates (id/name/isDir/modified) — enough for the REQ-008 Slice C
+// sync tests to assert the built entries. The real base owns/frees entries via
+// newCloudServiceEntry()/list_ (see CloudService below).
+class CloudServiceEntry
+{
+  public:
+    QString name;
+    QString label;
+    QString id;
+    bool isDir = false;
+    unsigned long size = 0;
+    QDateTime modified;
+    double distance = 0;
+    long duration = 0;
+    bool initial = true;
+};
 
 class CloudServiceAthlete
 {
@@ -106,7 +125,12 @@ class CloudService
     };
 
     CloudService(Context* c) : context(c) {}
-    virtual ~CloudService() {}
+    virtual ~CloudService()
+    {
+        for (CloudServiceEntry* e : list_)
+            delete e;
+        list_.clear();
+    }
 
     virtual CloudService* clone(Context*) = 0;
     virtual QString id() const { return QStringLiteral("NONE"); }
@@ -123,12 +147,33 @@ class CloudService
         return false;
     }
     virtual bool close() { return false; }
+
+    // REQ-008 (DEC-garmin-019 Option C) — connect/disconnect persistence hooks.
+    // Mirror the real CloudService.h defaults so GarminConnect's overrides compile
+    // against this stubbed base. Defaults are no-ops; GarminConnect overrides them.
+    virtual void persistConnectSuccess(const QString& garminUserId, const QString& tokenBlob)
+    {
+        Q_UNUSED(garminUserId);
+        Q_UNUSED(tokenBlob);
+    }
+    virtual void disconnectService() {}
+
     virtual bool readFile(QByteArray* data, QString remotename, QString remoteid)
     {
         Q_UNUSED(data);
         Q_UNUSED(remotename);
         Q_UNUSED(remoteid);
         return false;
+    }
+
+    // Dirent-style enumeration seam (REQ-008 Slice C readdir override target).
+    virtual QList<CloudServiceEntry*> readdir(QString path, QStringList& errors, QDateTime from, QDateTime to)
+    {
+        Q_UNUSED(path);
+        Q_UNUSED(from);
+        Q_UNUSED(to);
+        errors << QStringLiteral("not implemented.");
+        return QList<CloudServiceEntry*>();
     }
 
     // Production CloudService::notifyReadComplete emits readComplete(); the
@@ -153,6 +198,18 @@ class CloudService
     QHash<CloudServiceSetting, QString> settings;
     QHash<QString, QVariant> configuration;
     Context* context;
+
+  protected:
+    // Mirrors CloudService::newCloudServiceEntry(): base owns the entries and
+    // frees them in the dtor, so readdir() implementations do not leak.
+    CloudServiceEntry* newCloudServiceEntry()
+    {
+        CloudServiceEntry* p = new CloudServiceEntry();
+        p->initial = true;
+        list_ << p;
+        return p;
+    }
+    QList<CloudServiceEntry*> list_;
 };
 
 class CloudServiceFactory
@@ -200,6 +257,9 @@ class PyEmbeddedAdapter : public IGarminPyAdapter
     PyAuthOutcome submitMfa(const QString&) override { return {}; }
     PyDownloadOutcome downloadActivity(const QString&, const QString&) override { return {}; }
     PyLoadTokensOutcome loadTokens(const QString&) override { return {}; }
+    // REQ-008 Slice A seam extension (DEC-013 compile-enforced) — readFile does
+    // not list; a default outcome satisfies the interface so this stub compiles.
+    PyListOutcome listActivitiesSince(const QString&) override { return {}; }
     QString modulePath() const { return m_modulePath; }
 
   private:

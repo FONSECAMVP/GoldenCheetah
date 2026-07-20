@@ -14,6 +14,8 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
 
 QString GarminTokenStore::directoryFor(const QString& athleteConfigDir)
 {
@@ -23,6 +25,11 @@ QString GarminTokenStore::directoryFor(const QString& athleteConfigDir)
 QString GarminTokenStore::tokenFilePath(const QString& athleteConfigDir)
 {
     return QDir(directoryFor(athleteConfigDir)).filePath(QStringLiteral("tokens.json"));
+}
+
+QString GarminTokenStore::activeAccountFilePath(const QString& athleteConfigDir)
+{
+    return QDir(directoryFor(athleteConfigDir)).filePath(QStringLiteral("active-account.json"));
 }
 
 bool GarminTokenStore::save(const QString& athleteConfigDir, const QByteArray& tokenBlob)
@@ -39,6 +46,66 @@ bool GarminTokenStore::save(const QString& athleteConfigDir, const QByteArray& t
 
     // C++ owns the single atomic 0600 write of the opaque blob (DEC-014 B).
     return AtomicFile::writeOver(tokenFilePath(athleteConfigDir), tokenBlob);
+}
+
+bool GarminTokenStore::saveActiveAccount(const QString& athleteConfigDir, const QString& garminUserId)
+{
+    const QString dirPath = directoryFor(athleteConfigDir);
+
+    // Create garminconnect/ 0700 ONLY when absent (mirrors save(); DES-002 does not
+    // tighten an existing dir's perms).
+    if (!QFileInfo(dirPath).isDir()) {
+        if (!QDir().mkpath(dirPath))
+            return false;
+        QFile::setPermissions(dirPath, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+    }
+
+    // DEC-garmin-018 — {"garmin_user_id": "<uid>"}, atomic 0600 (AtomicFile default).
+    QJsonObject obj;
+    obj.insert(QStringLiteral("garmin_user_id"), garminUserId);
+    const QByteArray bytes = QJsonDocument(obj).toJson(QJsonDocument::Compact);
+    return AtomicFile::writeOver(activeAccountFilePath(athleteConfigDir), bytes);
+}
+
+QString GarminTokenStore::loadActiveAccountUserId(const QString& athleteConfigDir)
+{
+    // Tolerant, non-secret read: any absence / read error / torn-or-foreign JSON
+    // yields an empty id so the caller no-ops rather than keying a mis-named
+    // sidecar (DEC-garmin-018 graceful-degradation note).
+    QFile f(activeAccountFilePath(athleteConfigDir));
+    if (!f.open(QIODevice::ReadOnly))
+        return QString();
+    const QByteArray bytes = f.readAll();
+    f.close();
+    const QJsonDocument doc = QJsonDocument::fromJson(bytes);
+    if (!doc.isObject())
+        return QString();
+    return doc.object().value(QStringLiteral("garmin_user_id")).toString();
+}
+
+bool GarminTokenStore::persistConnectSuccess(const QString& athleteConfigDir, const QString& garminUserId,
+                                             const QByteArray& tokenBlob)
+{
+    // DEC-garmin-018 ordering: tokens.json FIRST, then active-account.json — a crash
+    // between the two degrades to a missing active-account.json (empty uid -> safe
+    // no-op), never a token file bound to the wrong active account.
+    if (!save(athleteConfigDir, tokenBlob))
+        return false;
+    return saveActiveAccount(athleteConfigDir, garminUserId);
+}
+
+bool GarminTokenStore::clearAccount(const QString& athleteConfigDir)
+{
+    // Disconnect (DES-002): remove the two connect-success artefacts. The
+    // per-account sidecars (imported-<uid>.json / backfill-state-<uid>.json) are
+    // deliberately left untouched — REQ-012 preserves imported/backfill history
+    // across a disconnect. Absent files are not a failure.
+    bool ok = true;
+    for (const QString& path : {tokenFilePath(athleteConfigDir), activeAccountFilePath(athleteConfigDir)}) {
+        if (QFileInfo::exists(path) && !QFile::remove(path))
+            ok = false;
+    }
+    return ok;
 }
 
 QByteArray GarminTokenStore::load(const QString& athleteConfigDir, bool* ok)

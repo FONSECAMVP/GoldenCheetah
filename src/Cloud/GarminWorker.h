@@ -28,6 +28,7 @@
 #include <QObject>
 #include <QString>
 #include <QUuid>
+#include <QVector>
 
 // REQ-007 — the failure payload of GarminWorker::downloadFailed. Mirrors
 // GarminAuthFailure one op down; `rawMessage` is the untranslated library
@@ -57,6 +58,29 @@ struct GarminRestoreFailure
 };
 Q_DECLARE_METATYPE(GarminRestoreFailure)
 
+// REQ-008 Slice A — the failure payload of GarminWorker::listFailed. Mirrors
+// GarminDownloadFailure one op sideways; `rawMessage` is the untranslated
+// library message (DES-008 translates at the consumer/ErrorBus layer). RateLimit
+// is a DISTINCT kind (not folded into Unknown) because DES-008 has dedicated
+// rate-limit copy and DES-005/DES-010 pace sync off it. Registered as a metatype
+// (below + qRegisterMetaType in the ctor) so it can cross the worker thread
+// boundary via a queued connection.
+struct GarminListFailure
+{
+    enum Kind { Network, RateLimit, Unknown };
+    Kind kind = Unknown;
+    QString rawMessage;
+};
+Q_DECLARE_METATYPE(GarminListFailure)
+
+// REQ-008 Slice A — the success payload element of GarminWorker::activitiesListed
+// crosses the worker thread boundary as a QVector<GarminActivitySummary>; both
+// the element and the container are registered as metatypes (in the ctor) so a
+// queued connection / QSignalSpy can carry them. GarminActivitySummary itself is
+// defined in IGarminPyAdapter.h.
+Q_DECLARE_METATYPE(GarminActivitySummary)
+Q_DECLARE_METATYPE(QVector<GarminActivitySummary>)
+
 class GarminWorker : public QObject
 {
     Q_OBJECT
@@ -75,6 +99,15 @@ class GarminWorker : public QObject
     // GUI thread. Emits downloaded() on Success, else downloadFailed(). `fmt`
     // is forwarded verbatim so the future readFile fallback can drive it.
     void downloadActivity(const QString& activityId, const QString& fmt, QUuid requestId);
+
+    // REQ-008 Slice A — list the activities whose Garmin server-side
+    // startTimeGMT is newer than `sinceGmt` (DES-010 step 4) via the retained
+    // adapter session, off the GUI thread. Emits activitiesListed() on Success
+    // (with the summaries — possibly empty, a normal result), else listFailed().
+    // `sinceGmt` is forwarded verbatim (DES-010 — Garmin's server-side timestamp,
+    // never the local clock). Same requestId-forwarding discipline as
+    // downloadActivity().
+    void listActivities(const QString& sinceGmt, QUuid requestId);
 
     // REQ-007 closure (Slice 1) — restore an authenticated session from a stored
     // OAuth blob (REQ-006 tokens) via the adapter's loadTokens(), off the GUI
@@ -104,6 +137,13 @@ class GarminWorker : public QObject
     // REQ-007 — download results, same threading contract as above.
     void downloaded(QUuid id, QByteArray data);
     void downloadFailed(QUuid id, GarminDownloadFailure error);
+
+    // REQ-008 Slice A — listing results, same threading contract as above.
+    // activitiesListed carries the summaries verbatim (SAME requestId); an empty
+    // vector on activitiesListed is a normal "nothing newer" success, NOT a
+    // failure (DES-009/DES-010).
+    void activitiesListed(QUuid id, QVector<GarminActivitySummary> summaries);
+    void listFailed(QUuid id, GarminListFailure error);
 
     // REQ-007 closure (Slice 1) — restore results, same threading contract.
     void sessionRestored(QUuid id);

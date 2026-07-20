@@ -52,6 +52,15 @@ class GarminCredentialsPage : public QWizardPage
     // route to the MFA page (id 22) instead of the post-auth 25/30.
     bool mfaPending() const { return m_state == MfaRequired; }
 
+  signals:
+    // REQ-008 (DEC-garmin-019 Option C, stale-reply option b) — emitted EXACTLY
+    // when this page reaches its id-gated terminal Success (the direct auth path).
+    // The wizard connects this to drive the connect-success persist. Because it is
+    // fired only from the m_pendingId-gated onAuthFinished (m_state == InFlight),
+    // a stale/superseded/duplicate finished() can never emit it — the A3-R003-06
+    // guard is preserved by construction, so a late abandoned reply cannot persist.
+    void succeeded(GarminAuthSuccess result);
+
   private slots:
     void onAuthFinished(QUuid id, GarminAuthSuccess result);
     void onAuthFailed(QUuid id, GarminAuthFailure error);

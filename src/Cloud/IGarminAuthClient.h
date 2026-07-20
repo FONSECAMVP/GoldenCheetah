@@ -30,6 +30,16 @@ struct GarminAuthSuccess
 {
     QString garmin_user_id;
     QString display_name;
+
+    // REQ-008 Slice D / DEC-014 Option B — the opaque OAuth session blob exported
+    // at auth-success (PyAuthOutcome::tokenBlob, forwarded verbatim by
+    // GarminWorker::emitAuthOutcome). The connect-success producer hands this to
+    // GarminTokenStore::save, which owns the atomic 0600 write to tokens.json.
+    // Empty when the adapter could not export a blob (never fails the auth itself).
+    // Adding this member is metatype-safe: GarminAuthSuccess is a copyable value
+    // struct marshalled across the queued worker->page connection and adding a
+    // QString field does not change its Q_DECLARE_METATYPE registration.
+    QString tokenBlob;
 };
 
 struct GarminAuthFailure

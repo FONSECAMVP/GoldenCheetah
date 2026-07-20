@@ -43,6 +43,8 @@ add_executable(testGarminConnectTile
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.h
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminTokenStore.cpp
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminTokenStore.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminSidecarStore.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminSidecarStore.h
     ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.cpp
     ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.h
     ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminDownloadClient.h
@@ -277,6 +279,14 @@ add_executable(testGarminConnectWizardRouting
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminCredentialsPage.h
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminMfaPage.cpp
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminMfaPage.h
+    # REQ-008 (T-051) — the REAL connect-success producer + atomic writer, so the
+    # wizard's persist trigger writes real tokens.json/active-account.json under the
+    # stubbed CloudService (LSN-018 — a test target linking a production .cpp it
+    # didn't before must add it here).
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminTokenStore.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminTokenStore.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.h
     ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminAuthClient.h
     ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminPyAdapter.h
 )
@@ -550,6 +560,8 @@ add_executable(testGarminConnectOpen
     ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminPyAdapter.h
     ${CMAKE_SOURCE_DIR}/contrib/qzip/zip.cpp
     ${CMAKE_SOURCE_DIR}/contrib/qzip/zipreader.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminSidecarStore.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminSidecarStore.h
     ${CMAKE_SOURCE_DIR}/contrib/qzip/zipwriter.h
 )
 
@@ -605,6 +617,8 @@ add_executable(testGarminConnectReadFile
     ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminPyAdapter.h
     ${CMAKE_SOURCE_DIR}/contrib/qzip/zip.cpp
     ${CMAKE_SOURCE_DIR}/contrib/qzip/zipreader.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminSidecarStore.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminSidecarStore.h
     ${CMAKE_SOURCE_DIR}/contrib/qzip/zipwriter.h
 )
 
@@ -631,3 +645,162 @@ target_compile_features(testGarminConnectReadFile PRIVATE cxx_std_17)
 
 add_test(NAME testGarminConnectReadFile COMMAND testGarminConnectReadFile)
 set_tests_properties(testGarminConnectReadFile PROPERTIES LABELS "garmin-fast")
+
+# --- T-045 / T-046 — REQ-008 Slice B (DEC-017 A): GarminSidecarStore -----------
+# Per-account sidecar persistence layer mirroring GarminTokenStore: owns the two
+# per-account files (imported-<uid>.json Tier-1 dedup map + backfill-state-<uid>.json
+# resume cursor). Pure-Qt (no Python.h) — `garmin-fast` label. Links the new
+# GarminSidecarStore TU plus AtomicFile (DES-006, the atomic 0600 writer).
+#
+# RED phase: src/Cloud/GarminSidecarStore.{h,cpp} do not exist yet — the compile
+# fails at the test's #include "GarminSidecarStore.h" (right-reason RED). GREEN
+# adds those files AND keeps them in this add_executable() so the link resolves.
+# LSN-018: this NEW production .cpp is registered BOTH here and in the app's
+# GC_WANT_GARMINCONNECT source list (src/CMakeLists.txt).
+add_executable(testGarminSidecarStore
+    testGarminSidecarStore.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminSidecarStore.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminSidecarStore.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.h
+)
+
+target_include_directories(testGarminSidecarStore PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+)
+
+target_link_libraries(testGarminSidecarStore PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Test
+)
+target_compile_features(testGarminSidecarStore PRIVATE cxx_std_17)
+
+add_test(NAME testGarminSidecarStore COMMAND testGarminSidecarStore)
+set_tests_properties(testGarminSidecarStore PROPERTIES LABELS "garmin-fast")
+
+# --- T-047 / T-048 — REQ-008 Slice C: GarminConnect incremental-sync ----------
+# The DES-010 flow bound onto CloudService's readdir/readFile sync machinery:
+# readdir drives the Slice-A worker list op (off the caller thread via the REAL
+# GarminDownloadChain), builds one CloudServiceEntry per activity, short-circuits
+# already-imported ids against imported-<uid>.json (Tier-1 dedup), and rejects a
+# concurrent sync (REQ-NF-Perf-002); readFile records each successful download
+# into the sidecar + advances backfill-state. Same Python-free stubbing as
+# testGarminConnectReadFile (ReadFileStubPreamble + Python-free PyEmbeddedAdapter
+# fake) PLUS the REAL GarminSidecarStore + AtomicFile (Slice B) and real
+# contrib/qzip for the FIT unwrap. A fake IGarminPyAdapter/IGarminDownloadClient
+# scripts the listing/download.
+#
+# RED phase: GarminConnect has no readdir override and IGarminDownloadClient has
+# no listActivities op yet — the compile fails at those references (right-reason
+# RED). GREEN adds them.
+add_executable(testGarminConnectSync
+    testGarminConnectSync.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminConnect.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminConnect.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadChain.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadChain.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadClient.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminTokenStore.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminTokenStore.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminSidecarStore.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminSidecarStore.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminDownloadClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminAuthClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminPyAdapter.h
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zip.cpp
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipreader.h
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipwriter.h
+)
+
+set_target_properties(testGarminConnectSync PROPERTIES AUTOMOC ON)
+
+target_include_directories(testGarminConnectSync PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+    ${CMAKE_SOURCE_DIR}/contrib/qzip
+)
+
+target_compile_options(testGarminConnectSync PRIVATE
+    "-include${CMAKE_CURRENT_SOURCE_DIR}/stubs/ReadFileStubPreamble.h"
+)
+
+find_package(ZLIB REQUIRED)
+target_link_libraries(testGarminConnectSync PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Gui
+    Qt${QT_VERSION_MAJOR}::Test
+    ZLIB::ZLIB
+)
+target_compile_features(testGarminConnectSync PRIVATE cxx_std_17)
+
+add_test(NAME testGarminConnectSync COMMAND testGarminConnectSync)
+set_tests_properties(testGarminConnectSync PROPERTIES LABELS "garmin-fast")
+
+# --- T-049 / T-050 — REQ-008 Slice D: connect->persist producer wiring ---------
+# Closes adversary finding A3-R008-01: the connect-success producer writes were
+# never wired, so sync could never run in production (only the ctor uid-override
+# masked the gap — LSN-024). This slice adds the producer: GarminAuthSuccess now
+# carries the tokenBlob forward (GarminWorker), GarminTokenStore persists BOTH
+# tokens.json AND the account-agnostic active-account.json (DEC-garmin-018 Option
+# B), and GarminConnect::resolveGarminUserId() reads active-account.json.
+#
+# T-049 (producer unit) drives GarminTokenStore::persistConnectSuccess /
+# loadActiveAccountUserId / clearAccount + a FRESH (no-override) GarminConnect's
+# readdir. T-050 (end-to-end) drives auth-success through the REAL GarminWorker,
+# persists, then a FRESH GarminConnect resolves the uid from disk and readdir
+# returns the scripted entries. Same Python-free stubbing as testGarminConnectSync
+# (ReadFileStubPreamble + Python-free PyEmbeddedAdapter fake) with the REAL
+# GarminTokenStore + GarminSidecarStore + AtomicFile backing the disk I/O.
+add_executable(testGarminConnectConnectPersist
+    testGarminConnectConnectPersist.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminConnect.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminConnect.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadChain.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadChain.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadClient.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminTokenStore.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminTokenStore.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminSidecarStore.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminSidecarStore.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminDownloadClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminAuthClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminPyAdapter.h
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zip.cpp
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipreader.h
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipwriter.h
+)
+
+set_target_properties(testGarminConnectConnectPersist PROPERTIES AUTOMOC ON)
+
+target_include_directories(testGarminConnectConnectPersist PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+    ${CMAKE_SOURCE_DIR}/contrib/qzip
+)
+
+target_compile_options(testGarminConnectConnectPersist PRIVATE
+    "-include${CMAKE_CURRENT_SOURCE_DIR}/stubs/ReadFileStubPreamble.h"
+)
+
+find_package(ZLIB REQUIRED)
+target_link_libraries(testGarminConnectConnectPersist PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Gui
+    Qt${QT_VERSION_MAJOR}::Test
+    ZLIB::ZLIB
+)
+target_compile_features(testGarminConnectConnectPersist PRIVATE cxx_std_17)
+
+add_test(NAME testGarminConnectConnectPersist COMMAND testGarminConnectConnectPersist)
+set_tests_properties(testGarminConnectConnectPersist PROPERTIES LABELS "garmin-fast")

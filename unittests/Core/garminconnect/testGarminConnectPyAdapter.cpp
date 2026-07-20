@@ -165,6 +165,13 @@ class TestGarminConnectPyAdapter : public QObject
         QCOMPARE(dOut.kind, PyDownloadOutcome::Unknown);
         QCOMPARE(dOut.rawMessage, QStringLiteral("embedded Python unavailable"));
 
+        // TEST-043 — the same fail-safe for the listing op: before the
+        // interpreter is up, listActivitiesSince must fold to Unknown /
+        // "embedded Python unavailable" without crashing (DES-013 step 1).
+        const PyListOutcome lOut = early.listActivitiesSince(QStringLiteral("2026-06-30 00:00:00"));
+        QCOMPARE(lOut.kind, PyListOutcome::Unknown);
+        QCOMPARE(lOut.rawMessage, QStringLiteral("embedded Python unavailable"));
+
         // Now bring the interpreter up and release the GIL from this (main)
         // thread so PyGILState_Ensure works from any thread afterwards.
         Py_Initialize();
@@ -571,6 +578,177 @@ class TestGarminConnectPyAdapter : public QObject
 
         QCOMPARE(out.kind, PyDownloadOutcome::Success);
         QCOMPARE(out.data, kExpectedDownload);
+    }
+
+    // ==================================================================
+    // TEST-043 / REQ-008 Slice A — listActivitiesSince marshalling (DES-013
+    // extension, same DEC-013 seam one op sideways). PyEmbeddedAdapter
+    // .listActivitiesSince() forwards `sinceGmt` VERBATIM (DES-010 — Garmin's
+    // server-side timestamp, never the local clock) to the authenticated
+    // GarminClient's list_activities_since(), marshals the returned iterator of
+    // summary dicts into a QVector<GarminActivitySummary> (activityId +
+    // startTimeGMT exact, str-normalized), and classifies failures by exception
+    // TYPE then .kind (LSN-006): connection→Network, rate_limit→RateLimited,
+    // foreign / non-iterable / unknown-kind → Unknown — NEVER a spurious Success.
+    //
+    // Session model (DES-013): listing reuses the client authenticate()
+    // established and the adapter retains — REQ-005 forbids keeping the password.
+    // Each slot therefore authenticates (success) first.
+    // ==================================================================
+
+    // (a) success: the iterator of dicts marshals to summaries with activityId +
+    // startTimeGMT exact (int activityId str-normalized), and the since-timestamp
+    // reaches the stub verbatim (DES-010).
+    void listSuccessMarshalsSummariesAndForwardsTimestampVerbatim()
+    {
+        PyEmbeddedAdapter adapter(kStubsDir);
+        setScenario("success");
+        QCOMPARE(adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw")).kind,
+                 PyAuthOutcome::Success);
+
+        setScenario("list_success");
+        const PyListOutcome out = adapter.listActivitiesSince(QStringLiteral("2026-06-30 00:00:00"));
+
+        QCOMPARE(out.kind, PyListOutcome::Success);
+        QCOMPARE(out.activities.size(), 2);
+        QCOMPARE(out.activities.at(0).activityId, QStringLiteral("1001"));
+        QCOMPARE(out.activities.at(0).startTimeGMT, QStringLiteral("2026-07-01 06:30:00"));
+        QCOMPARE(out.activities.at(1).activityId, QStringLiteral("1002"));
+        QCOMPARE(out.activities.at(1).startTimeGMT, QStringLiteral("2026-07-03 18:05:11"));
+        QCOMPARE(stubAttr("LAST_SINCE_GMT"), QStringLiteral("2026-06-30 00:00:00"));
+    }
+
+    // (b) empty listing → Success with an empty vector (DES-009/DES-010: a normal
+    // "nothing newer" result, NOT a failure).
+    void listEmptyResultIsSuccessNotFailure()
+    {
+        PyEmbeddedAdapter adapter(kStubsDir);
+        setScenario("success");
+        adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        setScenario("list_empty");
+        const PyListOutcome out = adapter.listActivitiesSince(QStringLiteral("2026-06-30 00:00:00"));
+
+        QCOMPARE(out.kind, PyListOutcome::Success);
+        QVERIFY2(out.activities.isEmpty(), "an empty listing is a normal success, not a failure");
+    }
+
+    // (c) GarminError kind='connection' → Network, raw message forwarded.
+    void listConnectionErrorMapsToNetwork()
+    {
+        PyEmbeddedAdapter adapter(kStubsDir);
+        setScenario("success");
+        adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        setScenario("list_connection");
+        const PyListOutcome out = adapter.listActivitiesSince(QStringLiteral("2026-06-30 00:00:00"));
+
+        QCOMPARE(out.kind, PyListOutcome::Network);
+        QCOMPARE(out.rawMessage, QStringLiteral("stub: listing connection refused"));
+    }
+
+    // (d) GarminError kind='rate_limit' → RateLimited — a DISTINCT kind, not
+    // collapsed to Unknown or misrouted to Network (DES-008 rate-limit copy).
+    void listRateLimitErrorMapsToRateLimited()
+    {
+        PyEmbeddedAdapter adapter(kStubsDir);
+        setScenario("success");
+        adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        setScenario("list_rate_limit");
+        const PyListOutcome out = adapter.listActivitiesSince(QStringLiteral("2026-06-30 00:00:00"));
+
+        QVERIFY2(out.kind != PyListOutcome::Unknown, "rate_limit must be its own kind, not Unknown");
+        QVERIFY2(out.kind != PyListOutcome::Network, "rate_limit must not be misrouted to Network");
+        QCOMPARE(out.kind, PyListOutcome::RateLimited);
+        QCOMPARE(out.rawMessage, QStringLiteral("stub: listing rate-limited"));
+    }
+
+    // (e) a non-GarminError exception (ValueError) → Unknown, NEVER Success
+    // (LSN-006: classify by type; a foreign exception is not a valid listing).
+    void listForeignExceptionMapsToUnknownNotSuccess()
+    {
+        PyEmbeddedAdapter adapter(kStubsDir);
+        setScenario("success");
+        adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        setScenario("list_value_error");
+        const PyListOutcome out = adapter.listActivitiesSince(QStringLiteral("2026-06-30 00:00:00"));
+
+        QVERIFY2(out.kind != PyListOutcome::Success, "a foreign exception must NOT be reported as a Success");
+        QCOMPARE(out.kind, PyListOutcome::Unknown);
+        QVERIFY2(out.rawMessage.contains(QStringLiteral("not a garmin error (listing)")),
+                 "rawMessage should carry str(e) of the foreign exception");
+    }
+
+    // (f) a non-iterable return (contract breach of the DES-012 seam) → Unknown,
+    // NEVER a Success with empty summaries. Kills a mutant that skips the check.
+    void listNonIterableResultYieldsUnknownNotSuccess()
+    {
+        PyEmbeddedAdapter adapter(kStubsDir);
+        setScenario("success");
+        adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        setScenario("list_non_iterable");
+        const PyListOutcome out = adapter.listActivitiesSince(QStringLiteral("2026-06-30 00:00:00"));
+
+        QVERIFY2(out.kind != PyListOutcome::Success, "a non-iterable result must NOT be reported as Success");
+        QCOMPARE(out.kind, PyListOutcome::Unknown);
+        QVERIFY2(!out.rawMessage.isEmpty(), "a non-iterable result must carry an explanatory message");
+    }
+
+    // TEST-053 / F3 (A3-R008 adversary gap) — the list IS iterable but yields a
+    // NON-dict item mid-stream. PyEmbeddedAdapter's per-item PyDict_Check guard
+    // (PyEmbeddedAdapter.cpp) must fold the WHOLE listing to Unknown — NEVER a
+    // Success carrying a phantom empty-id/empty-timestamp row synthesized from the
+    // non-dict. Mutation-confirmed: deleting the guard makes this test see
+    // Success (kind==0) with a phantom entry, so it FAILS; restoring it passes.
+    void listBadItemFoldsToUnknown()
+    {
+        PyEmbeddedAdapter adapter(kStubsDir);
+        setScenario("success");
+        adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        setScenario("list_bad_item");
+        const PyListOutcome out = adapter.listActivitiesSince(QStringLiteral("2026-06-30 00:00:00"));
+
+        QVERIFY2(out.kind != PyListOutcome::Success, "a list with a non-dict item must NOT be reported as Success");
+        QCOMPARE(out.kind, PyListOutcome::Unknown); // enum value 3
+        QVERIFY2(out.activities.isEmpty(), "a folded-to-Unknown listing must carry no (phantom) summaries");
+        QVERIFY2(!out.rawMessage.isEmpty(), "a non-dict list item must carry an explanatory message");
+    }
+
+    // (g) listing before any successful authenticate → Unknown (no retained
+    // session), never a crash and never a Success.
+    void listWithoutAuthenticateYieldsUnknownNotSuccess()
+    {
+        PyEmbeddedAdapter adapter(kStubsDir); // never authenticated
+        setScenario("list_success");
+        const PyListOutcome out = adapter.listActivitiesSince(QStringLiteral("2026-06-30 00:00:00"));
+
+        QVERIFY2(out.kind != PyListOutcome::Success, "listing without a session must NOT succeed");
+        QCOMPARE(out.kind, PyListOutcome::Unknown);
+        QVERIFY2(!out.rawMessage.isEmpty(), "must explain why the listing could not run");
+    }
+
+    // (h) the production call pattern: authenticate on this thread, then list
+    // from a non-main worker-like std::thread. PyGILState_Ensure must acquire the
+    // GIL there and marshal the identical summaries (REQ-NF-Threads-001 proof at
+    // the real-bridge level).
+    void listFromWorkerThreadMarshalsSameSummaries()
+    {
+        PyEmbeddedAdapter adapter(kStubsDir);
+        setScenario("success");
+        adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        setScenario("list_success");
+        PyListOutcome out;
+        std::thread worker([&] { out = adapter.listActivitiesSince(QStringLiteral("2026-06-30 00:00:00")); });
+        worker.join();
+
+        QCOMPARE(out.kind, PyListOutcome::Success);
+        QCOMPARE(out.activities.size(), 2);
+        QCOMPARE(out.activities.at(0).activityId, QStringLiteral("1001"));
     }
 
     void cleanupTestCase()

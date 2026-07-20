@@ -155,6 +155,19 @@ CredentialsPage::deleteClicked()
         appsettings->setCValue(context->athlete->cyclist, service->syncOnStartupSettingName(), false);
         appsettings->setCValue(context->athlete->cyclist, service->syncOnImportSettingName(), false);
 
+        // REQ-008 (DEC-garmin-019 Option C) — actually clear any stored session on
+        // disconnect. disconnectService() is a GENERIC CloudService virtual (default
+        // no-op); only GarminConnect overrides it (to delete its tokens.json +
+        // active-account.json while preserving the per-account sidecars, REQ-012).
+        // NO per-service special-case here — the factory singleton is const, so we
+        // mint a callable instance bound to this athlete's context (mirrors the
+        // sync-now path in AddCloudWizard), which resolves the same config dir.
+        CloudService *instance = CloudServiceFactory::instance().newService(service->id(), context);
+        if (instance) {
+            instance->disconnectService();
+            delete instance;
+        }
+
         // reset
         resetList();
     }

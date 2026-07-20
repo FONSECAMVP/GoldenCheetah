@@ -19,6 +19,13 @@ GarminWorker::GarminWorker(IGarminPyAdapter* py, QObject* parent) : QObject(pare
     // REQ-007 closure (Slice 1) — restoreFailed's payload crosses the worker
     // thread boundary via a queued connection; register it too.
     qRegisterMetaType<GarminRestoreFailure>("GarminRestoreFailure");
+    // REQ-008 Slice A — listFailed's payload and the activitiesListed summaries
+    // (both the element type and the QVector container) cross the worker thread
+    // boundary via a queued connection; register them so QVariant/QSignalSpy can
+    // carry them.
+    qRegisterMetaType<GarminListFailure>("GarminListFailure");
+    qRegisterMetaType<GarminActivitySummary>("GarminActivitySummary");
+    qRegisterMetaType<QVector<GarminActivitySummary>>("QVector<GarminActivitySummary>");
 }
 
 void GarminWorker::authenticate(const QString& email, const QString& password, QUuid requestId)
@@ -52,6 +59,10 @@ void GarminWorker::emitAuthOutcome(const PyAuthOutcome& outcome, QUuid requestId
         GarminAuthSuccess result;
         result.garmin_user_id = outcome.garmin_user_id;
         result.display_name = outcome.display_name;
+        // REQ-008 Slice D — carry the opaque OAuth blob forward so the
+        // connect-success producer can hand it to GarminTokenStore::save
+        // (previously DROPPED here — A3-R008-01 root cause).
+        result.tokenBlob = outcome.tokenBlob;
         emit finished(requestId, result);
         return;
     }
@@ -112,6 +123,45 @@ void GarminWorker::downloadActivity(const QString& activityId, const QString& fm
         err.kind = GarminDownloadFailure::Unknown;
         err.rawMessage = outcome.rawMessage;
         emit downloadFailed(requestId, err);
+        return;
+    }
+    }
+}
+
+void GarminWorker::listActivities(const QString& sinceGmt, QUuid requestId)
+{
+    // DEC-002 / DES-001: the worker is the SOLE caller of the adapter. The
+    // since-timestamp is forwarded verbatim (DES-010 — Garmin's server-side
+    // timestamp, never the local clock). Mirrors downloadActivity()'s
+    // outcome→signal mapping one op sideways.
+    const PyListOutcome outcome = m_py->listActivitiesSince(sinceGmt);
+
+    switch (outcome.kind) {
+    case PyListOutcome::Success:
+        // An empty listing is a normal success (DES-009/DES-010) — emit it as
+        // activitiesListed with an empty vector, NOT a failure.
+        emit activitiesListed(requestId, outcome.activities);
+        return;
+    case PyListOutcome::Network: {
+        GarminListFailure err;
+        err.kind = GarminListFailure::Network;
+        err.rawMessage = outcome.rawMessage;
+        emit listFailed(requestId, err);
+        return;
+    }
+    case PyListOutcome::RateLimited: {
+        GarminListFailure err;
+        err.kind = GarminListFailure::RateLimit;
+        err.rawMessage = outcome.rawMessage;
+        emit listFailed(requestId, err);
+        return;
+    }
+    case PyListOutcome::Unknown:
+    default: {
+        GarminListFailure err;
+        err.kind = GarminListFailure::Unknown;
+        err.rawMessage = outcome.rawMessage;
+        emit listFailed(requestId, err);
         return;
     }
     }

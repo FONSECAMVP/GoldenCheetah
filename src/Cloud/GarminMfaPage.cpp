@@ -101,7 +101,7 @@ void GarminMfaPage::initializePage()
     emit completeChanged();
 }
 
-void GarminMfaPage::onAuthFinished(QUuid id, GarminAuthSuccess)
+void GarminMfaPage::onAuthFinished(QUuid id, GarminAuthSuccess result)
 {
     if (id != m_pendingId)
         return; // stale reply guard.
@@ -109,6 +109,9 @@ void GarminMfaPage::onAuthFinished(QUuid id, GarminAuthSuccess)
         return; // A3-R003-06 — ignore a duplicate/late delivery once terminal.
     m_state = Success;
     emit completeChanged();
+    // REQ-008 (DEC-garmin-019 C) — id-gated post-MFA success drives the wizard's
+    // persist; a stale/late reply never reaches here so it can never persist.
+    emit succeeded(result);
 }
 
 void GarminMfaPage::onAuthFailed(QUuid id, GarminAuthFailure error)

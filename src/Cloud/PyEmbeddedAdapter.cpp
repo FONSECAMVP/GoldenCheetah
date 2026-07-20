@@ -197,6 +197,24 @@ PyDownloadOutcome classifyDownloadException(PyObject* module)
     return out;
 }
 
+// listActivitiesSince() classification (REQ-008 Slice A): mirrors
+// classifyDownloadException one op sideways — connection -> Network,
+// rate_limit -> RateLimited, anything else / foreign -> Unknown (NEVER a
+// spurious Success — the caller only treats Success as a real listing).
+PyListOutcome classifyListException(PyObject* module)
+{
+    const RaisedExc e = takeRaisedException(module);
+    PyListOutcome out;
+    out.rawMessage = e.message;
+    if (e.isGarminError && e.kind == QStringLiteral("connection"))
+        out.kind = PyListOutcome::Network;
+    else if (e.isGarminError && e.kind == QStringLiteral("rate_limit"))
+        out.kind = PyListOutcome::RateLimited;
+    else
+        out.kind = PyListOutcome::Unknown;
+    return out;
+}
+
 // loadTokens() classification (REQ-007 closure / REQ-NF-Compat-001(b)):
 // session_expired -> SessionExpired (route to fresh SSO, DISTINCT from a
 // transient dip), connection -> Network, anything else / foreign -> Unknown.
@@ -437,6 +455,86 @@ PyDownloadOutcome PyEmbeddedAdapter::downloadActivity(const QString& activityId,
 
     out.kind = PyDownloadOutcome::Success;
     out.data = QByteArray(buf, static_cast<int>(len)); // (ptr,len) copy — binary-safe, keeps NULs
+    return out;
+}
+
+PyListOutcome PyEmbeddedAdapter::listActivitiesSince(const QString& sinceGmt)
+{
+    PyListOutcome out;
+
+    // Step 1 — fail-safe before touching any interpreter API. Never throws.
+    if (!Py_IsInitialized()) {
+        out.kind = PyListOutcome::Unknown;
+        out.rawMessage = QStringLiteral("embedded Python unavailable");
+        return out;
+    }
+
+    // GIL held from here; the guard releases on every return below.
+    GilGuard gil;
+
+    // No retained session — authenticate()/loadTokens() must have succeeded
+    // first. The password is not kept (REQ-005), so we cannot build a fresh
+    // client here.
+    if (m_client == nullptr) {
+        out.kind = PyListOutcome::Unknown;
+        out.rawMessage = QStringLiteral("not authenticated");
+        return out;
+    }
+
+    // garmin_client is needed only to resolve the GarminError type for
+    // classification; it is already imported/cached from authenticate().
+    prependToSysPathIfAbsent(modulePath);
+    PyRef module(PyImport_ImportModule("garmin_client"));
+
+    // Forward the since-timestamp VERBATIM (DES-010 — Garmin's server-side
+    // timestamp, never the local clock). The adapter returns an iterator of
+    // summary dicts (list_activities_since -> Iterator[dict]).
+    PyRef result(PyObject_CallMethod(m_client, "list_activities_since", "s", sinceGmt.toUtf8().constData()));
+    if (!result)
+        return classifyListException(module.get());
+
+    // Iterate the returned iterable (list / generator / iterator) via the
+    // iterator protocol so either a list or a lazy generator marshals the same.
+    PyRef iter(PyObject_GetIter(result.get()));
+    if (!iter) {
+        // A non-iterable result is a DES-012 contract breach, not a valid
+        // listing: fold to Unknown rather than fabricate an empty Success.
+        PyErr_Clear();
+        out.kind = PyListOutcome::Unknown;
+        out.rawMessage = QStringLiteral("garmin_client.list_activities_since() returned a non-iterable result");
+        return out;
+    }
+
+    QVector<GarminActivitySummary> summaries;
+    while (true) {
+        PyRef item(PyIter_Next(iter.get()));
+        if (!item)
+            break; // exhausted (or an error was set — checked below)
+
+        // Each item must be a dict carrying at least activityId + startTimeGMT;
+        // a non-dict item is a contract breach → Unknown (never a partial
+        // Success with a bogus row).
+        if (!PyDict_Check(item.get())) {
+            out.kind = PyListOutcome::Unknown;
+            out.rawMessage = QStringLiteral("garmin_client.list_activities_since() yielded a non-dict item");
+            return out;
+        }
+        PyObject* aid = PyDict_GetItemString(item.get(), "activityId"); // borrowed
+        PyObject* stg = PyDict_GetItemString(item.get(), "startTimeGMT"); // borrowed
+        GarminActivitySummary s;
+        s.activityId = toQString(aid);
+        s.startTimeGMT = toQString(stg);
+        summaries.append(s);
+    }
+
+    // PyIter_Next returns null both at exhaustion and on an iteration error —
+    // an error raised mid-iteration (e.g. a lazily-translated GarminError) must
+    // be classified, not silently treated as a short listing.
+    if (PyErr_Occurred())
+        return classifyListException(module.get());
+
+    out.kind = PyListOutcome::Success;
+    out.activities = summaries;
     return out;
 }
 

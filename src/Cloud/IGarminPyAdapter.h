@@ -22,6 +22,7 @@
 
 #include <QByteArray>
 #include <QString>
+#include <QVector>
 
 // ---------------------------------------------------------------------------
 // PyAuthOutcome — value type returned by IGarminPyAdapter::authenticate() and
@@ -75,6 +76,51 @@ struct PyDownloadOutcome
 
     // Populated only when kind == Success. Binary-safe (may contain NUL).
     QByteArray data;
+
+    // Populated for non-Success outcomes. Raw library message — DES-008
+    // translates at the page/ErrorBus layer; the adapter does NOT translate.
+    QString rawMessage;
+};
+
+// ---------------------------------------------------------------------------
+// GarminActivitySummary — the minimal per-activity record carried by
+// PyListOutcome (REQ-008 Slice A). Each summary carries at least the two fields
+// the incremental-sync flow (DES-010) keys off: `activityId` (the stable Garmin
+// activity id, used by the Tier-1 imported-<uid>.json dedup in a later slice)
+// and `startTimeGMT` (Garmin's SERVER-SIDE timestamp — NOT the local clock,
+// DES-010 — the "newer than" comparison basis). Both are marshalled as strings
+// across the DES-012/DES-013 seam. Later slices may widen this struct additively
+// without re-shaping the listing op.
+// ---------------------------------------------------------------------------
+
+struct GarminActivitySummary
+{
+    QString activityId;
+    QString startTimeGMT;
+};
+
+// ---------------------------------------------------------------------------
+// PyListOutcome — value type returned by IGarminPyAdapter::listActivitiesSince()
+// (REQ-008 Slice A). Mirrors PyDownloadOutcome's shape one op sideways: the
+// worker maps each Kind to activitiesListed() (Success) or listFailed() with a
+// matching kind. `activities` carries the summaries and is populated ONLY on
+// Success; failures carry the raw library message for DES-008 to translate at
+// the page/ErrorBus layer. An empty `activities` on Success is a NORMAL result
+// (no activities newer than the timestamp), NOT an error (DES-009/DES-010).
+//
+// RateLimited is a distinct Kind (not folded into Unknown) — mirrors
+// PyDownloadOutcome — because DES-008 has dedicated rate-limit copy and
+// DES-005/DES-010 pace sync off it.
+// ---------------------------------------------------------------------------
+
+struct PyListOutcome
+{
+    enum Kind { Success, Network, RateLimited, Unknown };
+    Kind kind = Unknown;
+
+    // Populated only when kind == Success (may be empty — an empty listing is a
+    // normal success, DES-009/DES-010).
+    QVector<GarminActivitySummary> activities;
 
     // Populated for non-Success outcomes. Raw library message — DES-008
     // translates at the page/ErrorBus layer; the adapter does NOT translate.
@@ -139,6 +185,17 @@ class IGarminPyAdapter
     // for FIT, "TCX" for the fallback). Reuses the session authenticate()
     // established (REQ-005 forbids retaining the password for a fresh client).
     virtual PyDownloadOutcome downloadActivity(const QString& activityId, const QString& fmt) = 0;
+
+    // REQ-008 Slice A — list the activities whose Garmin server-side
+    // startTimeGMT is newer than `sinceGmt` (DES-010 step 4). Reuses the session
+    // authenticate()/loadTokens() established (REQ-005 forbids retaining the
+    // password for a fresh client). On Success `activities` carries the summaries
+    // (possibly empty — a normal result); failures fold into PyListOutcome
+    // (Network / RateLimited / Unknown). Adding this pure-virtual is a
+    // compile-enforced seam (DEC-013 Option A): a production adapter — or a test
+    // double — that forgets to implement it is a build break, not a silent
+    // runtime no-op. Never throws.
+    virtual PyListOutcome listActivitiesSince(const QString& sinceGmt) = 0;
 
     // REQ-007 closure (Slice 1) — restore an authenticated session from a
     // previously-exported opaque token blob (garmin_client.load_tokens). This is

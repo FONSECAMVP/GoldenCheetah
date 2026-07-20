@@ -19,6 +19,7 @@
 #include "GarminConnect.h"
 
 #include "GarminDownloadChain.h"
+#include "GarminSidecarStore.h"
 #include "GarminTokenStore.h"
 #include "IGarminDownloadClient.h"
 #include "PyEmbeddedAdapter.h"
@@ -26,6 +27,7 @@
 
 #include <QBuffer>
 #include <QColor>
+#include <QDateTime>
 #include <QEventLoop>
 #include <QTimer>
 #include <QUuid>
@@ -37,6 +39,26 @@ namespace {
 // on the first event-loop turn and never approach these.
 constexpr int kRestoreTimeoutMs = 30000;
 constexpr int kDownloadTimeoutMs = 60000;
+constexpr int kListTimeoutMs = 60000;
+
+// DES-010 step 3 — default the sync window to the last 7 days when there is no
+// backfill-state cursor (and no explicit `from`).
+constexpr int kDefaultSinceDays = 7;
+
+// Garmin's server-side startTimeGMT is stored/marshalled verbatim as a string in
+// this format (DES-010). Parsing it to a QDateTime lets readdir carry it as the
+// CloudServiceEntry timestamp; the raw string is what gets recorded in the sidecar.
+const char* const kGarminTimeFormat = "yyyy-MM-dd HH:mm:ss";
+
+QDateTime parseGarminTime(const QString& s)
+{
+    QDateTime dt = QDateTime::fromString(s, QString::fromLatin1(kGarminTimeFormat));
+    if (!dt.isValid())
+        dt = QDateTime::fromString(s, Qt::ISODate);
+    if (dt.isValid())
+        dt.setTimeSpec(Qt::UTC);
+    return dt;
+}
 
 // FIT signature: the ASCII bytes ".FIT" live at offset 8 in the FIT file header
 // (DEC-016). A shorter buffer, an HTML error page, or a TCX/GPX payload all fail
@@ -68,8 +90,10 @@ bool unzipFirstEntry(const QByteArray& zipped, QByteArray* out)
 
 GarminConnect::GarminConnect(Context* c) : CloudService(c) {}
 
-GarminConnect::GarminConnect(Context* c, IGarminDownloadClient* injectedClient, const QString& configDirOverride)
-    : CloudService(c), m_client(injectedClient), m_injectedClient(true), m_configDirOverride(configDirOverride)
+GarminConnect::GarminConnect(Context* c, IGarminDownloadClient* injectedClient, const QString& configDirOverride,
+                             const QString& garminUserIdOverride)
+    : CloudService(c), m_client(injectedClient), m_injectedClient(true), m_configDirOverride(configDirOverride),
+      m_garminUserIdOverride(garminUserIdOverride)
 {
 }
 
@@ -118,6 +142,24 @@ QString GarminConnect::resolveConfigDir() const
     if (context && context->athlete && context->athlete->home)
         return context->athlete->home->config().absolutePath();
     return QString();
+}
+
+QString GarminConnect::resolveGarminUserId() const
+{
+    // Test override wins (deterministic, decoupled from token internals).
+    if (!m_garminUserIdOverride.isEmpty())
+        return m_garminUserIdOverride;
+
+    // Production (REQ-008 Slice D / DEC-garmin-018 Option B): the active
+    // garmin_user_id is persisted at connect-success into the SEPARATE,
+    // account-agnostic active-account.json — NOT tokens.json, whose schema is
+    // security-locked (REQ-006/007) and carries only the raw garth OAuth blob.
+    // The read is tolerant: a missing/torn/absent active-account.json yields an
+    // empty id (readdir/record then no-op rather than key a mis-named sidecar).
+    const QString dir = resolveConfigDir();
+    if (dir.isEmpty())
+        return QString();
+    return GarminTokenStore::loadActiveAccountUserId(dir);
 }
 
 bool GarminConnect::blockingRestore(const QString& tokenBlob)
@@ -206,6 +248,49 @@ GarminConnect::DownloadResult GarminConnect::blockingDownload(const QString& fmt
     return res;
 }
 
+GarminConnect::ListResult GarminConnect::blockingList(const QString& sinceGmt)
+{
+    ListResult res;
+    IGarminDownloadClient* client = m_client;
+    if (!client)
+        return res;
+
+    const QUuid reqId = QUuid::createUuid();
+    QEventLoop loop;
+    bool done = false;
+
+    const QMetaObject::Connection c1 = QObject::connect(client, &IGarminDownloadClient::activitiesListed, &loop,
+                                                        [&](QUuid id, QVector<GarminActivitySummary> summaries) {
+                                                            if (done || id != reqId)
+                                                                return;
+                                                            done = true;
+                                                            res.ok = true;
+                                                            res.summaries = summaries;
+                                                            loop.quit();
+                                                        });
+    const QMetaObject::Connection c2 =
+        QObject::connect(client, &IGarminDownloadClient::listFailed, &loop, [&](QUuid id, GarminListFailure) {
+            if (done || id != reqId)
+                return;
+            done = true;
+            res.ok = false;
+            loop.quit();
+        });
+    QTimer::singleShot(kListTimeoutMs, &loop, [&]() {
+        if (!done) {
+            done = true;
+            loop.quit();
+        }
+    });
+
+    client->listActivities(sinceGmt, reqId);
+    loop.exec();
+
+    QObject::disconnect(c1);
+    QObject::disconnect(c2);
+    return res;
+}
+
 bool GarminConnect::open(QStringList& errors)
 {
     IGarminDownloadClient* client = ensureClient();
@@ -252,6 +337,26 @@ bool GarminConnect::close()
     return true;
 }
 
+void GarminConnect::persistConnectSuccess(const QString& garminUserId, const QString& tokenBlob)
+{
+    // REQ-008 (DEC-garmin-019 C) — the production caller of the connect-success
+    // producer (closes A3-R008-01). The wizard hands us the id-gated auth result;
+    // we resolve the athlete config dir and persist tokens.json + active-account.json
+    // atomically (0600) via the already-tested static producer. The blob crosses the
+    // page/wizard boundary as a QString (GarminAuthSuccess::tokenBlob); tokens.json
+    // stores the raw UTF-8 bytes.
+    GarminTokenStore::persistConnectSuccess(resolveConfigDir(), garminUserId, tokenBlob.toUtf8());
+}
+
+void GarminConnect::disconnectService()
+{
+    // REQ-008 (DEC-garmin-019 C) — the production caller of Disconnect (DES-002).
+    // Deletes tokens.json + active-account.json (account no longer connected) while
+    // PRESERVING imported-<uid>.json / backfill-state-<uid>.json (REQ-012). The
+    // risky delete logic lives here (testable), NOT in the generic deleteClicked().
+    GarminTokenStore::clearAccount(resolveConfigDir());
+}
+
 bool GarminConnect::readFile(QByteArray* data, QString remotename, QString remoteid)
 {
     Q_UNUSED(remotename);
@@ -264,7 +369,9 @@ bool GarminConnect::readFile(QByteArray* data, QString remotename, QString remot
         QByteArray inner;
         if (unzipFirstEntry(original.bytes, &inner) && looksLikeFit(inner)) {
             *data = inner; // stage the UNZIPPED FIT bytes
-            postReadComplete(data, QStringLiteral("garmin-%1.fit").arg(remoteid));
+            const QString staged = QStringLiteral("garmin-%1.fit").arg(remoteid);
+            recordImport(remoteid, staged); // DES-010 steps 5e/6 (before completion)
+            postReadComplete(data, staged);
             return true;
         }
         // 200 but not FIT (ZIP wrapping tcx/gpx, empty bytes, HTML page): fall
@@ -280,10 +387,116 @@ bool GarminConnect::readFile(QByteArray* data, QString remotename, QString remot
     const DownloadResult tcx = blockingDownload(QStringLiteral("TCX"), remoteid);
     if (tcx.ok) {
         *data = tcx.bytes; // TCX is raw XML, not ZIP-wrapped
-        postReadComplete(data, QStringLiteral("garmin-%1.tcx").arg(remoteid));
+        const QString staged = QStringLiteral("garmin-%1.tcx").arg(remoteid);
+        recordImport(remoteid, staged); // DES-010 steps 5e/6 (before completion)
+        postReadComplete(data, staged);
         return true;
     }
     return false;
+}
+
+QList<CloudServiceEntry*> GarminConnect::readdir(QString path, QStringList& errors, QDateTime from, QDateTime to)
+{
+    Q_UNUSED(path);
+    Q_UNUSED(to);
+    QList<CloudServiceEntry*> returning;
+
+    // DES-010 step 1 / REQ-NF-Perf-002 — reject a concurrent sync; the running
+    // one continues. FIRST check, before any I/O or worker op.
+    if (m_syncInProgress) {
+        errors << tr("Garmin Connect: sync already in progress.");
+        return returning;
+    }
+    m_syncInProgress = true;
+    // RAII reset so every early return clears the guard (never wedges).
+    struct InProgressGuard
+    {
+        bool* flag;
+        ~InProgressGuard() { *flag = false; }
+    } guard{&m_syncInProgress};
+
+    IGarminDownloadClient* client = m_client;
+    if (client == nullptr) {
+        errors << tr("Garmin Connect: no embedded session is available.");
+        return returning;
+    }
+
+    // DES-010 step 2 — resolve the active account + its per-account sidecar dir.
+    const QString dir = resolveConfigDir();
+    const QString uid = resolveGarminUserId();
+    if (uid.isEmpty()) {
+        errors << tr("Garmin Connect: no connected account; please sign in again.");
+        return returning;
+    }
+
+    // DES-010 step 3 — determine the "since" timestamp: the passed `from`, else
+    // backfill-state's lastSuccessStartTimeGMT, else now()-7d. startTimeGMT is
+    // Garmin's server-side clock — never the local clock.
+    QString sinceGmt;
+    if (from.isValid()) {
+        sinceGmt = from.toUTC().toString(QString::fromLatin1(kGarminTimeFormat));
+    } else {
+        const GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(dir, uid);
+        if (bf.isOk() && !bf.state.lastSuccessStartTimeGMT.isEmpty())
+            sinceGmt = bf.state.lastSuccessStartTimeGMT;
+        else
+            sinceGmt = QDateTime::currentDateTimeUtc()
+                           .addDays(-kDefaultSinceDays)
+                           .toString(QString::fromLatin1(kGarminTimeFormat));
+    }
+
+    // DES-010 step 4 — drive the worker list op (Slice A), off the caller thread.
+    const ListResult listed = blockingList(sinceGmt);
+    if (!listed.ok) {
+        errors << tr("Garmin Connect: could not list activities; please try again.");
+        return returning;
+    }
+
+    // DES-010 step 5a — Tier-1 dedup: filter OUT ids already in imported-<uid>.json
+    // so the base machinery never issues a redundant readFile/download.
+    const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(dir, uid);
+    for (const GarminActivitySummary& s : listed.summaries) {
+        if (imported.isOk() && imported.contains(s.activityId))
+            continue; // found → short-circuit, no download
+
+        CloudServiceEntry* e = newCloudServiceEntry();
+        e->isDir = false;
+        e->id = s.activityId;                                        // remoteid → readFile
+        e->name = QStringLiteral("garmin-%1.fit").arg(s.activityId); // natural staging name
+        e->modified = parseGarminTime(s.startTimeGMT);               // server-side timestamp
+        returning << e;
+
+        // Remember the server-side startTimeGMT so the subsequent readFile can
+        // record it (the base machinery hands readFile only name + remoteid).
+        m_pendingStartTimes.insert(s.activityId, s.startTimeGMT);
+    }
+
+    return returning;
+}
+
+void GarminConnect::recordImport(const QString& activityId, const QString& stagedFilename)
+{
+    const QString dir = resolveConfigDir();
+    const QString uid = resolveGarminUserId();
+    if (dir.isEmpty() || uid.isEmpty())
+        return; // nothing to key the per-account sidecar on (e.g. readFile unit tests)
+
+    const QString startTimeGMT = m_pendingStartTimes.value(activityId);
+
+    // DES-010 step 5e — record the import (read-modify-write, atomic 0600).
+    GarminSidecarStore::ImportedEntry entry;
+    entry.startTimeGMT = startTimeGMT;
+    entry.localFilename = stagedFilename;
+    GarminSidecarStore::recordImported(dir, uid, activityId, entry);
+
+    // DES-010 step 6 — advance the resume cursor to this activity's server time.
+    const GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(dir, uid);
+    GarminSidecarStore::BackfillState state = bf.isOk() ? bf.state : GarminSidecarStore::BackfillState{};
+    state.lastSuccessStartTimeGMT = startTimeGMT;
+    GarminSidecarStore::saveBackfillState(dir, uid, state);
+
+    // DES-010 step 7 (OUT OF SCOPE this slice — REQ-NF-Obs-001): the ErrorBus
+    // success event (count + duration) is a later item. TODO(REQ-NF-Obs-001).
 }
 
 // B-R007-01 / REQ-NF-Perf-003: deliver readComplete as a QUEUED self-post rather

@@ -36,9 +36,18 @@
 #include "GarminAuthChain.h"
 #include "GarminCredentialsPage.h"
 #include "GarminMfaPage.h"
+#include "GarminTokenStore.h"
+#include "IGarminAuthClient.h"
+#include "IGarminPyAdapter.h"
 #include "WorkerAuthClient.h"
 
+#include <QFile>
+#include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QLineEdit>
 #include <QSignalSpy>
+#include <QUuid>
 #include <QtTest/QtTest>
 
 // -----------------------------------------------------------------------------
@@ -261,6 +270,168 @@ class TestGarminConnectWizardRouting : public QObject
         QSignalSpy rejectedSpy(&wizard, &QDialog::rejected);
         emit static_cast<GarminMfaPage*>(page22)->aborted();
         QCOMPARE(rejectedSpy.count(), 1); // M-MFA-4
+    }
+
+    // --- Behaviour 5: REQ-008 (DEC-garmin-019 C) persist trigger — T-051 -----
+    //
+    // The connect-success producer (GarminTokenStore::persistConnectSuccess) had
+    // NO production caller before this slice (A3-R008-01 / D-R008-01), so live sync
+    // no-opped. The wizard now drives persist on a SUCCESSFUL (id-gated) auth on
+    // BOTH the direct path (credentials page 21) and the post-MFA path (page 22),
+    // and MUST NOT persist a stale/superseded reply.
+    //
+    // These tests drive a REAL auth-success end-to-end through the chain worker (a
+    // scriptable Python-free fake adapter -> GarminWorker -> WorkerAuthClient::
+    // finished -> the page's id-gated Success -> succeeded -> the wizard's persist
+    // trigger -> cloudService->persistConnectSuccess -> the REAL GarminTokenStore),
+    // so the assertion is on the ACTUAL tokens.json/active-account.json written to
+    // the resolved config dir (LSN-024 — verify the producer, not a fake).
+
+    // (i) direct auth-success -> exactly one persist with the right uid+blob.
+    void persistTriggerFiresOnDirectAuthSuccess()
+    {
+        g_persistConnectSuccessCalls = 0;
+        g_scriptedAuthenticateOutcome = successOutcome(kUid, kBlob);
+
+        WizardFixture fx;
+        AddCloudWizard wizard(&fx.ctx);
+        CloudService service;
+        service.context = &fx.ctx; // resolves the config dir for persist
+        wizard.cloudService = &service;
+        wizard.ensureGarminAuthPage();
+
+        auto* page21 = static_cast<GarminCredentialsPage*>(wizard.page(21));
+        QVERIFY(page21 != nullptr);
+        driveCredentials(page21, QStringLiteral("rider@example.com"), QStringLiteral("secret"));
+
+        const QString cfg = fx.home.config().absolutePath();
+        const QString tokensPath = GarminTokenStore::tokenFilePath(cfg);
+        const QString aaPath = GarminTokenStore::activeAccountFilePath(cfg);
+
+        QTRY_VERIFY2(QFileInfo::exists(tokensPath), "direct auth-success must persist tokens.json");
+        QTRY_COMPARE(g_persistConnectSuccessCalls, 1); // exactly ONE persist
+
+        assertPersisted(tokensPath, aaPath, kUid, kBlob);
+    }
+
+    // (ii) post-MFA success (page 22) -> exactly one persist with the right uid+blob.
+    void persistTriggerFiresOnPostMfaSuccess()
+    {
+        g_persistConnectSuccessCalls = 0;
+        g_scriptedSubmitMfaOutcome = successOutcome(kUid2, kBlob2);
+
+        WizardFixture fx;
+        AddCloudWizard wizard(&fx.ctx);
+        CloudService service;
+        service.context = &fx.ctx;
+        wizard.cloudService = &service;
+        wizard.ensureGarminAuthPage();
+
+        auto* page22 = static_cast<GarminMfaPage*>(wizard.page(22));
+        QVERIFY(page22 != nullptr);
+        driveMfa(page22, QStringLiteral("123456"));
+
+        const QString cfg = fx.home.config().absolutePath();
+        const QString tokensPath = GarminTokenStore::tokenFilePath(cfg);
+        const QString aaPath = GarminTokenStore::activeAccountFilePath(cfg);
+
+        QTRY_VERIFY2(QFileInfo::exists(tokensPath), "post-MFA success must persist tokens.json");
+        QTRY_COMPARE(g_persistConnectSuccessCalls, 1);
+
+        assertPersisted(tokensPath, aaPath, kUid2, kBlob2);
+    }
+
+    // (iii) a stale/superseded finished (an abandoned earlier attempt's id, arriving
+    // AFTER a fresh success) must NOT overwrite the freshly persisted token.
+    void stalePersistDoesNotOverwriteFreshToken()
+    {
+        g_persistConnectSuccessCalls = 0;
+        g_scriptedAuthenticateOutcome = successOutcome(kUid, kBlob);
+
+        WizardFixture fx;
+        AddCloudWizard wizard(&fx.ctx);
+        CloudService service;
+        service.context = &fx.ctx;
+        wizard.cloudService = &service;
+        wizard.ensureGarminAuthPage();
+
+        auto* page21 = static_cast<GarminCredentialsPage*>(wizard.page(21));
+        driveCredentials(page21, QStringLiteral("rider@example.com"), QStringLiteral("secret"));
+
+        const QString cfg = fx.home.config().absolutePath();
+        const QString tokensPath = GarminTokenStore::tokenFilePath(cfg);
+        const QString aaPath = GarminTokenStore::activeAccountFilePath(cfg);
+        QTRY_COMPARE(g_persistConnectSuccessCalls, 1); // fresh success persisted uid B
+
+        // Now an abandoned earlier attempt's late reply arrives on the SAME client
+        // with a DIFFERENT (superseded) uid + blob and an id matching nothing the
+        // pages are still awaiting. The page id-gates (option b) discard it, so the
+        // wizard's persist must NOT fire again and the fresh token must survive.
+        GarminAuthSuccess stale;
+        stale.garmin_user_id = QStringLiteral("999999999");
+        stale.tokenBlob = QStringLiteral("{\"oauth1\":\"STALE\"}");
+        auto* client = wizard.garminChain->client();
+        emit client->finished(QUuid::createUuid(), stale);
+        QTest::qWait(50); // give any (erroneous) delivery a chance to fire
+
+        QCOMPARE(g_persistConnectSuccessCalls, 1);        // still exactly one — no overwrite
+        assertPersisted(tokensPath, aaPath, kUid, kBlob); // fresh uid B intact
+    }
+
+  private:
+    // --- T-051 helpers ---------------------------------------------------
+
+    static constexpr const char* kUid = "123456789";
+    static constexpr const char* kUid2 = "987654321";
+    // Blobs deliberately WITHOUT a top-level garmin_user_id, so any reader that
+    // (wrongly) parsed the blob for the uid would resolve empty — the uid must come
+    // from the GarminAuthSuccess payload, not the blob.
+    static constexpr const char* kBlob = "{\"oauth1\":\"OA1-secret\",\"oauth2\":\"OA2.refresh\"}";
+    static constexpr const char* kBlob2 = "{\"oauth1\":\"OA1-mfa\",\"oauth2\":\"OA2.mfa\"}";
+
+    static PyAuthOutcome successOutcome(const QString& uid, const QString& blob)
+    {
+        PyAuthOutcome o;
+        o.kind = PyAuthOutcome::Success;
+        o.garmin_user_id = uid;
+        o.display_name = QStringLiteral("Test Athlete");
+        o.tokenBlob = blob;
+        return o;
+    }
+
+    static void driveCredentials(GarminCredentialsPage* page, const QString& email, const QString& pw)
+    {
+        auto* emailEdit = page->findChild<QLineEdit*>(QStringLiteral("garminEmail"));
+        auto* passEdit = page->findChild<QLineEdit*>(QStringLiteral("garminPassword"));
+        QVERIFY(emailEdit != nullptr);
+        QVERIFY(passEdit != nullptr);
+        emailEdit->setText(email);
+        passEdit->setText(pw);
+        page->validatePage(); // dispatches authenticate() through the chain worker
+    }
+
+    static void driveMfa(GarminMfaPage* page, const QString& code)
+    {
+        auto* codeEdit = page->findChild<QLineEdit*>(QStringLiteral("garminMfaCode"));
+        QVERIFY(codeEdit != nullptr);
+        codeEdit->setText(code);
+        page->validatePage(); // dispatches submitMfa() through the chain worker
+    }
+
+    static void assertPersisted(const QString& tokensPath, const QString& aaPath, const QString& uid,
+                                const QString& blob)
+    {
+        QFile tf(tokensPath);
+        QVERIFY(tf.open(QIODevice::ReadOnly));
+        QCOMPARE(tf.readAll(), blob.toUtf8());
+        tf.close();
+
+        QFile af(aaPath);
+        QVERIFY(af.open(QIODevice::ReadOnly));
+        const QJsonDocument doc = QJsonDocument::fromJson(af.readAll());
+        af.close();
+        QVERIFY(doc.isObject());
+        QCOMPARE(doc.object().value(QStringLiteral("garmin_user_id")).toString(), uid);
     }
 };
 

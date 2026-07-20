@@ -110,6 +110,18 @@ class CloudService : public QObject {
         virtual bool open(QStringList &errors) { Q_UNUSED(errors); return false; }
         virtual bool close() { return false; }
 
+        // REQ-008 (DEC-garmin-019 Option C) — connect/disconnect persistence hooks.
+        // Default no-ops so the ~15 other services are unaffected (non-breaking).
+        // GarminConnect overrides these to persist the connect-success blob +
+        // active-account pointer, and to delete them on disconnect. The wizard
+        // drives persistConnectSuccess() on connect; CredentialsPage::deleteClicked()
+        // drives disconnectService() generically (no per-service special-case).
+        // NOTE: named disconnectService() (not disconnect()) to avoid name-hiding
+        // QObject::disconnect() overloads in the ~15 CloudService subclasses.
+        virtual void persistConnectSuccess(const QString &garminUserId, const QString &tokenBlob)
+            { Q_UNUSED(garminUserId); Q_UNUSED(tokenBlob); }
+        virtual void disconnectService() {}
+
         // what is the path to the home directory on this store
         virtual QString home() { return "/"; }
 

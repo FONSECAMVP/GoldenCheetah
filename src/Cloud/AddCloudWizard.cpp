@@ -185,7 +185,8 @@ AddCloudWizard::ensureGarminAuthPage()
     // here yet.
     garminAdapter = new PyEmbeddedAdapter(modulePath);
     garminChain = new GarminAuthChain(garminAdapter);
-    setPage(21, new AddGarminAuth(this, garminChain->client()));
+    AddGarminAuth *authPage = new AddGarminAuth(this, garminChain->client());
+    setPage(21, authPage);
 
     // REQ-003 (MFA) Slice B — the conditional MFA page (DES-003). Registered on
     // the SAME non-owning client as page 21 (both drive the one auth session).
@@ -195,6 +196,27 @@ AddCloudWizard::ensureGarminAuthPage()
     AddGarminMfa *mfaPage = new AddGarminMfa(this, garminChain->client());
     setPage(22, mfaPage);
     connect(mfaPage, &GarminMfaPage::aborted, this, &AddCloudWizard::reject);
+
+    // REQ-008 (DEC-garmin-019 Option C) — the SINGLE wizard-level persist trigger
+    // that closes A3-R008-01 / D-R008-01: the connect-success producer finally gets
+    // a production caller. Both auth paths funnel through this one capture:
+    //   * direct path  — GarminCredentialsPage::succeeded (page 21)
+    //   * post-MFA path — GarminMfaPage::succeeded          (page 22)
+    // Each page emits succeeded() ONLY from its m_pendingId-gated terminal Success
+    // (stale-reply option b), so a slow/superseded reply from an abandoned earlier
+    // attempt (A3-R003-06) can never reach here and can never overwrite a freshly
+    // persisted token — the guard is preserved by construction. Registered under
+    // the same `if (garminChain) return;` idempotency, so it is wired exactly once.
+    // The persist is dispatched generically through the service handle
+    // (cloudService is the GarminConnect instance on this path — cloned by
+    // AddService::clicked before routing here, or set at ctor in edit mode); the
+    // service resolves the SAME athlete config dir as GarminConnect::resolveConfigDir().
+    auto persist = [this](const GarminAuthSuccess &result) {
+        if (cloudService)
+            cloudService->persistConnectSuccess(result.garmin_user_id, result.tokenBlob);
+    };
+    connect(authPage, &GarminCredentialsPage::succeeded, this, persist);
+    connect(mfaPage, &GarminMfaPage::succeeded, this, persist);
 }
 #endif
 

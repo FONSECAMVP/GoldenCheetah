@@ -56,6 +56,7 @@
 #include <QSignalMapper>
 #include <QString>
 #include <QStringList>
+#include <QTemporaryDir>
 #include <QTextEdit>
 #include <QThread>
 #include <QVariant>
@@ -63,6 +64,17 @@
 #include <QWidget>
 #include <QtGlobal>
 // clang-format on
+
+// REQ-008 (DEC-garmin-019 C / T-051) — the REAL, pure-Qt connect-success producer
+// (tokens.json + active-account.json, atomic 0600). The stub CloudService below
+// routes persistConnectSuccess() into it so T-051 asserts the ACTUAL producer runs
+// (LSN-024 — not a faked-away no-op). Pure Qt; safe to include here (no GC deps).
+#include "GarminTokenStore.h"
+
+// T-051 — count of persistConnectSuccess() calls routed through the stub
+// CloudService, so a test can assert EXACTLY ONE persist per auth-success and that
+// a stale/superseded reply triggers NONE (C++17 inline var, shared across TUs).
+inline int g_persistConnectSuccessCalls = 0;
 
 // ===========================================================================
 // GoldenCheetah.h (guard: _GC_GoldenCheetah_h) — nothing consumed here
@@ -132,7 +144,13 @@ inline Configuration* appsettings = new Configuration();
 class AthleteDirectoryStructure
 {
   public:
-    QDir config() const { return QDir(QStringLiteral("/tmp/gc-garmin-test")); }
+    // T-051 (LSN-018) — a per-instance QTemporaryDir instead of a hardcoded
+    // /tmp/gc-garmin-test, so the persist tests write into a unique, isolated dir
+    // (no parallel-CTest collisions; auto-cleaned at process exit).
+    QDir config() const { return QDir(m_dir.path()); }
+
+  private:
+    QTemporaryDir m_dir;
 };
 class Athlete
 {
@@ -247,6 +265,23 @@ class CloudService
     virtual QList<CloudServiceAthlete> listAthletes() { return {}; }
     virtual void selectAthlete(CloudServiceAthlete) {}
     virtual bool open(QStringList&) { return true; }
+
+    // REQ-008 (DEC-garmin-019 C) — mirror the real CloudService virtuals. The
+    // stub's persistConnectSuccess replicates GarminConnect::persistConnectSuccess +
+    // resolveConfigDir (config()->absolutePath()) and calls the REAL producer, so
+    // T-051 can assert tokens.json/active-account.json are written to the resolved
+    // dir when the wizard drives persist through cloudService (LSN-024).
+    // disconnectService() is a no-op here (T-052 covers GarminConnect's real one).
+    virtual void persistConnectSuccess(const QString& garminUserId, const QString& tokenBlob)
+    {
+        ++g_persistConnectSuccessCalls;
+        QString dir;
+        if (context && context->athlete && context->athlete->home)
+            dir = context->athlete->home->config().absolutePath();
+        GarminTokenStore::persistConnectSuccess(dir, garminUserId, tokenBlob.toUtf8());
+    }
+    virtual void disconnectService() {}
+
     virtual void folderSelected(QString) {}
     virtual QString syncOnStartupSettingName() const { return QStringLiteral("syncstartup"); }
     virtual QString syncOnImportSettingName() const { return QStringLiteral("syncimport"); }
@@ -332,6 +367,14 @@ class OAuthDialog : public QDialog
 inline int g_pyAdapterLiveCount = 0;
 inline bool g_pyAdapterDeletedWhileWorkerThreadRunning = false;
 
+// T-051 — scriptable auth outcomes so a test can drive a REAL auth-success through
+// the chain worker (fake adapter -> GarminWorker -> WorkerAuthClient::finished ->
+// page id-gated Success -> succeeded -> wizard persist). Default kind == Unknown
+// (PyAuthOutcome's own default), so existing routing/lifecycle tests that never
+// script these keep seeing the historical Unknown outcome (non-breaking).
+inline PyAuthOutcome g_scriptedAuthenticateOutcome;
+inline PyAuthOutcome g_scriptedSubmitMfaOutcome;
+
 class PyEmbeddedAdapter : public IGarminPyAdapter
 {
   public:
@@ -344,16 +387,11 @@ class PyEmbeddedAdapter : public IGarminPyAdapter
         --g_pyAdapterLiveCount;
     }
 
-    PyAuthOutcome authenticate(const QString&, const QString&) override
-    {
-        PyAuthOutcome o;
-        o.kind = PyAuthOutcome::Unknown;
-        return o;
-    }
+    PyAuthOutcome authenticate(const QString&, const QString&) override { return g_scriptedAuthenticateOutcome; }
 
-    // REQ-003 (MFA) Slice A seam extension (DEC-013 compile-enforced) — the
-    // wizard-routing test drives auth lifecycle only; a default outcome suffices.
-    PyAuthOutcome submitMfa(const QString&) override { return {}; }
+    // REQ-003 (MFA) Slice A seam extension (DEC-013 compile-enforced) — scriptable
+    // so T-051 can drive a post-MFA success; defaults to Unknown (non-breaking).
+    PyAuthOutcome submitMfa(const QString&) override { return g_scriptedSubmitMfaOutcome; }
 
     // REQ-007 seam extension (DEC-013 compile-enforced) — the wizard-routing
     // test drives auth lifecycle only; a default outcome satisfies the seam.
@@ -362,6 +400,9 @@ class PyEmbeddedAdapter : public IGarminPyAdapter
     // REQ-007 closure (Slice 1) seam extension (DEC-013 compile-enforced) — the
     // wizard-routing test never restores a session; a default outcome suffices.
     PyLoadTokensOutcome loadTokens(const QString&) override { return {}; }
+    // REQ-008 Slice A seam extension (DEC-013 compile-enforced) — the wizard
+    // stub does not list; a default outcome satisfies the interface so it compiles.
+    PyListOutcome listActivitiesSince(const QString&) override { return {}; }
 
     // Set by the destructor-order test to the chain's worker thread.
     QPointer<QThread> observedThread;
