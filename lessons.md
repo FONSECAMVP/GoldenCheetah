@@ -23,6 +23,10 @@ LSN-020 | op:test type:real-bridge-uncovered-behind-fake | guard scope:portable 
 LSN-021 | op:design type:wizard-page-state-not-reset-on-reentry | guard scope:portable | recur:1  saves:0 miss:1  | a QWizardPage (or any reusable multi-step UI page) that holds an async state machine (Idle→InFlight→Success/Error/terminal) MUST override initializePage()/cleanupPage() to reset that state on re-entry, OR carry an explicit test proving Back-then-retry is intentionally a no-op. Absent both, Back-navigation leaves a terminal state latched: a `validatePage()` that early-returns true on a cached Success/terminal state skips re-reading edited fields and silently discards the user's correction. Check: any page with a member state enum + validatePage() early-return-on-terminal needs an initializePage reset or a documented no-op test. (A3-R003-05: after MFA, Back to the credentials page kept `MfaRequired`, so an edited email/password was discarded with no re-auth.)
 LSN-023 | op:delegate type:readonly-agent-git-blind | guard scope:portable | recur:1  saves:0 miss:1  | a read-only agent (validator/adversary/scout — Read/Glob/Grep only, NO git tools) whose verdict depends on working-tree/commit state CANNOT see live git; and the session-start git-status snapshot in the harness prompt is FROZEN (it predates this session's work). So when a CLV/commit-gate dispatch turns on "is X committed / what's dirty", the orchestrator MUST paste a FRESH `git status --porcelain` + relevant `git log --oneline -- <paths>` into the briefing — else the agent reasons off the stale snapshot and raises a false git-state FAIL. Orchestrator owns git-truth (it has the shell); agents own content. (VAL-015: the final REQ-003 CLV FAILed the commit-scope check purely because it couldn't corroborate "uncommitted" — all 9 content checks passed; live git confirmed the ledger. The validator's own "CLV-git-truth" candidate is the same insight from its side.)
 LSN-022 | op:test type:tautological-assertion | advisory scope:portable | recur:1  saves:0 miss:1  | a test assertion that is unconditionally true — `QVERIFY2(X || true, …)`, `assert x or True`, `expect(true)`, `QCOMPARE(a||1, …)` — verifies NOTHING and gives false coverage confidence; it is the classic reason a "covered" line still lets a mutant survive. Treat any `|| true` / `or True` / literal-true disjunction in an assertion as a review-lint failure (mechanizable as a grep gate). Check at test review: grep the changeset's test files for `\|\| true`, `or True`, `QVERIFY2?\([^,]*\|\|`. (A3-R003-07: TEST-034's `QVERIFY2(…isEmpty()==false || true, …)` never fails and is exactly why mutant M1 — dropping the stale-id guard in onAuthFailed — survived.)
+LSN-024 | op:verify type:consumer-of-deferred-contract | guard scope:portable | recur:1 saves:0 miss:1 | a slice that CONSUMES a cross-slice/cross-module contract (a field in a persisted file, an env value, state another slice must WRITE) is not end-to-end-done until the PRODUCER side is verified to exist in production — a unit suite that injects the value via a test-only override (ctor override, mock, fixture) proves the consumer's logic while being BLIND to a missing/deferred producer. Check: for each external input a slice READS (file field, persisted state, another module's output), grep the PRODUCTION path that writes it; if the only writer is a test/override, it is an end-to-end gap even at 100% green. Sibling of [[LSN-018]] (green units != linked app) — both say unit-green != integrated. (A3-R008-01: REQ-008 readdir reads garmin_user_id from tokens.json + a GarminTokenStore::save the connect flow never calls; every test used the ctor uid-override, so 17/17 green hid that live sync always no-ops.)
+LSN-025 | op:design type:idempotency-record-before-confirm | guard scope:portable | recur:1 saves:0 miss:1 | a persistent dedup/idempotency record (a Tier-1 sidecar, "already-processed" cache, imported-id set) must be written STRICTLY AFTER the consuming pipeline confirms terminal success — never merely after the input bytes are staged/enqueued. If the record lands before a downstream parse/import can fail (esp. when that step is async + in another module), a failure becomes a SILENT, PERMANENT, happy-path-untestable data loss: the item is marked done, skipped forever, no error, no retry. Check: for every `record/markProcessed/addToImported` call, trace whether the success it claims is actually confirmed at that point or still pending downstream; if pending, either move the record to the confirmation callback or add a reconcile pass that drops records whose product doesn't exist. (A3-R008-F1: GarminConnect::readFile records imported-<uid>.json before the async CloudService import; a magic-sniff-pass/full-parse-fail FIT is dropped from sync forever.)
+LSN-026 | op:code type:rmw-not-salvaging-on-torn | advisory scope:portable | recur:1 saves:0 miss:1 | a read-modify-write persistence helper must SALVAGE surviving entries on a torn/permission-rejected precondition — reusing the SAME per-entry-tolerant parse its own load path already has — rather than silently starting from an empty object and clobbering prior good data. "record" and "recover" must not diverge. Check: a recordX() that reads-then-writes an aggregate file must handle a non-Ok load status the same tolerant way loadX() does, and a test must exercise recordX() after a torn/rejected precondition. (A3-R008-F2: GarminSidecarStore::recordImported drops the whole map to {} when the existing file is Torn/Rejected, contradicting its "merges" doc; mitigated to wasted redownload by Tier-2.)
+LSN-027 | op:design type:qobject-method-name-hidden | guard scope:portable | recur:1 saves:0 miss:1 | before naming a NEW method (esp. a virtual) on a QObject-derived base class, grep for collisions with QObject's own member names (disconnect, connect, sender, parent, event, ...) — C++ name-hiding silently hides ALL base overloads of that name for EVERY subclass, not just the one being extended, turning a familiar call (`obj->disconnect(...)`) into a compile error or a wrong-overload bind across the whole hierarchy. Check: `grep -E 'virtual .* (disconnect|connect|sender|parent|event|deleteLater)\b'` on any new method added to a QObject subtree; rename to a domain verb (disconnectService) if it collides. (A3-R008-F4: CloudService::disconnect() name-hides QObject::disconnect() for all ~15 CloudService subclasses — currently inert, a standing footgun.)
 
 ---
 
@@ -569,3 +573,78 @@ origin: VAL-015 (2026-07-19). miss:1: the briefing omission shipped and produced
 history:2026-07-19: captured at guard, first occurrence. scope:portable — applies to any read-only delegated
         role whose judgement depends on live VCS state, in any project. Related: [[LSN-016]] (merge-lag vs
         real defect — another "separate the evidence artifact from the true finding" rule at the CLV gate).
+
+---
+
+## LSN-024
+sig:    verify / consumer-of-deferred-contract / cross-slice
+rule:   a slice that CONSUMES a cross-slice or cross-module contract (a field read from a persisted file, an
+        env value, state another slice is responsible for WRITING) is not end-to-end-done until the PRODUCER
+        side is verified present in PRODUCTION code. A unit suite that supplies the value through a test-only
+        override (constructor override, mock, fixture, monkeypatch) proves the consumer's own logic but is
+        structurally BLIND to a missing or deferred producer — it can be 100% green while the live path always
+        no-ops.
+check:  for each EXTERNAL input a slice reads (a file field, persisted state, another module's output), grep
+        the production write path that PRODUCES it. If the only writer is a test/override/mock, mark it an
+        end-to-end gap and either build the producer in-scope or record an explicit blocking-for-end-to-end
+        finding — never let unit-green stand in for integrated. Same family as [[LSN-018]] (green unit targets
+        don't prove the app links): unit-green != integrated, at both the link layer and the data-contract layer.
+origin: A3-R008-01 (2026-07-19). miss:1: REQ-008 Slice C shipped a readdir that resolves the active account by
+        reading `garmin_user_id` from tokens.json, and records via a `GarminTokenStore::save` that NO connect-flow
+        code calls (the save-wiring was deferred at REQ-004/006; dump_tokens() also omits the field). All three
+        slices were fully unit-tested (17/17 executables) via a ctor uid-override, which masked that live sync
+        can never resolve a uid → readdir no-ops. Caught by the A3 adversary hypothesis (run inline when the
+        subagent hit a session limit), not at build time.
+history:2026-07-19: captured at guard, first occurrence. scope:portable — applies to any slice consuming a
+        value another slice/module must persist or emit, in any project. Related: [[LSN-018]] (link-layer
+        sibling), [[LSN-004]] (adapter-seam-before-impl — the producer/consumer seam should be defined up front).
+
+---
+
+## LSN-025
+sig:    design / idempotency-record-before-confirm / any dedup-cache
+rule:   a persistent dedup/idempotency record (Tier-1 sidecar, processed-id set, cache key) must be written
+        STRICTLY AFTER the consuming pipeline confirms terminal success — never merely after the input is
+        staged/enqueued. When the confirming step is async and/or in another module, a record-before-confirm
+        turns any downstream failure into a SILENT, PERMANENT, happy-path-untestable loss: the item is marked
+        done and skipped forever with no error and no retry.
+check:  for every record/markProcessed/addToImported call, trace whether the success it asserts is confirmed
+        AT that point or still pending downstream. If pending: move the record into the confirmation callback,
+        OR add a reconcile pass that drops records whose product cannot be found. A happy-path test that only
+        feeds valid input does NOT exercise this — add a case where the downstream step fails after staging.
+origin: A3-R008-F1 (2026-07-20, blocking). GarminConnect::readFile records imported-<uid>.json (GarminConnect.cpp
+        :374/:392) before the async CloudService import (CloudService.cpp:1937 ride==NULL → silent return); a FIT
+        that passes the shallow magic-sniff but fails the full parse is dropped from every future sync silently.
+        Tier-2 RideCache does NOT backstop it (no file was ever written to catch).
+history:2026-07-20: captured at guard, first occurrence. scope:portable — applies to any dedup/idempotency
+        record whose confirming step can fail after the record is taken. Related: [[LSN-024]] (producer/consumer
+        integration gaps), [[LSN-017]] (async-completion lifetime — the same "the real success is later/async"
+        family).
+
+## LSN-026
+sig:    code / rmw-not-salvaging-on-torn / aggregate-file persistence
+rule:   a read-modify-write persistence helper must SALVAGE surviving entries on a torn / permission-rejected
+        precondition — reusing the SAME per-entry-tolerant parse its load path already has — instead of silently
+        starting from an empty aggregate and clobbering prior good data. record() and recover() must not diverge.
+check:  a recordX() that reads-then-writes an aggregate must handle a non-Ok load status the same tolerant way
+        loadX() does; add a test exercising recordX() after a torn/rejected precondition.
+origin: A3-R008-F2 (2026-07-20, non-blocking). GarminSidecarStore::recordImported (GarminSidecarStore.cpp:164-188)
+        drops the whole imported map to {} when the existing file is Torn/Rejected, contradicting its own "merges"
+        doc comment; mitigated to a wasted redownload (Tier-2 catches the dup), not data loss.
+history:2026-07-20: captured at advisory, first occurrence. scope:portable. Related: [[LSN-025]] (same sidecar,
+        the record-timing sibling), [[LSN-005]] (validate-on-read as well as write).
+
+## LSN-027
+sig:    design / qobject-method-name-hidden / any QObject subtree
+rule:   before naming a NEW method (especially a virtual) on a QObject-derived base class, grep for collisions
+        with QObject's own member names (disconnect, connect, sender, parent, event, deleteLater, ...). C++
+        name-hiding silently hides ALL base overloads of that name for EVERY subclass in the hierarchy — a
+        familiar `obj->disconnect(sig,slot)` becomes a compile error or wrong-overload bind project-wide, not
+        just in the extended class.
+check:  `grep -E 'virtual .*\b(disconnect|connect|sender|parent|event|deleteLater)\s*\('` on any new method
+        added to a QObject subtree; if it collides, rename to a domain verb (e.g. disconnectService()).
+origin: A3-R008-F4 (2026-07-20, informational). CloudService::disconnect() (CloudService.h:121) name-hides
+        QObject::disconnect() for all ~15 CloudService subclasses; currently inert (no site relies on
+        QObject::disconnect on a CloudService*), a standing footgun.
+history:2026-07-20: captured at guard, first occurrence. scope:portable — applies to any framework base with
+        well-known member names (Qt QObject, etc.). Related: [[LSN-004]] (get the seam/API shape right up front).

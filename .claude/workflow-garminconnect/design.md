@@ -486,7 +486,7 @@ password is ever needed for download. The seam and host are Python-free (LSN-007
 
 ### Disconnect
 
-- `CloudService::removeSettings(id)` (existing GC contract) is overridden to first call `Disconnect` on the worker (deletes `tokens.json`), then proceed with the inherited cleanup. `imported.json` is **left alone** (REQ-012, DES-002).
+- **[Corrected 2026-07-20, D-R008-01 / DEC-019]** There is NO `CloudService::removeSettings(id)` virtual — that surface never existed (the earlier prose assumed it). The real disconnect UI is `CredentialsPage::deleteClicked()` (src/Gui/AthletePages.cpp:143-161), which historically only flipped the active/sync appsettings flags and deleted no token (as do all sibling services). DEC-019 (Option C) adds a new generic `CloudService::disconnect()` virtual (default no-op); `GarminConnect::disconnect()` overrides it to delete `tokens.json` + `active-account.json` (DEC-018) via `GarminTokenStore::clearAccount(resolveConfigDir())`; `deleteClicked()` invokes it generically (`newService(id, context)->disconnect()`, no Garmin special-case). Per-account sidecars `imported-<uid>.json` + `backfill-state-<uid>.json` are **left alone** (REQ-012, DES-002). Persist-on-connect is the symmetric `CloudService::persistConnectSuccess()` virtual, driven by a single `AddCloudWizard` capture of both pages' id-gated `succeeded(GarminAuthSuccess)` signals (both direct + post-MFA).
 
 ---
 
