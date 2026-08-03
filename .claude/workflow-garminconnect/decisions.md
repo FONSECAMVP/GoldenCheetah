@@ -546,3 +546,41 @@ The base virtual was renamed `disconnect()` → **`disconnectService()`** during
 
 ### Alignment probe
 grep -rn 'void disconnectService' src/Cloud/CloudService.h src/Cloud/GarminConnect.h | wc -l   # expect ≥2 (base virtual + GarminConnect override)
+
+---
+
+## DEC-020 — Disposition of A3-R012-F1: a live session outliving Disconnect
+- Status: accepted (C — fail-closed re-check + cheap hardening; full lifecycle work deferred to its own REQ) · IMPLEMENTED `f001c7d20` (2026-08-03)
+- Reversibility: high (C is additive and local to GarminConnect; it does not foreclose A)
+- Decided / last-reviewed: 2026-08-02
+- Serves: REQ-012 (the "before clearing in-memory state" criterion clause), REQ-NF-Sec-* (a revoked account must stop syncing); triggered by A3-R012-F1 (blocking)
+- Dependents: REQ-012 (closure), DEC-019 (its fresh-instance choice is the root cause and stays in force), REQ-016 (shares the readFile record path), a NEW follow-on REQ for instance-lifecycle/leak work (A3-R012-F10/F12)
+
+**Problem.** `GarminConnect::disconnectService()` deletes tokens.json + active-account.json and clears no in-memory
+state; nothing enumerates or shuts down live GarminConnect instances. A window-modal `CloudServiceSyncDialog`
+(AddCloudWizard.cpp:889-893) can therefore keep downloading from a just-disconnected account, because the parentless
+`ConfigDialog` (ConfigDialog.cpp:37-41) leaves Delete reachable concurrently and `readFile` (CloudService.cpp:1400)
+re-checks no token. DEC-019 deliberately chose to mint a FRESH instance in `deleteClicked()` to avoid touching live
+instances — that choice is exactly what leaves the live one running, so this is a DEC-level question, not prose.
+
+**Options considered (Three Options Doctrine; scored R/S/M/BP 1-5).**
+- **A — Full lifecycle binding.** Reopen DEC-019: invalidate live instances on disconnect (a registry of open
+  services, or bind session lifetime to the account) AND fix the `CloudServiceSyncDialog` store leak. R5 S4 M4 BP5.
+  Rejected FOR NOW: touches shared CloudService/GUI code owned by no current REQ, and drags the pre-existing
+  instance-leak (A3-R012-F12) into REQ-012's scope.
+- **B — Ticket and ship.** Commit the (safe) test slice, raise F1 as a new REQ, reopen DEC-019 later. R2 S3 M4 BP3.
+  Rejected: the defect ships, and REQ-012 stays open on a security-relevant clause with no mitigation.
+- **C — CHOSEN — Fail-closed re-check + cheap hardening.** `GarminConnect::readFile`/`readdir` re-check that the
+  account is still connected (tokens present) and fail closed once it is not; plus the cheap non-blockers F2 (sweep
+  the `<path>.tmp` siblings in `clearAccount`), F4 (pin the empty-uid write guard), F5 (assert mode + mtime, not just
+  bytes, in TEST-055). R4 S3 M4 BP4. Severs the exploit path with a small, testable, local change and leaves A's
+  remainder as honest, separately-scoped work.
+
+**Cascade.** REQ-012 can close once C lands and its tests are green (the criterion clause is then MECHANISED, if not
+by the literal ordering the prose describes — the prose should be re-read at that point, not before). A3-R012-F2/F4/F5
+close with the slice. A3-R012-F3 (ordering invariants unobserved), F6 (discarded bool), F9 (uid unvalidated), F10
+(uid re-resolved not latched) and F12 (CloudService leak) stay OPEN and non-blocking; F10+F12 are the seed of the
+follow-on lifecycle REQ. DEC-019 is NOT reverted — its trigger design stands; C adds a guard on the consuming side.
+
+### Alignment probe
+grep -n 'resolveConfigDir\|loadChecked\|isConnected' src/Cloud/GarminConnect.cpp | head   # expect a token re-check reachable from readFile/readdir after this slice

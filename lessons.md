@@ -26,6 +26,11 @@ LSN-022 | op:test type:tautological-assertion | advisory scope:portable | recur:
 LSN-024 | op:verify type:consumer-of-deferred-contract | guard scope:portable | recur:1 saves:0 miss:1 | a slice that CONSUMES a cross-slice/cross-module contract (a field in a persisted file, an env value, state another slice must WRITE) is not end-to-end-done until the PRODUCER side is verified to exist in production — a unit suite that injects the value via a test-only override (ctor override, mock, fixture) proves the consumer's logic while being BLIND to a missing/deferred producer. Check: for each external input a slice READS (file field, persisted state, another module's output), grep the PRODUCTION path that writes it; if the only writer is a test/override, it is an end-to-end gap even at 100% green. Sibling of [[LSN-018]] (green units != linked app) — both say unit-green != integrated. (A3-R008-01: REQ-008 readdir reads garmin_user_id from tokens.json + a GarminTokenStore::save the connect flow never calls; every test used the ctor uid-override, so 17/17 green hid that live sync always no-ops.)
 LSN-025 | op:design type:idempotency-record-before-confirm | guard scope:portable | recur:1 saves:0 miss:1 | a persistent dedup/idempotency record (a Tier-1 sidecar, "already-processed" cache, imported-id set) must be written STRICTLY AFTER the consuming pipeline confirms terminal success — never merely after the input bytes are staged/enqueued. If the record lands before a downstream parse/import can fail (esp. when that step is async + in another module), a failure becomes a SILENT, PERMANENT, happy-path-untestable data loss: the item is marked done, skipped forever, no error, no retry. Check: for every `record/markProcessed/addToImported` call, trace whether the success it claims is actually confirmed at that point or still pending downstream; if pending, either move the record to the confirmation callback or add a reconcile pass that drops records whose product doesn't exist. (A3-R008-F1: GarminConnect::readFile records imported-<uid>.json before the async CloudService import; a magic-sniff-pass/full-parse-fail FIT is dropped from sync forever.)
 LSN-026 | op:code type:rmw-not-salvaging-on-torn | advisory scope:portable | recur:1 saves:0 miss:1 | a read-modify-write persistence helper must SALVAGE surviving entries on a torn/permission-rejected precondition — reusing the SAME per-entry-tolerant parse its own load path already has — rather than silently starting from an empty object and clobbering prior good data. "record" and "recover" must not diverge. Check: a recordX() that reads-then-writes an aggregate file must handle a non-Ok load status the same tolerant way loadX() does, and a test must exercise recordX() after a torn/rejected precondition. (A3-R008-F2: GarminSidecarStore::recordImported drops the whole map to {} when the existing file is Torn/Rejected, contradicting its "merges" doc; mitigated to wasted redownload by Tier-2.)
+LSN-032 | op:verify type:checkout-revert-destroys-uncommitted-work | guard scope:portable | recur:1 saves:0 miss:1 | NEVER revert a temporary verification mutation with `git checkout -- <file>` unless that file is CLEAN at HEAD — on a file carrying uncommitted work, checkout discards the real work along with the mutation, silently and unrecoverably (no reflog for unstaged content). ALWAYS `cp <file> <file>.orig` before mutating and restore from that copy (`mv`/`cmp` to prove byte-identity), or stash-and-pop deliberately. Check before mutating: `git status --porcelain <file>` — a ` M` means checkout is FORBIDDEN as the revert path. The adversary's earlier `git checkout --` was safe ONLY because src/Cloud was clean at HEAD then; one slice later the same command on the same directory destroyed the builder's production change. (2026-08-03, orchestrator's own error while verifying the DEC-020 fail-closed gate: mutated `accountStillConnected()` to `return true`, confirmed 4 tests died — a GOOD verification — then reverted with checkout and lost the whole GarminConnect.cpp slice; recovered by re-dispatching the builder from its transcript. Sibling: [[LSN-007]] — evidence is void once files mutate under you.)
+LSN-031 | op:test type:untouched-means-bytes-only | guard scope:portable | recur:1 saves:0 miss:1 | an assertion that a file is "untouched"/"unchanged"/"preserved" via a BYTE compare alone tolerates truncate+rewrite-identical, a permission widening, and an mtime bump — for a security-relevant file (tokens, sidecars, keys) assert the MODE (owner-only) and mtime-or-inode too, not just content. (A3-R012-F5: MUT-D2 rewrote every prior-account sidecar and chmod'd it 0644 with bytes preserved; TEST-055's headline "sit on disk untouched" PASSED.)
+LSN-030 | op:code type:secret-deletion-misses-tmp-sibling | guard scope:portable | recur:1 saves:0 miss:1 | deleting a secret written through an atomic-write helper (tmp+fsync+rename) must ALSO remove the `<path>.tmp` sibling — a crash between write and rename leaves the complete secret there, and "the file is absent" is not "the secret is gone". Check: for every atomic writer, the matching delete/clear path must sweep the same tmp name. (A3-R012-F2: GarminTokenStore::clearAccount removes tokens.json + active-account.json but never their .tmp siblings; MUT-B survived 18/18. The class was already known — TEST-049 asserts !exists(.tmp) after a successful WRITE — but the DELETE side was never extended.)
+LSN-029 | op:test type:ordering-invariant-unobserved | guard scope:portable | recur:1 saves:0 miss:1 | when a DEC records an ORDERING invariant ("write A before B", "delete X before Y", "record only after confirm"), the test set must contain an assertion that OBSERVES the order — end-state assertions leave the invariant fully mutable, so the loudest-documented guarantees end up the least defended. Corollary: every production guard shaped `if (x.isEmpty()) return;` needs a mutation that removes it, or it will be refactored away unnoticed. Check: for each ordering clause in a DEC/DES, name the assertion that would fail if the order inverted; if none, it is uncovered. (A3-R012-F3/F4: MUT-1 [persistConnectSuccess writes active-account BEFORE tokens, inverting DEC-018's crash-safety rationale], MUT-N [clearAccount deletes in the wrong order] and MUT-C [drop recordImport's empty-uid guard] all SURVIVED 18/18. Sibling: [[LSN-025]] — the record-before-confirm ordering defect this project already paid for.)
+LSN-028 | op:verify type:unaudited-criterion | guard scope:portable | recur:1 saves:0 miss:1 | a requirement whose mechanism was built as a SIDE-EFFECT of another REQ's slice is NOT done until its OWN criterion is split into clauses and each clause maps to a covering test id or a RECORDED residual — the building slice was briefed with a different goal, so the overlap is coincidence, not coverage. Corollary: a test that passes first-run against unchanged production must prove it CAN fail (targeted, reverted mutation) before it counts. (REQ-012: disconnect shipped inside REQ-008's DEC-019 slice; only 2 of 5 prd.md:84 clauses had tests and a 5th had no mechanism at all — B-R012-01.)
 LSN-027 | op:design type:qobject-method-name-hidden | guard scope:portable | recur:1 saves:0 miss:1 | before naming a NEW method (esp. a virtual) on a QObject-derived base class, grep for collisions with QObject's own member names (disconnect, connect, sender, parent, event, ...) — C++ name-hiding silently hides ALL base overloads of that name for EVERY subclass, not just the one being extended, turning a familiar call (`obj->disconnect(...)`) into a compile error or a wrong-overload bind across the whole hierarchy. Check: `grep -E 'virtual .* (disconnect|connect|sender|parent|event|deleteLater)\b'` on any new method added to a QObject subtree; rename to a domain verb (disconnectService) if it collides. (A3-R008-F4: CloudService::disconnect() name-hides QObject::disconnect() for all ~15 CloudService subclasses — currently inert, a standing footgun.)
 
 ---
@@ -648,3 +653,58 @@ origin: A3-R008-F4 (2026-07-20, informational). CloudService::disconnect() (Clou
         QObject::disconnect on a CloudService*), a standing footgun.
 history:2026-07-20: captured at guard, first occurrence. scope:portable — applies to any framework base with
         well-known member names (Qt QObject, etc.). Related: [[LSN-004]] (get the seam/API shape right up front).
+
+## LSN-032
+sig:    verify / checkout-revert-destroys-uncommitted-work / any-mutation
+level:  guard scope:portable      since:DEC-020(2026-08-03)   recur:1   saves:0   miss:1
+tags:   op:verify, op:mutation-test, type:work-loss
+trigger:about to revert a temporary mutation (mutation testing, a spike, a bisect probe)
+mistake:the orchestrator mutated `GarminConnect::accountStillConnected()` to `return true;` to prove
+        the builder's fail-closed gate was load-bearing — a legitimate and successful verification,
+        4 tests died as they should — then reverted with `git checkout -- src/Cloud/GarminConnect.cpp`.
+        The builder's production change was UNCOMMITTED, so checkout reset the file to HEAD and
+        destroyed the slice's whole production half. Unstaged content has no reflog; it was
+        unrecoverable from git and had to be rebuilt by re-dispatching the builder.
+rule:   `git checkout -- <file>` is a valid mutation-revert ONLY when the file is clean at HEAD.
+        When the working tree carries uncommitted work on that file, snapshot first
+        (`cp f f.orig`) and restore from the snapshot, verifying with `cmp`.
+check:  before mutating, run `git status --porcelain <file>`; if it shows ` M` (or `??`),
+        checkout is FORBIDDEN as the revert path — use a file copy. Corollary: the safety of a
+        revert technique is a property of the CURRENT tree, not of the technique — the adversary's
+        identical `git checkout --` one step earlier was safe only because src/Cloud was clean then.
+origin: 2026-08-03, DEC-020 hardening slice verification. Recovered by resuming the builder agent
+        from its transcript to re-apply the lost GarminConnect.cpp changes; the .h, GarminTokenStore
+        and all test files were untouched and survived.
+history:2026-08-03: captured at guard, first occurrence, miss:1 (cost: one rebuild round-trip).
+        scope:portable — applies to any agent doing mutation testing in a dirty tree. Sibling:
+        [[LSN-007]] (a tool mutating files under you voids prior evidence). See also [[LSN-029]],
+        the lesson whose mutation discipline prompted this verification in the first place.
+
+## LSN-028
+sig:    verify / requirement-satisfied-as-side-effect / cross-REQ
+level:  guard scope:portable      since:REQ-012(2026-08-02)   recur:1   saves:0   miss:1
+tags:   op:verify, op:ledger-update, type:unaudited-criterion
+trigger:a requirement whose mechanism was built as a SIDE-EFFECT of another requirement's slice — i.e. the
+        code exists but no builder was ever briefed with THIS requirement's acceptance criterion
+mistake:REQ-012's disconnect mechanism shipped inside REQ-008's DEC-019 trigger slice, and the ledger read as
+        though REQ-012 was essentially done. A clause-by-clause audit of prd.md:84 found only 2 of 5 criterion
+        clauses had any test: "reconnect must perform a full SSO", "prior-account sidecars are not consulted",
+        and "same-account reconnect resumes history" were entirely uncovered, and a fifth ("deletes the token
+        file BEFORE clearing in-memory state") turned out to have NO MECHANISM AT ALL — disconnectService()
+        clears no in-memory state (B-R012-01). Incidental construction had been silently mistaken for coverage.
+rule:   a requirement satisfied incidentally by another REQ's slice is NOT done until its OWN acceptance
+        criterion is split into clauses and each clause is mapped to a covering test or an explicit,
+        recorded residual. The building slice was briefed with a DIFFERENT criterion, so it optimized for a
+        different goal — the overlap is coincidence, not coverage.
+check:  before closing (or dispatching) any REQ whose code "already exists", quote the criterion verbatim,
+        enumerate its clauses (split on sentence + "and"/";"), and for EACH clause name the test id that
+        encodes it; any clause with no id is either a build item or a recorded finding — never an assumption.
+        Corollary: a test that passes on first run against unchanged production must prove it CAN fail
+        (targeted, reverted mutation) before it counts as coverage.
+origin: REQ-012 (2026-08-02). The clause audit produced TEST-054/055/056 + finding B-R012-01. Every new test
+        passed first-run — the builder's 4 reverted mutations (incl. M4, which killed only the "not consulted"
+        assertion) are what turned "green" into evidence.
+history:2026-08-02: captured at guard, first occurrence. miss:1 — the gap existed from `ff9cce966` (2026-07-20)
+        until the REQ-012 audit two weeks later. Siblings: [[LSN-024]] and [[LSN-018]] (unit-green != integrated
+        — this is the ledger-layer version: code-exists != criterion-satisfied). See also [[LSN-022]]
+        (green-but-vacuous assertions) and [[LSN-014]] (one fact, one home).

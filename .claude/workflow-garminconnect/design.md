@@ -188,20 +188,21 @@ All paths are rooted at `<athlete-config-dir>` (the same directory used by other
 ```
 <athlete-config-dir>/garminconnect/
   ├── tokens.json                                # OAuth bearer + refresh tokens (singular per athlete — only one account connected at a time)
+  ├── active-account.json                        # { garmin_user_id } — the ACTIVE account pointer (DEC-018 Option B). Deliberately NOT inside tokens.json, whose schema is security-locked by REQ-006/007. Tolerant read: absent/torn -> empty uid -> callers no-op. Deleted on Disconnect alongside tokens.json.
   ├── imported-<garmin_user_id>.json             # PER ACCOUNT — { garmin_activity_id : { startTimeGMT, local_filename } }
   └── backfill-state-<garmin_user_id>.json       # PER ACCOUNT — { last_success_startTimeGMT, range_start, range_end }
 ```
 
-`<garmin_user_id>` is the stable Garmin account identifier obtained from the SSO response (the library exposes it as `Garmin.display_name` or `Garmin.full_name_id`; we use the numeric ID for filename safety). It is recorded once at first-connect into `tokens.json` so the per-account sidecar paths can be resolved before any further library call.
+`<garmin_user_id>` is the stable Garmin account identifier obtained from the SSO response (the library exposes it as `Garmin.display_name` or `Garmin.full_name_id`; we use the numeric ID for filename safety). It is recorded once at first-connect into `active-account.json` (**DEC-018 Option B**, 2026-07-19 — *not* `tokens.json`, whose schema is frozen by the REQ-006 permission-check and the REQ-007 `from_tokens`/`loadTokens` parse) so the per-account sidecar paths can be resolved before any further library call. Write ordering is `tokens.json` first, then `active-account.json`, so a crash between the two degrades to an empty uid (safe no-op) rather than a token file bound to the wrong active account. **[Prose corrected 2026-08-02 — VAL-016 check-5 WARN; the pre-DEC-018 text said `tokens.json`.]**
 
 ### Invariants
 
 - Directory created with mode **`0700`** (POSIX) / owner-only ACL (Windows) on first write. Existing directory permissions are *not* tightened (avoid surprising the user).
 - All files are written **0600** / owner-only via DES-006 atomic-writer.
 - On read: if the file's mode/ACL is wider than owner-only, GC **refuses to load it**, raises a typed `TokenPermissionsRejected` (for `tokens.json`) or `SidecarPermissionsRejected` (for sidecars), surfaces a *specific* user-facing message via DES-008 (naming the file path and expected mode), and triggers a forced re-login (REQ-006). **[A2-005 fix]**
-- `tokens.json` is **singular per athlete** — only one Garmin account is connected at a time. Disconnect deletes `tokens.json`.
+- `tokens.json` is **singular per athlete** — only one Garmin account is connected at a time. Disconnect deletes `tokens.json` **and `active-account.json`** (DEC-018/DEC-019; `GarminTokenStore::clearAccount`).
 - Per-account sidecars (`imported-<uid>.json`, `backfill-state-<uid>.json`) are **all preserved across Disconnect** (active or otherwise). Reconnecting with the same account picks up its sidecar; reconnecting with a different account uses (or creates) that account's sidecar — prior-account sidecars are left untouched and not consulted by the active session. **[A2-006 fix, Option C]**
-- The library's own default token path (`~/.garminconnect/tokens.json`) is **never** used; the library is initialized with an explicit `tokenstore=` path on every adapter `login()` call.
+- The library's own default token path (`~/.garminconnect/tokens.json`) is **never** used. **[Corrected 2026-08-02 — VAL-016 check-5 WARN.]** The `tokenstore=` path this invariant originally prescribed was REMOVED by REQ-006 Slice B (`3edb705cb`, A3-R004-M3 security close): the adapter now constructs the library **auth-only** (`(email, password)`, exactly 2 args — TEST-015/016 pin it) and GC owns persistence entirely, writing the blob itself via `GarminTokenStore` so the 0600/owner-only invariant is never delegated to the library.
 
 ### Migration / multi-athlete / multi-account
 
@@ -486,7 +487,7 @@ password is ever needed for download. The seam and host are Python-free (LSN-007
 
 ### Disconnect
 
-- **[Corrected 2026-07-20, D-R008-01 / DEC-019]** There is NO `CloudService::removeSettings(id)` virtual — that surface never existed (the earlier prose assumed it). The real disconnect UI is `CredentialsPage::deleteClicked()` (src/Gui/AthletePages.cpp:143-161), which historically only flipped the active/sync appsettings flags and deleted no token (as do all sibling services). DEC-019 (Option C) adds a new generic `CloudService::disconnect()` virtual (default no-op); `GarminConnect::disconnect()` overrides it to delete `tokens.json` + `active-account.json` (DEC-018) via `GarminTokenStore::clearAccount(resolveConfigDir())`; `deleteClicked()` invokes it generically (`newService(id, context)->disconnect()`, no Garmin special-case). Per-account sidecars `imported-<uid>.json` + `backfill-state-<uid>.json` are **left alone** (REQ-012, DES-002). Persist-on-connect is the symmetric `CloudService::persistConnectSuccess()` virtual, driven by a single `AddCloudWizard` capture of both pages' id-gated `succeeded(GarminAuthSuccess)` signals (both direct + post-MFA).
+- **[Corrected 2026-07-20, D-R008-01 / DEC-019]** There is NO `CloudService::removeSettings(id)` virtual — that surface never existed (the earlier prose assumed it). The real disconnect UI is `CredentialsPage::deleteClicked()` (src/Gui/AthletePages.cpp:143-161), which historically only flipped the active/sync appsettings flags and deleted no token (as do all sibling services). DEC-019 (Option C) adds a new generic `CloudService::disconnectService()` virtual (default no-op); `GarminConnect::disconnectService()` overrides it to delete `tokens.json` + `active-account.json` (DEC-018) via `GarminTokenStore::clearAccount(resolveConfigDir())`; `deleteClicked()` invokes it generically (`newService(id, context)->disconnectService()`, no Garmin special-case). **[Renamed 2026-07-20 per A3-R008-F4 / LSN-027 — `disconnect()` name-hid `QObject::disconnect()` across all ~15 CloudService subclasses; the shipped name is `disconnectService()`. Prose cascade completed 2026-08-02 (VAL-016 check-5 WARN).]** Per-account sidecars `imported-<uid>.json` + `backfill-state-<uid>.json` are **left alone** (REQ-012, DES-002). Persist-on-connect is the symmetric `CloudService::persistConnectSuccess()` virtual, driven by a single `AddCloudWizard` capture of both pages' id-gated `succeeded(GarminAuthSuccess)` signals (both direct + post-MFA).
 
 ---
 
