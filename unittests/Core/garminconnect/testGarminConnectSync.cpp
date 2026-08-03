@@ -39,6 +39,7 @@
 #include "GarminConnect.h"
 #include "GarminDownloadChain.h"
 #include "GarminSidecarStore.h"
+#include "GarminTokenStore.h"
 #include "IGarminDownloadClient.h"
 #include "IGarminPyAdapter.h"
 #include "zipreader.h"
@@ -99,6 +100,19 @@ QByteArray makeZip(const QString& entryName, const QByteArray& content)
 }
 
 const QString kUid = QStringLiteral("123456789");
+const QByteArray kBlob = QByteArray("{\"oauth1\":\"OA1-secret\",\"oauth2\":\"OA2.refresh\"}");
+
+// DEC-garmin-020 (A3-R012-F1): readdir/readFile now FAIL CLOSED unless the
+// athlete's stored Garmin credential is present and acceptable AT CALL TIME. The
+// slots below all exercise sync for a CONNECTED account, so each fixture writes a
+// real tokens.json (+ active-account.json) through the production producer first.
+// The ctor uid-override these slots use keys the sidecars exactly as before; this
+// only supplies the credential whose absence now (correctly) blocks any network
+// work. Verifying the credential re-check itself is TEST-057's job.
+bool connectAccount(const QString& athleteConfigDir)
+{
+    return GarminTokenStore::persistConnectSuccess(athleteConfigDir, kUid, kBlob);
+}
 
 } // namespace
 
@@ -252,6 +266,7 @@ class TestGarminConnectSync : public QObject
     {
         QTemporaryDir tmp;
         QVERIFY(tmp.isValid());
+        QVERIFY2(connectAccount(tmp.path()), "pre-condition: the account must be connected (DEC-garmin-020)");
 
         FakeListPyAdapter adapter;
         adapter.scriptedListOutcome.kind = PyListOutcome::Success;
@@ -296,6 +311,7 @@ class TestGarminConnectSync : public QObject
     {
         QTemporaryDir tmp;
         QVERIFY(tmp.isValid());
+        QVERIFY2(connectAccount(tmp.path()), "pre-condition: the account must be connected (DEC-garmin-020)");
 
         GarminSidecarStore::BackfillState st;
         st.lastSuccessStartTimeGMT = QStringLiteral("2026-07-12 00:00:00");
@@ -319,6 +335,7 @@ class TestGarminConnectSync : public QObject
     {
         QTemporaryDir tmp;
         QVERIFY(tmp.isValid());
+        QVERIFY2(connectAccount(tmp.path()), "pre-condition: the account must be connected (DEC-garmin-020)");
 
         FakeListPyAdapter adapter;
         adapter.scriptedListOutcome.kind = PyListOutcome::Success;
@@ -341,6 +358,7 @@ class TestGarminConnectSync : public QObject
     {
         QTemporaryDir tmp;
         QVERIFY(tmp.isValid());
+        QVERIFY2(connectAccount(tmp.path()), "pre-condition: the account must be connected (DEC-garmin-020)");
 
         GarminSidecarStore::BackfillState st;
         st.lastSuccessStartTimeGMT = QStringLiteral("2026-07-12 00:00:00");
@@ -365,6 +383,7 @@ class TestGarminConnectSync : public QObject
     {
         QTemporaryDir tmp;
         QVERIFY(tmp.isValid());
+        QVERIFY2(connectAccount(tmp.path()), "pre-condition: the account must be connected (DEC-garmin-020)");
 
         FakeListPyAdapter adapter;
         adapter.scriptedListOutcome.kind = PyListOutcome::Network;
@@ -386,6 +405,7 @@ class TestGarminConnectSync : public QObject
     {
         QTemporaryDir tmp;
         QVERIFY(tmp.isValid());
+        QVERIFY2(connectAccount(tmp.path()), "pre-condition: the account must be connected (DEC-garmin-020)");
 
         ReentrantListClient client;
         GarminActivitySummary a1;
@@ -426,6 +446,7 @@ class TestGarminConnectSync : public QObject
     {
         QTemporaryDir tmp;
         QVERIFY(tmp.isValid());
+        QVERIFY2(connectAccount(tmp.path()), "pre-condition: the account must be connected (DEC-garmin-020)");
 
         // Pre-seed imported-<uid>.json with one already-imported activity (AAA).
         GarminSidecarStore::ImportedEntry seeded;

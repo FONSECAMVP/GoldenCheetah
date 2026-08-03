@@ -162,6 +162,30 @@ QString GarminConnect::resolveGarminUserId() const
     return GarminTokenStore::loadActiveAccountUserId(dir);
 }
 
+bool GarminConnect::accountStillConnected() const
+{
+    // DEC-garmin-020 (Option C) — the fail-closed predicate, evaluated FRESH on
+    // every consuming call (A3-R012-F1).
+    //
+    // Ground truth: disconnectService() deletes tokens.json + active-account.json
+    // and clears NO in-memory state, and nothing shuts down GarminConnect
+    // instances that are already open() (the wizard's finish-with-sync dialog holds
+    // one open while Options -> Athlete -> Accounts -> Delete disconnects through a
+    // SECOND, freshly-minted instance — DEC-garmin-019 C). A live instance
+    // therefore cannot trust its own restored session: the on-disk credential is
+    // the single source of truth for "this account is still connected", so it is
+    // re-read at every call rather than cached.
+    //
+    // The predicate is deliberately the SAME one open() gates on
+    // (GarminTokenStore::loadChecked): only an Ok result counts as connected. An
+    // absent token file means disconnected; a REJECTED one (mode wider than
+    // owner-only, REQ-006) already forces a fresh SSO in open(), so it must not be
+    // downloaded against here either. No carve-out exists for the injected-client
+    // test seam or for a missing athlete config dir — a service that cannot prove
+    // it is connected does not talk to Garmin.
+    return GarminTokenStore::loadChecked(resolveConfigDir()).isOk();
+}
+
 bool GarminConnect::blockingRestore(const QString& tokenBlob)
 {
     IGarminDownloadClient* client = m_client;
@@ -363,6 +387,13 @@ bool GarminConnect::readFile(QByteArray* data, QString remotename, QString remot
     if (data == nullptr || m_client == nullptr)
         return false;
 
+    // DEC-garmin-020 — FAIL CLOSED (A3-R012-F1). The account may have been
+    // disconnected since this instance was open()ed; refuse BEFORE any network
+    // work, so nothing is downloaded from — or staged for — an account the user
+    // has already removed. Nothing is staged and no completion is posted.
+    if (!accountStillConnected())
+        return false;
+
     // DEC-016 attempt 1 — request ORIGINAL (FIT); the payload is ZIP-wrapped.
     const DownloadResult original = blockingDownload(QStringLiteral("ORIGINAL"), remoteid);
     if (original.ok) {
@@ -418,6 +449,16 @@ QList<CloudServiceEntry*> GarminConnect::readdir(QString path, QStringList& erro
     IGarminDownloadClient* client = m_client;
     if (client == nullptr) {
         errors << tr("Garmin Connect: no embedded session is available.");
+        return returning;
+    }
+
+    // DEC-garmin-020 — FAIL CLOSED (A3-R012-F1), before the listing is issued.
+    // Checked separately from (and ahead of) the uid resolution below: the uid
+    // lives in active-account.json, so it cannot speak for the CREDENTIAL — a
+    // present-but-permission-rejected tokens.json, or a tokens.json deleted on its
+    // own, leaves the uid resolvable while the account is not usable.
+    if (!accountStillConnected()) {
+        errors << tr("Garmin Connect: no connected account; please sign in again.");
         return returning;
     }
 

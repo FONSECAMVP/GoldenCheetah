@@ -122,6 +122,14 @@ class GarminConnect : public CloudService
     IGarminDownloadClient* ensureClient();
     QString resolveConfigDir() const;
 
+    // DEC-garmin-020 (A3-R012-F1) — the fail-closed re-check both readFile() and
+    // readdir() gate on. True only when the stored credential is present AND
+    // acceptable (GarminTokenStore::loadChecked == Ok — the very predicate open()
+    // uses). Re-read from disk on EVERY call because disconnectService() deletes
+    // the token files without touching live instances: an already-open()ed service
+    // must not keep serving downloads for an account the user has disconnected.
+    bool accountStillConnected() const;
+
     // One blocking download attempt in `fmt`; bridges the async client to a sync
     // result via a local QEventLoop keyed on a fresh requestId.
     struct DownloadResult

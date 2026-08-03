@@ -33,6 +33,7 @@
 // unwrap for real.
 
 #include "GarminConnect.h"
+#include "GarminTokenStore.h"
 #include "IGarminDownloadClient.h"
 #include "zipreader.h"
 #include "zipwriter.h"
@@ -44,6 +45,7 @@
 #include <QMetaObject>
 #include <QString>
 #include <QStringList>
+#include <QTemporaryDir>
 #include <QTemporaryFile>
 #include <QUuid>
 #include <QtTest/QtTest>
@@ -141,6 +143,21 @@ QByteArray makeZip(const QString& entryName, const QByteArray& content)
 
 const QByteArray kTcxBytes =
     QByteArray("<?xml version=\"1.0\"?><TrainingCenterDatabase>tcx-body</TrainingCenterDatabase>");
+
+// DEC-garmin-020 (A3-R012-F1): readFile now FAILS CLOSED unless the athlete's
+// stored Garmin credential is present and acceptable AT CALL TIME. Every slot
+// below exercises the DEC-016 download decision table for a CONNECTED account, so
+// the fixture must represent one — an athlete config dir carrying a real
+// tokens.json + active-account.json written by the production producer, instead of
+// the empty config-dir override these slots used before. (This makes the fixture
+// MORE faithful to production, where a download only ever follows a connect.)
+const QString kUid = QStringLiteral("123456789");
+const QByteArray kBlob = QByteArray("{\"oauth1\":\"OA1-secret\",\"oauth2\":\"OA2.refresh\"}");
+
+bool connectAccount(const QString& athleteConfigDir)
+{
+    return GarminTokenStore::persistConnectSuccess(athleteConfigDir, kUid, kBlob);
+}
 } // namespace
 
 class TestGarminConnectReadFile : public QObject
@@ -160,7 +177,10 @@ class TestGarminConnectReadFile : public QObject
         // A TCX response is scripted but must NEVER be requested on the FIT path.
         fake.responses[QStringLiteral("TCX")] = {true, kTcxBytes, {}};
 
-        GarminConnect gc(nullptr, &fake, QString());
+        QTemporaryDir cfg;
+        QVERIFY(cfg.isValid());
+        QVERIFY2(connectAccount(cfg.path()), "pre-condition: the account must be connected (DEC-garmin-020)");
+        GarminConnect gc(nullptr, &fake, cfg.path());
         QByteArray data;
         const bool ok = gc.readFile(&data, QStringLiteral("ignored-name"), QStringLiteral("123"));
 
@@ -193,7 +213,10 @@ class TestGarminConnectReadFile : public QObject
         fake.responses[QStringLiteral("ORIGINAL")] = {false, {}, GarminDownloadFailure::Kind(kind)};
         fake.responses[QStringLiteral("TCX")] = {true, kTcxBytes, {}};
 
-        GarminConnect gc(nullptr, &fake, QString());
+        QTemporaryDir cfg;
+        QVERIFY(cfg.isValid());
+        QVERIFY2(connectAccount(cfg.path()), "pre-condition: the account must be connected (DEC-garmin-020)");
+        GarminConnect gc(nullptr, &fake, cfg.path());
         QByteArray data;
         const bool ok = gc.readFile(&data, QStringLiteral("ignored-name"), QStringLiteral("77"));
 
@@ -215,7 +238,10 @@ class TestGarminConnectReadFile : public QObject
         // Present but must NOT be requested — RateLimited is fail-fast (anti retry-storm).
         fake.responses[QStringLiteral("TCX")] = {true, kTcxBytes, {}};
 
-        GarminConnect gc(nullptr, &fake, QString());
+        QTemporaryDir cfg;
+        QVERIFY(cfg.isValid());
+        QVERIFY2(connectAccount(cfg.path()), "pre-condition: the account must be connected (DEC-garmin-020)");
+        GarminConnect gc(nullptr, &fake, cfg.path());
         QByteArray data;
         const bool ok = gc.readFile(&data, QStringLiteral("ignored-name"), QStringLiteral("9"));
 
@@ -245,7 +271,10 @@ class TestGarminConnectReadFile : public QObject
         fake.responses[QStringLiteral("ORIGINAL")] = {true, originalBytes, {}};
         fake.responses[QStringLiteral("TCX")] = {true, kTcxBytes, {}};
 
-        GarminConnect gc(nullptr, &fake, QString());
+        QTemporaryDir cfg;
+        QVERIFY(cfg.isValid());
+        QVERIFY2(connectAccount(cfg.path()), "pre-condition: the account must be connected (DEC-garmin-020)");
+        GarminConnect gc(nullptr, &fake, cfg.path());
         QByteArray data;
         const bool ok = gc.readFile(&data, QStringLiteral("ignored-name"), QStringLiteral("55"));
 
@@ -299,7 +328,10 @@ class TestGarminConnectReadFile : public QObject
             fake.responses[QStringLiteral("TCX")] = {true, kTcxBytes, {}};
         }
 
-        GarminConnect gc(nullptr, &fake, QString());
+        QTemporaryDir cfg;
+        QVERIFY(cfg.isValid());
+        QVERIFY2(connectAccount(cfg.path()), "pre-condition: the account must be connected (DEC-garmin-020)");
+        GarminConnect gc(nullptr, &fake, cfg.path());
         CloudService& svc = static_cast<CloudService&>(gc);
 
         QByteArray data;
@@ -361,11 +393,17 @@ class TestGarminConnectReadFile : public QObject
                                  // data pointer stays valid when the loop turns
         fake.responses[QStringLiteral("ORIGINAL")] = {true, makeZip(QStringLiteral("555.fit"), makeFitBytes()), {}};
 
+        // Connected account (DEC-garmin-020 fail-closed) — declared before the
+        // storage so it outlives the placement-constructed service.
+        QTemporaryDir cfg;
+        QVERIFY(cfg.isValid());
+        QVERIFY2(connectAccount(cfg.path()), "pre-condition: the account must be connected (DEC-garmin-020)");
+
         // Storage the test owns and never frees — only the *object lifetime* ends
         // below, so reads of the recorder counter after destruction stay in valid
         // (allocated, in-scope) memory in the PASS path.
         alignas(GarminConnect) unsigned char storage[sizeof(GarminConnect)];
-        GarminConnect* gc = new (storage) GarminConnect(nullptr, &fake, QString());
+        GarminConnect* gc = new (storage) GarminConnect(nullptr, &fake, cfg.path());
 
         // Address of the recorder counter, captured while the object is alive.
         int* readCompleteCount = &static_cast<CloudService*>(gc)->readCompleteCount;
@@ -396,11 +434,18 @@ class TestGarminConnectReadFile : public QObject
     // is how it bites. See build NOTES.)
     void readFileNullGuardReturnsFalseNoCompletion()
     {
+        // Both cases run against a CONNECTED account, so the DEC-garmin-020
+        // fail-closed re-check cannot be what returns false here — only the null
+        // guard can be, which is exactly what this slot pins.
+        QTemporaryDir cfg;
+        QVERIFY(cfg.isValid());
+        QVERIFY2(connectAccount(cfg.path()), "pre-condition: the account must be connected (DEC-garmin-020)");
+
         // (a) null data pointer, valid client.
         {
             FakeDownloadClient fake;
             fake.responses[QStringLiteral("ORIGINAL")] = {true, makeZip(QStringLiteral("1.fit"), makeFitBytes()), {}};
-            GarminConnect gc(nullptr, &fake, QString());
+            GarminConnect gc(nullptr, &fake, cfg.path());
             const bool ok = gc.readFile(nullptr, QStringLiteral("n"), QStringLiteral("1"));
             QVERIFY2(!ok, "null data pointer must return false");
             QCOMPARE(fake.downloadCalls, 0); // no download attempted
@@ -408,7 +453,7 @@ class TestGarminConnectReadFile : public QObject
         }
         // (b) null client seam (injected nullptr), valid data.
         {
-            GarminConnect gc(nullptr, nullptr, QString());
+            GarminConnect gc(nullptr, nullptr, cfg.path());
             QByteArray data;
             const bool ok = gc.readFile(&data, QStringLiteral("n"), QStringLiteral("1"));
             QVERIFY2(!ok, "null client seam must return false");

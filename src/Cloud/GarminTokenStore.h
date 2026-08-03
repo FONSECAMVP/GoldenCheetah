@@ -98,6 +98,10 @@ class GarminTokenStore
     // sidecars imported-<uid>.json / backfill-state-<uid>.json (REQ-012 — imported/
     // backfill history survives a disconnect). Absent files are not an error.
     // Returns false only if an existing target could not be removed.
+    // DEC-garmin-020 (A3-R012-F2): the `<path>.tmp` siblings AtomicFile::writeOver
+    // stages through are removed as well — a crash between its write and its rename
+    // leaves the complete OAuth blob in tokens.json.tmp, and "the file is absent" is
+    // not "the secret is gone".
     static bool clearAccount(const QString& athleteConfigDir);
 
     // Minimal plain read of tokens.json (no perms enforcement). Returns the

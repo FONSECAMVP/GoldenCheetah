@@ -100,8 +100,17 @@ bool GarminTokenStore::clearAccount(const QString& athleteConfigDir)
     // per-account sidecars (imported-<uid>.json / backfill-state-<uid>.json) are
     // deliberately left untouched — REQ-012 preserves imported/backfill history
     // across a disconnect. Absent files are not a failure.
+    //
+    // DEC-garmin-020 (A3-R012-F2): each artefact is written through
+    // AtomicFile::writeOver, which stages the bytes in a `<path>.tmp` sibling
+    // before renaming it over the destination. A crash in that window leaves the
+    // COMPLETE OAuth blob sitting in tokens.json.tmp — deleting only tokens.json
+    // would leave that secret on disk for good. Sweep the siblings too.
     bool ok = true;
-    for (const QString& path : {tokenFilePath(athleteConfigDir), activeAccountFilePath(athleteConfigDir)}) {
+    const QString tokens = tokenFilePath(athleteConfigDir);
+    const QString activeAccount = activeAccountFilePath(athleteConfigDir);
+    for (const QString& path :
+         {tokens, tokens + QStringLiteral(".tmp"), activeAccount, activeAccount + QStringLiteral(".tmp")}) {
         if (QFileInfo::exists(path) && !QFile::remove(path))
             ok = false;
     }
