@@ -88,13 +88,25 @@ bool unzipFirstEntry(const QByteArray& zipped, QByteArray* out)
 }
 } // namespace
 
-GarminConnect::GarminConnect(Context* c) : CloudService(c) {}
+// REQ-018 — readFile stages UNCOMPRESSED bytes: the ORIGINAL download is
+// unzipped in memory before it is staged as garmin-<id>.fit, and the DEC-016 TCX
+// fallback is raw XML staged as garmin-<id>.tcx. CloudService's ctor defaults
+// downloadCompression to `zip`, and uncompressRide's FIRST guard rejects — with
+// "expected compressed activity file." — any name that does not match that
+// setting. Leaving the default therefore made every SUCCESSFUL Garmin download
+// unimportable in both consumers. Both ctors must declare what we actually hand
+// over, because either can be the one the service is created through.
+GarminConnect::GarminConnect(Context* c) : CloudService(c)
+{
+    downloadCompression = none;
+}
 
 GarminConnect::GarminConnect(Context* c, IGarminDownloadClient* injectedClient, const QString& configDirOverride,
                              const QString& garminUserIdOverride)
     : CloudService(c), m_client(injectedClient), m_injectedClient(true), m_configDirOverride(configDirOverride),
       m_garminUserIdOverride(garminUserIdOverride)
 {
+    downloadCompression = none;
 }
 
 GarminConnect::~GarminConnect()

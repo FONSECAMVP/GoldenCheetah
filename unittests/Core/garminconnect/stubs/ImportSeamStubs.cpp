@@ -1,0 +1,510 @@
+/*
+ * Copyright (c) 2026 GoldenCheetah Contributor
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the Free
+ * Software Foundation; either version 2 of the License, or (at your option)
+ * any later version.
+ */
+
+// Link-level stand-ins for testGarminConnectImport (TEST-067 / REQ-018) ONLY.
+//
+// That target compiles the REAL src/Cloud/CloudService.cpp so the REAL
+// CloudService::uncompressRide (the boundary REQ-018 is about) is under test,
+// plus the REAL RideFile/FitRideFile/TcxRideFile/TcxParser so a REAL parser
+// produces the RideFile. Those translation units reference the rest of the
+// application (RideCache, RideItem, RideMetric, MainWindow, DataProcessor,
+// Colors, GlobalContext, ...) from code paths this contract never executes;
+// linking them for real pulls in 355 of the app's 439 objects, i.e. the whole
+// program (which is exactly why DEC-garmin-021 rejected that option for
+// TEST-064).
+//
+// So the REAL headers are used everywhere — only the DEFINITIONS below are
+// stand-ins, and NONE of them sits on the path under test:
+//     readFile -> readComplete -> uncompressRide -> RideFileFactory -> reader
+// Everything here is either inert or an honest minimum (the athlete directory
+// structure IS created for real, because uncompressRide writes the staged bytes
+// into home->temp() before handing the file to the reader).
+
+// LTMSettings.h first: Athlete.h only forward-declares LTMSettings but holds it
+// by value in a QList, so the container instantiation needs the complete type
+// (the app gets it transitively; this TU must ask for it).
+#include "Athlete.h"
+#include "Colors.h"
+#include "CompareDateRange.h"
+#include "CompareInterval.h"
+#include "Context.h"
+#include "CsvRideFile.h"
+#include "DataProcessor.h"
+#include "JsonRideFile.h"
+#include "LTMSettings.h"
+#include "MainWindow.h"
+#include "PyEmbeddedAdapter.h"
+#include "RideCache.h"
+#include "RideFileCommand.h"
+#include "RideItem.h"
+#include "RideMetadata.h"
+#include "RideMetric.h"
+#include "Settings.h"
+#include "Specification.h"
+#include "SplineLookup.h"
+#include "TimeUtils.h"
+#include "Units.h"
+#include "Utils.h"
+#include "WPrime.h"
+#include "Zones.h"
+
+#include <QDir>
+#include <QtGlobal>
+
+// A QObject-derived class whose Q_OBJECT is not moc'd here still needs its three
+// virtuals + staticMetaObject or its vtable will not link. None of these objects
+// ever emits, receives or is qobject_cast in this test, so borrowing QObject's
+// metaobject is sufficient — and it fails loudly (a cast returns nullptr) rather
+// than silently if that ever stops being true.
+#define GC_STUB_METAOBJECT(Klass)                                          \
+    const QMetaObject Klass::staticMetaObject = QObject::staticMetaObject; \
+    const QMetaObject* Klass::metaObject() const                           \
+    {                                                                      \
+        return &staticMetaObject;                                          \
+    }                                                                      \
+    void* Klass::qt_metacast(const char* n)                                \
+    {                                                                      \
+        return QObject::qt_metacast(n);                                    \
+    }                                                                      \
+    int Klass::qt_metacall(QMetaObject::Call c, int id, void** a)          \
+    {                                                                      \
+        return QObject::qt_metacall(c, id, a);                             \
+    }
+
+// --- globals ---------------------------------------------------------------
+GSettings* appsettings = nullptr;
+QString gcroot;
+double dpiXFactor = 1.0;
+double dpiYFactor = 1.0;
+
+namespace {
+// appsettings is dereferenced by the ride readers (e.g. FitRideFile reads the
+// "fix garmin smart recording" preference), so it must be a live object, not a
+// null pointer. It answers every query with the caller's own default.
+struct AppSettingsInstaller
+{
+    AppSettingsInstaller() { appsettings = new GSettings(QStringLiteral("gc-test"), QStringLiteral("gc-test")); }
+} appSettingsInstaller;
+} // namespace
+
+// --- GSettings -------------------------------------------------------------
+GSettings::GSettings(QString org, QString app)
+{
+    Q_UNUSED(org);
+    Q_UNUSED(app);
+}
+
+GSettings::~GSettings() {}
+
+QVariant GSettings::value(const QObject* me, const QString key, const QVariant def)
+{
+    Q_UNUSED(me);
+    Q_UNUSED(key);
+    return def;
+}
+
+QVariant GSettings::cvalue(QString athleteName, QString key, QVariant def)
+{
+    Q_UNUSED(athleteName);
+    Q_UNUSED(key);
+    return def;
+}
+
+void GSettings::setCValue(QString athleteName, QString key, QVariant value)
+{
+    Q_UNUSED(athleteName);
+    Q_UNUSED(key);
+    Q_UNUSED(value);
+}
+
+// --- AthleteDirectoryStructure ---------------------------------------------
+// Real behaviour, not a stand-in: uncompressRide writes into temp().
+AthleteDirectoryStructure::AthleteDirectoryStructure(const QDir home) : myhome(home)
+{
+    athlete_activities = QStringLiteral("activities");
+    athlete_tmp_activities = QStringLiteral("tmpactivities");
+    athlete_imports = QStringLiteral("imports");
+    athlete_records = QStringLiteral("records");
+    athlete_downloads = QStringLiteral("downloads");
+    athlete_fileBackup = QStringLiteral("bak");
+    athlete_config = QStringLiteral("config");
+    athlete_cache = QStringLiteral("cache");
+    athlete_calendar = QStringLiteral("calendar");
+    athlete_workouts = QStringLiteral("workouts");
+    athlete_logs = QStringLiteral("logs");
+    athlete_temp = QStringLiteral("temp");
+    athlete_quarantine = QStringLiteral("quarantine");
+    athlete_planned = QStringLiteral("planned");
+    athlete_snippets = QStringLiteral("snippets");
+    athlete_media = QStringLiteral("media");
+}
+
+AthleteDirectoryStructure::~AthleteDirectoryStructure() {}
+
+void AthleteDirectoryStructure::createAllSubdirs()
+{
+    myhome.mkpath(activities().absolutePath());
+    myhome.mkpath(tmpActivities().absolutePath());
+    myhome.mkpath(imports().absolutePath());
+    myhome.mkpath(config().absolutePath());
+    myhome.mkpath(cache().absolutePath());
+    myhome.mkpath(temp().absolutePath());
+    myhome.mkpath(downloads().absolutePath());
+}
+
+GC_STUB_METAOBJECT(AthleteDirectoryStructure)
+
+// --- Athlete ---------------------------------------------------------------
+// The REAL Athlete ctor stands up the whole athlete (ride cache, zones, seasons,
+// intervals, ...). uncompressRide needs exactly one thing from it: home->temp().
+Athlete::Athlete(Context* context, const QDir& homeDir) : QObject(nullptr)
+{
+    Q_UNUSED(context);
+    home = new AthleteDirectoryStructure(homeDir);
+    home->createAllSubdirs();
+    rideCache = nullptr;
+    cloudAutoDownload = nullptr;
+}
+
+Athlete::~Athlete()
+{
+    delete home;
+}
+
+void Athlete::addRide(QString name, bool dosignal, bool select, bool useTempActivities, bool planned)
+{
+    Q_UNUSED(name);
+    Q_UNUSED(dosignal);
+    Q_UNUSED(select);
+    Q_UNUSED(useTempActivities);
+    Q_UNUSED(planned);
+}
+
+double Athlete::getWeight(QDate date, RideFile* ride)
+{
+    Q_UNUSED(date);
+    Q_UNUSED(ride);
+    return 75.0;
+}
+
+double Athlete::getHeight(RideFile* ride)
+{
+    Q_UNUSED(ride);
+    return 1.75;
+}
+
+GC_STUB_METAOBJECT(Athlete)
+
+// --- Context / GlobalContext -----------------------------------------------
+Context::Context(MainWindow* mainWindow) : mainWindow(mainWindow)
+{
+    athlete = nullptr;
+}
+
+Context::~Context() {}
+
+void Context::metadataFlush() {}
+void Context::autoDownloadStart() {}
+void Context::autoDownloadEnd() {}
+void Context::autoDownloadProgress(QString s, double x, int i, int n)
+{
+    Q_UNUSED(s);
+    Q_UNUSED(x);
+    Q_UNUSED(i);
+    Q_UNUSED(n);
+}
+
+GC_STUB_METAOBJECT(Context)
+
+GlobalContext::GlobalContext()
+{
+    rideMetadata = nullptr;
+    colorEngine = nullptr;
+    useMetricUnits = true;
+}
+
+GlobalContext* GlobalContext::context()
+{
+    static GlobalContext* gc = new GlobalContext();
+    return gc;
+}
+
+GC_STUB_METAOBJECT(GlobalContext)
+
+// --- TimeUtils / Units -----------------------------------------------------
+DateRange::DateRange(QDate from, QDate to, QString name, QColor color)
+    : from(from), to(to), name(name), color(color), valid(true)
+{
+}
+
+GC_STUB_METAOBJECT(DateRange)
+
+DateRange& DateRange::operator=(const DateRange& other)
+{
+    from = other.from;
+    to = other.to;
+    name = other.name;
+    color = other.color;
+    id = other.id;
+    valid = other.valid;
+    return *this;
+}
+
+QDateTime convertToLocalTime(QString timestamp)
+{
+    return QDateTime::fromString(timestamp, Qt::ISODate).toLocalTime();
+}
+
+QString kphToPace(double kph, bool metric, bool swim)
+{
+    Q_UNUSED(kph);
+    Q_UNUSED(metric);
+    Q_UNUSED(swim);
+    return QString();
+}
+
+// --- Specification ---------------------------------------------------------
+Specification::Specification() : it(nullptr), ri(nullptr), recintsecs(0) {}
+
+bool Specification::pass(RideItem* item) const
+{
+    Q_UNUSED(item);
+    return true;
+}
+
+void Specification::setDateRange(DateRange dr)
+{
+    this->dr = dr;
+}
+
+double Specification::secsStart() const
+{
+    return -1;
+}
+
+double Specification::secsEnd() const
+{
+    return -1;
+}
+
+// --- RideItem / RideCache / RideMetadata / RideMetric ----------------------
+RideItem::RideItem(RideFile* ride, Context* context) : context(context), ride_(ride) {}
+
+RideFile* RideItem::ride(bool open)
+{
+    Q_UNUSED(open);
+    return ride_;
+}
+
+double RideItem::getForSymbol(QString name, bool useMetricUnits)
+{
+    Q_UNUSED(name);
+    Q_UNUSED(useMetricUnits);
+    return 0;
+}
+
+void RideItem::notifyRideMetadataChanged() {}
+
+RideItem::~RideItem() {}
+
+GC_STUB_METAOBJECT(RideItem)
+
+void RideCache::save(bool opendata, QString filename)
+{
+    Q_UNUSED(opendata);
+    Q_UNUSED(filename);
+}
+
+void RideMetadata::setLinkedDefaults(RideFile* ride)
+{
+    Q_UNUSED(ride);
+}
+
+QHash<QString, RideMetricPtr> RideMetric::computeMetrics(RideItem* item, Specification spec, const QStringList& metrics)
+{
+    Q_UNUSED(item);
+    Q_UNUSED(spec);
+    Q_UNUSED(metrics);
+    return QHash<QString, RideMetricPtr>();
+}
+
+// --- DataProcessorFactory --------------------------------------------------
+DataProcessorFactory* DataProcessorFactory::instance_ = nullptr;
+
+DataProcessorFactory& DataProcessorFactory::instance()
+{
+    if (!instance_)
+        instance_ = new DataProcessorFactory();
+    return *instance_;
+}
+
+bool DataProcessorFactory::autoProcess(RideFile* ride, QString mode, QString op)
+{
+    Q_UNUSED(ride);
+    Q_UNUSED(mode);
+    Q_UNUSED(op);
+    return false;
+}
+
+QMap<QString, DataProcessor*> DataProcessorFactory::getProcessors(bool coreProcessorsOnly) const
+{
+    Q_UNUSED(coreProcessorsOnly);
+    return QMap<QString, DataProcessor*>();
+}
+
+// --- Colors ----------------------------------------------------------------
+QColor GCColor::getColor(int c)
+{
+    Q_UNUSED(c);
+    return QColor(Qt::black);
+}
+
+QColor GCColor::invertColor(QColor c)
+{
+    Q_UNUSED(c);
+    return QColor(Qt::white);
+}
+
+// --- Utils -----------------------------------------------------------------
+namespace Utils {
+bool qstringascend(const QString& s1, const QString& s2)
+{
+    return s1 < s2;
+}
+} // namespace Utils
+
+// --- MainWindow ------------------------------------------------------------
+void MainWindow::saveSilent(Context* context, RideItem* item)
+{
+    Q_UNUSED(context);
+    Q_UNUSED(item);
+}
+
+// --- ride writers (upload/save paths, never executed here) -----------------
+RideFile* JsonFileReader::openRideFile(QFile& file, QStringList& errors, QList<RideFile*>* list) const
+{
+    Q_UNUSED(file);
+    Q_UNUSED(list);
+    errors << QStringLiteral("json reader not linked into this test target");
+    return nullptr;
+}
+
+bool JsonFileReader::writeRideFile(Context* context, const RideFile* ride, QFile& file) const
+{
+    Q_UNUSED(context);
+    Q_UNUSED(ride);
+    Q_UNUSED(file);
+    return false;
+}
+
+RideFile* CsvFileReader::openRideFile(QFile& file, QStringList& errors, QList<RideFile*>* list) const
+{
+    Q_UNUSED(file);
+    Q_UNUSED(list);
+    errors << QStringLiteral("csv reader not linked into this test target");
+    return nullptr;
+}
+
+bool CsvFileReader::writeRideFile(Context* context, const RideFile* ride, QFile& file, CsvType format) const
+{
+    Q_UNUSED(context);
+    Q_UNUSED(ride);
+    Q_UNUSED(file);
+    Q_UNUSED(format);
+    return false;
+}
+
+// --- misc RideFile.cpp / FitRideFile.cpp collaborators ---------------------
+RideFileCommand::RideFileCommand(RideFile* ride) : ride(ride), stackptr(0), inLUW(false), luw(nullptr) {}
+
+RideFileCommand::~RideFileCommand() {}
+
+GC_STUB_METAOBJECT(RideFileCommand)
+
+CompareDateRange::~CompareDateRange() {}
+CompareInterval::~CompareInterval() {}
+
+int Zones::getCP(int rnum) const
+{
+    Q_UNUSED(rnum);
+    return 0;
+}
+
+int Zones::whichRange(const QDate& date) const
+{
+    Q_UNUSED(date);
+    return -1;
+}
+
+void FilterHrv(XDataSeries* rr, double rr_min, double rr_max, double filt, int hwin)
+{
+    Q_UNUSED(rr);
+    Q_UNUSED(rr_min);
+    Q_UNUSED(rr_max);
+    Q_UNUSED(filt);
+    Q_UNUSED(hwin);
+}
+
+WPrime::WPrime() {}
+
+void WPrime::setRide(RideFile* ride)
+{
+    Q_UNUSED(ride);
+}
+
+void SplineLookup::update(const QwtSplineBasis& spline, const QPolygonF& polygon, double tolerance)
+{
+    Q_UNUSED(spline);
+    Q_UNUSED(polygon);
+    Q_UNUSED(tolerance);
+}
+
+double SplineLookup::valueY(double x) const
+{
+    Q_UNUSED(x);
+    return 0;
+}
+
+// --- Garmin embedded-Python adapter ----------------------------------------
+// GarminConnect's lazy production path does `new PyEmbeddedAdapter(modulePath)`.
+// The test injects an IGarminDownloadClient, so this is never constructed — it
+// only keeps the target Python-free (`garmin-fast`), exactly as the
+// ReadFileStubPreamble fake does for the other targets.
+PyEmbeddedAdapter::PyEmbeddedAdapter(const QString& modulePath)
+{
+    Q_UNUSED(modulePath);
+    qFatal("PyEmbeddedAdapter must never be constructed in testGarminConnectImport");
+}
+
+PyEmbeddedAdapter::~PyEmbeddedAdapter() {}
+
+PyAuthOutcome PyEmbeddedAdapter::authenticate(const QString&, const QString&)
+{
+    return {};
+}
+
+PyAuthOutcome PyEmbeddedAdapter::submitMfa(const QString&)
+{
+    return {};
+}
+
+PyDownloadOutcome PyEmbeddedAdapter::downloadActivity(const QString&, const QString&)
+{
+    return {};
+}
+
+PyLoadTokensOutcome PyEmbeddedAdapter::loadTokens(const QString&)
+{
+    return {};
+}
+
+PyListOutcome PyEmbeddedAdapter::listActivitiesSince(const QString&)
+{
+    return {};
+}

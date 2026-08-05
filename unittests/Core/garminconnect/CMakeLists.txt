@@ -804,3 +804,139 @@ target_compile_features(testGarminConnectConnectPersist PRIVATE cxx_std_17)
 
 add_test(NAME testGarminConnectConnectPersist COMMAND testGarminConnectConnectPersist)
 set_tests_properties(testGarminConnectConnectPersist PROPERTIES LABELS "garmin-fast")
+
+# --- TEST-067 — REQ-018: a downloaded Garmin activity must actually IMPORT -----
+# The ONLY garmin target that does NOT force-include stubs/ReadFileStubPreamble.h.
+# That preamble replaces CloudService with a stand-in that has no uncompressRide
+# at all, which is precisely why the REQ-018 defect (GarminConnect never setting
+# downloadCompression, so uncompressRide's first guard rejected every
+# garmin-<id>.fit/.tcx it was handed) survived a 22/22-green suite: no test ever
+# crossed that boundary.
+#
+# So this target uses the REAL GC headers and compiles:
+#   - the REAL src/Cloud/CloudService.cpp  -> the REAL uncompressRide + guard
+#   - the REAL src/Cloud/GarminConnect.cpp -> the REAL staged name + compression
+#   - the REAL FileIO ride readers         -> a REAL parsed RideFile
+# stubs/ImportSeamStubs.cpp supplies link-level stand-ins for the application
+# layers those TUs merely reference (RideCache/RideItem/RideMetric/MainWindow/
+# DataProcessor/Colors/GlobalContext/...); nothing on the path under test is
+# stubbed. Linking those for real would pull in 355 of the app's 439 objects.
+#
+# Still Python-free (the injected IGarminDownloadClient replaces the worker host
+# and PyEmbeddedAdapter is a never-constructed link stub) -> `garmin-fast`.
+add_executable(testGarminConnectImport
+    testGarminConnectImport.cpp
+    stubs/ImportSeamStubs.cpp
+    # The boundary under test.
+    ${CMAKE_SOURCE_DIR}/src/Cloud/CloudService.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/CloudService.h
+    # The producer under test.
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminConnect.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminConnect.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadChain.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadChain.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadClient.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminTokenStore.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminTokenStore.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminSidecarStore.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminSidecarStore.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminDownloadClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminAuthClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminPyAdapter.h
+    # The REAL parsers, so "yields a parsed RideFile" means what it says.
+    ${CMAKE_SOURCE_DIR}/src/FileIO/RideFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/FileIO/RideFile.h
+    ${CMAKE_SOURCE_DIR}/src/FileIO/FitRideFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/FileIO/TcxRideFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/FileIO/TcxParser.cpp
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zip.cpp
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipreader.h
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipwriter.h
+)
+
+set_target_properties(testGarminConnectImport PROPERTIES AUTOMOC ON)
+
+target_include_directories(testGarminConnectImport PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/ANT
+    ${CMAKE_SOURCE_DIR}/src/Train
+    ${CMAKE_SOURCE_DIR}/src/FileIO
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+    ${CMAKE_SOURCE_DIR}/src/Charts
+    ${CMAKE_SOURCE_DIR}/src/Metrics
+    ${CMAKE_SOURCE_DIR}/src/Gui
+    ${CMAKE_SOURCE_DIR}/src/Core
+    ${CMAKE_SOURCE_DIR}/src/Planning
+    ${CMAKE_SOURCE_DIR}/src/Coach
+    ${CMAKE_SOURCE_DIR}/qwt/src
+    ${CMAKE_SOURCE_DIR}/contrib/qxt/src
+    ${CMAKE_SOURCE_DIR}/contrib/qtsolutions/json
+    ${CMAKE_SOURCE_DIR}/contrib/qtsolutions/qwtcurve
+    ${CMAKE_SOURCE_DIR}/contrib/qtsolutions/flowlayout
+    ${CMAKE_SOURCE_DIR}/contrib/qtsolutions/codeeditor
+    ${CMAKE_SOURCE_DIR}/contrib/lmfit
+    ${CMAKE_SOURCE_DIR}/contrib/boost
+    ${CMAKE_SOURCE_DIR}/contrib/kmeans
+    ${CMAKE_SOURCE_DIR}/contrib/voronoi
+    ${CMAKE_SOURCE_DIR}/contrib/httpserver
+    ${CMAKE_SOURCE_DIR}/contrib/qzip
+    ${CMAKE_BINARY_DIR}
+)
+
+target_compile_definitions(testGarminConnectImport PRIVATE
+    GC_WANT_GARMINCONNECT
+    "GARMIN_PY_MODULE_DIR=\"${CMAKE_SOURCE_DIR}/src/Python/garminconnect\""
+    "GC_TEST_RIDES_DIR=\"${CMAKE_SOURCE_DIR}/test/rides\""
+)
+
+# The REAL GC headers reach a long way (MainWindow.h -> QSqlDatabase,
+# Context.h -> WebEngine/Charts, ...). These modules are here for their HEADERS;
+# nothing from them is executed by this test.
+find_package(ZLIB REQUIRED)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS
+    Sql Concurrent SerialPort Multimedia MultimediaWidgets PrintSupport Svg
+    Bluetooth DBus Charts OpenGL OpenGLWidgets WebEngineCore WebEngineWidgets
+    WebEngineQuick WebChannel Positioning Qml Quick)
+target_link_libraries(testGarminConnectImport PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Gui
+    Qt${QT_VERSION_MAJOR}::Widgets
+    Qt${QT_VERSION_MAJOR}::Network
+    Qt${QT_VERSION_MAJOR}::Xml
+    Qt${QT_VERSION_MAJOR}::Sql
+    Qt${QT_VERSION_MAJOR}::Concurrent
+    Qt${QT_VERSION_MAJOR}::SerialPort
+    Qt${QT_VERSION_MAJOR}::Multimedia
+    Qt${QT_VERSION_MAJOR}::MultimediaWidgets
+    Qt${QT_VERSION_MAJOR}::PrintSupport
+    Qt${QT_VERSION_MAJOR}::Svg
+    Qt${QT_VERSION_MAJOR}::Bluetooth
+    Qt${QT_VERSION_MAJOR}::DBus
+    Qt${QT_VERSION_MAJOR}::Charts
+    Qt${QT_VERSION_MAJOR}::OpenGL
+    Qt${QT_VERSION_MAJOR}::OpenGLWidgets
+    Qt${QT_VERSION_MAJOR}::WebEngineCore
+    Qt${QT_VERSION_MAJOR}::WebEngineWidgets
+    Qt${QT_VERSION_MAJOR}::WebEngineQuick
+    Qt${QT_VERSION_MAJOR}::WebChannel
+    Qt${QT_VERSION_MAJOR}::Positioning
+    Qt${QT_VERSION_MAJOR}::Qml
+    Qt${QT_VERSION_MAJOR}::Quick
+    Qt${QT_VERSION_MAJOR}::Core5Compat
+    Qt${QT_VERSION_MAJOR}::Test
+    ZLIB::ZLIB
+    # RideFile.cpp's smoothing uses QwtSplineBasis — link the REAL qwt the app
+    # links rather than faking a spline.
+    qwt
+)
+target_compile_features(testGarminConnectImport PRIVATE cxx_std_17)
+
+add_test(NAME testGarminConnectImport COMMAND testGarminConnectImport)
+set_tests_properties(testGarminConnectImport PROPERTIES
+    LABELS "garmin-fast"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
