@@ -80,8 +80,13 @@ Duplicating it across files is what caused LSN-008 (recur:7). Rules:
   never copy a count between docs):**
   `drafted → GREEN → committed → CLOSED`, with `deferred` as an orthogonal tag on a
   not-yet-built slice. DEC-status uses `accepted (X)` / `superseded` / `[retired]`.
-- **Enforcement:** the absence-check `ledger_drift_lint.py` (installed via
-  `install_hook.py`, runs pre-commit + in the CLV) fails if any status token pairs with an
+- **Enforcement:** the absence-check `ledger_drift_lint.py` — canonical source at the
+  project-owned `scripts/ledger_drift_lint.py` (with `scripts/test_ledger_drift_lint.py`,
+  TEST-017), synced to the `.claude/hooks/` copy that pre-commit and the CLV actually run by
+  `install_hook.py --extra-hook scripts/ledger_drift_lint.py .`; re-run that after any edit
+  to the source AND after every skill update. It deliberately does NOT live under
+  `.claude/skills/` — that tree is vendor territory, replaced wholesale on each update
+  (ORCH-004) — fails if any status token pairs with an
   id in the NON-canonical governance set (`STATE.md`, `WIKI.md`, `wiki/*.md`, `design.md`).
   The canonical ledgers (`traceability.md`, `decisions.md`) are the source of truth and are
   NOT scanned — they legitimately co-locate ids with status (the REQ→DEC→DES→TEST matrix,

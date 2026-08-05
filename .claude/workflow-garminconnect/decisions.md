@@ -387,7 +387,10 @@ Per-id lifecycle: `drafted → GREEN → committed → CLOSED`, with `deferred` 
 - OQ3 (RESOLVED by the corrected invariant, see Refinement note above) — the appendix provenance tables live in `traceability.md`, which the corrected lint exempts UNCONDITIONALLY (canonical source-of-truth, never scanned). So the `<!-- provenance: dated -->` marker is NOT needed there and none were added — no false-positive risk exists for those tables. The marker mechanism still applies to any provenance block that appears in a SCANNED file (STATE.md / WIKI.md / wiki/* / design.md), where it exempts the block up to the next `## ` heading.
 
 ### Alignment probe
-python3 .claude/skills/quality-gated-dev-workflow/scripts/ledger_drift_lint.py .   # expect exit 0 (no status token outside canonical homes) once migration lands
+python3 scripts/ledger_drift_lint.py .   # expect exit 0 (no status token outside canonical homes) once migration lands
+# Path corrected 2026-08-05 (ORCH-004): the lint's canonical source moved OUT of the skill tree to the
+# project-owned `scripts/` this DEC's Dependents line specified all along; .claude/hooks/ holds the synced
+# copy pre-commit + CLV invoke. The skill tree is vendor territory, replaced wholesale on every update.
 
 ---
 
