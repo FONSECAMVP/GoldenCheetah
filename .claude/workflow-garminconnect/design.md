@@ -178,8 +178,33 @@ These stay one level below the interface so the worker tests need not stand any 
 
 ## DES-002 — Per-athlete storage layer
 
-**Implements:** DEC-003.
-**Serves:** REQ-004, REQ-006, REQ-008, REQ-010, REQ-012, REQ-NF-Reliab-002, REQ-NF-Sec-002, REQ-NF-Sec-004.
+**Implements:** DEC-003, DEC-021 (the account epoch, below).
+**Serves:** REQ-004, REQ-006, REQ-008, REQ-010, REQ-012, REQ-017, REQ-NF-Reliab-002, REQ-NF-Sec-002, REQ-NF-Sec-004.
+
+### The account epoch — in-memory, NOT storage [added 2026-08-05, DEC-021 / REQ-017, VAL-017 check-3 cascade]
+
+Alongside the on-disk state below there is one piece of **deliberately non-persistent** per-athlete state:
+`GarminAccountEpoch` (`src/Cloud/GarminAccountEpoch.{h,cpp}`) — a process-global
+`static QHash<QString /*configDir*/, quint64>` guarded by a `QMutex`, exposing `current(dir)` / `bump(dir)`.
+It is pure Qt (no `Python.h`), the same seam discipline as `GarminDownloadChain.h`, so every Python-free
+`garmin-fast` target can link it.
+
+`GarminConnect::open()` latches `m_openedEpoch = current(dir)` **and** `m_openedUserId = resolveGarminUserId()`;
+`disconnectService()` calls `bump(dir)` alongside `GarminTokenStore::clearAccount(dir)`; `readFile`/`readdir` refuse
+when `current(dir) != m_openedEpoch` (`sessionSuperseded()`), and `downloadResultStillWanted()` re-checks after a
+download completes but before staging/recording. This answers a question the on-disk credential cannot:
+`GarminTokenStore::loadChecked` (DEC-020) answers *"is SOME account connected right now?"*, whereas the epoch
+answers *"is the account THIS session opened against still the connected one?"* — disconnect-then-reconnect answers
+the first YES while the second is NO.
+
+**Why it is NOT persisted:** it exists only to invalidate live in-process sessions, and no live session survives a
+restart. It is not a revocation record and must not be treated as one.
+
+**Why `bump()` touches nothing but the map:** `blockingDownload()` runs a nested `QEventLoop`, so a disconnect can
+land inside a live download frame; reaching into another `GarminConnect` from there would be a use-after-free (the
+A3-R007-01 hazard). Invalidation is therefore LAZY — a superseded session refuses at its next call rather than being
+torn down at the instant of disconnect. That is why REQ-017 clause (b) is read functionally and why the
+`CloudServiceSyncDialog` ownership contract (DES-014) is load-bearing rather than cleanup.
 
 ### Paths
 
@@ -408,8 +433,38 @@ These stay one level below the interface so the page tests need not stand any of
 
 ## DES-004 — Cloud/GarminConnect: CloudService subclass
 
-**Implements:** DEC-001 (Phase 1 staged ship), DEC-005 (capabilities), DEC-006 (file format).
-**Serves:** REQ-001, REQ-007, REQ-008, REQ-011, REQ-012.
+**Implements:** DEC-001 (Phase 1 staged ship), DEC-005 (capabilities), DEC-006 (file format), DEC-023 (explicit read-failure channel).
+**Serves:** REQ-001, REQ-007, REQ-008, REQ-011, REQ-012, REQ-017, REQ-018.
+
+### Download compression — the base default is WRONG for Garmin [added 2026-08-05, REQ-018 / B-R017-09]
+
+`CloudService`'s ctor defaults `downloadCompression` to `zip` (CloudService.cpp:54), and `uncompressRide` rejects,
+as its FIRST guard, any name not ending `.zip` (CloudService.cpp:239-241, `tr("expected compressed activity file.")`).
+GarminConnect stages and lists UNCOMPRESSED names — `garmin-<id>.fit` and the DEC-016 `.tcx` fallback — so **both
+ctors set `downloadCompression = none`** (GarminConnect.cpp:102, :110). Without it every *successful* download is
+rejected at that guard and the whole feature is inert.
+
+This shipped broken through REQ-007 and REQ-008 behind a fully green suite, because every Garmin test stopped at
+`readFile`'s staging and none crossed into the consumer's `uncompressRide` call. TEST-067 is written specifically to
+cross that boundary with real `test/rides/` payloads; a staging-only assertion does not satisfy REQ-018.
+
+### Reporting a refusal — never a bare `return false` [added 2026-08-05, DEC-023 / REQ-017(a)]
+
+`CloudServiceSyncDialog::syncNext`/`downloadNext` **discard** `readFile`'s bool and advance only on a completion
+signal, so a bare `return false` is a HANG plus a leaked caller buffer, not a refusal (LSN-033). Every non-success
+exit from `GarminConnect::readFile` therefore posts exactly one signal before returning:
+
+- the two ENTRY guards (session superseded / account no longer connected) post `readComplete` with a labelled
+  message (DEC-022) — **see the residual note below**;
+- the five mid-flight exits (post-download discard FIT, RateLimit fast-fail, TCX-not-attempted, post-download
+  discard TCX, neither-format) post `readFailed` with five DISTINCT reasons (DEC-023).
+
+Both post QUEUED through `m_completionContext`, never synchronously — `readFile` runs inside a nested `QEventLoop`
+and a synchronous emit is the A3-R007-01 use-after-free hazard.
+
+**Recorded residual (B-R023-01):** the two entry guards still report via `postReadComplete` with an EMPTY payload —
+which is the empty-payload heuristic DEC-023 exists to reject. `readFile` consequently has two mechanisms for one
+job. Moving them onto `readFailed` is a small slice (it touches TEST-065's assertions), not a one-liner.
 
 ### Class shape
 
@@ -473,6 +528,31 @@ public:
 > caller to its timeout. The intended design is a queued/deferred completion (a self-posted notify on
 > the CloudService QObject) so per-item download latency meets REQ-NF-Perf-003. See the traceability
 > matrix / findings for which slice carries this.
+
+### Session binding, failure channel, and store ownership (DES-014) [added 2026-08-05, DEC-021/023 + REQ-017(b)(e)]
+
+Three contracts layer onto the seam below:
+
+1. **Session binding (DEC-021).** `readFile`/`readdir` are gated by `sessionSuperseded()` (the in-memory epoch,
+   DES-002) BEFORE DEC-020's `accountStillConnected()` disk re-check. The disk check is KEPT as a second layer —
+   the epoch is not a replacement. REQ-017(a) is proven by neutralising `accountStillConnected()` and confirming the
+   epoch alone still refuses; a fix that only works because the DEC-020 guard is present does not satisfy the clause.
+2. **Explicit failure channel (DEC-023).** `CloudService` carries `readFailed(QByteArray* data, QString name,
+   QString reason)` beside `readComplete`, with a `notifyReadFailed` helper mirroring `notifyReadComplete`. It
+   exists because failure cannot be inferred from the existing `message` argument: **every** sibling service passes
+   `tr("Completed.")` on success, so "message is non-empty" means success, not failure. The ~15 siblings never emit
+   `readFailed` and are untouched — that is what bounds the blast radius. Both consumers connect it and each does the
+   same three things: show the reason, free the buffer, advance the loop. `CloudServiceAutoDownload`'s blocking
+   `QEventLoop` releases on `readFailed` as well as `readComplete` (CloudService.cpp:1944); without that, a refusal
+   would merely relocate the hang.
+3. **Store ownership (REQ-017 b/e).** An owner destroys what it opens. `closeAndDeleteStore(Store*& store)`
+   (CloudService.h) clears the caller's pointer FIRST, then `close()`s, then deletes — that ordering IS the
+   double-delete and re-entrancy guard. `~CloudServiceSyncDialog()` uses it (and `store->disconnect(this)` first, so
+   a completion cannot land in a half-destroyed dialog); `MainWindow::syncCloud` and `uploadCloud` use it too.
+   `WA_DeleteOnClose` is set at the HEAP call site (AddCloudWizard.cpp) and deliberately NOT in the dialog ctor —
+   `syncCloud`'s dialog is stack-allocated and that would be a stack double-free.
+   Because DEC-021's invalidation is lazy, this destructor is the guaranteed teardown trigger for an idle live
+   session, which is what makes REQ-017 clause (b)'s functional reading honest.
 
 ### The download-client seam (DES-014)
 

@@ -105,3 +105,12 @@ C10↔C12: AI Coach (Coach) also uses embedded Python via C12's PythonEmbed core
   benign "Qt caught an exception thrown from an event handler" warning on `terminate()` is the
   pthread_cancel forced-unwind, not a defect. Harden the dtor (detach/leak rather than destroy a
   running thread) if Phase 1.5 wedge-recovery doesn't already remove the reachability.
+- CloudServiceSyncDialog `syncNext`/`downloadNext` self-guards are DEAD CODE today (A3-R025-F2 /
+  B-R025-02, accept-with-rationale 2026-08-06): the `if (self.isNull()) return true;` after each
+  `store->readFile` blocking call protects NO member access — nothing but static `processEvents()`
+  follows — so removing either leaves the suite green (mutation-proven). Kept as defence-in-depth
+  and marked UNTESTED-BY-DESIGN in the code (CloudService.cpp ~:1636 syncNext, ~:1727 downloadNext).
+  **A-cycle re-check:** if any future edit adds a member access after those blocking calls, the
+  guard becomes load-bearing and TEST-076 (allocated, unused) becomes feasible AND required — write
+  the teardown-during-readFile ASan test then. Contrast `refreshClicked` / `start()` whose self-bails
+  ARE load-bearing (TEST-072/075 kill their mutants).

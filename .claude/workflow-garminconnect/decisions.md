@@ -587,3 +587,251 @@ follow-on lifecycle REQ. DEC-019 is NOT reverted — its trigger design stands; 
 
 ### Alignment probe
 grep -n 'resolveConfigDir\|loadChecked\|isConnected' src/Cloud/GarminConnect.cpp | head   # expect a token re-check reachable from readFile/readdir after this slice
+
+---
+
+## DEC-021 — The REQ-017 lifecycle-binding mechanism: how Disconnect invalidates a LIVE session
+- Status: accepted (B — account-epoch counter latched at open(), compared in-memory)
+- Reversibility: cheap (a private static hash + two free functions + two latched members, confined to `GarminAccountEpoch.{h,cpp}` + `GarminConnect.{h,cpp}`; deleting it reverts cleanly to DEC-020's status quo)
+- Decided / last-reviewed: 2026-08-03
+- Serves: REQ-017 (all five clauses a–e); closes the residual DEC-020 explicitly accepted; constrained by DEC-019 (its fresh-instance choice stays in force — NOT reopened), DEC-002/DES-001/REQ-NF-Threads-001 (single off-GUI worker, no `terminate()`), DEC-014 (Garmin owns a file token store), and the standing test constraint that GarminConnect cannot link into the Python-free wizard harness
+- Dependents: REQ-017 build slices A + B, TEST-060..064, DES-002/DES-014 (add the epoch to the storage/lifecycle prose), A3-R012-F10 (uid latch) + F12 (CloudService leak) which close with this REQ, DEC-020 (its guard STAYS — the epoch is an independent second gate, not a replacement)
+- Origin: A3-R012-F1 residual; research draft by qgdw-scout 2026-08-03 (three real options; orchestrator independently verified the central code claims — see below)
+
+### Key research findings (scout, orchestrator-verified on disk)
+- `blockingDownload()` (GarminConnect.cpp:231) runs a **nested `QEventLoop`** (:239, 60s watchdog `kDownloadTimeoutMs` at :260). The GUI event queue therefore keeps pumping during a download — which is precisely how a Disconnect click reaches us mid-flight, and why teardown must be QUEUED, never same-frame (deleting `m_client` under a live `blockingDownload()` frame is a UAF).
+- **There is no cancel primitive anywhere**: `cancel|abort|interrupt|requestInterruption` matches NOTHING in `GarminWorker.{h,cpp}`, `IGarminDownloadClient.h`, `PyEmbeddedAdapter.h`. The download is a blocking Python call under the GIL and DES-001 invariant 3 forbids `terminate()`. True mid-flight cancellation is unreachable without new work — see the REQ-017(c) narrowing below.
+- The queued-post idiom already exists and is documented: `m_completionContext` (GarminConnect.h:200, rationale at .cpp:545-580, the A3-R007-01 UAF guard). Any teardown reuses it rather than inventing one.
+- Two ctors (:91, :93) + dtor (:100); `disconnectService()` :375; `accountStillConnected()` :165; `resolveGarminUserId()` defined :147 and re-resolved per call at :467 (readdir) and :521 (recordImport) — the F10 defect, fixed by the same open()-latch as the epoch.
+
+### Alternatives
+| Opt | Rel | Scal | Maint | BP |
+|---|---|---|---|---|
+| A registry of live instances + queued self-close broadcast | 4 — self-contained, but the queued-close discipline must be exactly right | 4 — per-config-dir keying, O(1) | 4 — all state in GarminConnect.{h,cpp}; register/unregister across 2 ctors + dtor | 4 — standard observer/registry, more machinery than B for the same guarantee |
+| B account-epoch latched at open(), in-memory compare (chosen) | 4 — fewest moving parts; `bump()` never reaches into another instance's state, so there is NO delete-out-from-under hazard | 5 — one static hash of ints, per config dir | 5 — lowest cognitive load; one hash, two functions, two latched members | 5 — the generation/epoch token is the canonical idiom for exactly this stale-handle bug class, and matches REQ-017's own framing ("by binding, not a per-call disk re-check") |
+| C route Disconnect through the live instance (Context tracks it) | 3 — most "correct" ownership, but widest shared touch; ~15 siblings' open/close bookkeeping was never designed for tracking | 4 — per-Context map, fine for a desktop app | 2 — touches Context/MainWindow/AddCloudWizard/AthletePages/CloudService.h and reopens DEC-019 | 3 — RAII-correct in the abstract, but reopens an accepted decision AND is untestable under the Python-free harness (WizardStubPreamble.h stubs Context/MainWindow) |
+
+### Chosen
+B. It satisfies clauses (a), (c), (d) most cheaply, stays entirely inside `src/Cloud/` with **zero blast radius on the ~15 sibling services and no `CloudService.h` change**, leaves DEC-019 intact, and is fully testable on `garmin-fast`. Decisively: its clause-(a) test is the strongest available — leave `tokens.json` **valid and untouched**, bump the epoch alone, and assert the live instance issues zero list/download calls. That proves the binding without any reference to DEC-020's guard, so the test cannot silently pass for the wrong reason.
+
+**The one gap, accepted with a compensating control.** B's invalidation is LAZY: `bump()` does not reach into the other live instance, so an *idle* sync dialog keeps its worker thread + embedded-Python session alive until its next call (which now fails fast, pre-network) or until its owner closes it. Clause (b) is therefore read FUNCTIONALLY — "never outlives the owning window", not "torn down at the instant of disconnect". To make that reading honest, REQ-017(e)'s `CloudServiceSyncDialog` dtor + `MainWindow::syncCloud` leak fix is **load-bearing, not parallel**: it is the guaranteed teardown trigger. Option A remains the documented, non-strawman fallback if the literal instant-of-disconnect reading is ever required.
+
+### REQ-017(c) narrowed at decision time (user-approved 2026-08-03)
+Clause (c) originally read "cancelled **or** its result discarded". Cancellation is unreachable (see findings). The clause is narrowed to **discard-only**: a download whose result lands after the disconnect is neither staged nor recorded, implemented as a **post-download, pre-stage recheck** of the epoch immediately before `recordImport`/`postReadComplete` — not only at `readFile`/`readdir` entry. **Accepted residual, deliberately visible:** the in-flight HTTP call still runs to completion (or the 60s watchdog); we discard its result rather than stopping it. An interruptible download path in `GarminWorker`/`PyEmbeddedAdapter` is separate, larger work and is NOT in REQ-017 — if it is ever wanted it needs its own REQ + DEC. Do not let a later cycle quietly re-read (c) as though cancellation were implemented.
+
+### Cascade impact (chosen = B)
+- NEW `src/Cloud/GarminAccountEpoch.{h,cpp}` — pure Qt, **no `Python.h`** (same seam discipline as `GarminDownloadChain.h`); `static QHash<QString,quint64> s_epoch` + `current(dir)` / `bump(dir)`. Must be added to `src/CMakeLists.txt` GC_WANT_GARMINCONNECT **and** the unittest target (LSN-018 — a missed main-binary link has bitten this project before).
+- `GarminConnect.{h,cpp}`: latch `m_openedEpoch` + `m_openedUserId` in `open()`; gate `readFile`/`readdir` on the epoch compare **in addition to** DEC-020's `accountStillConnected()` (the guard is NOT removed — defence in depth, and REQ-017(a) is proven by neutralising it); `disconnectService()` calls `GarminAccountEpoch::bump()` alongside `clearAccount()`; `readdir`/`readFile`/`recordImport` consume `m_openedUserId` instead of re-resolving (F10).
+- `CloudService.h`/`.cpp` + `src/Gui/MainWindow.cpp` + `AddCloudWizard.cpp`: clause (e) — a real `~CloudServiceSyncDialog` that `close()`s and deletes its store, and the `syncCloud` leak. **This is the only part that leaves `src/Cloud/`**, and both `MainWindow.cpp` and `src/CMakeLists.txt` are ALREADY dirty with unrelated pre-session edits ⇒ hunk-split at commit (LSN-010/007).
+- Tests TEST-060..064 (see traceability). A3-R017's FIRST probe is mandated: neutralise `accountStillConnected()` and confirm the epoch alone still stops the exploit.
+- DEC-020 is NOT superseded — its guard remains as the second layer.
+
+### Alignment probe
+grep -rn 'GarminAccountEpoch\|m_openedEpoch\|m_openedUserId' src/Cloud/ | wc -l   # expect >0 after slice A; 0 means the bind was never wired
+grep -n 'GarminAccountEpoch.cpp' src/CMakeLists.txt unittests/Core/garminconnect/CMakeLists.txt   # expect BOTH (LSN-018)
+
+---
+
+## DEC-022 — How a refused (fail-closed) readFile reports itself to the sync dialog
+- Status: **PARTIALLY IMPLEMENTED 2026-08-04 — GarminConnect half accepted + green (TEST-065); the SHARED half is BLOCKED and un-decided, because this entry's original safety premise was FALSE (see the correction below). Re-decide before touching `completedRead`.**
+- Reversibility: cheap (two small edits; the shared change is confined to the existing failure branch of one slot)
+- Decided / last-reviewed: 2026-08-03
+- Serves: REQ-017(a) ("fails with a Garmin-labelled error"), B-R017-06 (blocking); also retro-fixes REQ-012/DEC-020's shipped guard
+- Dependents: TEST-065/066, `GarminConnect::readFile` both fail-closed paths, `CloudServiceSyncDialog::completedRead`, B-R017-07 (uploadCloud leak, folded in)
+- Origin: B-R017-06, surfaced by the Slice-B builder's report-only ErrorBus feasibility read and CONFIRMED on disk by the orchestrator
+
+**Problem.** `syncNext` (CloudService.cpp:1413) and `downloadNext` (:1495) discard `readFile`'s bool and wait for a `readComplete` signal to advance. `GarminConnect::readFile`'s fail-closed paths (`sessionSuperseded()` :452, `accountStillConnected()` :460) return false and post NO completion ⇒ the dialog hangs at "Downloading n of N" and the `new QByteArray` at :1412/:1494 leaks. Already shipped via DEC-020's identically-shaped guard in `f001c7d20`.
+
+**THE TRAP that constrains every option (verified).** `completedRead` is declared `(QByteArray*, QString, QString /*message*/)` — the parameter is literally unnamed/discarded at CloudService.cpp:1527. But **a non-empty `message` does NOT mean failure today**: `GarminConnect::postReadComplete` already passes `tr("Completed.")` on SUCCESS (GarminConnect.cpp:686-691). So no option may infer "error" from "message is non-empty" — that would relabel every successful Garmin download as an error.
+
+### CORRECTION 2026-08-04 — the premise that made Option A's shared half "safe" was FALSE
+This entry (and the build briefing derived from it) asserted that the ~15 other CloudService subclasses pass an
+EMPTY message, so surfacing `message` on the `ride == NULL` branch would leave them untouched. **That is wrong, and
+the orchestrator confirmed it on disk.** EVERY sibling passes `tr("Completed.")` on success —
+`Strava.cpp:530`, `Dropbox.cpp:321`, `SportTracks.cpp:539`, `Xert.cpp:478`, `Azum.cpp:297`, `PolarFlow.cpp:219`,
+`CyclingAnalytics.cpp:433`, `SixCycle.cpp:480`, `Nolio.cpp:247`, `LocalFileStore.cpp:150`. So
+`if (!message.isEmpty()) show(message)` on the failure branch would render EVERY OTHER SERVICE'S PARSE FAILURE as
+**"Completed."** — the trap above, inverted: failure relabelled as success, across ~10 shipped integrations.
+The builder built the seam, RED-verified it, then REMOVED it and fired the stop-and-report hatch rather than ship a
+cross-service regression against a briefing it could see was wrong. That was the correct call.
+**Consequence:** the GarminConnect half (post a labelled completion, still return false) is INDEPENDENTLY correct and
+shipped — it closes the blocking half of B-R017-06 (loop advances, buffer freed) with no regression for anyone. Only
+the *display* of the reason is unresolved: a Garmin refusal currently shows `uncompressRide`'s text instead of the
+reason. Strictly better than the hang. The shared half needs a fresh decision — candidate discriminators, none
+chosen: (1) branch on `data->isEmpty()` (safe except for a genuine 0-byte download from another service, which would
+then read "Completed."); (2) a canonical success-label accessor on `CloudService` so the shared side can ignore it
+(~15 files, and cross-`tr()`-context string comparison is locale-fragile); (3) carry failure EXPLICITLY — an extra
+signal argument or a `readFailed` signal (bigger blast radius, but the only one that is not a heuristic).
+**Lesson [[LSN-034]]** — an orchestrator's "this is what makes it safe" premise is a claim about the tree and must be
+grepped before it is written into a DEC, not after.
+
+**Options considered (scored R/S/M/BP 1-5).**
+- **A — CHOSEN — post a labelled completion; surface `message` ONLY on the existing failure branch.** GarminConnect's refusal paths call `postReadComplete(data, name, tr("Garmin Connect: …"))` and still `return false`. In `completedRead`, the sole shared change is in the branch that already runs when `ride == NULL`: show `message` when it is non-empty, else fall back to today's `errors.join(" ")`. Success path (`ride != NULL`) is untouched, so `tr("Completed.")` can never be mistaken for an error, and the ~15 other services (which pass an empty message) keep their exact current behaviour. R4 S4 M5 BP5.
+- **B — new out-of-band error channel (ErrorBus).** Rejected: `ErrorBus` DOES NOT EXIST in the tree — only DES-008 prose and a TODO at GarminConnect.cpp:649. It would be a new subsystem, and being a side channel it would label the error while leaving the loop still stalled. R2 S3 M2 BP3.
+- **C — make the callers honour `readFile`'s bool.** Rejected for now: `syncNext`/`downloadNext` would need to advance the loop themselves on a false return, changing control flow for all ~15 services in a function whose completion-driven design is load-bearing. Larger blast radius for the same user-visible outcome. R3 S4 M2 BP3.
+
+**Cascade.** `GarminConnect::readFile` both fail-closed paths post a completion before returning false (the buffer is then freed by `completedRead`'s existing `delete data`, killing the leak). `CloudServiceSyncDialog::completedRead` names its `message` param and uses it in the `ride == NULL` branch. B-R017-07 (`MainWindow::uploadCloud`'s identical `db` leak) is folded in, reusing Slice B's `closeAndDeleteStore()`. REQ-017(a) then holds on BOTH `readdir` and `readFile`, so B-R017-01/06 close together. DEC-020's guard is unchanged in behaviour — it merely reports properly now.
+
+### Alignment probe
+grep -n 'QString /\*message\*/' src/Cloud/CloudService.cpp   # expect ZERO after this slice (the param must be named + used)
+grep -n 'postReadComplete' src/Cloud/GarminConnect.cpp        # expect a call on BOTH fail-closed paths, not just the success path
+
+---
+
+## DEC-023 — Carry read FAILURE explicitly instead of inferring it from the message
+- Status: accepted (option 3 of DEC-022's correction — an explicit failure channel)
+- Reversibility: moderate (a new signal is additive and the ~15 siblings never emit it; unwinding it later means re-auditing whoever came to depend on it)
+- Decided / last-reviewed: 2026-08-04
+- Serves: REQ-017(a) (the "Garmin-labelled error" half DEC-022 could not deliver), B-R017-06 (display half), B-R017-10 (the ~4 other silent `return false` sites); supersedes DEC-022's shared half
+- Dependents: TEST-068/069, `GarminConnect::readFile` (all non-posting return sites), `CloudService` signal surface, `CloudServiceSyncDialog`, `CloudServiceAutoDownload`
+- Origin: DEC-022's false premise (see its 2026-08-04 correction) — every sibling passes `tr("Completed.")`, so success and failure are INDISTINGUISHABLE on the existing `message` channel
+
+**Why explicit beats every heuristic.** Both cheaper candidates infer failure from a proxy: "message is non-empty" is wrong because all ~10 shipped siblings pass `tr("Completed.")` on success; "payload is empty" is wrong for a genuine 0-byte download, which would then render as its success label. A dedicated failure channel needs no proxy, and it is the only option that also covers B-R017-10's remaining silent paths (`:490`, `:501` RateLimit, `:512`, `:520`, `:527` TCX-failed) with ONE mechanism instead of five special cases. Cost is a wider surface — hence its own DEC rather than a build-slice improvisation.
+
+**Cascade.** `CloudService` gains a `readFailed(QByteArray* data, QString name, QString reason)` signal alongside `readComplete`. The ~15 siblings never emit it and are otherwise untouched — that is what keeps the blast radius honest (contrast DEC-022's shared edit, which would have changed behaviour for all of them). `GarminConnect::readFile`'s non-posting `return false` sites emit it with a reason. Both consumers connect it: the sync dialog shows the reason, deletes the buffer, and advances the loop (the same three things `completedRead` does); `CloudServiceAutoDownload` does the equivalent. TEST-065's GarminConnect-half assertions stay valid — the refusal paths keep posting; DEC-023 only changes WHICH signal they post on. B-R017-11 (readFile vs readdir wording drift) is aligned in the same slice.
+
+### Alignment probe
+grep -rn 'readFailed' src/Cloud/CloudService.h src/Cloud/GarminConnect.cpp   # expect the signal + emits on every silent return-false site
+grep -c 'notifyReadComplete' src/Cloud/Strava.cpp src/Cloud/Dropbox.cpp      # expect UNCHANGED — siblings must not be touched
+
+---
+
+## DEC-024 — Making the modeless sync dialog's self-deletion safe (A3-R017-F1)
+- Status: accepted (A — `closeEvent()` guard + a blocking-call-in-flight flag, shipped with an ASan-backed test)
+- Reversibility: cheap (a flag, an override, and a deferred re-close; confined to `CloudServiceSyncDialog`)
+- Decided / last-reviewed: 2026-08-05
+- Serves: REQ-017(e) on the wizard path, and therefore REQ-017(b) — DEC-021 leans on this teardown as its compensating control; triggered by A3-R017-F1 (BLOCKING, ASan-reproduced)
+- Dependents: TEST-070/071, `CloudServiceSyncDialog` (ctor `open()`, `refreshClicked` readdir :1019, `syncNext` readFile :1417, `downloadNext` readFile :1499, `cancelClicked` :980), AddCloudWizard.cpp:899
+
+**Problem.** REQ-017 Slice B added `setAttribute(Qt::WA_DeleteOnClose)` to the MODELESS post-connect sync dialog (AddCloudWizard.cpp:899) so it would stop leaking its store. But `GarminConnect::readFile`/`readdir` run nested `QEventLoop`s, so GUI events are processed mid-call; closing the dialog then destroys it → `~CloudServiceSyncDialog` → `closeAndDeleteStore(store)` → the GarminConnect is deleted **while `readFile` is still executing on it**, and execution resumes after the nested loop on freed memory. ASan-reproduced with two independent harnesses. `cancelClicked()` (CloudService.cpp:980) `reject()`s unconditionally — it does not consult `downloading` — so the ordinary Cancel button reaches this too. **We converted a leak into a crash**, which is strictly worse; the fix must not simply re-introduce the leak.
+
+**Options considered (scored R/S/M/BP 1-5).**
+- **A — CHOSEN — `closeEvent()` guard + deferred self-close.** A `m_blockingCallActive` flag is set around every dialog→store call that can run a nested loop (ctor `open()`, `refreshClicked`'s readdir :1019, `syncNext` :1417, `downloadNext` :1499). `closeEvent()` overrides: if the flag is set, record `m_closeDeferred`, `e->ignore()`, and **also set the existing `aborted` flag (CloudService.h:427) so the sync stops promptly** rather than leaving the user's click apparently ignored; when the last blocking frame unwinds, if `m_closeDeferred` then `close()` for real. `cancelClicked()` routes through the same guard instead of an unconditional `reject()`. R4 S4 M4 BP4. Keeps clause (e) fully satisfied on the wizard path — no leak, no crash — at the cost of a genuine ASan-backed test, which is exactly the discipline A3-R017's lesson demands.
+- **B — Drop `WA_DeleteOnClose`, explicit owner (stack + `exec()`).** Mirrors the pattern `MainWindow::syncCloud` already proves safe; structurally eliminates the hazard rather than guarding it. R5 S4 M5 BP4. Rejected only because it converts the wizard's post-connect sync from modeless to MODAL — a real UX change to the feature's most common first-use path. Retained as the explicit fallback if A's guard proves fragile under A4.
+- **C — Revert to the leak for this call site.** R2 S3 M5 BP2. Rejected: REQ-017(e) would go unmet on the one path DEC-021 explicitly called load-bearing, so clause (b)'s functional reading would lose its guaranteed teardown trigger — we would be back to a session outliving its window, which is the whole point of REQ-017.
+
+**Cascade.** `CloudService.h`: two bools + a `closeEvent` override on `CloudServiceSyncDialog`. `CloudService.cpp`: bracket the four call sites, rewrite `cancelClicked`, add the deferred re-close. `AddCloudWizard.cpp:899` is UNCHANGED — the attribute stays. `MainWindow::syncCloud`/`uploadCloud` are unaffected (stack-allocated, never set the attribute; it is commented out at CloudService.cpp:436 for this exact reason). A3-R017-F3 (`completedRead`'s abort branch leaking `data`, CloudService.cpp:1537-1541) is folded in — same function family, one line.
+
+**Evidence bar (non-negotiable).** The fix ships with a test that actually EXECUTES the close-during-nested-loop sequence, not a test that reasons about it. A3-R017's lesson is that a Qt lifetime claim ("DeferredDelete is throttled to the posting loop level, so this is safe") sounded correct, was written into a design comment, and was false in practice. Run it under AddressSanitizer.
+
+### Post-build correction (2026-08-05) — RATIFIED: the gate must be on `done(int)`, not `closeEvent()`
+**This entry as originally written was insufficient, and the builder proved it rather than following it.** DEC-024
+step 3 prescribed a `closeEvent()` override. Measured on Qt 6.8.2: `reject()` and the Escape key destroy a
+`WA_DeleteOnClose` dialog **even when `closeEvent()` calls `e->ignore()`**, because `QDialog::closeEvent` internally
+routes to `reject()` → `done()`. The real choke point that ALL of `close()`/`reject()`/`accept()`/Escape funnel
+through is **`QDialog::done(int)`**, so the guard is overridden there.
+
+Mutation-verified, by the builder and independently re-run by the orchestrator:
+- **M1, remove the `done()` gate → ASan `heap-use-after-free`.** The gate is load-bearing. (Orchestrator re-ran this
+  itself: snapshot → mutate → ASan UAF reproduced → restore, md5 `0cd1dfb3…`, 26/26 green.)
+- **M2, remove the `closeEvent()` gate → still PASSES.** The `closeEvent()` override is therefore **NOT
+  independently load-bearing** — it is belt-and-braces, kept so the fix does not silently depend on that Qt internal
+  ever staying true. Recorded honestly so a later reader does not mistake it for the mechanism.
+
+Also ratified, all beyond what this entry specified:
+- **Depth COUNTER, not a bool** (`blockingCallDepth`): `QApplication::processEvents()` inside a blocking call can
+  dispatch a Refresh click, nesting a `readdir` frame inside a `readFile` frame — a bool would be cleared by the
+  inner frame while the outer was still live.
+- **The ctor guard is WIDER than specified** — the whole ctor body, not just `store->open()`, because the ctor also
+  reaches `refreshClicked()` → `readdir`, and `delete this` must not happen while the ctor is on the stack at all.
+- **`cancelClicked()`** rewritten off its unconditional `reject()`.
+- **A3-R017-F3 folded in**: `completedRead`'s abort branch now `delete data` like its `failedRead` sibling.
+
+**Accepted residuals (recorded, not fixed):** `writeFile` is deliberately unguarded at CloudService.cpp:1435/:1656 —
+no service in this tree runs a nested loop there (all go async via `QNetworkReply`), but **if one ever blocks in
+`writeFile`, the UAF returns on the upload path**. Direct destruction (`delete dialog`, or teardown via the parent
+`MainWindow`) still bypasses the gate entirely — nothing routes through `close`/`done` — which is pre-existing and
+by construction. The ASan target sets `detect_leaks=0` (LSan drowns in Qt/qwt startup allocations), so
+whole-process leaks are not covered by it.
+
+**Hang risk, deliberately tested:** gating `done()` is dangerous in the modal path — `MainWindow::syncCloud` uses
+`exec()`, which waits on `done()`, so a gate that failed to reopen would HANG File > Sync rather than crash it.
+TEST-071 drives exactly that shape with a 5-second watchdog and, probed with the guard wedged, reports
+`exec() never returned`.
+
+### Alignment probe
+grep -n 'void done' src/Cloud/CloudService.h                               # expect the done(int) override — the actual gate
+grep -n 'closeEvent' src/Cloud/CloudService.h src/Cloud/CloudService.cpp   # present, but belt-and-braces (see M2)
+grep -n 'WA_DeleteOnClose' src/Cloud/AddCloudWizard.cpp                    # expect it STILL PRESENT (option A keeps it)
+
+---
+
+## DEC-025 — Surviving PARENT TEARDOWN: guarding the unsafe operation, not the close (A3-R017b-F1/F4)
+- Status: accepted (A — the destructor declines to delete the store while a blocking call is in flight, plus self-death detection on the frames that resume)
+- Reversibility: cheap (a depth check in one destructor + a `QPointer` in one RAII class; confined to `CloudServiceSyncDialog`)
+- Decided / last-reviewed: 2026-08-05
+- Serves: REQ-017(e) on the parent-teardown path; triggered by A3-R017b-F1 (BLOCKING, Qt-semantics proven by isolated repro) with A3-R017b-F4 as the root cause
+- Dependents: TEST-072/073/074, `~CloudServiceSyncDialog` (CloudService.cpp:981-987), `BlockingCall` (:1003-1019), `deferCloseIfBusy` (:1030-1038), `syncNext` (:1518-1521), `downloadNext` (:1605-1608), `refreshClicked` (:1113), `closeAndDeleteStore` (CloudService.h:279-289); context: AddCloudWizard.cpp:899, MainWindow.cpp:143
+
+**Problem.** DEC-024's gate sits on close-INITIATION — `done(int)`, with `closeEvent()` as belt-and-braces. Qt destroys child widgets **directly** when the parent is destroyed: no `closeEvent`, no `done`, no virtual dispatch, and a destructor cannot be vetoed the way a virtual can. The dialog is parented to `context->mainWindow` (CloudService.cpp:709) and **`MainWindow` itself carries `WA_DeleteOnClose`** (MainWindow.cpp:143), so closing the athlete's main window mid-sync runs `~CloudServiceSyncDialog` → `closeAndDeleteStore(store)` while a nested `QEventLoop` is on the stack — freeing the GarminConnect that `readFile` is still executing on. Exposure is up to 60s per call (GarminConnect.cpp:41-43). Pre-Slice-B there was no destructor, so this path LEAKED; **this changeset converted it into a crash**, exactly as it did for the self-close routes. All ~16 CloudService subclasses run nested loops in `open()`/`readdir()`, so the route is not Garmin-specific.
+
+**The second half of the hazard, found while drafting this entry (O-R025-01) — declining to delete the store is NECESSARY BUT NOT SUFFICIENT.** Parent teardown frees the *dialog* too, while the dialog's own member functions are suspended in that nested loop. Verified on disk, not reasoned about:
+- `BlockingCall::~BlockingCall` writes `dialog->blockingCallDepth` (CloudService.cpp:1011) and may call `dialog->close()` (:1018) — the first thing that runs when the loop unwinds, straight into freed memory.
+- `downloadNext` then resumes at `QApplication::processEvents()` (:1608) and `syncNext` at (:1521); both continue walking `rideListDown`/`progressLabel`/`listindex` — all members of a destroyed object.
+
+So a store-only guard leaves a use-after-free on the *identical trigger*, and the ASan test this decision mandates would still trip. The guard must cover both objects the teardown frees.
+
+**Options considered (scored R/S/M/BP 1-5).**
+- **A — CHOSEN — guard the unsafe operation itself, in three parts.** (1) `~CloudServiceSyncDialog`: when `blockingCallDepth > 0`, keep `store->disconnect(this)` but **skip `closeAndDeleteStore(store)`** — deliberately leak the store, which is precisely the pre-REQ-017 behaviour on this path and strictly better than a UAF. (2) `BlockingCall` holds a `QPointer<CloudServiceSyncDialog>`; its destructor no-ops when the dialog is already gone. (3) `syncNext`/`downloadNext`/`refreshClicked` take a `QPointer` self before each blocking call and return immediately if it is null afterwards, touching no members. R4 S4 M4 BP4. Addresses A3-R017b-F4's root cause — the check moves onto the operation that is actually unsafe, so any future direct-destruction path (`delete dialog` tomorrow) is covered by construction, not by having enumerated the routes.
+- **B — Reparent the dialog to `nullptr`.** A top-level, parentless dialog is never destroyed by MainWindow, so the route disappears rather than being guarded. R4 S3 M4 BP3. **Rejected:** it orphans the window — the sync dialog survives the athlete window that spawned it, and with `WA_DeleteOnClose` firing only on user close, the store is torn down only if the user happens to close the dialog. That forfeits REQ-017(b)'s functional reading ("never outlives the owning window"), which is the clause Slice B exists to satisfy.
+- **C — MainWindow event filter / busy-veto deferring teardown while a child reports busy.** R2 S2 M2 BP2. **Rejected on three counts:** parent destruction is not an event, so there is nothing to filter at the moment that matters; it puts CloudService lifecycle knowledge into MainWindow, inverting the ownership direction the whole REQ is establishing; and it would block application quit for up to 60 seconds.
+
+**Cascade.** `CloudService.h`: a `QPointer` member on `BlockingCall` (already non-copyable, :475-484). `CloudService.cpp`: the destructor's depth check, the `BlockingCall` destructor's null check, and the three resuming call sites. `closeAndDeleteStore` (CloudService.h:279-289) is UNCHANGED — the decision is *whether* to call it, not what it does, so TEST-064's contract stands. `AddCloudWizard.cpp:899` keeps `WA_DeleteOnClose`; `MainWindow.cpp:143` is not touched. The ~15 sibling services are untouched and inherit the fix, since the guard lives in the shared dialog. **A3-R017b-F2 folded in if cheap:** wrap the two `writeFile` sites (CloudService.cpp:1538 in `syncNext`, :1769 in `uploadNext`) in `BlockingCall` for symmetry — no service blocks there today (adversary verified across all 16), so this is pre-emptive consistency, not a fix, and it must be dropped rather than forced if it complicates the slice.
+
+**Evidence bar (non-negotiable, and the reason this is not a one-line change).** The fix ships with a test that EXECUTES parent teardown mid-nested-loop — construct a parent, construct the dialog as its child, enter a blocking call, `delete parent` from inside that call, let the loop unwind — under AddressSanitizer, on the existing ASan target. Both directions proven: restoring the unconditional `closeAndDeleteStore` in the destructor must reproduce the ASan `heap-use-after-free`. DEC-024's lesson is that a Qt lifetime claim which *sounded* correct was false in practice; the same standard applies here to the QPointer half.
+
+**Accepted residuals (recorded, not fixed).** The store LEAKS on the parent-teardown path — deliberate, user-chosen, and the pre-REQ-017 status quo; for GarminConnect that means the worker thread and its embedded-interpreter session live to process exit, but only for a sync that was in flight when the main window closed. The ASan target keeps `detect_leaks=0` (LSan drowns in Qt/qwt startup allocations), so that leak is not observable by the test either way. A deferred reaper that deletes the store once the call unwinds was considered and NOT taken: at parent-teardown time the application is already shutting down, so a reaper would be running against a dying event loop.
+
+### Alignment probe
+grep -n 'blockingCallDepth' src/Cloud/CloudService.cpp                     # expect a check in ~CloudServiceSyncDialog, not only in deferCloseIfBusy
+grep -n 'QPointer' src/Cloud/CloudService.h src/Cloud/CloudService.cpp     # expect it on BlockingCall + the three resuming call sites
+grep -n 'closeAndDeleteStore' src/Cloud/CloudService.h src/Cloud/CloudService.cpp  # expect the helper UNCHANGED, the CALL conditional
+
+## DEC-026 — Two-phase init: no nested event loop under construction (closes the BLOCKING A3-R025-F1)
+- Status: accepted (B — the constructor builds the widget shell only; the blocking work (`store->open()` + the initial `refreshClicked()`) moves to an explicit `start()` the caller invokes on a fully-constructed object)
+- Reversibility: moderate (re-shapes one ctor + a new slot + two call sites; confined to `CloudServiceSyncDialog` and its two constructors of record)
+- Decided / last-reviewed: 2026-08-06
+- Serves: REQ-017(e) on the constructor-teardown path; triggered by A3-R025-F1 (BLOCKING) which escalated B-R025-01; completes the class DEC-024/DEC-025 left open (A3-R017b-F4)
+- Dependents: TEST-075 (ctor route eliminated, ASan, both directions), TEST-076 (RED tests making the syncNext/downloadNext self-guards load-bearing — A3-R025-F2/B-R025-02), `CloudServiceSyncDialog::CloudServiceSyncDialog` (CloudService.cpp:709-974), new `CloudServiceSyncDialog::start()`, callers `MainWindow::syncCloud` (MainWindow.cpp:2577-2578), `AddCloudWizard` (AddCloudWizard.cpp:892-899); context: DEC-024, DEC-025
+
+**Problem.** DEC-024 gated close-initiation; DEC-025 guarded the destructor + the resuming member frames for parent teardown. A3-R025-F1 (orchestrator-confirmed at CloudService.cpp:719/725/734/972; general Qt mechanism proven by the adversary's standalone ASan repro) showed a FOURTH live route to the identical use-after-free that neither closes: the **constructor itself**. `CloudServiceSyncDialog::CloudServiceSyncDialog` wraps its whole body in one depth-only `BlockingCall` and runs three blocking / nested-loop calls with no `QPointer` self-bail — `store->open()` (:725, `blockingRestore` 30s), `QMessageBox::exec()` (:734, UNBOUNDED user wait), the tail `refreshClicked()` (:972, readdir loop) — then resumes writing `this` members (`tabs = new QTabWidget(this)` :745…). A parent teardown (MainWindow `WA_DeleteOnClose`, MainWindow.cpp:143) landing in any of those frees the half-built dialog under its own ctor; reachable via the heap/modeless `AddCloudWizard.cpp:892`. DEC-025's three guards cannot help — there is no fully-formed object to stand down. This is the THIRD cycle of the same enumeration-miss family (DEC-024 → DEC-025 → here), recorded as a miss on [[LSN-037]], whose rule now names the constructor explicitly.
+
+**Options considered (scored R/S/M/BP 1-5).**
+- **A — Constructor self-bail.** `QPointer<CloudServiceSyncDialog> self(this)` + early-return after each of the three ctor blocking sites, touching no members if null. R2 S3 M3 BP2. **Rejected:** does NOT end the recurrence (same per-site enumeration that has missed a frame three times), and carries a CALLER-SIDE residual — after the ctor bails, `new` returns a dangling pointer and `AddCloudWizard.cpp:899` still calls `->open()` on freed memory, so A only fully closes the route if the caller is also guarded. Guards an anti-pattern (nested event loops in a constructor) rather than removing it.
+- **B — CHOSEN — two-phase init.** The constructor builds only what does not depend on `open()` (title, size, member refs) and runs NO nested loop; a new `bool start()` slot does `store->open()`, the tab construction, and the initial `refreshClicked()`, returning false on open-failure. Both callers invoke `start()` on the fully-constructed object: `MainWindow::syncCloud` → `if (sync.start()) sync.exec();`; `AddCloudWizard` → `d->setAttribute(WA_DeleteOnClose); if (d->start()) d->open(); else delete d;` (open-failure cleanup preserved — today the ctor's failure path hides + queues close). R4 S4 M4 BP4. Eliminates the class structurally: no nested loop ever runs on the stack under construction, so there is no half-built frame to free; `start()` runs on a complete object where DEC-024/025's guards already apply, and as a resuming frame it takes the DEC-025 part-3 `QPointer` self-bail discipline. No caller-side residual. Blast radius is the TWO construction sites of record, not the ~15 sibling services (which inherit the shared dialog and never construct it).
+- **C — Reparent the dialog to `nullptr`.** R3 S2 M2 BP2. **Rejected — same objection as DEC-025 option B:** a top-level parentless dialog is never destroyed by MainWindow, but it orphans the window and can outlive the athlete window that spawned it, forfeiting REQ-017(b)'s functional reading ("never outlives the owning window").
+
+**Cascade.** `CloudService.h`: `CloudServiceSyncDialog` gains a public `bool start()`; the ctor's declared responsibility shrinks to shell-only. `CloudService.cpp`: split the ctor at the `store->open()` boundary into ctor + `start()`; `start()` carries the DEC-025 part-3 self-bail after each blocking call it makes. `MainWindow.cpp:2577-2578` and `AddCloudWizard.cpp:892-899`: the two callers gain the `start()` invocation + open-failure handling. DEC-024's `done()`/`closeEvent()`/`deferCloseIfBusy`/`BlockingCall` and DEC-025's dtor/`QPointer` guards are UNCHANGED and continue to protect `start()`'s loop and every post-construction frame — this decision removes the one frame they could not reach. TEST-070..073 must still pass. **Rider (A3-R025-F2 disposition, user-chosen):** add TEST-076 — RED tests that make `syncNext`'s and `downloadNext`'s `QPointer` self-guards load-bearing (today both mutations survive; only `refreshClicked`'s is caught), so no untested guard stands in front of the hazard.
+
+**Evidence bar (non-negotiable).** TEST-075 EXECUTES parent teardown during `start()`'s nested loop under AddressSanitizer on the existing `testGarminConnectSyncDialogClose` target, and proves BOTH directions: reverting the split — moving `store->open()`/`refreshClicked()` back into the constructor body — must reproduce the ASan `heap-use-after-free`. TEST-076's two slots must each FAIL when their guard is removed. Extend the existing ASan target; no new file unless the build forces it.
+
+**Accepted residuals (recorded, not fixed).** The deliberate busy-teardown store leak from DEC-025 is unchanged. `start()`-based init changes the construction contract for these two callers only; any future third caller of `CloudServiceSyncDialog` must call `start()` — enforced by making the ctor produce a non-functional (un-opened) dialog until `start()` runs.
+
+### Alignment probe
+grep -n 'start()' src/Cloud/CloudService.h                                 # expect a new public bool start() on CloudServiceSyncDialog
+grep -n 'store->open\|refreshClicked' src/Cloud/CloudService.cpp           # expect these OUT of the ctor body, inside start()
+grep -n 'CloudServiceSyncDialog' src/Gui/MainWindow.cpp src/Cloud/AddCloudWizard.cpp  # expect both callers to invoke start() before exec()/open()
+
+## DEC-027 — Unify the sync-dialog lifetime: heap + WA_DeleteOnClose for BOTH callers (closes the BLOCKING A3-R026-F1)
+- Status: accepted (A — convert `MainWindow::syncCloud` from a STACK modal dialog to the heap + `WA_DeleteOnClose` + modeless `open()` pattern `AddCloudWizard` already uses; the shared `CloudServiceSyncDialog` is unchanged)
+- Reversibility: moderate (one call site changes storage class + modality; the dialog class itself is untouched)
+- Decided / last-reviewed: 2026-08-06
+- Serves: REQ-017(e) on the stack-caller path; triggered by A3-R026-F1 (BLOCKING); completes the class DEC-024/025/026 left open (the 5th and final route)
+- Dependents: TEST-077 (A3-R026-F2 fixture-gap coverage — the 4 previously-unreachable `start()` self-bails), TEST-078 (syncCloud heap-conversion teardown, conditional), `MainWindow::syncCloud` (MainWindow.cpp:2571-2585); context: AddCloudWizard.cpp:892-910 (the reference pattern), DEC-024/025/026
+
+**Problem.** A3-R026-F1 (orchestrator-confirmed self-parenting chain: MainWindow.cpp:143 `WA_DeleteOnClose` + `new Context(this)` :162/2038 + `sync` stack dialog parented to `context->mainWindow` :2583). `MainWindow::syncCloud` builds `CloudServiceSyncDialog` in AUTOMATIC storage parented to the very MainWindow whose teardown is the whole threat scenario. Qt's `QObjectPrivate::deleteChildren()` deletes every child UNCONDITIONALLY of the child's attribute — so parent teardown mid-sync (reachable during `start()`'s non-modal nested loops) calls `delete` on a STACK object (bad-free) then the scope double-destructs it. NO internal `self.isNull()` guard reaches this — the suspended frame is ON the freed object. This is the storage-class axis of the same family DEC-024/025/026 addressed; the prior [[A3-R017-F1]] disposition wrongly declared syncCloud "UNAFFECTED (no WA_DeleteOnClose)" — that attribute governs the CHILD's own close, not parent-initiated deletion (LSN-040).
+
+**Options considered (scored R/S/M/BP 1-5).**
+- **A — CHOSEN — heap + `WA_DeleteOnClose` + modeless `open()`.** Make syncCloud construct exactly as `AddCloudWizard` does: `new`, `setAttribute(WA_DeleteOnClose)`, `if (sync->start()) sync->open();` with NO `else delete` (open-failure posts a queued `close()` that self-deletes; an else-delete would double-free). R4 S4 M4 BP4. The dialog becomes a VALID heap child: `deleteChildren` frees it validly, DEC-025's dtor declines the store while `blockingCallDepth>0`, and `start()`'s `self.isNull()` sentinel fires (the dialog IS a child → it gets deleted → self goes null) BEFORE any frame touches the freed `context` — the exact geometry TEST-075 already proves. Unifies both callers on ONE lifetime contract. **Cost (deliberate, user-approved):** menu-triggered sync becomes MODELESS — it no longer blocks the main window — matching `AddCloudWizard`'s already-modeless sync. db ownership is preserved: the dialog's dtor still closes+deletes db (REQ-017(e)), now triggered by `WA_DeleteOnClose` deletion instead of stack-scope exit.
+- **C — keep MODAL: heap + `WA_DeleteOnClose` + `QPointer`-guarded `exec()`.** R3 S3 M3 BP3. **Rejected:** the modal `exec()` frame is itself suspended ON the dialog, so it needs a self-check after `exec()` returns PLUS the dtor guard PLUS a new ASan test for the exec-suspended-frame teardown — more lifetime code and a second lifetime pattern, to dodge a hazard A removes structurally. Chosen only if modality were a hard requirement; it is not.
+- **B — reparent the stack dialog to `nullptr`.** R2 S2 M2 BP2. **Rejected:** fixes the stack bad-free but the dialog is then NOT a child, so `start()`'s `self.isNull()` sentinel never fires and it proceeds to touch the freed `context` (owned by MainWindow) — a context use-after-free. Trades one UAF for another.
+
+**Cascade.** `MainWindow::syncCloud` (MainWindow.cpp:2571-2585): stack `CloudServiceSyncDialog sync(...)` + `if (sync.start()) sync.exec();` → heap `new` + `setAttribute(WA_DeleteOnClose)` + `if (sync->start()) sync->open();`, no else-delete, db-ownership comment updated. `CloudServiceSyncDialog` itself is UNCHANGED — it already supports this pattern (AddCloudWizard uses it). DEC-024/025/026 machinery + TEST-070..075 unchanged/green. **Rider (A3-R026-F2, folded in):** extend the ASan fixture so the 4 currently-unreachable `start()` self-bails become testable — add an open-failure `BlockingStore::open()` mode (reaches :778/:782), a non-empty dirty `rideCache` (reaches :993), and a teardown armed during the readdir/`refreshClicked` frame (reaches :1023) — TEST-077, each guard RED-verified.
+
+**Evidence bar.** TEST-077's four slots each FAIL when their guard is neutered (the F2 gap closed). The syncCloud conversion inherits TEST-075's proven parent-teardown geometry (both callers now identical); optionally TEST-078 drives a parent teardown through the syncCloud entry point specifically. Baseline: ASan target green, `ctest -R "Garmin|AtomicFile"` ≥25, full ≥26, `GoldenCheetah` links. DEC-024/025/026 byte-unchanged.
+
+**Accepted residuals.** Menu-sync is now modeless (user-approved UX change). db lifetime is tied to `WA_DeleteOnClose` deletion, exactly as `AddCloudWizard`'s already is. A3-R026-F3 (no start()-called/re-entrancy invariant) stays a latent advisory — inert with the two known callers.
+
+### Alignment probe
+grep -n 'new CloudServiceSyncDialog\|WA_DeleteOnClose\|->start()\|->open()\|->exec()' src/Gui/MainWindow.cpp   # expect heap+WA_DeleteOnClose+open(), NO stack `sync`, NO exec()
+grep -n 'CloudServiceSyncDialog sync' src/Gui/MainWindow.cpp                                                    # expect GONE (no stack construction)
