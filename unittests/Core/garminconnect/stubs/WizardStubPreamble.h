@@ -331,6 +331,11 @@ class CloudServiceSyncDialog : public QDialog
 {
   public:
     CloudServiceSyncDialog(Context*, CloudService*) {}
+    // DEC-garmin-026 two-phase init: the real dialog's constructor now builds
+    // only a shell and start() does the store->open() + widget build. This stub
+    // never opens a store, so start() just reports "ready" to preserve the
+    // wizard's previous unconditional open() path (AddCloudWizard.cpp).
+    bool start() { return true; }
 };
 
 #endif // GC_CloudService_h

@@ -124,6 +124,16 @@ class CloudService
         Consent
     };
 
+    // REQ-018: the real base declares the up/download compression contract and
+    // defaults BOTH to zip; uncompressRide refuses any staged name that does not
+    // match downloadCompression. GarminConnect's ctors set it, so this stand-in
+    // must carry the same shape (same enumerators, same zip default) or
+    // GarminConnect.cpp no longer compiles against it.
+    enum compression { none, zip, gzip };
+    typedef enum compression CompressionType;
+    CompressionType uploadCompression = zip;
+    CompressionType downloadCompression = zip;
+
     CloudService(Context* c) : context(c) {}
     virtual ~CloudService()
     {
@@ -180,11 +190,18 @@ class CloudService
     // framework's handler then stages+parses via uncompressRide keyed on `name`.
     // The stub records what GarminConnect staged so tests can assert the DEC-016
     // garmin-<id>.fit / .tcx filename and the final bytes.
+    //
+    // DEC-garmin-022 (TEST-065) also records the BUFFER POINTER: the real callers
+    // (CloudServiceSyncDialog::completedRead / CloudServiceAutoDownload::readComplete)
+    // free the buffer they preallocated when the completion reaches them, so
+    // "the completion carried back the caller's own buffer" is what says the
+    // refusal path no longer leaks it.
     void notifyReadComplete(QByteArray* data, QString name, QString message)
     {
         ++readCompleteCount;
         lastReadName = name;
         lastReadMessage = message;
+        lastReadPtr = data;
         if (data)
             lastReadData = *data;
     }
@@ -192,6 +209,27 @@ class CloudService
     QString lastReadName;
     QString lastReadMessage;
     QByteArray lastReadData;
+    const QByteArray* lastReadPtr = nullptr;
+
+    // DEC-garmin-023 (TEST-068) — the EXPLICIT failure channel. Production
+    // CloudService::notifyReadFailed emits readFailed(); the recorder mirrors the
+    // readComplete one exactly, because the two are alternatives for the SAME
+    // caller-owned buffer: a test that cannot see both counts cannot tell a
+    // fixed leak from a fresh double-free.
+    void notifyReadFailed(QByteArray* data, QString name, QString reason)
+    {
+        ++readFailedCount;
+        lastFailedName = name;
+        lastFailedReason = reason;
+        lastFailedPtr = data;
+        if (data)
+            lastFailedData = *data;
+    }
+    int readFailedCount = 0;
+    QString lastFailedName;
+    QString lastFailedReason;
+    QByteArray lastFailedData;
+    const QByteArray* lastFailedPtr = nullptr;
 
     static QString tr(const char* s) { return QString::fromUtf8(s); }
 

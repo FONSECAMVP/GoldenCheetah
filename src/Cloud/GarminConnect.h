@@ -130,6 +130,37 @@ class GarminConnect : public CloudService
     // must not keep serving downloads for an account the user has disconnected.
     bool accountStillConnected() const;
 
+    // REQ-017 Slice A / DEC-garmin-021 (Option B) — the SESSION LATCH. Binds this
+    // instance to the account it was opened against, in memory:
+    //   * m_openedEpoch  — GarminAccountEpoch::current() at latch time;
+    //     disconnectService() bumps that dir's epoch, so every session latched
+    //     before it becomes SUPERSEDED (an int compare, zero disk I/O).
+    //   * m_openedUserId — the garmin_user_id at latch time, consumed by
+    //     readdir/readFile/recordImport for the life of the session instead of
+    //     being re-resolved from active-account.json on every call (A3-R012-F10):
+    //     a mid-sync rewrite of that file can then never record an import against
+    //     a different-or-empty account.
+    // latchSession() FORCES a (re-)latch and is called on every successful open()
+    // — so a close()+open(), or a reconnect, correctly starts a NEW session.
+    // ensureSessionLatched() is the lazy fallback for the (test-only today, but
+    // reachable) case of a consuming call on an instance that was never open()ed:
+    // it binds to what is current at first use rather than leaving the session
+    // unbound. It never RE-latches, so it can never launder away a bump.
+    void latchSession();
+    void ensureSessionLatched();
+    bool sessionSuperseded() const;
+
+    // REQ-017 clause (c) — the POST-DOWNLOAD, PRE-STAGE recheck. blockingDownload()
+    // runs a nested QEventLoop, so the GUI event queue keeps pumping and a
+    // Disconnect can land while the request is in flight; the checks readFile made
+    // on entry are stale by the time the bytes arrive. Re-asks BOTH questions (the
+    // DEC-021 epoch binding and the DEC-020 credential predicate) immediately
+    // before anything is staged or recorded. False => drop the result on the floor.
+    // NOT cancellation: DEC-021 puts that explicitly out of scope (there is no
+    // cancel primitive in GarminWorker/PyEmbeddedAdapter) — the request has already
+    // run to completion; only its result is discarded.
+    bool downloadResultStillWanted() const;
+
     // One blocking download attempt in `fmt`; bridges the async client to a sync
     // result via a local QEventLoop keyed on a fresh requestId.
     struct DownloadResult
@@ -166,7 +197,21 @@ class GarminConnect : public CloudService
     // self-post (deferred onto the event queue via m_client's event loop, on the
     // calling thread) so the auto-download caller's QEventLoop observes it promptly
     // instead of timing out its 30s watchdog. No Q_OBJECT is added (DES-014).
-    void postReadComplete(QByteArray* data, const QString& name);
+    //
+    // DEC-garmin-022 (B-R017-06): `message` is carried through to the completion so
+    // a FAIL-CLOSED refusal can report itself instead of stalling the caller's loop.
+    // It is tr("Completed.") on the success paths — a non-empty message therefore
+    // does NOT mean failure, which is exactly why DEC-garmin-023 stopped trying to
+    // read failure off this channel and added postReadFailed below instead.
+    void postReadComplete(QByteArray* data, const QString& name, const QString& message);
+
+    // DEC-garmin-023 (B-R017-10): the same QUEUED self-post, on CloudService's
+    // EXPLICIT failure channel (notifyReadFailed). Used by every readFile() path
+    // that gives up: the consumers render `reason`, free the caller's buffer and
+    // advance their loop, instead of hanging on a silent `return false`. Exactly
+    // one of postReadComplete/postReadFailed runs per readFile() call — see the
+    // ownership note above postReadComplete's definition.
+    void postReadFailed(QByteArray* data, const QString& name, const QString& reason);
 
     IGarminDownloadClient* m_client = nullptr; // active seam (injected or host's)
     PyEmbeddedAdapter* m_adapter = nullptr;    // owned in production only
@@ -174,6 +219,12 @@ class GarminConnect : public CloudService
     bool m_injectedClient = false;             // true → m_client not owned
     QString m_configDirOverride;               // test override; empty in production
     QString m_garminUserIdOverride;            // test override; empty in production
+
+    // REQ-017 Slice A (DEC-garmin-021 B) — the latched session identity. See
+    // latchSession() above. Never written by anything but latchSession().
+    quint64 m_openedEpoch = 0;
+    QString m_openedUserId;
+    bool m_sessionLatched = false;
 
     // REQ-NF-Perf-002 — in-object in-progress guard: a second readdir/sync while
     // one is running is rejected; the running one continues. Single-threaded

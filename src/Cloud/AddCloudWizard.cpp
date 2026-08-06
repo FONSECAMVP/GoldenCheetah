@@ -890,7 +890,24 @@ AddFinish::validatePage()
     if (wizard->fsync) {
         CloudService *db = CloudServiceFactory::instance().newService(wizard->cloudService->id(), wizard->context);
         CloudServiceSyncDialog *syncnow = new CloudServiceSyncDialog(wizard->context, db);
-        syncnow->open();
+
+        // REQ-017 (e) - this modeless dialog is nobody's local variable, so it
+        // must delete itself when the user closes it; its destructor then closes
+        // and deletes db (which the dialog now owns). Without this both the
+        // dialog and the service - worker thread and interpreter session
+        // included - survived until the application quit.
+        syncnow->setAttribute(Qt::WA_DeleteOnClose);
+
+        // DEC-garmin-026 (A3-R025-F1) - two-phase init. start() runs store->open()
+        // and builds the rest; only open() the (now shown) dialog if it succeeded.
+        //
+        // NO `else delete syncnow`: on open-failure start() posts a queued close()
+        // exactly as the old constructor's failure branch did, and with
+        // WA_DeleteOnClose that close() deletes the dialog itself - deleting it
+        // here as well would double-free. On the parent-teardown route start()
+        // can also have destroyed `syncnow` already; reading start()'s bool is
+        // safe, touching syncnow past it is not, so we don't.
+        if (syncnow->start()) syncnow->open();
     }
 
     // delete the instance

@@ -18,6 +18,7 @@
 
 #include "GarminConnect.h"
 
+#include "GarminAccountEpoch.h"
 #include "GarminDownloadChain.h"
 #include "GarminSidecarStore.h"
 #include "GarminTokenStore.h"
@@ -198,6 +199,40 @@ bool GarminConnect::accountStillConnected() const
     return GarminTokenStore::loadChecked(resolveConfigDir()).isOk();
 }
 
+void GarminConnect::latchSession()
+{
+    // DEC-garmin-021 (Option B) — bind this instance to the account session that
+    // is current RIGHT NOW. Both halves are captured together and from then on the
+    // instance speaks only for this account: the epoch decides whether it may act
+    // at all, the uid decides which per-account sidecar it acts on.
+    m_openedEpoch = GarminAccountEpoch::current(resolveConfigDir());
+    m_openedUserId = resolveGarminUserId();
+    m_sessionLatched = true;
+}
+
+void GarminConnect::ensureSessionLatched()
+{
+    if (!m_sessionLatched)
+        latchSession();
+}
+
+bool GarminConnect::sessionSuperseded() const
+{
+    // The A3-R012-F1 close-out (REQ-017 clause a): TRUE once the account this
+    // session was opened against has been disconnected — INDEPENDENTLY of what is
+    // on disk now, so a disconnect-then-reconnect (which restores a perfectly
+    // valid tokens.json and therefore satisfies DEC-garmin-020's predicate) still
+    // stops this session dead. An unlatched instance is not superseded: it has not
+    // claimed a session yet, and every consuming path latches before asking.
+    return m_sessionLatched && GarminAccountEpoch::current(resolveConfigDir()) != m_openedEpoch;
+}
+
+bool GarminConnect::downloadResultStillWanted() const
+{
+    // Both layers, re-asked after the wire work finished (REQ-017 clause c).
+    return !sessionSuperseded() && accountStillConnected();
+}
+
 bool GarminConnect::blockingRestore(const QString& tokenBlob)
 {
     IGarminDownloadClient* client = m_client;
@@ -356,6 +391,13 @@ bool GarminConnect::open(QStringList& errors)
         errors << tr("Garmin Connect: could not restore the stored session; please sign in again.");
         return false;
     }
+
+    // REQ-017 clause (d) / DEC-garmin-021 — the session is now open: latch the
+    // account epoch AND the garmin_user_id it belongs to. A FORCED latch (not
+    // ensureSessionLatched) so a close()+open(), or a reconnect through this same
+    // instance, correctly rebinds to the account that is current now. A FAILED
+    // open() latches nothing — it never claimed a session.
+    latchSession();
     return true;
 }
 
@@ -390,51 +432,159 @@ void GarminConnect::disconnectService()
     // Deletes tokens.json + active-account.json (account no longer connected) while
     // PRESERVING imported-<uid>.json / backfill-state-<uid>.json (REQ-012). The
     // risky delete logic lives here (testable), NOT in the generic deleteClicked().
-    GarminTokenStore::clearAccount(resolveConfigDir());
+    const QString dir = resolveConfigDir();
+    GarminTokenStore::clearAccount(dir);
+
+    // REQ-017 Slice A (DEC-garmin-021 B) — and invalidate every session that was
+    // opened against the account just removed, including sessions held by OTHER,
+    // still-live GarminConnect instances over this athlete's config dir. Deliberately
+    // done by bumping a shared counter rather than by reaching into those instances:
+    // blockingDownload() runs a nested QEventLoop, so this call can execute inside
+    // another instance's live download frame, where touching its state (or deleting
+    // its client) would be a use-after-free. A bump mutates nothing but the map;
+    // the affected instances notice on their own next call.
+    GarminAccountEpoch::bump(dir);
 }
 
 bool GarminConnect::readFile(QByteArray* data, QString remotename, QString remoteid)
 {
-    Q_UNUSED(remotename);
     if (data == nullptr || m_client == nullptr)
         return false;
 
-    // DEC-garmin-020 — FAIL CLOSED (A3-R012-F1). The account may have been
-    // disconnected since this instance was open()ed; refuse BEFORE any network
-    // work, so nothing is downloaded from — or staged for — an account the user
-    // has already removed. Nothing is staged and no completion is posted.
-    if (!accountStillConnected())
+    // REQ-017 (DEC-garmin-021 B) — bind to the account session before deciding
+    // anything (a no-op on the normal path: open() already latched).
+    ensureSessionLatched();
+
+    // REQ-017 clause (a) — FAIL CLOSED on the in-memory binding FIRST: this
+    // session's account was disconnected, so it may not download regardless of
+    // what tokens.json says now (a reconnect would satisfy the disk predicate
+    // below while leaving this session's account gone). Zero disk I/O.
+    //
+    // DEC-garmin-022 (B-R017-06) — REFUSE, AND SAY SO. The sync/auto-download
+    // callers DISCARD this bool and wait on the readComplete signal to advance;
+    // a silent refusal hung the dialog on "Downloading n of N" forever and leaked
+    // the QByteArray they preallocated for us (their completion handler is what
+    // frees it). So post a labelled completion carrying the still-EMPTY buffer and
+    // still return false: the loop moves on, the buffer is freed exactly once, and
+    // the empty bytes yield no ride, so the caller takes its FAILURE branch —
+    // nothing here can be mistaken for a successful download.
+    if (sessionSuperseded()) {
+        postReadComplete(data, remotename,
+                         tr("Garmin Connect: this session's account was disconnected; please sign in again."));
         return false;
+    }
+
+    // DEC-garmin-020 — FAIL CLOSED (A3-R012-F1). The SECOND layer, deliberately
+    // KEPT: the stored credential must also still be present and acceptable at
+    // call time. Refuse BEFORE any network work, so nothing is downloaded from —
+    // or staged for — an account the user has already removed. Nothing is staged;
+    // as above (DEC-garmin-022) the refusal itself IS reported, so the loop moves
+    // on and the caller's buffer is freed.
+    //
+    // B-R017-11 — the wording is readdir()'s, VERBATIM, for this same predicate
+    // (see the matching accountStillConnected() branch there). The two entry
+    // points describe an identical condition, so a user who provokes it by
+    // listing and a user who provokes it by downloading must read the same
+    // sentence; the previous text here was the SUPERSEDED-session wording, which
+    // is a different condition (this instance's account is gone versus no account
+    // is connected at all) and is still used by the guard immediately above.
+    if (!accountStillConnected()) {
+        postReadComplete(data, remotename, tr("Garmin Connect: no connected account; please sign in again."));
+        return false;
+    }
 
     // DEC-016 attempt 1 — request ORIGINAL (FIT); the payload is ZIP-wrapped.
     const DownloadResult original = blockingDownload(QStringLiteral("ORIGINAL"), remoteid);
     if (original.ok) {
         QByteArray inner;
         if (unzipFirstEntry(original.bytes, &inner) && looksLikeFit(inner)) {
+            // REQ-017 clause (c) — POST-DOWNLOAD, PRE-STAGE recheck. blockingDownload
+            // ran a nested QEventLoop, so a Disconnect can have landed WHILE the
+            // request was in flight; the entry gates above are stale by now. DEC-021
+            // scopes this to discard-only (there is no cancel primitive in
+            // GarminWorker/PyEmbeddedAdapter and none is added here): the request ran
+            // to completion, and its result is dropped — not staged, no sidecar
+            // record, and no TCX retry either.
+            //
+            // DEC-garmin-023 (B-R017-10): the discard is REPORTED on the explicit
+            // failure channel. It used to `return false` in silence, which hung the
+            // sync dialog on "Downloading n of N" and leaked the caller's buffer —
+            // the very defect DEC-022 closed for the two entry guards. Its own
+            // reason: this one means "we did download your activity and then threw
+            // it away", which is not the same news as "we never asked".
+            if (!downloadResultStillWanted()) {
+                postReadFailed(data, remotename,
+                               tr("Garmin Connect: the account was disconnected while this activity was "
+                                  "downloading; it was discarded."));
+                return false;
+            }
             *data = inner; // stage the UNZIPPED FIT bytes
             const QString staged = QStringLiteral("garmin-%1.fit").arg(remoteid);
             recordImport(remoteid, staged); // DES-010 steps 5e/6 (before completion)
-            postReadComplete(data, staged);
+            postReadComplete(data, staged, tr("Completed."));
             return true;
         }
         // 200 but not FIT (ZIP wrapping tcx/gpx, empty bytes, HTML page): fall
         // through to the TCX retry (content-sniff backstop).
     } else if (original.failureKind == GarminDownloadFailure::RateLimit) {
         // DEC-016: RateLimited → FAIL fast. NO second request (anti retry-storm).
+        //
+        // DEC-garmin-023 (B-R017-10): an ORDINARY failure — no disconnect, nothing
+        // wrong with the account — and one of the two everyday ways a download does
+        // not happen. Its reason is kept separate from every other site because the
+        // advice it implies is unique: wait, then retry. Reporting it does NOT
+        // retry it (still exactly one request, still false).
+        postReadFailed(data, remotename,
+                       tr("Garmin Connect: rate limited by the server; this activity was not downloaded. "
+                          "Please try again later."));
         return false;
     }
     // Network / Unknown (DEC-016 Assumption-B: Network legitimately conflates a
     // real network failure with a 404 "no FIT original"), or a non-FIT 200 →
     // retry once as TCX.
 
+    // REQ-017 clauses (a)+(c) — the retry is a SECOND network request, so the
+    // recheck has to happen BEFORE it is issued as well: a Disconnect that landed
+    // during the ORIGINAL attempt must leave this session issuing no further
+    // download calls at all, not merely discarding what they return.
+    //
+    // DEC-garmin-023 (B-R017-10): reported, with its own reason — nothing was
+    // downloaded here, so telling the user it was "discarded" would be a lie.
+    if (!downloadResultStillWanted()) {
+        postReadFailed(data, remotename,
+                       tr("Garmin Connect: the account was disconnected; the TCX retry for this activity was "
+                          "not attempted."));
+        return false;
+    }
+
     const DownloadResult tcx = blockingDownload(QStringLiteral("TCX"), remoteid);
     if (tcx.ok) {
+        // REQ-017 clause (c) — the same post-download, pre-stage recheck on the
+        // retry path (the TCX request is a second nested event loop and a second
+        // window for a Disconnect to land).
+        //
+        // DEC-garmin-023 (B-R017-10): reported, and distinct from the FIT-path
+        // discard above so the log says WHICH request was thrown away.
+        if (!downloadResultStillWanted()) {
+            postReadFailed(data, remotename,
+                           tr("Garmin Connect: the account was disconnected while the TCX retry for this "
+                              "activity was downloading; it was discarded."));
+            return false;
+        }
         *data = tcx.bytes; // TCX is raw XML, not ZIP-wrapped
         const QString staged = QStringLiteral("garmin-%1.tcx").arg(remoteid);
         recordImport(remoteid, staged); // DES-010 steps 5e/6 (before completion)
-        postReadComplete(data, staged);
+        postReadComplete(data, staged, tr("Completed."));
         return true;
     }
+
+    // DEC-016 exhausted: neither ORIGINAL nor TCX produced a usable activity.
+    //
+    // DEC-garmin-023 (B-R017-10): the second ORDINARY failure, and the everyday
+    // one — a 404 for the original plus a failed TCX is simply an activity Garmin
+    // will not hand over. Silence here left the sync dialog stuck on this row
+    // forever; now the row says so and the loop moves to the next activity.
+    postReadFailed(data, remotename, tr("Garmin Connect: this activity could not be downloaded as either FIT or TCX."));
     return false;
 }
 
@@ -464,19 +614,37 @@ QList<CloudServiceEntry*> GarminConnect::readdir(QString path, QStringList& erro
         return returning;
     }
 
-    // DEC-garmin-020 — FAIL CLOSED (A3-R012-F1), before the listing is issued.
-    // Checked separately from (and ahead of) the uid resolution below: the uid
-    // lives in active-account.json, so it cannot speak for the CREDENTIAL — a
-    // present-but-permission-rejected tokens.json, or a tokens.json deleted on its
-    // own, leaves the uid resolvable while the account is not usable.
+    // REQ-017 (DEC-garmin-021 B) — bind to the account session before deciding
+    // anything (a no-op on the normal path: open() already latched).
+    ensureSessionLatched();
+
+    // REQ-017 clause (a) — FAIL CLOSED on the in-memory binding FIRST, before the
+    // listing is issued. This session's account was disconnected, so it enumerates
+    // nothing — even if the athlete has since reconnected and tokens.json is
+    // perfectly valid again (which would satisfy the DEC-020 check below). Zero
+    // disk I/O.
+    if (sessionSuperseded()) {
+        errors << tr("Garmin Connect: this session's account was disconnected; please sign in again.");
+        return returning;
+    }
+
+    // DEC-garmin-020 — FAIL CLOSED (A3-R012-F1), before the listing is issued. The
+    // SECOND layer, deliberately KEPT. Checked separately from (and ahead of) the
+    // uid below: the uid lives in active-account.json, so it cannot speak for the
+    // CREDENTIAL — a present-but-permission-rejected tokens.json, or a tokens.json
+    // deleted on its own, leaves the uid resolvable while the account is not usable.
     if (!accountStillConnected()) {
         errors << tr("Garmin Connect: no connected account; please sign in again.");
         return returning;
     }
 
-    // DES-010 step 2 — resolve the active account + its per-account sidecar dir.
+    // DES-010 step 2 — the active account + its per-account sidecar dir. REQ-017
+    // clause (d) / A3-R012-F10: the uid is the one LATCHED at session open, not a
+    // fresh read of active-account.json — a mid-sync rewrite of that file must not
+    // be able to repoint this session's dedup map (nor, via recordImport, the file
+    // its imports are written to).
     const QString dir = resolveConfigDir();
-    const QString uid = resolveGarminUserId();
+    const QString uid = m_openedUserId;
     if (uid.isEmpty()) {
         errors << tr("Garmin Connect: no connected account; please sign in again.");
         return returning;
@@ -529,8 +697,14 @@ QList<CloudServiceEntry*> GarminConnect::readdir(QString path, QStringList& erro
 
 void GarminConnect::recordImport(const QString& activityId, const QString& stagedFilename)
 {
+    // REQ-017 clause (d) / A3-R012-F10 — record against the account this session
+    // was OPENED against. Re-resolving active-account.json here (the previous
+    // behaviour) meant a rewrite of that file between readdir and readFile silently
+    // moved the import into another account's sidecar — or, if it had been deleted,
+    // into no sidecar at all, breaking dedup without a trace.
+    ensureSessionLatched();
     const QString dir = resolveConfigDir();
-    const QString uid = resolveGarminUserId();
+    const QString uid = m_openedUserId;
     if (dir.isEmpty() || uid.isEmpty())
         return; // nothing to key the per-account sidecar on (e.g. readFile unit tests)
 
@@ -585,11 +759,28 @@ void GarminConnect::recordImport(const QString& activityId, const QString& stage
 // readFile(); the caller does not free it before its loop.exec() runs the post, so
 // the captured pointer stays valid. We capture the pointer (and the computed name)
 // by value — never a reference to anything with a shorter lifetime than the post.
-void GarminConnect::postReadComplete(QByteArray* data, const QString& name)
+// Ownership is unchanged by DEC-garmin-022: this posts the caller's buffer back
+// exactly once per readFile() call (success OR refusal) and never frees it — the
+// caller's completion handler is the sole owner and the sole deleter.
+void GarminConnect::postReadComplete(QByteArray* data, const QString& name, const QString& message)
 {
-    const QString message = tr("Completed.");
     QMetaObject::invokeMethod(
         &m_completionContext, [this, data, name, message]() { notifyReadComplete(data, name, message); },
+        Qt::QueuedConnection);
+}
+
+// DEC-garmin-023 (B-R017-10) — the failure twin of postReadComplete. Every word
+// of the rationale above applies unchanged: the same m_completionContext, so the
+// post lands on the same event loop and is cancelled by the same lifetime; the
+// same captured-by-value pointer; the same ownership rule — this posts the
+// CALLER'S buffer back and never frees it. The only difference is the channel:
+// CloudService::readFailed, which says "this read did not happen" in a way
+// tr("Completed.")-on-success cannot. readFile() calls exactly one of the two per
+// invocation, so the consumers' `delete data` runs exactly once.
+void GarminConnect::postReadFailed(QByteArray* data, const QString& name, const QString& reason)
+{
+    QMetaObject::invokeMethod(
+        &m_completionContext, [this, data, name, reason]() { notifyReadFailed(data, name, reason); },
         Qt::QueuedConnection);
 }
 

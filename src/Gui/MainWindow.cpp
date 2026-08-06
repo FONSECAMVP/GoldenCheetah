@@ -2529,6 +2529,13 @@ MainWindow::uploadCloud(QAction *action)
 
         CloudService *db = CloudServiceFactory::instance().newService(action->data().toString(), currentAthleteTab->context);
         CloudService::upload(this, currentAthleteTab->context, db, currentAthleteTab->context->ride);
+
+        // REQ-017 (b)/(e) - upload() does NOT take ownership: it builds a
+        // stack-local CloudServiceUploadDialog whose ctor open()s this store and
+        // which neither close()s nor deletes it. Without this the service - and
+        // any worker thread / session its open() started - outlives every upload
+        // until process exit. Same contract MainWindow::syncCloud relies on.
+        closeAndDeleteStore(db);
     }
 }
 
@@ -2537,8 +2544,33 @@ MainWindow::syncCloud(QAction *action)
 {
     // sync with cloud
     CloudService *db = CloudServiceFactory::instance().newService(action->data().toString(), currentAthleteTab->context);
-    CloudServiceSyncDialog sync(currentAthleteTab->context, db);
-    sync.exec();
+
+    // DEC-garmin-027 (A3-R026-F1) - HEAP + WA_DeleteOnClose + modeless open(),
+    // the identical pattern AddCloudWizard uses (AddCloudWizard.cpp:892-910). The
+    // old stack dialog was parented to this WA_DeleteOnClose MainWindow, so a
+    // teardown of the athlete window mid-sync ran ~CloudServiceSyncDialog on a
+    // C++ stack object that Qt would ALSO free from ~QObject when it destroyed its
+    // children - a bad-free + double destruction no internal guard could reach.
+    // On the heap the dialog is a valid child: Qt's deleteChildren() frees it
+    // once (validly), DEC-025's dtor declines to delete the store while a blocking
+    // call is on the stack, and DEC-026's start() self.isNull() sentinel bails
+    // before any frame touches the freed context. Same geometry TEST-075/TEST-078
+    // prove for this call site.
+    //
+    // REQ-017 (e) - ownership is preserved, just heap-triggered: this modeless
+    // dialog is nobody's local variable, so it deletes ITSELF on close
+    // (WA_DeleteOnClose) and its destructor then closes and deletes db (which it
+    // owns). Do NOT delete db here as well.
+    //
+    // DEC-garmin-026 (A3-R025-F1) - two-phase init: the constructor builds only
+    // the shell; start() runs store->open() and the rest. Only open() (modeless -
+    // NOT exec()) if start() succeeded. NO `else delete sync`: on open-failure
+    // start() posts a queued close() which, under WA_DeleteOnClose, self-deletes
+    // the dialog; on a parent-teardown route start() may already have destroyed
+    // `sync`. Reading start()'s bool is safe; touching `sync` past it is not.
+    CloudServiceSyncDialog *sync = new CloudServiceSyncDialog(currentAthleteTab->context, db);
+    sync->setAttribute(Qt::WA_DeleteOnClose);
+    if (sync->start()) sync->open();
 }
 
 

@@ -1374,6 +1374,13 @@ if(GC_WANT_GARMINCONNECT)
     target_sources(GoldenCheetah PRIVATE
         Cloud/GarminConnect.cpp
         Cloud/GarminConnect.h
+        # REQ-017 Slice A (DEC-garmin-021 Option B): the per-athlete account epoch
+        # that binds a live GarminConnect session to the account it was opened
+        # against. Pure-Qt (no Python.h). GarminConnect.cpp calls current()/bump(),
+        # so the main binary needs this TU or GC_WANT_GARMINCONNECT builds fail with
+        # an undefined reference to GarminAccountEpoch::current (LSN-018).
+        Cloud/GarminAccountEpoch.cpp
+        Cloud/GarminAccountEpoch.h
         Cloud/GarminCredentialsPage.cpp
         Cloud/GarminCredentialsPage.h
         # REQ-003 (MFA) Slice B: AddCloudWizard constructs GarminMfaPage (page 22),

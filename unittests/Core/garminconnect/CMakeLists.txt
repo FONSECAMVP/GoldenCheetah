@@ -35,6 +35,11 @@ add_executable(testGarminConnectTile
     testGarminConnectTile.cpp
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminConnect.cpp
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminConnect.h
+    # LSN-018 — REQ-017 Slice A: GarminConnect.cpp now calls
+    # GarminAccountEpoch::current()/bump(), so EVERY target that compiles it must
+    # link this TU too or the link fails with an undefined reference.
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminAccountEpoch.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminAccountEpoch.h
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadChain.cpp
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadChain.h
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadClient.cpp
@@ -545,6 +550,11 @@ add_executable(testGarminConnectOpen
     testGarminConnectOpen.cpp
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminConnect.cpp
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminConnect.h
+    # LSN-018 — REQ-017 Slice A: GarminConnect.cpp now calls
+    # GarminAccountEpoch::current()/bump(), so EVERY target that compiles it must
+    # link this TU too or the link fails with an undefined reference.
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminAccountEpoch.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminAccountEpoch.h
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadChain.cpp
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadChain.h
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadClient.cpp
@@ -602,6 +612,11 @@ add_executable(testGarminConnectReadFile
     testGarminConnectReadFile.cpp
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminConnect.cpp
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminConnect.h
+    # LSN-018 — REQ-017 Slice A: GarminConnect.cpp now calls
+    # GarminAccountEpoch::current()/bump(), so EVERY target that compiles it must
+    # link this TU too or the link fails with an undefined reference.
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminAccountEpoch.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminAccountEpoch.h
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadChain.cpp
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadChain.h
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadClient.cpp
@@ -698,6 +713,11 @@ add_executable(testGarminConnectSync
     testGarminConnectSync.cpp
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminConnect.cpp
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminConnect.h
+    # LSN-018 — REQ-017 Slice A: GarminConnect.cpp now calls
+    # GarminAccountEpoch::current()/bump(), so EVERY target that compiles it must
+    # link this TU too or the link fails with an undefined reference.
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminAccountEpoch.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminAccountEpoch.h
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadChain.cpp
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadChain.h
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadClient.cpp
@@ -761,6 +781,11 @@ add_executable(testGarminConnectConnectPersist
     testGarminConnectConnectPersist.cpp
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminConnect.cpp
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminConnect.h
+    # LSN-018 — REQ-017 Slice A: GarminConnect.cpp now calls
+    # GarminAccountEpoch::current()/bump(), so EVERY target that compiles it must
+    # link this TU too or the link fails with an undefined reference.
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminAccountEpoch.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminAccountEpoch.h
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadChain.cpp
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadChain.h
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadClient.cpp
@@ -805,6 +830,245 @@ target_compile_features(testGarminConnectConnectPersist PRIVATE cxx_std_17)
 add_test(NAME testGarminConnectConnectPersist COMMAND testGarminConnectConnectPersist)
 set_tests_properties(testGarminConnectConnectPersist PROPERTIES LABELS "garmin-fast")
 
+# --- TEST-060..063 — REQ-017 Slice A (DEC-garmin-021 B): account EPOCH ---------
+# Binds a GarminConnect session to the account it was opened against with an
+# in-memory epoch (src/Cloud/GarminAccountEpoch.{h,cpp} — pure Qt, no Python.h,
+# same seam discipline as GarminDownloadChain.h) instead of relying solely on
+# DEC-garmin-020's per-call disk re-check, which is deliberately KEPT as the
+# second layer.
+#
+# A SEPARATE executable rather than more slots in testGarminConnectConnectPersist:
+# the epoch map is process-global static state, so a dedicated process keeps these
+# slots independent of every other suite's expectations (and testGarminConnectSync
+# / …ConnectPersist stay readable).
+#
+# Same Python-free stubbing as testGarminConnectConnectPersist (ReadFileStubPreamble
+# + Python-free PyEmbeddedAdapter fake) with the REAL GarminTokenStore +
+# GarminSidecarStore + AtomicFile backing the disk I/O and real contrib/qzip for
+# the FIT unwrap.
+#
+# LSN-018: GarminAccountEpoch.cpp is a NEW production TU — it is registered BOTH
+# here (and in every other target that compiles GarminConnect.cpp) AND in the app's
+# GC_WANT_GARMINCONNECT source list (src/CMakeLists.txt).
+add_executable(testGarminConnectAccountEpoch
+    testGarminConnectAccountEpoch.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminConnect.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminConnect.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminAccountEpoch.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminAccountEpoch.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadChain.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadChain.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadClient.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminTokenStore.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminTokenStore.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminSidecarStore.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminSidecarStore.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminDownloadClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminAuthClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminPyAdapter.h
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zip.cpp
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipreader.h
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipwriter.h
+)
+
+set_target_properties(testGarminConnectAccountEpoch PROPERTIES AUTOMOC ON)
+
+target_include_directories(testGarminConnectAccountEpoch PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+    ${CMAKE_SOURCE_DIR}/contrib/qzip
+)
+
+target_compile_options(testGarminConnectAccountEpoch PRIVATE
+    "-include${CMAKE_CURRENT_SOURCE_DIR}/stubs/ReadFileStubPreamble.h"
+)
+
+find_package(ZLIB REQUIRED)
+target_link_libraries(testGarminConnectAccountEpoch PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Gui
+    Qt${QT_VERSION_MAJOR}::Test
+    ZLIB::ZLIB
+)
+target_compile_features(testGarminConnectAccountEpoch PRIVATE cxx_std_17)
+
+add_test(NAME testGarminConnectAccountEpoch COMMAND testGarminConnectAccountEpoch)
+set_tests_properties(testGarminConnectAccountEpoch PROPERTIES LABELS "garmin-fast")
+
+# --- TEST-065 — REQ-017 / DEC-garmin-022: a refusal REPORTS itself ------------
+# Drives GarminConnect::readFile's two fail-closed entry guards (DEC-021 session
+# epoch + DEC-020 credential re-check) and asserts each posts a labelled,
+# QUEUED completion carrying the caller's own (empty) buffer while still
+# returning false — so CloudServiceSyncDialog's loop advances and the
+# preallocated QByteArray is freed instead of leaking (finding B-R017-06).
+#
+# A SEPARATE executable for the same reason as testGarminConnectAccountEpoch: the
+# account-epoch map is process-global static state, so a dedicated process keeps
+# these slots independent of every other suite's expectations. Same Python-free
+# stubbing (ReadFileStubPreamble + Python-free PyEmbeddedAdapter fake) with the
+# REAL GarminTokenStore + GarminSidecarStore + AtomicFile and real contrib/qzip.
+add_executable(testGarminConnectRefusalCompletion
+    testGarminConnectRefusalCompletion.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminConnect.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminConnect.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminAccountEpoch.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminAccountEpoch.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadChain.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadChain.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadClient.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminTokenStore.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminTokenStore.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminSidecarStore.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminSidecarStore.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminDownloadClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminAuthClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminPyAdapter.h
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zip.cpp
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipreader.h
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipwriter.h
+)
+
+set_target_properties(testGarminConnectRefusalCompletion PROPERTIES AUTOMOC ON)
+
+target_include_directories(testGarminConnectRefusalCompletion PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+    ${CMAKE_SOURCE_DIR}/contrib/qzip
+)
+
+target_compile_options(testGarminConnectRefusalCompletion PRIVATE
+    "-include${CMAKE_CURRENT_SOURCE_DIR}/stubs/ReadFileStubPreamble.h"
+)
+
+find_package(ZLIB REQUIRED)
+target_link_libraries(testGarminConnectRefusalCompletion PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Gui
+    Qt${QT_VERSION_MAJOR}::Test
+    ZLIB::ZLIB
+)
+target_compile_features(testGarminConnectRefusalCompletion PRIVATE cxx_std_17)
+
+add_test(NAME testGarminConnectRefusalCompletion COMMAND testGarminConnectRefusalCompletion)
+set_tests_properties(testGarminConnectRefusalCompletion PROPERTIES LABELS "garmin-fast")
+
+# --- TEST-068 — DEC-garmin-023: readFile carries FAILURE explicitly -----------
+# Drives the FIVE remaining silent `return false` sites in GarminConnect::readFile
+# (finding B-R017-10) and asserts each posts a QUEUED, distinguishable readFailed
+# carrying the caller's own (empty) buffer while still returning false — so the
+# consumers' loops advance and the preallocated QByteArray is freed instead of
+# leaking, exactly as DEC-022/TEST-065 established for the two ENTRY guards.
+#
+# A SEPARATE executable for the same reason as testGarminConnectRefusalCompletion:
+# the account-epoch map is process-global static state, and three of the five
+# sites bump it mid-flight. Same Python-free stubbing (ReadFileStubPreamble +
+# Python-free PyEmbeddedAdapter fake) with the REAL GarminTokenStore +
+# GarminSidecarStore + AtomicFile + GarminAccountEpoch and real contrib/qzip.
+add_executable(testGarminConnectReadFailure
+    testGarminConnectReadFailure.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminConnect.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminConnect.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminAccountEpoch.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminAccountEpoch.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadChain.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadChain.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadClient.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminTokenStore.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminTokenStore.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminSidecarStore.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminSidecarStore.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminDownloadClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminAuthClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminPyAdapter.h
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zip.cpp
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipreader.h
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipwriter.h
+)
+
+set_target_properties(testGarminConnectReadFailure PROPERTIES AUTOMOC ON)
+
+target_include_directories(testGarminConnectReadFailure PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+    ${CMAKE_SOURCE_DIR}/contrib/qzip
+)
+
+target_compile_options(testGarminConnectReadFailure PRIVATE
+    "-include${CMAKE_CURRENT_SOURCE_DIR}/stubs/ReadFileStubPreamble.h"
+)
+
+find_package(ZLIB REQUIRED)
+target_link_libraries(testGarminConnectReadFailure PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Gui
+    Qt${QT_VERSION_MAJOR}::Test
+    ZLIB::ZLIB
+)
+target_compile_features(testGarminConnectReadFailure PRIVATE cxx_std_17)
+
+add_test(NAME testGarminConnectReadFailure COMMAND testGarminConnectReadFailure)
+set_tests_properties(testGarminConnectReadFailure PROPERTIES LABELS "garmin-fast")
+
+# --- TEST-064 — REQ-017 Slice B: an owner destroys what it opens --------------
+# Drives the REAL src/Cloud/CloudService.h teardown contract (closeAndDeleteStore)
+# against a spy store that owns a real QThread — the assertion is close()-then-
+# destroy, which is what actually stops a GarminConnect worker thread and releases
+# its interpreter session (DES-001 invariant 3).
+#
+# NO GarminConnect/CloudService .cpp is compiled here: CloudService.cpp pulls in
+# RideCache/RideItem/MainWindow/JsonRideFile/CsvRideFile/DataProcessor, i.e. the
+# whole application, which is precisely why DEC-garmin-021 rejected Option C. Only
+# the HEADER is real; the test TU predefines the Context.h/Athlete.h guards inline
+# (Settings.h and Utils.h are pulled in for real, both pure Qt) so no stub preamble
+# and no -include flag is needed. Widgets is linked because CloudService.h's dialog
+# declarations are QWidget-derived; Network because it declares QNetworkReply
+# slots. Nothing from either module is executed.
+#
+# CloudService.h is deliberately NOT listed as a target source: AUTOMOC would then
+# generate moc_CloudService.cpp, whose qt_static_metacall calls every slot of
+# CloudServiceSyncDialog/CloudServiceDialog/CloudServiceAutoDownload — all defined
+# in the un-linkable CloudService.cpp. The test only INCLUDES the header (no
+# CloudService-derived object is ever instantiated), so no metaobject is needed.
+add_executable(testGarminConnectOwnerTeardown
+    testGarminConnectOwnerTeardown.cpp
+)
+
+set_target_properties(testGarminConnectOwnerTeardown PROPERTIES AUTOMOC ON)
+
+target_include_directories(testGarminConnectOwnerTeardown PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+    ${CMAKE_SOURCE_DIR}/src/Core
+    ${CMAKE_SOURCE_DIR}/src/Charts
+)
+
+target_link_libraries(testGarminConnectOwnerTeardown PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Gui
+    Qt${QT_VERSION_MAJOR}::Network
+    Qt${QT_VERSION_MAJOR}::Widgets
+    Qt${QT_VERSION_MAJOR}::Test
+)
+target_compile_features(testGarminConnectOwnerTeardown PRIVATE cxx_std_17)
+
+add_test(NAME testGarminConnectOwnerTeardown COMMAND testGarminConnectOwnerTeardown)
+set_tests_properties(testGarminConnectOwnerTeardown PROPERTIES LABELS "garmin-fast")
+
 # --- TEST-067 — REQ-018: a downloaded Garmin activity must actually IMPORT -----
 # The ONLY garmin target that does NOT force-include stubs/ReadFileStubPreamble.h.
 # That preamble replaces CloudService with a stand-in that has no uncompressRide
@@ -833,6 +1097,8 @@ add_executable(testGarminConnectImport
     # The producer under test.
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminConnect.cpp
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminConnect.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminAccountEpoch.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminAccountEpoch.h
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadChain.cpp
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadChain.h
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminDownloadClient.cpp
@@ -940,3 +1206,252 @@ add_test(NAME testGarminConnectImport COMMAND testGarminConnectImport)
 set_tests_properties(testGarminConnectImport PROPERTIES
     LABELS "garmin-fast"
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# --- TEST-069 — DEC-garmin-023: the CONSUMER half of the failure channel -------
+# The defect DEC-023 closes is a STALL plus a LEAK in CloudServiceSyncDialog, so
+# the dialog itself has to be the thing under test — "readFailed was emitted" is
+# not the contract (LSN-033). Like testGarminConnectImport, and for the same
+# reason, this target does NOT force-include stubs/ReadFileStubPreamble.h: that
+# preamble replaces CloudService with a stand-in that has no sync dialog at all.
+#
+# So it compiles the REAL src/Cloud/CloudService.cpp (hence the REAL
+# CloudServiceSyncDialog ctor/refreshClicked/downloadClicked/syncNext/
+# completedRead/failedRead and the REAL uncompressRide the positive control is
+# measured against) plus the REAL FileIO readers CloudService.cpp dispatches to.
+#
+# Stand-ins: stubs/ImportSeamStubs.cpp (shared verbatim with TEST-067) supplies
+# the application layers those TUs merely reference, and stubs/SyncDialogSeamStubs.cpp
+# adds ONLY what the dialog additionally touches (RideCache's ctor/dtor — the
+# dialog walks the athlete's ride cache; the import boundary never did). No
+# GarminConnect.cpp is compiled here: the contract is CloudService's, and driving
+# it from a spy store is what proves the ~15 siblings are governed by the same
+# code path.
+#
+# Python-free -> `garmin-fast`. Needs a QApplication (the dialog is a QWidget),
+# hence the offscreen platform.
+add_executable(testGarminConnectReadFailedConsumer
+    testGarminConnectReadFailedConsumer.cpp
+    stubs/ImportSeamStubs.cpp
+    stubs/SyncDialogSeamStubs.cpp
+    # The consumers under test.
+    ${CMAKE_SOURCE_DIR}/src/Cloud/CloudService.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/CloudService.h
+    # The REAL parsers, so uncompressRide's verdict is the real one.
+    ${CMAKE_SOURCE_DIR}/src/FileIO/RideFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/FileIO/RideFile.h
+    ${CMAKE_SOURCE_DIR}/src/FileIO/FitRideFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/FileIO/TcxRideFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/FileIO/TcxParser.cpp
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zip.cpp
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipreader.h
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipwriter.h
+)
+
+set_target_properties(testGarminConnectReadFailedConsumer PROPERTIES AUTOMOC ON)
+
+target_include_directories(testGarminConnectReadFailedConsumer PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/ANT
+    ${CMAKE_SOURCE_DIR}/src/Train
+    ${CMAKE_SOURCE_DIR}/src/FileIO
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+    ${CMAKE_SOURCE_DIR}/src/Charts
+    ${CMAKE_SOURCE_DIR}/src/Metrics
+    ${CMAKE_SOURCE_DIR}/src/Gui
+    ${CMAKE_SOURCE_DIR}/src/Core
+    ${CMAKE_SOURCE_DIR}/src/Planning
+    ${CMAKE_SOURCE_DIR}/src/Coach
+    ${CMAKE_SOURCE_DIR}/qwt/src
+    ${CMAKE_SOURCE_DIR}/contrib/qxt/src
+    ${CMAKE_SOURCE_DIR}/contrib/qtsolutions/json
+    ${CMAKE_SOURCE_DIR}/contrib/qtsolutions/qwtcurve
+    ${CMAKE_SOURCE_DIR}/contrib/qtsolutions/flowlayout
+    ${CMAKE_SOURCE_DIR}/contrib/qtsolutions/codeeditor
+    ${CMAKE_SOURCE_DIR}/contrib/lmfit
+    ${CMAKE_SOURCE_DIR}/contrib/boost
+    ${CMAKE_SOURCE_DIR}/contrib/kmeans
+    ${CMAKE_SOURCE_DIR}/contrib/voronoi
+    ${CMAKE_SOURCE_DIR}/contrib/httpserver
+    ${CMAKE_SOURCE_DIR}/contrib/qzip
+    ${CMAKE_BINARY_DIR}
+)
+
+target_compile_definitions(testGarminConnectReadFailedConsumer PRIVATE
+    GC_WANT_GARMINCONNECT
+    "GARMIN_PY_MODULE_DIR=\"${CMAKE_SOURCE_DIR}/src/Python/garminconnect\""
+)
+
+find_package(ZLIB REQUIRED)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS
+    Sql Concurrent SerialPort Multimedia MultimediaWidgets PrintSupport Svg
+    Bluetooth DBus Charts OpenGL OpenGLWidgets WebEngineCore WebEngineWidgets
+    WebEngineQuick WebChannel Positioning Qml Quick)
+target_link_libraries(testGarminConnectReadFailedConsumer PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Gui
+    Qt${QT_VERSION_MAJOR}::Widgets
+    Qt${QT_VERSION_MAJOR}::Network
+    Qt${QT_VERSION_MAJOR}::Xml
+    Qt${QT_VERSION_MAJOR}::Sql
+    Qt${QT_VERSION_MAJOR}::Concurrent
+    Qt${QT_VERSION_MAJOR}::SerialPort
+    Qt${QT_VERSION_MAJOR}::Multimedia
+    Qt${QT_VERSION_MAJOR}::MultimediaWidgets
+    Qt${QT_VERSION_MAJOR}::PrintSupport
+    Qt${QT_VERSION_MAJOR}::Svg
+    Qt${QT_VERSION_MAJOR}::Bluetooth
+    Qt${QT_VERSION_MAJOR}::DBus
+    Qt${QT_VERSION_MAJOR}::Charts
+    Qt${QT_VERSION_MAJOR}::OpenGL
+    Qt${QT_VERSION_MAJOR}::OpenGLWidgets
+    Qt${QT_VERSION_MAJOR}::WebEngineCore
+    Qt${QT_VERSION_MAJOR}::WebEngineWidgets
+    Qt${QT_VERSION_MAJOR}::WebEngineQuick
+    Qt${QT_VERSION_MAJOR}::WebChannel
+    Qt${QT_VERSION_MAJOR}::Positioning
+    Qt${QT_VERSION_MAJOR}::Qml
+    Qt${QT_VERSION_MAJOR}::Quick
+    Qt${QT_VERSION_MAJOR}::Core5Compat
+    Qt${QT_VERSION_MAJOR}::Test
+    ZLIB::ZLIB
+    qwt
+)
+target_compile_features(testGarminConnectReadFailedConsumer PRIVATE cxx_std_17)
+
+add_test(NAME testGarminConnectReadFailedConsumer COMMAND testGarminConnectReadFailedConsumer)
+set_tests_properties(testGarminConnectReadFailedConsumer PROPERTIES
+    LABELS "garmin-fast"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# --- TEST-070 / TEST-071 — DEC-garmin-024: the sync dialog's LIFETIME ---------
+# A3-R017-F1 is a use-after-free that REQ-017 Slice B introduced, so the thing
+# under test is the REAL CloudServiceSyncDialog and its REAL destructor (the one
+# that calls closeAndDeleteStore). Same seam as TEST-067/TEST-069: compile the
+# REAL src/Cloud/CloudService.cpp and satisfy the application layers it merely
+# references with stubs/ImportSeamStubs.cpp + stubs/SyncDialogSeamStubs.cpp. The
+# service is the only stand-in, and it stands in for GarminConnect by doing the
+# one thing that matters — running a nested QEventLoop inside readFile.
+#
+# WHY THIS ONE TARGET IS BUILT WITH AddressSanitizer
+# --------------------------------------------------
+# A3-R017's standing lesson: a Qt lifetime claim must be EXECUTED, not reasoned.
+# A test that "passes" because the freed store's bytes happened to survive proves
+# nothing, so the memory model itself has to be the judge. -fsanitize=address is
+# applied to compilation AND linking of this target only; the test source
+# #errors out if it is ever compiled without it, so this wiring cannot rot
+# silently. Before the fix this binary aborts with
+#   AddressSanitizer: heap-use-after-free ... in BlockingStore::readFile
+#
+# detect_leaks=0: LeakSanitizer would report the process-lifetime allocations Qt,
+# qwt and GlobalContext make on the way to main() and drown the signal. The LEAK
+# half of this slice is asserted directly instead, by asking ASan's own shadow
+# whether the dialog's in-flight QByteArray was released
+# (__asan_region_is_poisoned) and by QPointer-observing that dialog and store are
+# both destroyed — both far sharper than a whole-process leak report.
+#
+# Python-free -> `garmin-fast`. Needs a QApplication (the dialog is a QWidget),
+# hence the offscreen platform.
+add_executable(testGarminConnectSyncDialogClose
+    testGarminConnectSyncDialogClose.cpp
+    stubs/ImportSeamStubs.cpp
+    stubs/SyncDialogSeamStubs.cpp
+    # The class under test.
+    ${CMAKE_SOURCE_DIR}/src/Cloud/CloudService.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/CloudService.h
+    # The REAL parsers CloudService.cpp dispatches to.
+    ${CMAKE_SOURCE_DIR}/src/FileIO/RideFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/FileIO/RideFile.h
+    ${CMAKE_SOURCE_DIR}/src/FileIO/FitRideFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/FileIO/TcxRideFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/FileIO/TcxParser.cpp
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zip.cpp
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipreader.h
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipwriter.h
+)
+
+set_target_properties(testGarminConnectSyncDialogClose PROPERTIES AUTOMOC ON)
+
+target_include_directories(testGarminConnectSyncDialogClose PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/ANT
+    ${CMAKE_SOURCE_DIR}/src/Train
+    ${CMAKE_SOURCE_DIR}/src/FileIO
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+    ${CMAKE_SOURCE_DIR}/src/Charts
+    ${CMAKE_SOURCE_DIR}/src/Metrics
+    ${CMAKE_SOURCE_DIR}/src/Gui
+    ${CMAKE_SOURCE_DIR}/src/Core
+    ${CMAKE_SOURCE_DIR}/src/Planning
+    ${CMAKE_SOURCE_DIR}/src/Coach
+    ${CMAKE_SOURCE_DIR}/qwt/src
+    ${CMAKE_SOURCE_DIR}/contrib/qxt/src
+    ${CMAKE_SOURCE_DIR}/contrib/qtsolutions/json
+    ${CMAKE_SOURCE_DIR}/contrib/qtsolutions/qwtcurve
+    ${CMAKE_SOURCE_DIR}/contrib/qtsolutions/flowlayout
+    ${CMAKE_SOURCE_DIR}/contrib/qtsolutions/codeeditor
+    ${CMAKE_SOURCE_DIR}/contrib/lmfit
+    ${CMAKE_SOURCE_DIR}/contrib/boost
+    ${CMAKE_SOURCE_DIR}/contrib/kmeans
+    ${CMAKE_SOURCE_DIR}/contrib/voronoi
+    ${CMAKE_SOURCE_DIR}/contrib/httpserver
+    ${CMAKE_SOURCE_DIR}/contrib/qzip
+    ${CMAKE_BINARY_DIR}
+)
+
+target_compile_definitions(testGarminConnectSyncDialogClose PRIVATE
+    GC_WANT_GARMINCONNECT
+    "GARMIN_PY_MODULE_DIR=\"${CMAKE_SOURCE_DIR}/src/Python/garminconnect\""
+)
+
+# The evidence bar for this slice, expressed in the build.
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(testGarminConnectSyncDialogClose PRIVATE
+        -fsanitize=address -fno-omit-frame-pointer -g)
+    target_link_options(testGarminConnectSyncDialogClose PRIVATE -fsanitize=address)
+else()
+    message(FATAL_ERROR
+        "testGarminConnectSyncDialogClose (TEST-070/071) is a lifetime test and requires "
+        "AddressSanitizer; no -fsanitize=address for compiler ${CMAKE_CXX_COMPILER_ID}.")
+endif()
+
+find_package(ZLIB REQUIRED)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS
+    Sql Concurrent SerialPort Multimedia MultimediaWidgets PrintSupport Svg
+    Bluetooth DBus Charts OpenGL OpenGLWidgets WebEngineCore WebEngineWidgets
+    WebEngineQuick WebChannel Positioning Qml Quick)
+target_link_libraries(testGarminConnectSyncDialogClose PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Gui
+    Qt${QT_VERSION_MAJOR}::Widgets
+    Qt${QT_VERSION_MAJOR}::Network
+    Qt${QT_VERSION_MAJOR}::Xml
+    Qt${QT_VERSION_MAJOR}::Sql
+    Qt${QT_VERSION_MAJOR}::Concurrent
+    Qt${QT_VERSION_MAJOR}::SerialPort
+    Qt${QT_VERSION_MAJOR}::Multimedia
+    Qt${QT_VERSION_MAJOR}::MultimediaWidgets
+    Qt${QT_VERSION_MAJOR}::PrintSupport
+    Qt${QT_VERSION_MAJOR}::Svg
+    Qt${QT_VERSION_MAJOR}::Bluetooth
+    Qt${QT_VERSION_MAJOR}::DBus
+    Qt${QT_VERSION_MAJOR}::Charts
+    Qt${QT_VERSION_MAJOR}::OpenGL
+    Qt${QT_VERSION_MAJOR}::OpenGLWidgets
+    Qt${QT_VERSION_MAJOR}::WebEngineCore
+    Qt${QT_VERSION_MAJOR}::WebEngineWidgets
+    Qt${QT_VERSION_MAJOR}::WebEngineQuick
+    Qt${QT_VERSION_MAJOR}::WebChannel
+    Qt${QT_VERSION_MAJOR}::Positioning
+    Qt${QT_VERSION_MAJOR}::Qml
+    Qt${QT_VERSION_MAJOR}::Quick
+    Qt${QT_VERSION_MAJOR}::Core5Compat
+    Qt${QT_VERSION_MAJOR}::Test
+    ZLIB::ZLIB
+    qwt
+)
+target_compile_features(testGarminConnectSyncDialogClose PRIVATE cxx_std_17)
+
+add_test(NAME testGarminConnectSyncDialogClose COMMAND testGarminConnectSyncDialogClose)
+set_tests_properties(testGarminConnectSyncDialogClose PROPERTIES
+    LABELS "garmin-fast"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;ASAN_OPTIONS=detect_leaks=0:abort_on_error=0:halt_on_error=1")

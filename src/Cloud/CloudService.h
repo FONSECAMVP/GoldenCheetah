@@ -24,6 +24,7 @@
 #include <QStringList>
 #include <QDateTime>
 #include <QObject>
+#include <QPointer>
 #include <QNetworkReply>
 
 #include <QDialog>
@@ -143,6 +144,28 @@ class CloudService : public QObject {
         }
         void notifyReadComplete(QByteArray *data, QString name, QString message) { emit readComplete(data,name,message); }
 
+        // DEC-garmin-023 - the EXPLICIT read-FAILURE channel.
+        //
+        // readComplete cannot carry failure. Every service in this tree passes
+        // tr("Completed.") as `message` on SUCCESS (Strava, Dropbox, SportTracks,
+        // Xert, Azum, PolarFlow, CyclingAnalytics, SixCycle, Nolio,
+        // LocalFileStore), so "message is non-empty" cannot discriminate, and
+        // "payload is empty" is a guess about the parser. A service that KNOWS
+        // the read did not happen therefore says so here instead.
+        //
+        // CONTRACT for a service that chooses to use it:
+        //   - emit readFailed OR readComplete for a given readFile() call, never
+        //     both and never neither. The consumers free the caller-preallocated
+        //     buffer on whichever arrives, so a second delivery is a double free.
+        //   - pass back the SAME `data` pointer the caller handed to readFile,
+        //     with nothing staged into it.
+        //   - `reason` is user-facing text and is rendered verbatim by the sync
+        //     dialog, so it must say what went wrong and which service said so.
+        //
+        // Not emitting it at all is entirely legal and is what the ~15 existing
+        // services do: they are unchanged, and behave exactly as before.
+        void notifyReadFailed(QByteArray *data, QString name, QString reason) { emit readFailed(data,name,reason); }
+
         // list and select an athlete - list will need to block rather than notify asynchronously
         virtual QList<CloudServiceAthlete> listAthletes() { return QList<CloudServiceAthlete>(); }
         virtual bool selectAthlete(CloudServiceAthlete) { return false; }
@@ -220,6 +243,10 @@ class CloudService : public QObject {
         void writeComplete(QString id, QString message);
         void readComplete(QByteArray *data, QString id, QString message);
 
+        // DEC-garmin-023 - the alternative to readComplete for a read that did
+        // not happen. See notifyReadFailed above for the emitter's contract.
+        void readFailed(QByteArray *data, QString id, QString reason);
+
     protected:
 
         // if you want a new filestoreentry struct
@@ -233,6 +260,34 @@ class CloudService : public QObject {
         Context *context;
         
 };
+
+// REQ-017 (b)/(e) - teardown of a store that an owner opened.
+//
+// Whoever creates a CloudService owns it, and on teardown must close() it and
+// only THEN destroy it. close() is what performs the bounded session teardown -
+// for GarminConnect that is stopping the download worker thread (quit()+wait(),
+// never terminate()) and releasing the embedded interpreter session - so a store
+// that is merely dropped, or deleted without being closed, leaves that worker and
+// that session alive until process exit. This is the same close()-then-delete
+// idiom CloudServiceAutoDownload already uses (CloudService.cpp).
+//
+// The caller's pointer is cleared BEFORE close()/delete, so a second teardown of
+// the same owner is a no-op that cannot double-delete, and no re-entrant path can
+// observe a dangling store.
+//
+// Templated on the store type so the contract is exercisable in a unit test
+// without linking the whole CloudService translation unit (see TEST-064).
+template <typename Store>
+void closeAndDeleteStore(Store *&store)
+{
+    if (store == NULL) return;
+
+    Store *doomed = store;
+    store = NULL;
+
+    doomed->close();
+    delete doomed;
+}
 
 // UPLOADER dialog to upload a single rideitem to the file
 //          store. Typically as a quick ^U type operation or
@@ -334,8 +389,26 @@ class CloudServiceSyncDialog : public QDialog
 
     public:
         CloudServiceSyncDialog(Context *context, CloudService *store);
-	
+
+        // REQ-017 (e) - this dialog OWNS the store it was handed: it opens it in
+        // the constructor, so it closes and destroys it here. Callers must not
+        // delete the store themselves.
+        ~CloudServiceSyncDialog();
+
     public slots:
+
+        // DEC-garmin-026 (A3-R025-F1) - PHASE TWO of two-phase init. The
+        // constructor now builds only the widget SHELL and runs NO nested event
+        // loop, so it can never be caught half-built by a parent teardown. This
+        // slot carries everything the constructor's body used to do from
+        // store->open() onward - the one and only nested-loop work - and it runs
+        // on a COMPLETE object, so DEC-024's done()/closeEvent() gate and
+        // DEC-025's destructor depth-check + BlockingCall QPointer already
+        // protect it. Returns true when the store opened and the dialog is ready
+        // to be shown/exec()'d; false on open-failure (the dialog then tears
+        // itself down exactly as the old constructor's failure branch did) or if
+        // `this` was destroyed inside one of its blocking calls.
+        bool start();
 
         void cancelClicked();
         void refreshClicked();
@@ -349,7 +422,31 @@ class CloudServiceSyncDialog : public QDialog
         void selectAllSyncChanged(int);
 
         void completedRead(QByteArray *data, QString name, QString message);
+
+        // DEC-garmin-023 - the counterpart of completedRead on CloudService's
+        // explicit failure channel. Does the same three things completedRead
+        // does for a read that produced no ride: show the reason, free the
+        // caller-preallocated buffer, advance the loop. Without it a service
+        // that refuses leaves this dialog parked on "Downloading n of N".
+        void failedRead(QByteArray *data, QString name, QString reason);
+
         void completedWrite(QString name,QString message);
+
+        // DEC-garmin-024 (A3-R017-F1) - the LAST gate before this dialog is
+        // allowed to destroy itself. QDialog::done() is what reject()/accept()
+        // and the Escape key all funnel through, and on Qt it destroys a
+        // WA_DeleteOnClose dialog EVEN IF closeEvent() ignored the close - so
+        // overriding closeEvent() alone leaves Escape and reject() lethal
+        // (measured, not assumed: see TEST-070/071). Deferring here covers every
+        // one of them with a single decision.
+        void done(int result) override;
+
+    protected:
+
+        // DEC-garmin-024 - the window X. Refuses the close while a store call
+        // that can run a nested QEventLoop is on the stack; see deferCloseIfBusy.
+        void closeEvent(QCloseEvent *e) override;
+
     private:
         Context *context;
         CloudService *store;
@@ -358,6 +455,55 @@ class CloudServiceSyncDialog : public QDialog
         bool downloading;
         bool sync;
         bool aborted;
+
+        // DEC-garmin-024 (A3-R017-F1) - REENTRANCY GUARD.
+        //
+        // GarminConnect::readFile/readdir run NESTED QEventLoops (blockingDownload
+        // / blockingList / blockingRestore), so GUI events - including the user
+        // closing this dialog - ARE delivered in the middle of a call this dialog
+        // made ON THE STORE. Since REQ-017 (e) this dialog deletes itself on close
+        // and its destructor deletes the store, that close used to free the store
+        // while readFile was still running on it, and free this dialog while
+        // syncNext was still running on it: a use-after-free, reproduced under
+        // AddressSanitizer by TEST-070.
+        //
+        // So a close arriving while such a call is on the stack is DEFERRED: the
+        // sync is aborted (so the user's click visibly does something) and the
+        // close is replayed once the last of those frames has unwound.
+        //
+        // A DEPTH COUNT rather than a bool because these frames can nest - the
+        // QApplication::processEvents() inside a blocking call can dispatch a
+        // click on Refresh, putting a readdir frame inside a readFile frame - and
+        // a bool would be cleared by the inner frame while the outer one was
+        // still live, reopening exactly the window this closes.
+        int blockingCallDepth;
+        bool closeDeferred;
+
+        // Sets up the deferral and returns true when the caller must NOT proceed
+        // with destroying/closing the dialog.
+        bool deferCloseIfBusy();
+
+        // RAII, deliberately: an early return, a `continue`, or an exception out
+        // of a store call must not leave the depth count raised, or this dialog
+        // could never be closed again.
+        //
+        // DEC-garmin-025 (A3-R017b-F1) - the back-pointer is a QPointer because
+        // this object OUTLIVES the dialog on the parent-teardown path: Qt
+        // destroys child widgets directly from ~QObject, with a store call - and
+        // therefore one of these - still on the stack. A raw pointer here means
+        // ~BlockingCall writes blockingCallDepth into freed memory as the very
+        // first thing that runs when the nested loop unwinds.
+        class BlockingCall
+        {
+            public:
+                explicit BlockingCall(CloudServiceSyncDialog *dialog);
+                ~BlockingCall();
+
+            private:
+                BlockingCall(const BlockingCall &);            // not copyable
+                BlockingCall &operator=(const BlockingCall &); // not assignable
+                QPointer<CloudServiceSyncDialog> dialog;
+        };
 
         // Quick lists for checking if file exists
         // locally (rideFiles) or remotely (uploadFiles)
@@ -481,6 +627,12 @@ class CloudServiceAutoDownload : public QThread {
 
         // receiver for downloaded files to add to the ridecache
         void readComplete(QByteArray*,QString,QString);
+
+        // DEC-garmin-023 - receiver for reads that did NOT happen. Frees the
+        // preallocated buffer and reports the reason; run()'s blocking
+        // per-activity QEventLoop is released by this signal too, so a refusal
+        // costs the next activity nothing instead of burning the 30s watchdog.
+        void readFailed(QByteArray*,QString,QString);
 
     private:
 

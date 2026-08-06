@@ -33,6 +33,7 @@
 #include <QFileIconProvider>
 #include <QMessageBox>
 #include <QHeaderView>
+#include <QCloseEvent>   // DEC-garmin-024 - CloudServiceSyncDialog::closeEvent
 
 #include "../qzip/zipwriter.h"
 #include "../qzip/zipreader.h"
@@ -705,14 +706,64 @@ FolderNameDialog::FolderNameDialog(QWidget *parent) : QDialog(parent)
     connect(create, SIGNAL(clicked()), this, SLOT(accept()));
 }
 
+// DEC-garmin-026 (A3-R025-F1) - TWO-PHASE INIT.
+//
+// The constructor used to wrap its ENTIRE body in one BlockingCall and then run
+// three calls that each spin a nested QEventLoop - store->open()
+// (blockingRestore), the open-failure QMessageBox::exec(), and the tail
+// refreshClicked() (blockingList) - writing `this` members after each. Because
+// the dialog is parented to context->mainWindow (WA_DeleteOnClose), a close of
+// the athlete window mid-construction destroyed the half-built dialog under its
+// own constructor: a heap-use-after-free that NO gate could veto, since the
+// constructor frame is unreachable by DEC-024's done()/closeEvent() and its
+// BlockingCall could not carry a self-bail on a not-yet-constructed `this`.
+//
+// So the constructor now builds ONLY the widget shell - window title, minimum
+// size, the context/store refs and null member init - and runs no nested loop.
+// After it returns `this` is a fully-constructed object. Everything from
+// store->open() onward moved to start(), which runs on that complete object and
+// is therefore covered by DEC-024/025 like every other resuming frame.
 CloudServiceSyncDialog::CloudServiceSyncDialog(Context *context, CloudService *store)
-    : QDialog(context->mainWindow, Qt::Dialog), context(context), store(store), downloading(false), aborted(false)
+    : QDialog(context->mainWindow, Qt::Dialog), context(context), store(store),
+      downloading(false), sync(false), aborted(false),
+      blockingCallDepth(0), closeDeferred(false),
+      listindex(0),
+      tabs(nullptr), athleteCombo(nullptr), refreshButton(nullptr),
+      cancelButton(nullptr), downloadButton(nullptr), from(nullptr), to(nullptr),
+      selectAll(nullptr), rideListDown(nullptr), selectAllUp(nullptr),
+      rideListUp(nullptr), selectAllSync(nullptr), rideListSync(nullptr),
+      syncMode(nullptr), progressBar(nullptr), progressLabel(nullptr),
+      overwrite(nullptr)
 {
+    // SHELL ONLY - no nested event loop may run here (see the class comment
+    // above). start() does the rest.
     setWindowTitle(tr("Synchronise ") + store->uiName());
     setMinimumSize(850 *dpiXFactor,450 *dpiYFactor);
+}
+
+// DEC-garmin-026 (A3-R025-F1) - PHASE TWO. Carries what the constructor's body
+// did from store->open() onward. It is a RESUMING frame, so it takes the
+// DEC-025 part-3 discipline: a QPointer<CloudServiceSyncDialog> self held across
+// every nested-loop call it makes, every call-result landed in a LOCAL first
+// (LSN-037), and an immediate bail - touching no member - whenever `this` was
+// destroyed inside one of those loops. The single BlockingCall over the whole
+// body is what the constructor used to hold: while it is live the destructor
+// DECLINES to delete the store (DEC-025), so a parent teardown mid-open leaks
+// the store rather than freeing it under the call still executing on it.
+bool
+CloudServiceSyncDialog::start()
+{
+    QPointer<CloudServiceSyncDialog> self(this);
+    BlockingCall blocking(this);
 
     QStringList errors;
-    if (store->open(errors) == false) {
+    // store->open() is GarminConnect::blockingRestore - a real nested QEventLoop.
+    // Land the result in a LOCAL; if the owning window was torn down inside the
+    // loop, `this` is already gone and only the bool survives.
+    bool opened = store->open(errors);
+    if (self.isNull()) return false;
+
+    if (opened == false) {
         QWidget::hide(); // meh
 
         QMessageBox msgBox;
@@ -721,14 +772,18 @@ CloudServiceSyncDialog::CloudServiceSyncDialog(Context *context, CloudService *s
         msgBox.setDetailedText(errors.join("\n"));
 
         msgBox.setIcon(QMessageBox::Critical);
+        // QMessageBox::exec() is an UNBOUNDED nested loop - the same teardown can
+        // land here too.
         msgBox.exec();
+        if (self.isNull()) return false;
 
         QWidget::hide(); // don't show just yet...
         QApplication::processEvents();
+        if (self.isNull()) return false;
 
         QMetaObject::invokeMethod(this, "close", Qt::QueuedConnection);
 
-        return;
+        return false;
     }
 
     // setup tabs
@@ -747,6 +802,10 @@ CloudServiceSyncDialog::CloudServiceSyncDialog(Context *context, CloudService *s
     // notification when upload/download completes
     connect (store, SIGNAL(writeComplete(QString,QString)), this, SLOT(completedWrite(QString,QString)));
     connect (store, SIGNAL(readComplete(QByteArray*,QString,QString)), this, SLOT(completedRead(QByteArray*,QString,QString)));
+    // DEC-garmin-023 - the explicit failure channel. A service that emits it
+    // instead of readComplete is reporting a read that did not happen; without
+    // this connection such a service stalls the loop below forever.
+    connect (store, SIGNAL(readFailed(QByteArray*,QString,QString)), this, SLOT(failedRead(QByteArray*,QString,QString)));
 
     // combo box
     athleteCombo = new QComboBox(this);
@@ -928,7 +987,10 @@ CloudServiceSyncDialog::CloudServiceSyncDialog(Context *context, CloudService *s
                                   "before proceeding."));
         msgBox.setStandardButtons(QMessageBox::SaveAll | QMessageBox::Ignore | QMessageBox::Cancel);
         msgBox.setIcon(QMessageBox::Question);
+        // Another unbounded nested loop; `ret` is a LOCAL, so a teardown inside
+        // it costs only the bail below.
         int ret = msgBox.exec();
+        if (self.isNull()) return false;
         switch (ret) {
         case QMessageBox::SaveAll:
             context->notifyMetadataFlush();
@@ -946,7 +1008,7 @@ CloudServiceSyncDialog::CloudServiceSyncDialog(Context *context, CloudService *s
         case QMessageBox::Cancel:
             QApplication::processEvents();
             QMetaObject::invokeMethod(this, "close", Qt::QueuedConnection);
-            return;
+            return false;
         default:
             // should never be reached
             break;
@@ -954,14 +1016,142 @@ CloudServiceSyncDialog::CloudServiceSyncDialog(Context *context, CloudService *s
 
     }
 
-    // refresh anyway
+    // refresh anyway - refreshClicked() runs store->readdir (blockingList),
+    // another nested loop; it carries its own self-bail, and after it returns
+    // start() touches no member before returning.
     refreshClicked();
+    if (self.isNull()) return false;
 
+    return true;
+}
+
+// REQ-017 (b)/(e) - an owner destroys what it opens. This dialog open()ed the
+// store in its constructor, so it closes and deletes it here: without this the
+// store - and for GarminConnect the download worker thread plus the embedded
+// interpreter session it hosts - lived on to process exit, long after the dialog
+// the user closed. Callers hand the store over and must not delete it.
+CloudServiceSyncDialog::~CloudServiceSyncDialog()
+{
+    // no completion callbacks into a half-destroyed dialog while we close
+    if (store) store->disconnect(this);
+
+    // DEC-garmin-025 (A3-R017b-F1) - THE ONE CASE WHERE WE DECLINE TO DELETE.
+    //
+    // DEC-024 gates close INITIATION (done(), closeEvent()), and that covers
+    // every route the dialog takes to its own destruction. It cannot cover this
+    // one: when the parent QObject is destroyed - and this dialog is parented to
+    // context->mainWindow, which carries WA_DeleteOnClose - Qt destroys its
+    // children DIRECTLY from ~QObject. No close event, no done(), no virtual to
+    // override, nothing to veto. So a destructor CAN be reached with a store
+    // call still on the stack, and closing+deleting the store here would free the
+    // object readFile/readdir is executing on.
+    //
+    // The guard therefore sits on the unsafe OPERATION rather than on the routes
+    // to it, so any future direct `delete dialog` is covered by construction.
+    //
+    // The store is deliberately LEAKED in that case. That is precisely the
+    // pre-REQ-017 behaviour on this path (there was no destructor at all), and it
+    // is strictly better than a use-after-free. Nothing is deferred: at
+    // parent-teardown time the application is already tearing down, so there is
+    // no live event loop left for a reaper to run on. See TEST-072; TEST-073 is
+    // the control that the ordinary, idle case still closes and deletes.
+    if (blockingCallDepth > 0) return;
+
+    closeAndDeleteStore(store);
+}
+
+//
+// DEC-garmin-024 (A3-R017-F1) - THE REENTRANCY GUARD.
+//
+// Every store call that can run a nested QEventLoop is wrapped in one of these.
+// While at least one is on the stack this dialog must not be destroyed, because
+// destroying it deletes the very store that call is executing on (REQ-017 (e),
+// closeAndDeleteStore) and pulls the widgets syncNext/downloadNext are still
+// walking out from under them.
+//
+// It is RAII and not a set/clear pair on purpose: syncNext, downloadNext and
+// refreshClicked all have early returns, and a single path that left the depth
+// count raised would wedge the dialog permanently un-closable - a worse bug than
+// the one being fixed.
+//
+CloudServiceSyncDialog::BlockingCall::BlockingCall(CloudServiceSyncDialog *dialog) : dialog(dialog)
+{
+    dialog->blockingCallDepth++;
+}
+
+CloudServiceSyncDialog::BlockingCall::~BlockingCall()
+{
+    // DEC-garmin-025 - the dialog was destroyed while this frame was suspended
+    // in a nested event loop (parent teardown: Qt destroys child widgets from
+    // ~QObject, which no gate on close() or done() can intercept). There is no
+    // depth left to decrement and no close left to replay - both would be writes
+    // into freed memory, and this destructor is the FIRST thing that runs as the
+    // loop unwinds. Standing down here is what makes the leak in
+    // ~CloudServiceSyncDialog the only casualty.
+    if (dialog.isNull()) return;
+
+    // an OUTER blocking frame is still live - it is not safe yet
+    if (--dialog->blockingCallDepth > 0) return;
+
+    if (!dialog->closeDeferred) return;
+
+    // Replay the close the user asked for while we were busy. Cleared FIRST so
+    // that whatever close() runs cannot see a stale request and replay it twice.
+    dialog->closeDeferred = false;
+    dialog->close();
+}
+
+//
+// Called from every path that would otherwise destroy this dialog. Returns true
+// when the caller must stand down.
+//
+// It also sets `aborted`, which is what makes deferring honest rather than a
+// shrug: without it the user's Close/Cancel would appear to do nothing while the
+// sync carried on downloading the remaining activities behind a dialog they had
+// already dismissed. completedRead/failedRead consult it and stop the loop.
+//
+bool
+CloudServiceSyncDialog::deferCloseIfBusy()
+{
+    if (blockingCallDepth <= 0) return false;
+
+    closeDeferred = true;
+    aborted = true;
+    return true;
+}
+
+// The window X (and anything else that goes through QWidget::close()).
+void
+CloudServiceSyncDialog::closeEvent(QCloseEvent *e)
+{
+    if (deferCloseIfBusy()) {
+        e->ignore();
+        return;
+    }
+
+    QDialog::closeEvent(e);
+}
+
+// reject(), accept() and the Escape key all arrive here - and on Qt this is the
+// path that honours WA_DeleteOnClose regardless of whether closeEvent() accepted
+// the close, so this override, not closeEvent(), is what actually keeps Escape
+// and the Cancel button from freeing the store mid-call.
+void
+CloudServiceSyncDialog::done(int result)
+{
+    if (deferCloseIfBusy()) return;
+
+    QDialog::done(result);
 }
 
 void
 CloudServiceSyncDialog::cancelClicked()
 {
+    // DEC-garmin-024 - was an unconditional reject(), which did not consult
+    // `downloading` and so took the ordinary Cancel button down the same
+    // use-after-free as the window X.
+    if (deferCloseIfBusy()) return;
+
     reject();
 }
 
@@ -999,7 +1189,28 @@ CloudServiceSyncDialog::refreshClicked()
 
     // get a list of all rides in the home directory
     QStringList errors;
-    workouts = store->readdir(store->home(), errors, from->dateTime(), to->dateTime());
+    QList<CloudServiceEntry*> found;
+    {
+        // DEC-garmin-024 - GarminConnect::readdir runs a nested QEventLoop
+        // (blockingList), so the user can close this dialog from inside this
+        // call.
+        //
+        // DEC-garmin-025 - and on the parent-teardown route that close is a
+        // DESTRUCTION, so `this` may be gone when readdir returns. The result
+        // lands in a LOCAL rather than straight into the `workouts` member,
+        // because that assignment happens after readdir returns but before the
+        // guard below could ever run - it would be the use-after-free itself.
+        QPointer<CloudServiceSyncDialog> self(this);
+
+        BlockingCall blocking(this);
+        found = store->readdir(store->home(), errors, from->dateTime(), to->dateTime());
+
+        // The entries in `found` are owned by the store (newCloudServiceEntry
+        // keeps them in list_ and ~CloudService frees them), so dropping them
+        // here leaks nothing this dialog owns.
+        if (self.isNull()) return;
+    }
+    workouts = found;
 
     // clear current
     rideFiles.clear();
@@ -1397,7 +1608,32 @@ CloudServiceSyncDialog::syncNext()
                 rideListSync->setCurrentItem(curr);
 
                 QByteArray *data = new QByteArray;
-                store->readFile(data, curr->text(1), curr->text(8)); // filename
+                // DEC-garmin-025 - `this` can be DESTROYED inside the call below
+                // (parent teardown, which no close gate can intercept), so
+                // everything after it is a member access on a dead object.
+                QPointer<CloudServiceSyncDialog> self(this);
+                {
+                    // DEC-garmin-024 - GarminConnect::readFile runs a nested
+                    // QEventLoop (blockingDownload), so the user can close this
+                    // dialog from inside this call; doing so used to delete
+                    // `store` while it was executing.
+                    BlockingCall blocking(this);
+                    store->readFile(data, curr->text(1), curr->text(8)); // filename
+                }
+                // Nothing below this line may touch a member. The buffer and the
+                // ride list are the store's and Qt's respectively; our caller
+                // (downloadClicked / completedRead / failedRead) calls us last
+                // and ignores the result, so returning is the whole of standing
+                // down.
+                // UNTESTED-BY-DESIGN (A3-R025-F2 / B-R025-02): because no member
+                // access follows this blocking call today, this guard is dead
+                // code w.r.t. the current control flow — removing it leaves the
+                // suite green (proven by mutation). It is kept as defence-in-depth
+                // for whoever next adds a member access below. If you do, TEST-076
+                // becomes feasible AND required (make this guard load-bearing with
+                // a teardown-during-readFile ASan test).
+                if (self.isNull()) return true;
+
                 QApplication::processEvents();
 
             } else {
@@ -1479,7 +1715,22 @@ CloudServiceSyncDialog::downloadNext()
             progressLabel->setText(QString(tr("Downloaded %1 of %2")).arg(downloadcounter).arg(downloadtotal));
 
             QByteArray *data = new QByteArray; // gets deleted when read completes
-            store->readFile(data, curr->text(1), curr->text(6));
+            // DEC-garmin-025 - as in syncNext: the call below can destroy `this`
+            // outright when the owning window is torn down.
+            QPointer<CloudServiceSyncDialog> self(this);
+            {
+                // DEC-garmin-024 - as in syncNext: a nested QEventLoop inside
+                // readFile means a close can land mid-call.
+                BlockingCall blocking(this);
+                store->readFile(data, curr->text(1), curr->text(6));
+            }
+            // UNTESTED-BY-DESIGN (A3-R025-F2 / B-R025-02): as in syncNext, no
+            // member access follows this blocking call today, so this guard is
+            // dead code w.r.t. current control flow (mutation-proven) and is kept
+            // as defence-in-depth. Add any member touch below and TEST-076 becomes
+            // feasible AND required.
+            if (self.isNull()) return true;
+
             QApplication::processEvents();
             //delete data;
             return true;
@@ -1518,6 +1769,11 @@ CloudServiceSyncDialog::completedRead(QByteArray *data, QString name, QString /*
 
     // was abort pressed?
     if (aborted == true) {
+        // A3-R017-F3 - was allocated before calling readFile, and this early
+        // return used to drop it: aborting leaked the in-flight buffer, once per
+        // abort. failedRead frees it on every path; so does this now.
+        delete data;
+
         QTreeWidgetItem *curr = which->invisibleRootItem()->child(listindex-1);
         curr->setText(col, tr("Aborted"));
         return;
@@ -1548,6 +1804,53 @@ CloudServiceSyncDialog::completedRead(QByteArray *data, QString name, QString /*
     } else {
         curr->setText(col, errors.join(" "));
     }
+
+    QApplication::processEvents();
+
+    if (sync)
+        syncNext();
+    else
+        downloadNext();
+}
+
+//
+// DEC-garmin-023 - the failure counterpart of completedRead.
+//
+// A service that emits readFailed is saying "this read did not happen, and here
+// is why". That could not be said on readComplete: every service in this tree
+// passes tr("Completed.") as its message on SUCCESS, so a non-empty message is
+// not a failure and an empty payload is only a guess at one.
+//
+// The three things that matter, and why:
+//   * the buffer is FREED. syncNext/downloadNext allocate it with `new QByteArray`
+//     before every readFile and rely on the completion handler to release it, so
+//     a refusal that reported nothing leaked it once per attempt. It is freed
+//     FIRST here, before any early return, because that is the leak.
+//   * the reason is SHOWN, in the row that failed - otherwise the cell simply
+//     goes blank and the user is told nothing.
+//   * the loop ADVANCES. This is the actual defect: without it the dialog sits on
+//     "Downloading n of N" forever and no later activity is ever attempted.
+//
+void
+CloudServiceSyncDialog::failedRead(QByteArray *data, QString, QString reason)
+{
+    QTreeWidget *which = sync ? rideListSync : rideListDown;
+    int col = sync ? 7 : 5;
+
+    // was allocated before calling readFile, and nothing was staged into it
+    delete data;
+
+    // was abort pressed?
+    if (aborted == true) {
+        QTreeWidgetItem *curr = which->invisibleRootItem()->child(listindex-1);
+        curr->setText(col, tr("Aborted"));
+        return;
+    }
+
+    progressBar->setValue(++downloadcounter);
+
+    QTreeWidgetItem *curr = which->invisibleRootItem()->child(listindex-1);
+    curr->setText(col, reason);
 
     QApplication::processEvents();
 
@@ -1776,6 +2079,9 @@ CloudServiceAutoDownload::run()
 
             // we want to trap received files
             connect(service, SIGNAL(readComplete(QByteArray*,QString,QString)), this, SLOT(readComplete(QByteArray*,QString,QString)));
+            // DEC-garmin-023 - ...and reads that did not happen, so the buffer is
+            // freed and the reason is reported rather than both being dropped.
+            connect(service, SIGNAL(readFailed(QByteArray*,QString,QString)), this, SLOT(readFailed(QByteArray*,QString,QString)));
 
             // open connection
             QStringList errors;
@@ -1868,6 +2174,13 @@ CloudServiceAutoDownload::run()
         // we block on read completing
         QEventLoop loop;
         connect(download.provider, SIGNAL(readComplete(QByteArray*,QString,QString)), &loop, SLOT(quit()));
+        // DEC-garmin-023 - a read that FAILS releases this loop too. This is not
+        // optional: readFailed exists precisely so a service can refuse instead of
+        // going silent, and a refusal that did not quit here would simply move the
+        // hang from the sync dialog into auto-download, where every refused
+        // activity would burn the full 30s watchdog below before the next one is
+        // even attempted.
+        connect(download.provider, SIGNAL(readFailed(QByteArray*,QString,QString)), &loop, SLOT(quit()));
         QTimer::singleShot(30000,&loop, SLOT(quit())); // timeout after 30 seconds
 
         // preallocate
@@ -1905,6 +2218,41 @@ CloudServiceAutoDownload::run()
     exit(0);
 }
 
+//
+// DEC-garmin-023 - the failure counterpart of readComplete below.
+//
+// Auto-download has no UI to put a reason in, so it does what it already does
+// with everything else that goes wrong here: says so on the debug log. What it
+// must NOT do is drop the buffer on the floor - readComplete is the only thing
+// that frees the QByteArray run() preallocated, so a refusal that reached
+// neither handler leaked one buffer per activity.
+//
+// Exactly one of readComplete/readFailed runs for any given readFile call (the
+// emitting service's contract, see CloudService::notifyReadFailed), so `data` is
+// deleted exactly once. The "no download entry" branch mirrors readComplete's
+// and deliberately does NOT delete: a buffer we cannot match is not one we
+// allocated, and freeing it would be a great deal worse than leaking it.
+//
+void
+CloudServiceAutoDownload::readFailed(QByteArray*data,QString name,QString reason)
+{
+    // find the entry I belong too
+    bool found=false;
+    foreach(CloudServiceDownloadEntry p, downloadlist) {
+        if (p.data == data) found=true;
+    }
+
+    if (!found) {
+        qDebug() <<"Autodownload: failed read has no download entry";
+        return;
+    }
+
+    qDebug() <<"Autodownload: could not download"<<name<<":"<<reason;
+
+    // free up - nothing was staged in it
+    delete data;
+}
+
 void
 CloudServiceAutoDownload::readComplete(QByteArray*data,QString name,QString)
 {
@@ -1935,7 +2283,18 @@ CloudServiceAutoDownload::readComplete(QByteArray*data,QString name,QString)
     delete data;
 
     // can't process the content received.
-    if (ride == NULL) return;
+    //
+    // B-R018-02(iii): `errors` used to be collected here and then thrown away
+    // with the frame, so an activity that downloaded fine but was REJECTED by
+    // uncompressRide (wrong compression, unknown extension, unparseable bytes)
+    // vanished without trace - no ride, no message, nothing in the log. That is
+    // exactly how the REQ-018 defect stayed invisible. Say what happened; this is
+    // the only channel auto-download has.
+    if (ride == NULL) {
+        qDebug() <<"Autodownload: could not process"<<name<<":"
+                 <<(errors.isEmpty() ? QString("no ride was produced") : errors.join(" "));
+        return;
+    }
 
     // lets save this one away as json with the right filename
     QDateTime ridedatetime = ride->startTime();
