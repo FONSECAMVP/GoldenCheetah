@@ -13,10 +13,15 @@ cmake_minimum_required(VERSION 3.16)
 # Project information
 project(GoldenCheetah VERSION 3.7 LANGUAGES CXX C)
 
-# Set C++ standard
+# Set C++ standard.
+# Extensions stay ON to match the qmake build (CONFIG += c++17 yields -std=gnu++17).
+# Strict -std=c++17 hides __int128, so Qt does not define QT_SUPPORTS_INT128 and
+# QBluetoothUuid then declares a toUInt128(QSysInfo::Endian) overload that the
+# shipped Qt library never compiled — Train/KurtInRide.cpp fails to link against a
+# stock Qt 6.8. Diverging from the reference build's dialect is not free.
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_CXX_EXTENSIONS ON)
 
 # Set C standard
 set(CMAKE_C_STANDARD 11)
@@ -68,6 +73,7 @@ find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS
     Charts
     OpenGL
     PrintSupport
+    LinguistTools
 )
 
 # Qt6-specific modules
@@ -202,7 +208,6 @@ set(GC_SOURCES_CHARTS
     Charts/CPPlot.cpp
     Charts/CpPlotCurve.cpp
     Charts/CriticalPowerWindow.cpp
-    Charts/DiaryWindow.cpp
     Charts/ExhaustionDialog.cpp
     Charts/GcOverlayWidget.cpp
     Charts/GcPane.cpp
@@ -238,6 +243,8 @@ set(GC_SOURCES_CHARTS
     Charts/ReferenceLineDialog.cpp
     Charts/RideEditor.cpp
     Charts/RideMapWindow.cpp
+    Charts/CalendarWindow.cpp
+    Charts/AgendaWindow.cpp
     # Charts/RouteWindow.cpp  # Disabled - has refactoring issues (missing getRides(), protected routes, etc.)
     Charts/ScatterPlot.cpp
     Charts/ScatterWindow.cpp
@@ -264,7 +271,6 @@ set(GC_HEADERS_CHARTS
     Charts/CPPlot.h
     Charts/CriticalPowerWindow.h
     Charts/DaysScaleDraw.h
-    Charts/DiaryWindow.h
     Charts/ExhaustionDialog.h
     Charts/GcOverlayWidget.h
     Charts/GcPane.h
@@ -327,7 +333,6 @@ set(GC_SOURCES_CLOUD
     Cloud/RideWithGPS.cpp
     Cloud/TrainingsTageBuch.cpp
     Cloud/Selfloops.cpp
-    Cloud/Velohero.cpp
     Cloud/SportsPlusHealth.cpp
     Cloud/AddCloudWizard.cpp
     Cloud/Withings.cpp
@@ -353,7 +358,6 @@ set(GC_HEADERS_CLOUD
     Cloud/RideWithGPS.h
     Cloud/TrainingsTageBuch.h
     Cloud/Selfloops.h
-    Cloud/Velohero.h
     Cloud/SportsPlusHealth.h
     Cloud/AddCloudWizard.h
     Cloud/Withings.h
@@ -578,7 +582,6 @@ set(GC_SOURCES_GUI
     Gui/CompareInterval.cpp
     Gui/ComparePane.cpp
     Gui/ConfigDialog.cpp
-    Gui/DiarySidebar.cpp
     Gui/DragBar.cpp
     Gui/EstimateCPDialog.cpp
     Gui/GcCrashDialog.cpp
@@ -627,6 +630,14 @@ set(GC_SOURCES_GUI
     Gui/ActionButtonBox.cpp
     Gui/MetricOverrideDialog.cpp
     Gui/QTFullScreen.cpp
+    Gui/MiniCalendar.cpp
+    Gui/IconManager.cpp
+    Gui/FilterSimilarDialog.cpp
+    Gui/Calendar.cpp
+    Gui/CalendarData.cpp
+    Gui/CalendarItemDelegates.cpp
+    Gui/Agenda.cpp
+    Gui/RepeatScheduleWizard.cpp
 )
 
 set(GC_HEADERS_GUI
@@ -640,7 +651,6 @@ set(GC_HEADERS_GUI
     Gui/CompareInterval.h
     Gui/ComparePane.h
     Gui/ConfigDialog.h
-    Gui/DiarySidebar.h
     Gui/DragBar.h
     Gui/EstimateCPDialog.h
     Gui/GcCrashDialog.h
@@ -1095,14 +1105,12 @@ endif()
 if(GC_HAVE_ICAL)
     set(GC_SOURCES_ICAL
         Core/ICalendar.cpp
-        Charts/DiaryWindow.cpp
         Cloud/CalDAV.cpp
         Cloud/CalDAVCloud.cpp
     )
     
     set(GC_HEADERS_ICAL
         Core/ICalendar.h
-        Charts/DiaryWindow.h
         Cloud/CalDAV.h
         Cloud/CalDAVCloud.h
     )
@@ -1352,6 +1360,19 @@ set(GC_HEADERS
     ${GC_HEADERS_USBXPRESS}
 )
 
+# Translations — port of the src.pro TSQM/lrelease rule (src.pro:185-196).
+# Resources/application.qrc embeds translations/*.qm by a path relative to the .qrc,
+# so the .qm must be generated INTO the source translations dir (qmake's TS_DIR) and
+# must exist before AUTORCC reads the .qrc. The .qm are gitignored build artifacts
+# (src/.gitignore), so without this rule a clean checkout has nothing to embed and
+# the build dies in qrc_application.cpp — it only ever worked on machines where an
+# earlier qmake build had left the .qm behind.
+file(GLOB GC_TS_FILES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Resources/translations/*.ts")
+set_source_files_properties(${GC_TS_FILES} PROPERTIES
+    OUTPUT_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/Resources/translations")
+qt_add_translation(GC_QM_FILES ${GC_TS_FILES})
+
 # Create executable
 add_executable(GoldenCheetah
     ${GC_SOURCES}
@@ -1359,6 +1380,10 @@ add_executable(GoldenCheetah
     ${GC_RC_FILE}
     Resources/application.qrc
 )
+
+# AUTORCC must wait for lrelease; a plain target dependency is not enough because
+# the autogen step runs ahead of the target's own compile rules.
+set_property(TARGET GoldenCheetah APPEND PROPERTY AUTOGEN_TARGET_DEPENDS ${GC_QM_FILES})
 
 # Set executable properties
 set_target_properties(GoldenCheetah PROPERTIES

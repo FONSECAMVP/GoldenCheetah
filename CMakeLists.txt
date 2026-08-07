@@ -2,10 +2,13 @@ cmake_minimum_required(VERSION 3.16)
 
 project(GoldenCheetah VERSION 3.7 LANGUAGES CXX C)
 
-# Set C++ standard
+# Set C++ standard.
+# Extensions ON to match the qmake reference build (-std=gnu++17); see the note in
+# src/CMakeLists.txt for the QT_SUPPORTS_INT128 / QBluetoothUuid link failure that
+# strict -std=c++17 causes.
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_CXX_EXTENSIONS ON)
 
 # Set C standard for C files
 set(CMAKE_C_STANDARD 11)
