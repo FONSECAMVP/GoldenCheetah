@@ -835,3 +835,29 @@ grep -n 'CloudServiceSyncDialog' src/Gui/MainWindow.cpp src/Cloud/AddCloudWizard
 ### Alignment probe
 grep -n 'new CloudServiceSyncDialog\|WA_DeleteOnClose\|->start()\|->open()\|->exec()' src/Gui/MainWindow.cpp   # expect heap+WA_DeleteOnClose+open(), NO stack `sync`, NO exec()
 grep -n 'CloudServiceSyncDialog sync' src/Gui/MainWindow.cpp                                                    # expect GONE (no stack construction)
+
+## DEC-028 — Clean-checkout build repair: commit the missing wiring rather than guard around it (ORCH-001)
+- Status: accepted (B — commit `unittests/Core/coach/CMakeLists.txt` + `stubs/` so committed CMake refers only to committed files)
+- Reversibility: high (build-definition only; every part is a one-line revert, no product code changed)
+- Decided / last-reviewed: 2026-08-07
+- Serves: ORCH-001 (user dispositioned "fix it"); unblocks the mandated clean-worktree configure+build gate that has never once run in this project
+- Dependents: commit `427da745b`; ORCH-005/006/007 (the three further causes the build gate exposed); the branch-merge gate for `garmin/req017-lifecycle-uaf`
+
+**Problem.** ORCH-001 recorded that `master` does not configure from a clean checkout, from two causes. The decision point was cause 2: `unittests/CMakeLists.txt:1` unconditionally `add_subdirectory(Core/coach)` while `unittests/Core/coach/CMakeLists.txt` and its `stubs/` were never committed — even though `testCoachTools.cpp` and `coach.pro` WERE. The repair lands in files reserved for the pre-session Coach work's owner, so the scope was the user's call.
+
+**Options considered (scored R/S/M/BP 1-5).**
+- **B — CHOSEN — commit the missing wiring** (`CMakeLists.txt` + 5 stub headers, 6 small files). R4 S4 M3 BP5. Root-cause fix: committed CMake then references only committed files, and the ALREADY-TRACKED `testCoachTools` actually builds. Every `src/Coach/*` source the wiring consumes (`GCToolExecutor.cpp`, `ToolConfirmCard.cpp`, `PlanPreviewCard.cpp`, `LLMService.h`) was already tracked, so nothing of the Coach feature itself is adopted. **Cost:** 6 files of the owner's WIP enter master, and the stubs may churn under their refactor.
+- **A — guard `add_subdirectory` with an `EXISTS` check.** R4 S3 M4 BP2. **Rejected:** one line and zero ownership entanglement, but it leaves a TRACKED test permanently unbuilt from clean, silently — the precise "green but dead" class that produced REQ-018 and ORCH-001 itself. It masks the defect instead of fixing it, and would hide the NEXT forgotten CMakeLists.
+- **C — both (commit AND guard).** R5 S4 M3 BP4. **Rejected:** the guard is cheap insurance but carries A's masking cost for future recurrences; with the files committed it protects only against someone deleting them, which git already reports.
+
+**Cascade.** `unittests/Core/coach/{CMakeLists.txt,stubs/*.h}` become tracked (6 files) — WIKI MAP `unittests/` line updated. `unittests/CMakeLists.txt` is UNCHANGED (no guard added). Cause 1 (8 phantom refs) had no trade space and was fixed mechanically. **The repair then TRIPLED in scope**, because running the actual build exposed three further pre-existing causes invisible to configure: ORCH-005 (translations/lrelease never ported to CMake), ORCH-006 (11 tracked sources absent from the CMake lists, so HEAD could not link), ORCH-007 (`CMAKE_CXX_EXTENSIONS OFF` diverging the dialect from qmake and breaking the `QBluetoothUuid` link). All fixed in the same commit; see their findings rows.
+
+**Evidence bar.** Verified against a clean extract of the STAGED tree (`git archive` of the index — never the working tree, which is dirty with unrelated work): configure+generate succeed, lrelease emits all 13 `.qm`, the full build links `GoldenCheetah` (27.9 MB) plus 26 test executables including `testCoachTools`, and `ctest` is **26/26**. The committed tree hash was confirmed byte-identical to the verified tree (`d8dfe490…`), so there is no gap between the evidence and the commit. Two-directional check on ORCH-006/007: with cause 5 alone reverted the link yields EXACTLY ONE undefined reference, at `KurtInRide.cpp`.
+
+**Accepted residuals.** (i) `CMAKE_CXX_EXTENSIONS ON` now permits GNU extensions project-wide — this CONVERGES on the qmake reference build rather than diverging from it, but it does relax strict-ISO enforcement. (ii) The uncommitted `src/Train/KurtInRide.cpp` workaround in the working tree is now REDUNDANT and should be dropped by its owner rather than committed — it hand-rewrites byte-order handling to work around what ORCH-007 shows is a build-configuration defect. (iii) The `.qm` are generated into the SOURCE translations dir (matching qmake's `TS_DIR`) because `application.qrc` addresses them relative to the `.qrc`; they stay gitignored, so this does not dirty `git status`. (iv) All other pre-session Coach/libusb/Calendar work in both CMakeLists remains uncommitted and untouched.
+
+### Alignment probe
+grep -n 'DiaryWindow\|Velohero\|DiarySidebar' src/CMakeLists.txt        # expect NOTHING (8 phantom refs gone)
+grep -n 'CMAKE_CXX_EXTENSIONS' CMakeLists.txt src/CMakeLists.txt        # expect ON in both
+grep -n 'qt_add_translation\|LinguistTools\|AUTOGEN_TARGET_DEPENDS' src/CMakeLists.txt   # expect all three present
+git ls-files unittests/Core/coach                                        # expect CMakeLists.txt + stubs/ + coach.pro + testCoachTools.cpp

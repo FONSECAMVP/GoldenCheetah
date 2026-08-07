@@ -5,17 +5,39 @@
 
 TEAM: on (5 agents: scout, builder, adversary, validator, librarian)
 RIGOR: FULL (Phase 0 backfill 2026-07-11; project ran A0–A5 + STRIDE + per-slice CLV = FULL de facto)
+BUDGETS: WIKI 10.8k chars/cap-ok (compacted 2026-08-05 from 18.3k) · LSN active:42 guards:28 mech:2 ·
+  decisions.md 107k + findings.md 109k + lessons.md 98k = COLD entry files, drilled by id, not hot reads
+  (the hot reads are their index heads). No cap breach; librarian Job-3 compaction NOT due.
+COUNTS: REQ 20(+NF) · DEC 28 · DES 14(+2) · TEST 78 · VAL 17 · LSN 44 · ORCH-findings 7   (registries → WIKI.md; per-id status → traceability.md)
 
 PHASE: Phase 2.2 — Garmin Connect integration. Per-REQ/DES/TEST/VAL status → traceability.md.
 
-CURRENT: **REQ-017 lifecycle changeset COMMITTED `ae5a7a8ab` 2026-08-07** on branch `garmin/req017-lifecycle-uaf`
+CURRENT: **ORCH-001 FIXED + COMMITTED `427da745b` 2026-08-07 (DEC-028) — the clean-checkout gate now RUNS, for the
+first time in this project.** `git worktree`/`git archive` extract of the staged tree → configure+generate OK, lrelease
+emits all 13 `.qm`, `GoldenCheetah` (27.9 MB) + 26 test executables link, **ctest 26/26**. Committed tree hash is
+byte-identical to the verified tree (`d8dfe490…`), so evidence and commit cannot have drifted. **ORCH-001 turned out to
+be 5 pre-existing causes, not the 2 on record** — the extra three (ORCH-005 translations/lrelease never ported from
+qmake; ORCH-006 eleven TRACKED sources absent from the CMake lists so HEAD could not link; ORCH-007
+`CMAKE_CXX_EXTENSIONS OFF` diverging the dialect from qmake and breaking the `QBluetoothUuid` link) were **invisible to
+configure** and only a real build exposed them → LSN-043. 8 files, +233/-12, hunk-split out of two CMakeLists dirty with
+unrelated Coach/libusb/Calendar work (the root hunk split BY HAND — git had merged the dialect change with an unrelated
+`cmake_minimum_required` bump). **Deliberately NOT adopted:** the uncommitted `src/Train/KurtInRide.cpp` byte-order
+rewrite — ORCH-007 shows that hazard is a build-configuration defect, so that workaround is now redundant and is its
+owner's to drop. All other pre-session WIP untouched (53 dirty entries preserved through the pre-commit stash cycle).
+LSN-044 captured (ORCH-002/003/004 were GUESSED for new findings and collided with three existing ones; the ORCH series
+is now registered in WIKI REGISTRIES, next:ORCH-008; commit message amended, tree unchanged). LSN-001 scored its first
+SAVE (the hook denied a `cp` clobber of `unittests/CMakeLists.txt`; honoured, not routed around).
+Prior (superseded): **REQ-017 lifecycle changeset COMMITTED `ae5a7a8ab` 2026-08-07** on branch `garmin/req017-lifecycle-uaf`
 (feat(garmin), 19 files, +5221/-33) — the epoch bind + the CloudServiceSyncDialog UAF-class fix (DEC-021..027),
 path-scoped to Garmin. Staged as 17 whole Garmin files + 2 hunk-split patches (MainWindow.cpp uploadCloud+syncCloud
 hunks, src/CMakeLists.txt the GarminAccountEpoch source line); the Coach hunks in those two files were LEFT
 uncommitted (partial-stage verified — committed MainWindow.cpp carries zero Coach refs). Pre-commit clang-format
 reformatted 6 Garmin files (cosmetic line-joins only, LSN-007 class) → re-staged, retry passed every hook. ORCH-001
-caveat stated in the commit message (branch cannot clean-build-verify). **This docs-record commit (d) follows**,
-recording that closure. F1/F2 became follow-up REQ-019 (Upload UAF, HIGH) + REQ-020 (OAuth-wizard UAF) — lifecycle
+caveat stated in the commit message (branch cannot clean-build-verify). **Docs-record commit (d) DONE `3651de222`
+2026-08-07** (9 governance files: decisions/design/findings/prd/traceability + STATE/WIKI/lessons/architecture).
+**REQ-017 is fully closed — feature + ledger both committed.** Branch `garmin/req017-lifecycle-uaf` is now
+**2 ahead / 0 behind master and NOT merged**; working tree carries ZERO Garmin files (only the pre-session
+Coach/Gui/CMake/vcpkg/skill dirt, left for its owners). F1/F2 became follow-up REQ-019 (Upload UAF, HIGH) + REQ-020 (OAuth-wizard UAF) — lifecycle
 status in traceability.md; F3 tracked. Pre-session skill/tooling churn (c) LEFT to the user. LEAVE uncommitted: Coach
 WIP, ORCH-001 CMake cleanup, unrelated pre-session dirt. NOTE: the scratchpad `COMMIT_PLAN.md` + patches this cursor
 previously named were a prior session's and did NOT survive into this one — the plan was reconstructed from git + the
@@ -275,7 +297,24 @@ Garmin only; final CLV VAL-015 PASS; pre-commit clang-format/ruff/mypy passed af
 + 2 files reformatted, re-verified per LSN-007). Prior: **REQ-007 DONE + COMMITTED `d312886a6`** (docs-record
 `f637c138b`).
 
-NEXT_GATE: **DEC-026 (the CONSTRUCTOR UAF route, A3-R025-F1) must be decided → built → A3-cleared, THEN the commits.**
+NEXT_GATE: **AWAITING USER — REQ-017 closed, ORCH-001 fixed and clean-build-verified. Two open calls: (i) land the
+branch on master, (ii) start the REQ-019/020 follow-up wave.**
+1. **Branch disposition — the blocker is GONE.** `garmin/req017-lifecycle-uaf` = 3 ahead / 0 behind `master`,
+   unmerged, fast-forward available. **ORCH-001 is FIXED (`427da745b`), so branch HEAD now configures, builds and
+   passes 26/26 from a clean checkout — the gate that blocked verified merging for three commits.** The two prior
+   Garmin commits carry an ORCH-001 caveat in their messages that is now historical, not live. Recommend merging.
+   Note for whoever reviews: the merge carries 6 files of the Coach owner's test wiring (DEC-028 option B) and a
+   project-wide `CMAKE_CXX_EXTENSIONS ON`.
+2. **The follow-up wave — REQ-019 (Upload UAF, HIGH, live for every Upload service) + REQ-020 (OAuth-wizard UAF).**
+   Both are prd.md STUBS with trace rows, not started; no DEC yet (candidate: reuse the DEC-024..027 recipe —
+   two-phase init + heap/WA_DeleteOnClose + QPointer self-bails — which is now a proven pattern, so this may be a
+   cheap DEC rather than a fresh three-way research). REQ-019 needs an ASan test target; none exists for Upload today.
+   These are the ONLY BLOCKING items and they block only the "UAF class closed codebase-wide" claim.
+3. **Cheap, available any time (open, non-blocking):** A3-R012-F3/F6/F9, B-R017-03/04/12, B-R018-01/02/03/04,
+   B-R023-01, A3-R017-F2/F4, VAL-016's two coverage WARNs, DEC-024's accepted residuals.
+4. **Not the agent's call:** the pre-session Coach/skill/tooling dirt (c) stays with the user.
+--- superseded (kept for provenance) ---
+NEXT_GATE-PRIOR: **DEC-026 (the CONSTRUCTOR UAF route, A3-R025-F1) must be decided → built → A3-cleared, THEN the commits.**
 -3. **SCOPE RESOLVED 2026-08-07 (user: ship sync now + new REQs).** F1→REQ-019 (Upload UAF, HIGH, prd.md stub + trace
     row), F2→REQ-020 (OAuth-wizard UAF), F3 tracked (dormant). REQ registry bumped next:garmin-021. These are a
     FOLLOW-UP wave, NOT part of the sync commit. **The DEC-024..027 sync changeset is now clear to commit.**

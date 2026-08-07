@@ -1,6 +1,6 @@
 # Lessons Memory — GoldenCheetah            (index first, cold entries below)
 
-LSN-001 | op:create-file type:duplication            | guard    | recur:n/a saves:0 miss:0 | check WIKI MAP before mkdir/touch/write — enforced by mechanism: .claude/hooks/anti_duplication_guard.py
+LSN-001 | op:create-file type:duplication            | guard    | recur:n/a saves:1 miss:0 | check WIKI MAP before mkdir/touch/write — enforced by mechanism: .claude/hooks/anti_duplication_guard.py
 LSN-002 | op:id-alloc type:cross-ledger-collision     | guard    | recur:2  saves:0 miss:0  | never merge ID ranges across ledgers; qualify with ledger prefix (garmin:/coach:)
 LSN-003 | op:prd type:underspecified-nfr              | guard    | recur:11 saves:0 miss:0  | every NF-* requirement needs a quantified acceptance value before it enters an A1 cycle
 LSN-004 | op:design type:missing-seam                 | guard    | recur:1  saves:0 miss:0  | any call into a mutable third-party library needs its adapter/interface seam defined before first implementation, not retrofitted after review
@@ -41,13 +41,19 @@ LSN-041 | op:design type:fix-scoped-to-one-instance-of-a-class-wide-bug | guard 
 LSN-042 | op:test type:dormant-hazard-behind-unset-flag-is-still-a-defect | advisory scope:portable | recur:1 saves:0 miss:0 | a memory-safety (or security) hazard that is unreachable today ONLY because a UI flag / config setting / feature toggle is currently unset is a DEFECT TO RECORD, not a non-finding — the thing making it "safe" is unrelated to the bug and silently makes it live the moment any future code sets that flag. Record it (tracked/dormant) with the exact condition that would arm it. (2026-08-06, A3-R027-F3: `AddSettings::browseFolder`'s stack-dialog-under-self-deleting-ancestor UAF is inert only because no `CloudService` subclass sets `CloudService::Folder` in its settings map; a Dropbox-style folder service added tomorrow arms it. Sibling: [[LSN-041]].)
 LSN-040 | op:design type:qt-parent-deletes-stack-child | guard scope:portable | recur:1 saves:0 miss:1 | Qt's `QObjectPrivate::deleteChildren()` calls `delete` on EVERY child of a destroyed parent UNCONDITIONALLY — independent of the child's `WA_DeleteOnClose`, storage class, or any `self.isNull()`/`QPointer` guard INSIDE the child (the guard sees the death, cannot prevent it). So a QObject in AUTOMATIC (stack) storage parented to a widget that can be independently destroyed (a `WA_DeleteOnClose` window, a `deleteLater` target, or any to-be-deleted parent) is a bad-free (`free() on non-malloc'd`) PLUS a double-destruction when the C++ scope unwinds. Check: for every `Widget foo(parent, ...)` in automatic storage OR any `new`-then-manually-`delete`d QObject, confirm `parent` cannot be destroyed within the object's lifetime; if it can, heap-allocate + `WA_DeleteOnClose` (let Qt own it) or parent to something that outlives the scope. Corollary (test-comment-trust): a safety claim embedded in a comment — "X has no attribute Y and so was never affected" — must be checked against the actual Qt mechanism before it justifies SKIPPING test coverage; here that belief left the second production caller untested for the very bug class its DEC chain exists to close. (2026-08-06, A3-R026-F1: `MainWindow::syncCloud`'s STACK `CloudServiceSyncDialog` parented to the `WA_DeleteOnClose` MainWindow — a fifth route DEC-024/025/026 never covered; the prior [[A3-R017-F1]] disposition wrongly declared it "UNAFFECTED (no WA_DeleteOnClose)". Adversary proved the mechanism by a standalone ASan repro. Sibling: [[LSN-037]] enumerate every freed object/frame — this is the storage-class axis of the same family.)
 LSN-039 | op:verify type:mutation-survives-because-branch-unreachable | guard scope:portable | recur:1 saves:0 miss:1 | a guard/line whose mutation SURVIVES the suite is not proven dead or wrong — it may be UNREACHABLE by the fixture. Before concluding "dead code" (remove/accept) OR "fix covered", confirm the test can structurally REACH the mutated branch: scripted failure modes for error paths, non-empty triggering state for count-gated branches, and the hazard armed at EACH distinct nested-loop/suspension point (not just the first). Mutation testing answers "does the suite catch this?", NOT "is this code needed?" — a green mutation over an unreachable branch is a COVERAGE gap masquerading as a dead-code finding. Check: for each surviving guard mutation, name the fixture input that reaches its branch; if none exists, the finding is "untested", not "dead". Contrast a genuinely-dead guard ([[A3-R025-F2]]: no member access follows) with a reachable-but-unexercised one. (2026-08-06, A3-R026-F2: 4 of 5 `start()` self-bails survived neutering — but because `BlockingStore::open()` had no failure mode, `rideCache` was kept empty, and the teardown was armed only in `open()`; three structurally-distinct unreachable branches, not dead code. Sibling: [[LSN-032]] snapshot-mutate discipline, [[LSN-013]] one case per uncovered class.)
+LSN-043 | op:verify type:configure-is-not-build | guard scope:portable | recur:1 saves:0 miss:1 | a build-definition fix is NOT verified until configure AND link AND the test suite have run from a CLEAN extract — configure-only passed while 3 of ORCH-001's 5 causes were still fatal; missing-source and dialect defects surface at LINK, generated-asset defects at BUILD, and neither is visible at configure
+LSN-044 | op:id-alloc type:unregistered-id-series-invites-guessing | guard scope:portable | recur:1 saves:0 miss:1 | never cite or allocate an id from a series that WIKI REGISTRIES does not list — if the series is absent, register it FIRST and take `next` from there; the ORCH-nnn series was unregistered, so ORCH-002/003/004 were guessed for new findings and collided with three existing ones
 LSN-038 | op:verify type:snapshot-suffix-unrecognized-by-guard | advisory scope:portable | recur:1 saves:0 miss:0 | an LSN-032 verification snapshot MUST use a suffix the anti-dup guard recognizes as a backup — `_BACKUP_SUFFIXES = (.orig, .bak, .backup)` — or the guard will (CORRECTLY) deny the `cp <snap> <original>` restore as a clobber, indistinguishable from a genuine overwrite. Use `cp file file.orig` (the canonical Verification-Gate form), not an ad-hoc name like `file.ORIG_ORCH`. This is NOT an [[LSN-036]] false-positive — the guard is working as designed (guard_selftest case 39 proves a proper `.orig` cross-dir scratchpad restore passes); the fault is the operator's suffix choice. If a restore is denied, FIRST check the snapshot's suffix against `_BACKUP_SUFFIXES` before suspecting the mechanism; and never route around the denial (a targeted Edit reversing your own known mutation, proven byte-identical by `cmp`, is a legitimate content-edit, not a bypass). (2026-08-06, DEC-026 verification: orchestrator snapshotted `CloudService.cpp.ORIG_ORCH`, the `cp` restore was denied, briefly misread as an LSN-036 recurrence; the bundled self-test passed 46/46 incl. the scratchpad case, isolating the cause to the non-canonical suffix. Sibling: [[LSN-032]] the snapshot mandate, [[LSN-036]] the real false-positive class this was mistaken for.)
 
 ---
 
 ## LSN-001
 sig:    create-file / duplication / any-path
-level:  guard      since:P0(bootstrap)   recur:n/a   saves:0   miss:0
+level:  guard      since:P0(bootstrap)   recur:n/a   saves:1   miss:0
+saves:  2026-08-07 (ORCH-001 repair) — the hook DENIED `cp /tmp/hdr.txt unittests/CMakeLists.txt`,
+        a clobber-shaped shell idiom used where an in-place edit was intended, on an existing tracked
+        file. Genuine catch, not an LSN-036 false positive: the correct tool was Edit, and the denial
+        was honoured rather than routed around.
 tags:   op:create-file, type:duplication
 trigger:about to create/overwrite a file or directory (Write, Edit, MultiEdit, Bash)
 mistake:(seeded, not observed in this project) re-creating a file/folder that already
@@ -747,3 +753,43 @@ history:2026-08-02: captured at guard, first occurrence. miss:1 — the gap exis
         until the REQ-012 audit two weeks later. Siblings: [[LSN-024]] and [[LSN-018]] (unit-green != integrated
         — this is the ledger-layer version: code-exists != criterion-satisfied). See also [[LSN-022]]
         (green-but-vacuous assertions) and [[LSN-014]] (one fact, one home).
+
+## LSN-043
+sig:    verify / configure-is-not-build / build-definition-change
+level:  guard      since:2026-08-07   recur:1   saves:0   miss:1
+tags:   op:verify, op:commit, type:incomplete-gate
+trigger:about to accept ANY build-definition change (CMakeLists, qrc, source lists, toolchain flags)
+rule:   run the gate to completion from a CLEAN extract — configure AND generate AND full build AND
+        the test suite. "Configure succeeds" is NOT evidence a build works.
+check:  did the verification actually LINK the product binary and run ctest, or did it stop at
+        "Configuring done"? If it stopped, the gate has not run.
+why:    ORCH-001 was recorded as two causes, both configure-stage. Fixing them made configure pass —
+        and the build still died three more times: generated translations never ported from qmake
+        (ORCH-005, fails at BUILD), 11 tracked sources absent from the CMake lists (ORCH-006, fails
+        at LINK), and a C++ dialect divergence breaking a Qt overload (ORCH-007, fails at LINK).
+        Each failure stage is invisible to the stage before it. Had the repair stopped at "configure
+        works", the branch would have merged with a still-unbuildable master and the clean-checkout
+        gate would have reported success.
+history:2026-08-07: captured at guard. miss:1 — the original ORCH-001 investigation (2026-08-05) used a
+        throwaway worktree but only configured it, so it recorded 2 of 5 causes and understated the
+        defect for two days. Siblings: [[LSN-018]] and [[LSN-024]] (unit-green != integrated) — this is
+        the build-layer version: configure-green != builds. See also [[LSN-022]].
+
+## LSN-044
+sig:    id-alloc / unregistered-series / any-id
+level:  guard      since:2026-08-07   recur:1   saves:0   miss:1
+tags:   op:id-alloc, type:collision
+trigger:about to write ANY id (REQ/DEC/DES/TEST/VAL/LSN/ORCH/finding) into a ledger or commit message
+rule:   take every id from WIKI REGISTRIES. If the series is not listed there, REGISTER IT FIRST
+        (range + next), then allocate. Never infer "the next one" from memory or from context.
+check:  does WIKI REGISTRIES name this series and its `next`? If not, stop and add it.
+why:    The ORCH-nnn finding series existed in findings.md but was never listed in REGISTRIES, so
+        there was no `next` to take. Writing up ORCH-001's repair I guessed ORCH-002/003/004 for three
+        NEW findings — all three were already taken by unrelated 2026-08-05 skill-reinstall findings.
+        The collision reached a commit message before being caught, needing an amend. An id series
+        that lives outside the registry will be guessed sooner or later; registering it is the fix.
+history:2026-08-07: captured at guard; ORCH series registered in WIKI REGISTRIES the same action
+        (next:ORCH-008), new findings re-allocated ORCH-005/006/007, commit message amended (tree
+        unchanged, so the build evidence still held). miss:1. Sibling: [[LSN-002]] (cross-ledger id
+        collision) — same family, different cause: LSN-002 is merging registered ranges, this is
+        allocating from an UNregistered one. See also [[LSN-014]] (one fact, one home).

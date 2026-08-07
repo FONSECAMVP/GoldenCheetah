@@ -26,7 +26,7 @@ doc/                        legacy doc archive: collaboration, contrib, design, 
 docs/                       BUILD_NOTES.md, COACH_DEV_GUIDE.md, COACH_IMPLEMENTATION.md, COACH_USER_GUIDE.md, MODERNIZATION.md, project_analysis.md, WORKFLOW_GUIDE.md (workflow operating manual), QGDW_SKILL_RETROSPECTIVE.md (evidence-based review OF the workflow skill itself + a reusable skill-audit prompt)
 qwt/                        bundled Qwt plotting library (vendored, not walked further)
 test/                       sample ride/workout/measurement fixture files (aerolab, bodymeasures, charts, coretemp, hrvmeasures, rides, roundtrip, rowing, runs, swims, workouts) — data, not automated test code
-unittests/                  QTest units: Core/{coach,garminconnect,season*,signalSafety,splineCrash,units,utils}, Gui/calendarData
+unittests/                  QTest units: Core/{coach,garminconnect,season*,signalSafety,splineCrash,units,utils}, Gui/calendarData. Core/coach/ carries CMakeLists.txt + stubs/{GCStubPreamble,Athlete,Context,Season,Seasons}.h — COMMITTED 2026-08-07 (DEC-028) so committed CMake references only committed files; `unittests/CMakeLists.txt` adds Core/coach UNCONDITIONALLY (no EXISTS guard, deliberately — a guard would silently skip a tracked test)
 util/                       dev scripts (fit tooling, bundle fixups, safety-check linters, rpi packaging) — UPSTREAM-owned; workflow-governance tooling goes in scripts/ instead
 scripts/                    project-owned workflow mechanisms (CANONICAL source; deliberately NOT in .claude/skills/ — vendor territory, ORCH-004): ledger_drift_lint.py (DEC-015 status-drift lint) + test_ledger_drift_lint.py (TEST-017, 15 cases). Synced into .claude/hooks/ by `install_hook.py --extra-hook scripts/ledger_drift_lint.py .`
 src/ANT/                    ANT+/ANT USB device protocol stack
@@ -55,12 +55,12 @@ src/*.o,moc_*,qrc_*,*_yacc*,*_lex*   [SKIP] generated in-source qmake build arti
 
 ## REGISTRIES — what exists (allocate next; never reuse, never re-create)
 REQ  garmin:001–020+NF-*  full:.claude/workflow-garminconnect/prd.md         next:garmin-021   (REQ-019 Upload UAF / REQ-020 OAuth-wizard UAF = STUBS for the follow-up wave, A3-R027-F1/F2; what each REQ is + its status → prd.md / traceability.md — DEC-015 SSOT)
-DEC  garmin:001–027  index:.claude/workflow-garminconnect/decisions.md      next:garmin-028   (question + chosen option + status → decisions.md; the DEC index table in traceability.md must list EVERY id — VAL-017 found it silently stopped at DEC-019)
+DEC  garmin:001–028  index:.claude/workflow-garminconnect/decisions.md      next:garmin-029   (question + chosen option + status → decisions.md; the DEC index table in traceability.md must list EVERY id — VAL-017 found it silently stopped at DEC-019)
 DES  garmin:001–014(+001a,003a)  .claude/workflow-garminconnect/design.md   next:garmin-015
 TEST garmin:T-001–T-078  .claude/workflow-garminconnect/traceability.md     next:garmin-T-079   (T-075 ctor-route ASan DONE; T-076 allocated-UNUSED [dead-code guards, LSN-022]; T-077 A3-R026-F2 fixture-gap coverage [4 guard slots] + T-078 syncCloud-entry teardown DONE 2026-08-06 [DEC-027]; what each TEST covers + whether it is built/green → traceability.md ONLY)
 VAL  garmin:001–017  next:garmin-018   (verdicts + scope → traceability.md ## Validations run; report files → .claude/workflow-garminconnect/validations/)
-F    no F-### namespace in use; findings tracked as <cycle>-<seq> (A0-001…, A3-Rxxx-Fn, B-Rxxx-nn, O-Rxxx-nn orchestrator-found, D-0x) in findings.md — **that file is the SSOT for severity + disposition; this hub POINTS, never restates** (LSN-035). Live blocking count → findings.md / STATE.BLOCKING.   next:n/a (see conventions.md)
-LSN  001–042  active:42 guards:28 mech:2 (LSN-001 anti-dup hook, LSN-008 ledger-drift lint)  lessons.md   next:043   (each lesson's rule/check → lessons.md; the index lines there are the hot read)
+F    no F-### namespace in use; findings tracked as <cycle>-<seq> (A0-001…, A3-Rxxx-Fn, B-Rxxx-nn, O-Rxxx-nn orchestrator-found, **ORCH-001–007 orchestrator/process+build — ALLOCATE FROM HERE, next:ORCH-008**, D-0x) in findings.md — **that file is the SSOT for severity + disposition; this hub POINTS, never restates** (LSN-035). Live blocking count → findings.md / STATE.BLOCKING.   next:n/a (see conventions.md)
+LSN  001–044  active:44 guards:30 mech:2 (LSN-001 anti-dup hook, LSN-008 ledger-drift lint)  lessons.md   next:045   (each lesson's rule/check → lessons.md; the index lines there are the hot read)
 -- retired ledger (provenance only, do not extend): aicoach:DEC-001–013, aicoach:REQ-001–020, aicoach:TEST-001–020 — numeric collision with garmin ranges above; always use ledger prefix (coach:DEC-NNN / garmin:DEC-NNN)
 
 ## PAGES — wiki spokes (read the one named; don't explore blindly)
