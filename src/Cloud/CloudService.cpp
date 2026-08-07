@@ -78,9 +78,36 @@ bool
 CloudService::upload(QWidget *parent, Context *context, CloudService *store, RideItem *item)
 {
 
-    // open a dialog to do it
-    CloudServiceUploadDialog uploader(parent, context, store, item);
-    int ret = uploader.exec();
+    // DEC-garmin-029 (A3-R027-F1) - HEAP + WA_DeleteOnClose + two-phase init,
+    // the lifetime contract DEC-026/027 already gave the sync dialog.
+    //
+    // This used to be a STACK dialog parented to `parent` - which is the
+    // WA_DeleteOnClose MainWindow (MainWindow.cpp:143/2556). Qt's
+    // QObjectPrivate::deleteChildren() deletes every child unconditionally, so a
+    // close of the athlete window while the dialog was blocked called delete on
+    // a C++ stack object (a bad-free) and then the scope destructed it again. On
+    // the heap it is a valid child: Qt frees it exactly once, and start()'s
+    // QPointer self-bails stop any suspended frame touching it afterwards.
+    //
+    // Upload stays MODAL and blocking - exec(), not open(). It is a per-ride,
+    // short operation, and going modeless would race the store teardown at
+    // MainWindow.cpp:2563 (see DEC-029 option A, rejected).
+    CloudServiceUploadDialog *uploader = new CloudServiceUploadDialog(parent, context, store, item);
+    uploader->setAttribute(Qt::WA_DeleteOnClose);
+
+    // NO `else delete uploader` (the DEC-027 precedent): when start() fails it
+    // has posted a queued close(), which under WA_DeleteOnClose self-deletes the
+    // dialog, and on the parent-teardown route the object is ALREADY gone -
+    // deleting it here would be a double free. Reading start()'s bool is safe;
+    // touching `uploader` past a false is not, so we do not.
+    if (uploader->start() == false) return false;
+
+    // QDialog::exec() holds its own QPointer over the loop and returns Rejected
+    // if `this` was destroyed inside it (verified under ASan, TEST-080), so a
+    // teardown mid-upload lands here as a plain "not accepted" - and `ret` is a
+    // local, so nothing dereferences the dialog afterwards. exec() also performs
+    // the WA_DeleteOnClose deletion itself on the normal path.
+    int ret = uploader->exec();
 
     // was it successfull ?
     if (ret == QDialog::Accepted) return true;
@@ -323,9 +350,26 @@ CloudService::uploadExtension() {
     return spec;
 }
 
-CloudServiceUploadDialog::CloudServiceUploadDialog(QWidget *parent, Context *context, CloudService *store, RideItem *item) : QDialog(parent), context(context), store(store), item(item)
+// DEC-garmin-029 (A3-R027-F1) - TWO-PHASE INIT.
+//
+// This constructor used to run EVERY blocking operation in the upload - the
+// store open(), the unsaved-changes QMessageBox::exec(), compressRide/writeFile
+// and the upload-failure QMessageBox::exec() - each of them a nested QEventLoop,
+// on an object parented to the WA_DeleteOnClose MainWindow (MainWindow.cpp:143).
+// A close of the athlete window inside any of those destroyed the half-built
+// dialog under its own constructor, which then resumed writing `status`, reading
+// `context` and calling QWidget::hide() on freed memory. No guard could reach
+// that frame: there is no fully-formed object to stand down.
+//
+// So the constructor now builds ONLY the widget shell and runs no nested loop.
+// After it returns `this` is a complete object; start() does the rest, where a
+// QPointer self-bail works. This is the identical split DEC-026 made for
+// CloudServiceSyncDialog. See TEST-079/TEST-080.
+CloudServiceUploadDialog::CloudServiceUploadDialog(QWidget *parent, Context *context, CloudService *store, RideItem *item)
+    : QDialog(parent), context(context), store(store), item(item),
+      info(nullptr), progress(nullptr), okcancel(nullptr), status(false)
 {
-    // setup the gui!
+    // SHELL ONLY - no nested event loop may run here. start() does the rest.
     QVBoxLayout *layout = new QVBoxLayout(this);
     info = new QLabel(QString(tr("Uploading %1 bytes...")).arg(data.size()));
     layout->addWidget(info);
@@ -340,10 +384,38 @@ CloudServiceUploadDialog::CloudServiceUploadDialog(QWidget *parent, Context *con
     buttons->addStretch();
     buttons->addWidget(okcancel);
     layout->addLayout(buttons);
+}
+
+// DEC-garmin-029 (A3-R027-F1) - PHASE TWO. Carries what the constructor's body
+// did from store->open() onward.
+//
+// It is a RESUMING frame, so it takes the DEC-025 part-3 discipline: a
+// QPointer<CloudServiceUploadDialog> self held across every nested loop it
+// enters, every call result landed in a LOCAL before any member is touched
+// (LSN-037 - the direct member write is itself the use-after-free), and an
+// immediate bail touching nothing whenever `this` was destroyed inside one of
+// those loops.
+//
+// It deliberately does NOT carry DEC-024's done()/closeEvent()/deferCloseIfBusy
+// close-gate, nor DEC-025's destructor decline, because neither hazard exists
+// here: `okcancel` is connected to no slot until completed() fires and the
+// dialog is not shown until exec(), so no user-initiated close can race these
+// calls; and this dialog does not own the store - MainWindow::uploadCloud does,
+// and closes+deletes it only after upload() has returned (REQ-017,
+// MainWindow.cpp:2563) - so there is nothing for a destructor to decline.
+bool
+CloudServiceUploadDialog::start()
+{
+    QPointer<CloudServiceUploadDialog> self(this);
 
     // lets open the store
     QStringList errors;
-    status = store->open(errors);
+    // For most services this is a real nested QEventLoop over network I/O. Land
+    // the result in a LOCAL: if the athlete window was torn down inside it,
+    // `this` is already freed and only the bool survives.
+    bool opened = store->open(errors);
+    if (self.isNull()) return false;
+    status = opened;
 
     // compress and upload if opened successfully.
     if (status == true) {
@@ -360,7 +432,11 @@ CloudServiceUploadDialog::CloudServiceUploadDialog(QWidget *parent, Context *con
                                           "We recommend to save the changed activity before proceeding."));
                 msgBox.setStandardButtons(QMessageBox::Save | QMessageBox::Ignore | QMessageBox::Cancel);
                 msgBox.setIcon(QMessageBox::Question);
+                // An UNBOUNDED nested loop - the user may take as long as they
+                // like to answer, and the athlete window can close underneath it.
+                // `ret` is a LOCAL, so a teardown here costs only the bail below.
                 int ret = msgBox.exec();
+                if (self.isNull()) return false;
                 switch (ret) {
                 case QMessageBox::Save:
                     // save
@@ -373,8 +449,9 @@ CloudServiceUploadDialog::CloudServiceUploadDialog(QWidget *parent, Context *con
                     break;
                 case QMessageBox::Cancel:
                     QApplication::processEvents();
+                    if (self.isNull()) return false;
                     QMetaObject::invokeMethod(this, "close", Qt::QueuedConnection);
-                    return;
+                    return false;
                 default:
                     // should never be reached
                     break;
@@ -383,10 +460,19 @@ CloudServiceUploadDialog::CloudServiceUploadDialog(QWidget *parent, Context *con
         }
 
         // get a compressed version
+        //
+        // compressRide() runs no nested event loop - it is QTemporaryFile plus a
+        // RideFileReader::writeRideFile, and the only QEventLoop anywhere in the
+        // file writers is on the FIT READ path (FitRideFile.cpp:172, reached from
+        // openRideFile) - so a separate self-bail between it and writeFile would
+        // be unreachable and untestable. The one below covers the pair.
         store->compressRide(item->ride(), data, QFileInfo(item->fileName).baseName() + ".json");
 
-        // ok, so now we can kickoff the upload
-        status = store->writeFile(data, QFileInfo(item->fileName).baseName() + store->uploadExtension(), item->ride());
+        // ok, so now we can kickoff the upload. LOCAL first: `status = ...` here
+        // would BE the use-after-free if writeFile blocked and the window closed.
+        bool wrote = store->writeFile(data, QFileInfo(item->fileName).baseName() + store->uploadExtension(), item->ride());
+        if (self.isNull()) return false;
+        status = wrote;
     }
 
     // if the upload failed in any way, bail out
@@ -398,17 +484,29 @@ CloudServiceUploadDialog::CloudServiceUploadDialog(QWidget *parent, Context *con
         msgBox.setText(tr("Unable to upload, check your configuration in preferences."));
 
         msgBox.setIcon(QMessageBox::Critical);
+        // Another unbounded nested loop; the teardown lands here too, and the
+        // very next statement is a call on `this`.
         msgBox.exec();
+        if (self.isNull()) return false;
 
         QWidget::hide(); // don't show just yet...
         QApplication::processEvents();
+        if (self.isNull()) return false;
 
-        return;
+        // DEC-garmin-029 - the dialog is now a heap object with
+        // WA_DeleteOnClose, so this failure path has to CLOSE it or it leaks:
+        // the caller does NOT exec() a dialog whose start() failed, and there is
+        // no stack scope left to destroy it. Same queued close the sync dialog's
+        // open-failure branch posts (start(), above).
+        QMetaObject::invokeMethod(this, "close", Qt::QueuedConnection);
+
+        return false;
     }
 
     // get notification when done
     connect(store, SIGNAL(writeComplete(QString,QString)), this, SLOT(completed(QString,QString)));
 
+    return true;
 }
 
 int

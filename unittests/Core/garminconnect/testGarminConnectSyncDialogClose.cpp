@@ -91,8 +91,10 @@
 #include <QEventLoop>
 #include <QKeyEvent>
 #include <QList>
+#include <QMessageBox>
 #include <QMetaObject>
 #include <QPointer>
+#include <QPushButton>
 #include <QString>
 #include <QStringList>
 #include <QTemporaryDir>
@@ -135,6 +137,17 @@ QByteArray* lastBuffer = nullptr; // the buffer syncNext preallocated
 int openCalls = 0;
 bool openResumed = false;
 
+// TEST-079 / TEST-080 (DEC-garmin-029, REQ-019) — the UPLOAD dialog's own
+// blocking call. CloudServiceUploadDialog is the subject; see the ORCH-008 note
+// on those slots for why it lives in a file named after GarminConnect.
+int writeFileCalls = 0;
+bool writeResumed = false;              // writeFile ran its tail after the nested loop
+const void* lastUploadBuffer = nullptr; // the dialog MEMBER QByteArray it was handed
+bool teardownSawModal = false;          // the teardown landed while a modal box was up
+bool teardownFired = false;             // ...and it fired at all
+bool startReturned = false;             // has start() handed control back yet?
+bool teardownAfterStart = false;        // ...had it, when the teardown landed?
+
 void reset()
 {
     readFileCalls = 0;
@@ -145,6 +158,13 @@ void reset()
     lastBuffer = nullptr;
     openCalls = 0;
     openResumed = false;
+    writeFileCalls = 0;
+    writeResumed = false;
+    lastUploadBuffer = nullptr;
+    teardownSawModal = false;
+    teardownFired = false;
+    startReturned = false;
+    teardownAfterStart = false;
 }
 
 } // namespace obs
@@ -301,6 +321,48 @@ class BlockingStore : public CloudService
         return true;
     }
 
+    // REQ-019 / DEC-garmin-029 — the UPLOAD path's store call.
+    //
+    // CloudServiceUploadDialog::start() calls compressRide() and then writeFile()
+    // (CloudService.cpp:386/:389) and lands the result in `status`. writeFile is
+    // virtual and every service implements it over the network; DEC-029 names it
+    // as one of the four suspension points a parent teardown can land in, so this
+    // stub does what readFile already does for the download path: run a nested
+    // QEventLoop, then resume and touch `this`.
+    //
+    // The base-class writeFile returns false, which would send the dialog down
+    // its upload-failure branch, so this override also gives the happy path a
+    // writeFile that SUCCEEDS and (optionally) notifies completion afterwards —
+    // that notification is what the dialog's exec() sits waiting for.
+    bool writeFile(QByteArray& data, QString remotename, RideFile* ride) override
+    {
+        Q_UNUSED(ride);
+        ++obs::writeFileCalls;
+        obs::lastUploadBuffer = &data;
+
+        if (blockInWrite) {
+            fireActionThenBlock();
+
+            // writeFile RESUMES. The STORE is still alive here whatever happens —
+            // MainWindow::uploadCloud owns it and closes+deletes it only after
+            // upload() returns (REQ-017, MainWindow.cpp:2563) — so this tail is
+            // safe. `data` is NOT: it is a MEMBER of the dialog the teardown may
+            // just have destroyed, so nothing past this point may touch it.
+            obs::writeResumed = true;
+            if (canary_ != kCanary)
+                return false;
+        }
+
+        if (!writeSucceeds)
+            return false;
+
+        if (completeWrite)
+            QMetaObject::invokeMethod(
+                this, [this, remotename]() { notifyWriteComplete(remotename, tr("Completed.")); },
+                Qt::QueuedConnection);
+        return true;
+    }
+
     QStringList entryNames;
     QDialog* dialog = nullptr;             // where the close is sent
     std::function<void()> closeAction;     // what the user does, inside the loop
@@ -308,6 +370,9 @@ class BlockingStore : public CloudService
     bool blockInReaddir = false;           // does readdir run a nested loop too?
     bool blockInOpen = false;              // does open() run a nested loop too? (TEST-075)
     bool openFailMode = false;             // does open() FAIL, taking start()'s open-failure branch? (TEST-077)
+    bool blockInWrite = false;             // does writeFile run a nested loop? (TEST-079)
+    bool writeSucceeds = true;             // ...and does it report the upload started?
+    bool completeWrite = false;            // ...and does writeComplete ever arrive? (TEST-080)
     QPointer<QDialog> dialogGuard;
     int blockingMs = 120;
 
@@ -1373,6 +1438,507 @@ class TestGarminConnectSyncDialogClose : public QObject
         QVERIFY2(!(storeGuard.isNull() && obs::storeDestroyed),
                  "the destructor deleted the store while readdir was on the stack (DEC-025 requires DECLINE)");
         QVERIFY2(!obs::storeClosed, "the destructor closed the store while readdir was still executing on it");
+    }
+
+  private:
+    // =====================================================================
+    // TEST-079 / TEST-080 (REQ-019, DEC-garmin-029) — THE UPLOAD DIALOG.
+    // =====================================================================
+    //
+    // SUBJECT: CloudServiceUploadDialog (src/Cloud/CloudService.cpp) and its
+    // single call site CloudService::upload(), reached from
+    // MainWindow::uploadCloud. NOTHING BELOW IS ABOUT GARMINCONNECT — GarminConnect
+    // advertises Query|Download only (GarminConnect.h:76) and can never reach this
+    // dialog. The eleven services that CAN are RideWithGPS, CyclingAnalytics,
+    // Selfloops, SportsPlusHealth, TrainingsTageBuch and Xert (explicit Upload
+    // bit) plus Strava, Dropbox, SixCycle, SportTracks and LocalFileStore
+    // (inheriting the CloudService.h:104 default). These slots live in a file
+    // named after GarminConnect purely to reuse this target's ASan + offscreen +
+    // blocking-store harness; the misnomer is knowingly accepted and tracked as
+    // ORCH-008.
+    //
+    // THE DEFECT. The upload dialog's CONSTRUCTOR ran every blocking operation
+    // while the object was a STACK dialog parented to the WA_DeleteOnClose
+    // MainWindow (MainWindow.cpp:143): store->open(), the unsaved-changes
+    // QMessageBox::exec(), compressRide/writeFile, and the upload-failure
+    // QMessageBox::exec() — with no QPointer self-bail anywhere. A parent
+    // teardown landing in any of those nested loops resumed the constructor on
+    // freed memory and then wrote `status`, read `context` and called
+    // QWidget::hide() on it. DEC-029 fixes it the way DEC-026/027 fixed the sync
+    // dialog: two-phase init (shell-only ctor + start()) and a heap dialog with
+    // WA_DeleteOnClose, modality PRESERVED.
+    // =====================================================================
+    enum UploadFrame {
+        UploadOpen,           // teardown inside store->open()                        -> guard A
+        UploadDirtyExec,      // teardown inside the unsaved-changes QMessageBox::exec() -> guard B
+        UploadCancelPE,       // teardown inside the Cancel branch's processEvents()  -> guard B2
+        UploadWrite,          // teardown inside compressRide/writeFile               -> guard C
+        UploadFailExec,       // teardown inside the upload-failure QMessageBox::exec() -> guard D
+        UploadFailPE,         // teardown inside the failure branch's processEvents() -> guard D2
+        UploadExecWait,       // teardown inside the exec() wait for writeComplete    -> Qt's own guard
+        UploadFailNoTeardown, // CONTROL: open() fails, nobody tears anything down
+        UploadHappyPath       // CONTROL: no teardown at all
+    };
+
+    struct UploadOutcome
+    {
+        bool startReturnedFalse = false; // start() bailed instead of building on a corpse
+        bool execReturned = false;       // exec() came back rather than hanging
+        int execResult = -1;             // ...with what
+        bool dialogGoneAtEnd = false;    // the teardown really did destroy the dialog
+        bool storeClosed = false;        // the CALLER's closeAndDeleteStore ran close()
+        bool storeDestroyed = false;     // ...and then deleted it, exactly once
+        bool openRan = false;
+        bool writeRan = false;
+        bool timedOut = false;
+        bool ownerSurvived = false;         // nothing tore the athlete window down
+        bool dialogGoneBeforeOwner = false; // ...and it collected ITSELF anyway
+    };
+
+    // Drives ONE parent teardown into ONE of the upload dialog's suspension
+    // points, through the production call sequence:
+    //
+    //   QEventLoop (stands in for QApplication::exec())
+    //     -> queued call (event delivery, so scopeLevel is bumped, exactly as when
+    //        the user picks a service from the Upload menu)
+    //          -> owner QWidget + its Context           [MainWindow + its Context]
+    //          -> new CloudServiceUploadDialog(owner, ...)   [CloudService::upload]
+    //          -> setAttribute(Qt::WA_DeleteOnClose)
+    //          -> if (start()) exec();
+    //               -> store->open() / QMessageBox::exec() / writeFile / exec()
+    //                    -> NESTED loop -> queued `delete owner; delete ctx` on qApp
+    //                         -> ~QWidget -> ~QObject destroys its children
+    //                              -> ~CloudServiceUploadDialog, mid-call
+    //          -> closeAndDeleteStore(store)            [MainWindow.cpp:2563]
+    //
+    // The Context is destroyed WITH the window, because that is what makes the
+    // criterion's "no use-after-free on context/context->mainWindow" testable at
+    // all: in production the athlete window owns its Context, and the dialog's
+    // `context` member is what the unsaved-changes Save branch dereferences.
+    UploadOutcome runUploadTeardown(UploadFrame frame)
+    {
+        obs::reset();
+
+        UploadOutcome out;
+        QPointer<CloudServiceUploadDialog> dialogGuard;
+        QPointer<CloudService> storeGuard;
+        QEventLoop appLoop;
+
+        QMetaObject::invokeMethod(
+            this,
+            [&]() {
+                // The athlete window. WA_DeleteOnClose is the production
+                // attribute (MainWindow.cpp:143) and the reason this teardown is
+                // reachable at all.
+                QWidget* owner = new QWidget;
+                owner->setAttribute(Qt::WA_DeleteOnClose);
+
+                // The Context that window owns. Only its QWidget-level identity
+                // is used through the MainWindow* it is handed (saveSilent is the
+                // one call, and it is a link stub here).
+                Context* runCtx = new Context(reinterpret_cast<MainWindow*>(owner));
+                runCtx->athlete = athlete;
+
+                // The ride being uploaded. compressRide() dereferences
+                // ride->context, so this needs a real RideFile, not a null one.
+                RideFile* rideFile = new RideFile();
+                rideFile->context = runCtx;
+                RideItem* item = new RideItem(rideFile, runCtx);
+                // ImportSeamStubs' RideItem ctor sets only context and ride_, so
+                // isdirty is uninitialised garbage - and the dialog branches on
+                // it. Say so explicitly rather than inherit whatever the heap
+                // happened to hold (this cost one hung run to find).
+                item->isdirty = false;
+                item->fileName = QStringLiteral("2026_08_07_10_00_00.json");
+                // Production hands the dialog context->ride (MainWindow.cpp:2556).
+                runCtx->ride = item;
+
+                BlockingStore* store = new BlockingStore(runCtx);
+                store->blockingMs = 120;
+                store->closeActionContext = qApp;
+                store->completeWrite = (frame == UploadHappyPath);
+
+                switch (frame) {
+                case UploadOpen:
+                    store->blockInOpen = true;
+                    break;
+                case UploadWrite:
+                    store->blockInWrite = true;
+                    break;
+                case UploadDirtyExec:
+                case UploadCancelPE:
+                    item->isdirty = true; // reaches the unsaved-changes prompt
+                    break;
+                case UploadFailExec:
+                case UploadFailPE:
+                case UploadFailNoTeardown:
+                    store->openFailMode = true; // reaches the upload-failure prompt
+                    break;
+                default:
+                    break;
+                }
+
+                bool ownerDead = false;
+                auto killOwner = [owner, runCtx, &ownerDead]() {
+                    obs::teardownFired = true;
+                    obs::teardownSawModal = (QApplication::activeModalWidget() != nullptr);
+                    obs::teardownAfterStart = obs::startReturned;
+                    ownerDead = true;
+                    delete owner;
+                    delete runCtx;
+                };
+
+                if (frame == UploadOpen || frame == UploadWrite) {
+                    // Fired from inside the store call's own nested loop.
+                    store->closeAction = killOwner;
+                } else if (frame == UploadFailNoTeardown) {
+                    // No teardown at all - just a user dismissing the "unable to
+                    // upload" box. What is under test is what happens NEXT: the
+                    // dialog is a heap object with WA_DeleteOnClose that the
+                    // caller will never exec(), so start()'s failure branch has
+                    // to close it or it leaks (CloudService.cpp:501).
+                    QTimer::singleShot(100, qApp, []() {
+                        if (QDialog* m = qobject_cast<QDialog*>(QApplication::activeModalWidget()))
+                            m->close();
+                    });
+                } else if (frame == UploadCancelPE || frame == UploadFailPE) {
+                    // One frame LATER than the two above. The modal box is
+                    // answered with the dialog still ALIVE (so the guard after
+                    // exec() passes), and only THEN is the teardown posted - so
+                    // it is not delivered inside exec() (done() exits that loop
+                    // immediately) but by the QApplication::processEvents() the
+                    // branch runs next (CloudService.cpp:450 / :493). Cancel is
+                    // the answer that reaches the first of those.
+                    const int answer = (frame == UploadCancelPE) ? int(QMessageBox::Cancel) : int(QMessageBox::Ok);
+                    QMetaObject::invokeMethod(
+                        qApp,
+                        [killOwner, answer]() {
+                            if (QDialog* m = qobject_cast<QDialog*>(QApplication::activeModalWidget()))
+                                m->done(answer);
+                            QMetaObject::invokeMethod(qApp, killOwner, Qt::QueuedConnection);
+                        },
+                        Qt::QueuedConnection);
+                } else if (frame == UploadDirtyExec || frame == UploadFailExec) {
+                    // Posted BEFORE the dialog runs, so the FIRST nested loop it
+                    // spins — the QMessageBox — delivers it. Answering the box
+                    // afterwards is what returns exec() onto the guard.
+                    //
+                    // DirtyExec answers SAVE deliberately: that branch is the one
+                    // that dereferences context and context->mainWindow
+                    // (CloudService.cpp:367-369), i.e. the exact objects the
+                    // teardown just freed.
+                    const int answer = (frame == UploadDirtyExec) ? int(QMessageBox::Save) : int(QMessageBox::Cancel);
+                    QMetaObject::invokeMethod(
+                        qApp,
+                        [killOwner, answer]() {
+                            killOwner();
+                            if (QDialog* m = qobject_cast<QDialog*>(QApplication::activeModalWidget()))
+                                m->done(answer);
+                        },
+                        Qt::QueuedConnection);
+                }
+
+                storeGuard = store;
+
+                // If a guard ever failed to let exec() return, the whole suite
+                // would hang; unwind instead and record why.
+                bool* timedOut = &out.timedOut;
+                QTimer::singleShot(5000, qApp, [timedOut]() {
+                    *timedOut = true;
+                    QCoreApplication::exit(1);
+                });
+
+                if (frame == UploadExecWait || frame == UploadHappyPath) {
+                    // ---- THE REAL PRODUCTION ENTRY POINT.
+                    //
+                    // These two frames call CloudService::upload() itself - the
+                    // function that owns the `new`, the WA_DeleteOnClose, the
+                    // deliberate absence of an `else delete` and the exec(). They
+                    // can, because they do not need to observe start()'s bool:
+                    // start() succeeds on both. The dialog is reached through
+                    // findChild, since upload() constructs it internally.
+                    if (frame == UploadExecWait) {
+                        // The teardown lands while exec() is waiting for
+                        // writeComplete. Posted to qApp, not to the dialog: the
+                        // dialog is what it destroys.
+                        QTimer::singleShot(50, qApp, [owner, killOwner, &dialogGuard]() {
+                            dialogGuard = owner->findChild<CloudServiceUploadDialog*>();
+                            killOwner();
+                        });
+                    } else {
+                        // The user clicking OK once the upload completed - the
+                        // only route by which this dialog accepts.
+                        QTimer::singleShot(200, qApp, [owner, &dialogGuard]() {
+                            CloudServiceUploadDialog* d = owner->findChild<CloudServiceUploadDialog*>();
+                            dialogGuard = d;
+                            if (d && d->okcancel)
+                                d->okcancel->click();
+                        });
+                    }
+
+                    bool accepted = CloudService::upload(owner, runCtx, store, item);
+                    obs::startReturned = true;
+                    out.execReturned = true;
+                    out.execResult = accepted ? int(QDialog::Accepted) : int(QDialog::Rejected);
+                } else {
+                    // ---- The same sequence CloudService::upload() runs, opened
+                    // up so start()'s bool - the thing the guards actually
+                    // produce - is observable. The two frames above are what
+                    // prove this hand-copy still matches the real function.
+                    CloudServiceUploadDialog* uploader = new CloudServiceUploadDialog(owner, runCtx, store, item);
+                    uploader->setAttribute(Qt::WA_DeleteOnClose);
+                    dialogGuard = uploader;
+
+                    // PHASE TWO. Reading start()'s bool is safe even after `this`
+                    // is freed (the value is in a register); dereferencing
+                    // `uploader` past a false is not, so we do not.
+                    bool started = uploader->start();
+                    obs::startReturned = true;
+                    out.startReturnedFalse = (started == false);
+
+                    if (started) {
+                        out.execResult = uploader->exec();
+                        out.execReturned = true;
+                    }
+                }
+
+                // ---- and the caller's REQ-017 obligation, unchanged by DEC-029:
+                // MainWindow::uploadCloud closes and deletes the store it created,
+                // exactly once, after upload() returns (MainWindow.cpp:2563).
+                delete item;
+                delete rideFile;
+                closeAndDeleteStore(store);
+
+                out.ownerSurvived = !ownerDead;
+                if (!ownerDead) {
+                    // Destroy the athlete window LATE, and record first whether
+                    // the dialog had already collected itself. Deleting it here
+                    // and now would destroy the dialog as a CHILD and hide the
+                    // very thing UploadFailNoTeardown asks about: a dialog the
+                    // caller never exec()s has to self-delete off the failure
+                    // path (CloudService.cpp:501) rather than sit there leaking
+                    // until its parent happens to go.
+                    QTimer::singleShot(300, qApp, [owner, runCtx, &out, &dialogGuard]() {
+                        out.dialogGoneBeforeOwner = dialogGuard.isNull();
+                        delete owner;
+                        delete runCtx;
+                    });
+                }
+
+                QTimer::singleShot(400, &appLoop, &QEventLoop::quit);
+            },
+            Qt::QueuedConnection);
+
+        appLoop.exec();
+
+        for (int i = 0; i < 50; ++i)
+            QApplication::processEvents(QEventLoop::AllEvents, 5);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+        out.dialogGoneAtEnd = dialogGuard.isNull();
+        out.storeClosed = obs::storeClosed;
+        out.storeDestroyed = storeGuard.isNull() && obs::storeDestroyed;
+        out.openRan = obs::openCalls > 0;
+        out.writeRan = obs::writeFileCalls > 0;
+        return out;
+    }
+
+    // The shared verdict for the four TEST-079 suspension points. NOT a slot.
+    void assertUploadBailedNotCrashed(const char* frame, const UploadOutcome& out)
+    {
+        // Reaching this line at all means the process did not abort under ASan:
+        // no heap-use-after-free and no bad-free on the dialog, on `context` or
+        // on `context->mainWindow`. The mutation matrix (see the build report) is
+        // what proves it is the guard, and not luck, that achieved that.
+        QVERIFY2(
+            out.timedOut == false,
+            qPrintable(QStringLiteral("%1: the dialog never came back - a guard wedged it").arg(QLatin1String(frame))));
+        QVERIFY2(obs::teardownFired,
+                 qPrintable(QStringLiteral("%1: the parent teardown never ran - this run proves nothing")
+                                .arg(QLatin1String(frame))));
+        QVERIFY2(out.dialogGoneAtEnd,
+                 qPrintable(QStringLiteral("%1: the parent teardown did not destroy the dialog - the test's "
+                                           "premise is wrong")
+                                .arg(QLatin1String(frame))));
+        QVERIFY2(out.startReturnedFalse,
+                 qPrintable(QStringLiteral("%1: start() returned true after the dialog was destroyed inside this "
+                                           "nested loop - upload() would exec() a freed dialog")
+                                .arg(QLatin1String(frame))));
+        QVERIFY2(out.execReturned == false,
+                 qPrintable(QStringLiteral("%1: upload() exec()d a dialog that start() had already lost")
+                                .arg(QLatin1String(frame))));
+
+        // The store is the CALLER's (REQ-017, MainWindow.cpp:2563) - DEC-029
+        // changes nothing about that - so unlike the sync dialog it is closed and
+        // deleted on EVERY route, exactly once. A second free would have aborted
+        // this process under ASan long before this line.
+        QVERIFY2(out.storeClosed,
+                 qPrintable(QStringLiteral("%1: the store was never close()d - the REQ-017 owner contract broke")
+                                .arg(QLatin1String(frame))));
+        QVERIFY2(out.storeDestroyed,
+                 qPrintable(QStringLiteral("%1: the store was never deleted - it leaked past the teardown")
+                                .arg(QLatin1String(frame))));
+    }
+
+  private slots:
+
+    // -- TEST-080 --------------------------------------------------------
+    // THE ONE CLAIM DEC-029 RESTS ON AND HAD NOT EXECUTED.
+    //
+    // Option B keeps upload MODAL and leaves closeAndDeleteStore(db) unguarded at
+    // MainWindow.cpp:2563. Both of those depend on QDialog::exec() SELF-PROTECTING
+    // when `this` is destroyed inside its own event loop: if exec() touched a
+    // member after the loop returned, the fix would be building on the same kind
+    // of reasoned-but-unverified Qt claim that DEC-024's closeEvent() premise
+    // turned out to be.
+    //
+    // So this tears the parent down while exec() is waiting for writeComplete —
+    // the fourth suspension point — and asks ASan. It must report nothing, exec()
+    // must come back rather than hang, and it must NOT report Accepted: a torn-down
+    // upload is not a successful one.
+    void uploadExecWait_parentTeardownMidExec_doesNotUseAFreedDialog()
+    {
+        UploadOutcome out = runUploadTeardown(UploadExecWait);
+
+        QVERIFY2(out.timedOut == false, "exec() never returned after the dialog was destroyed inside it");
+        QVERIFY2(obs::teardownFired, "the parent teardown never ran - this run proves nothing");
+        QVERIFY2(out.writeRan, "the upload never reached writeFile, so exec() was not waiting for writeComplete");
+        QVERIFY2(out.dialogGoneAtEnd, "the parent teardown did not destroy the dialog - the test's premise is wrong");
+        QVERIFY2(out.execReturned, "exec() did not return at all");
+        QVERIFY2(out.execResult != QDialog::Accepted,
+                 "exec() reported Accepted for an upload whose dialog was destroyed mid-flight");
+        QVERIFY2(out.storeClosed, "the store was never close()d - the REQ-017 owner contract broke");
+        QVERIFY2(out.storeDestroyed, "the store was never deleted - it leaked past the teardown");
+    }
+
+    // -- TEST-079 --------------------------------------------------------
+    // guard A - teardown inside store->open() (CloudService.cpp:346).
+    // RED (neuter guard A): start() resumes into `status = opened` - a member
+    // WRITE on the freed dialog -> ASan heap-use-after-free.
+    void upload_teardownInsideStoreOpen_doesNotUseAFreedDialog()
+    {
+        UploadOutcome out = runUploadTeardown(UploadOpen);
+        QVERIFY2(out.openRan, "start() never reached store->open() - this run proves nothing");
+        QVERIFY2(obs::openResumed, "open() never resumed from its nested loop - the teardown did not land there");
+        assertUploadBailedNotCrashed("store->open (:346)", out);
+        QCOMPARE(obs::writeFileCalls, 0);
+    }
+
+    // guard B - teardown inside the unsaved-changes QMessageBox::exec() (:363).
+    // RED (neuter guard B): start() resumes into the Save branch and dereferences
+    // `context` and `context->mainWindow` (:367-369), both freed with the athlete
+    // window -> ASan heap-use-after-free.
+    void upload_teardownInsideUnsavedChangesPrompt_doesNotUseAFreedContext()
+    {
+        UploadOutcome out = runUploadTeardown(UploadDirtyExec);
+        QVERIFY2(out.openRan, "start() never reached store->open() - this run proves nothing");
+        QVERIFY2(obs::teardownSawModal,
+                 "the teardown did not land inside a modal prompt - it missed the frame under test");
+        assertUploadBailedNotCrashed("unsaved-changes QMessageBox::exec (:363)", out);
+        QCOMPARE(obs::writeFileCalls, 0);
+    }
+
+    // guard B2 - teardown inside the Cancel branch's QApplication::processEvents().
+    // RED (neuter guard B2): start() resumes into
+    // QMetaObject::invokeMethod(this, "close", ...) on the freed dialog -> ASan
+    // heap-use-after-free.
+    void upload_teardownInsideCancelProcessEvents_doesNotUseAFreedDialog()
+    {
+        UploadOutcome out = runUploadTeardown(UploadCancelPE);
+        QVERIFY2(out.openRan, "start() never reached store->open() - this run proves nothing");
+        QVERIFY2(obs::teardownAfterStart == false,
+                 "the teardown landed after start() had already returned - it missed the frame under test");
+        QVERIFY2(obs::teardownSawModal == false,
+                 "the teardown landed while the prompt was still up - that is guard B's frame, not this one");
+        assertUploadBailedNotCrashed("unsaved-changes Cancel processEvents (:365)", out);
+        QCOMPARE(obs::writeFileCalls, 0);
+    }
+
+    // guard C - teardown inside compressRide/writeFile (:386/:389).
+    // RED (neuter guard C): start() resumes into `status = wrote` - a member WRITE
+    // on the freed dialog -> ASan heap-use-after-free.
+    void upload_teardownInsideWriteFile_doesNotUseAFreedDialog()
+    {
+        UploadOutcome out = runUploadTeardown(UploadWrite);
+        QVERIFY2(out.writeRan, "start() never reached store->writeFile() - this run proves nothing");
+        QVERIFY2(obs::writeResumed, "writeFile never resumed from its nested loop - the teardown did not land there");
+        assertUploadBailedNotCrashed("compressRide/writeFile (:386/:389)", out);
+    }
+
+    // guard D - teardown inside the upload-failure QMessageBox::exec() (:401).
+    // RED (neuter guard D): start() resumes into QWidget::hide() (:403) on the
+    // freed dialog -> ASan heap-use-after-free.
+    void upload_teardownInsideFailurePrompt_doesNotUseAFreedDialog()
+    {
+        UploadOutcome out = runUploadTeardown(UploadFailExec);
+        QVERIFY2(out.openRan, "start() never reached store->open() - this run proves nothing");
+        QVERIFY2(obs::teardownSawModal,
+                 "the teardown did not land inside a modal prompt - it missed the frame under test");
+        assertUploadBailedNotCrashed("upload-failure QMessageBox::exec (:401)", out);
+        QCOMPARE(obs::writeFileCalls, 0);
+    }
+
+    // guard D2 - teardown inside the failure branch's QApplication::processEvents().
+    // RED (neuter guard D2): start() resumes into the queued close() invoke on the
+    // freed dialog -> ASan heap-use-after-free.
+    void upload_teardownInsideFailureProcessEvents_doesNotUseAFreedDialog()
+    {
+        UploadOutcome out = runUploadTeardown(UploadFailPE);
+        QVERIFY2(out.openRan, "start() never reached store->open() - this run proves nothing");
+        QVERIFY2(obs::teardownAfterStart == false,
+                 "the teardown landed after start() had already returned - it missed the frame under test");
+        QVERIFY2(obs::teardownSawModal == false,
+                 "the teardown landed while the prompt was still up - that is guard D's frame, not this one");
+        assertUploadBailedNotCrashed("upload-failure processEvents (:404)", out);
+        QCOMPARE(obs::writeFileCalls, 0);
+    }
+
+    // CONTROL - the LEAK half of the heap conversion, with no teardown anywhere.
+    //
+    // Going from a stack dialog to `new` + WA_DeleteOnClose means the failure
+    // path no longer has a scope to destroy it, and the caller deliberately does
+    // NOT exec() (nor `else delete`) a dialog whose start() failed - so if that
+    // path did not close itself, every failed upload would leak a dialog for the
+    // life of the athlete window, on all eleven Upload-capable services.
+    //
+    // RED (delete the queued close() at CloudService.cpp:501): the dialog is
+    // still alive when this looks, and only its parent's eventual destruction
+    // collects it.
+    void upload_openFailureWithNoTeardown_closesItselfRatherThanLeaking()
+    {
+        UploadOutcome out = runUploadTeardown(UploadFailNoTeardown);
+
+        QVERIFY2(out.timedOut == false, "the failure prompt never came back");
+        QVERIFY2(out.openRan, "start() never reached store->open() - this run proves nothing");
+        QVERIFY2(out.ownerSurvived, "something destroyed the athlete window - this is the no-teardown control");
+        QVERIFY2(out.startReturnedFalse, "start() reported success for a store that failed to open");
+        QVERIFY2(out.execReturned == false, "the caller exec()d a dialog whose start() had failed");
+        QVERIFY2(out.dialogGoneBeforeOwner,
+                 "the failed upload dialog was still alive with its parent untouched - a heap dialog the caller "
+                 "never exec()s and never deletes has leaked");
+        QCOMPARE(obs::writeFileCalls, 0);
+        QVERIFY2(out.storeClosed, "the store was never close()d");
+        QVERIFY2(out.storeDestroyed, "the store was never deleted");
+    }
+
+    // CONTROL for all seven. The same heap + WA_DeleteOnClose + start()/exec()
+    // sequence with NO teardown anywhere must still upload, still block modally,
+    // still report Accepted when the user clicks OK, and still leave nothing
+    // behind - otherwise DEC-029 has broken upload for eleven services in order
+    // to fix a crash none of them had yet hit.
+    void upload_withNoTeardown_stillCompletesModallyAndCleansUp()
+    {
+        UploadOutcome out = runUploadTeardown(UploadHappyPath);
+
+        QVERIFY2(out.timedOut == false, "the upload dialog never returned from exec()");
+        QVERIFY2(out.openRan, "the upload never opened the store");
+        QVERIFY2(out.writeRan, "the upload never reached writeFile");
+        QVERIFY2(out.startReturnedFalse == false, "start() failed on the happy path");
+        QVERIFY2(out.execReturned, "exec() did not return");
+        QCOMPARE(out.execResult, int(QDialog::Accepted));
+        QVERIFY2(out.dialogGoneAtEnd, "the dialog leaked - WA_DeleteOnClose did not collect it");
+        QVERIFY2(out.storeClosed, "the store was never close()d");
+        QVERIFY2(out.storeDestroyed, "the store was never deleted");
     }
 };
 

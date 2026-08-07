@@ -298,7 +298,18 @@ class CloudServiceUploadDialog : public QDialog
     Q_OBJECT
 
     public:
+        // DEC-garmin-029 (A3-R027-F1) - TWO-PHASE INIT. The constructor builds
+        // the widget SHELL ONLY and runs no nested event loop; start() does every
+        // blocking thing (open the store, prompt about unsaved changes, compress
+        // and kick off the write) on a fully-constructed object.
         CloudServiceUploadDialog(QWidget *parent, Context *context, CloudService *store, RideItem *item);
+
+        // PHASE TWO. Returns false if the upload could not be started - or if a
+        // parent teardown destroyed `this` inside one of those nested loops.
+        // Callers MUST call it before exec(), and MUST NOT touch the dialog again
+        // once it has returned false: on the teardown route the object is already
+        // gone (only the returned bool survives).
+        bool start();
 
         QLabel *info;               // how much being uploaded / status
         QProgressBar *progress;     // whilst we wait

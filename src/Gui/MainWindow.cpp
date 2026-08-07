@@ -2531,10 +2531,18 @@ MainWindow::uploadCloud(QAction *action)
         CloudService::upload(this, currentAthleteTab->context, db, currentAthleteTab->context->ride);
 
         // REQ-017 (b)/(e) - upload() does NOT take ownership: it builds a
-        // stack-local CloudServiceUploadDialog whose ctor open()s this store and
-        // which neither close()s nor deletes it. Without this the service - and
-        // any worker thread / session its open() started - outlives every upload
-        // until process exit. Same contract MainWindow::syncCloud relies on.
+        // CloudServiceUploadDialog whose start() open()s this store and which
+        // neither close()s nor deletes it. Without this the service - and any
+        // worker thread / session its open() started - outlives every upload
+        // until process exit.
+        //
+        // DEC-garmin-029 (REQ-019) - that dialog is now a HEAP object with
+        // WA_DeleteOnClose (see CloudService::upload), so a close of this window
+        // mid-upload deletes it as a valid child instead of bad-freeing a stack
+        // object, and its start() self-bails rather than resuming onto freed
+        // memory. Ownership of the store is UNCHANGED and stays right here:
+        // upload() is synchronous (modal exec()), so by the time it returns
+        // nothing is still using db. Do NOT move this into the dialog.
         closeAndDeleteStore(db);
     }
 }
