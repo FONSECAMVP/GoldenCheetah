@@ -12,7 +12,61 @@ COUNTS: REQ 20(+NF) · DEC 28 · DES 14(+2) · TEST 78 · VAL 17 · LSN 44 · OR
 
 PHASE: Phase 2.2 — Garmin Connect integration. Per-REQ/DES/TEST/VAL status → traceability.md.
 
-CURRENT: **ORCH-001 FIXED + COMMITTED `427da745b` 2026-08-07 (DEC-028) — the clean-checkout gate now RUNS, for the
+CURRENT: **REQ-019 COMMITTED `e8833682f` 2026-08-08 — the upload-dialog UAF is closed on the axis it targeted, and the
+clean-checkout gate passed on the ACTUAL COMMITTED TREE.** 4 files, +697/-14, on branch `garmin/req019-upload-uaf`
+(now 1 ahead of master). Staged via plumbing: 3 whole files + `src/Gui/MainWindow.cpp` HUNK-SPLIT to its 16-line comment
+hunk — the committed copy contains ZERO Coach content and the worktree copy is md5-identical to its pre-session state
+through BOTH pre-commit stash cycles, so the Coach owner's uncommitted work was never at risk. clang-format rewrote the
+test file on attempt 1 (cosmetic only) → re-staged and RE-VERIFIED BY EXECUTION (20/20, 26/26) before retrying, per
+LSN-007. Committed tree `1ab2135a…` == intended staged tree. **Clean gate run TWICE**: once on the pre-format staged
+tree, then AGAIN on the committed tree after the reformat rather than assuming whitespace was harmless — `git archive
+HEAD` extract → configure + build → GoldenCheetah 27,983,584 B + 26 test executables, ctest 26/26, ASan 20/20.
+**A3 verdict: the targeted axis is CLOSED; a SECOND axis is not.** A3-R019-F1/F2 (orchestrator spot-checked and
+CONFIRMED at all four cited sites): the guards protect the DIALOG's lifetime only — `context`/`item` belong to the
+AthleteTab, which `MainWindow::removeAthleteTab` deletes SYNCHRONOUSLY while MainWindow's own WA_DeleteOnClose deletion
+is DEFERRED, so the dialog reliably outlives its Context and `self.isNull()` never fires. **The same gap is LIVE ON
+MASTER in the shipped sync dialog** (`ae5a7a8ab`), which weakens the recorded A3-R027-CLOSURE claim. User decision:
+commit REQ-019, fix that axis in the new **REQ-021** across BOTH dialogs, with a purpose-built fake modelling the real
+two-phase teardown order (the current stubs cannot express it). A3 also REFUTED four hypotheses with evidence.
+Lessons this wave: [[LSN-045]] (DEC self-consistency + run the alignment probe), [[LSN-046]] (a self-lifetime guard
+covers exactly ONE pointer — `this`), [[LSN-047]] (an inert stub cannot prove the fault it is credited with).
+Prior (superseded): **REQ-019 BUILT + VERIFICATION-GATE PASS 2026-08-08 (uncommitted); A3 RUNNING.** The upload-dialog UAF is
+fixed per DEC-029 Option B: ctor is a widget shell, `start()` carries the blocking work behind 6 self-bails, the
+construction site (`CloudService::upload`, NOT uploadCloud) is heap + `WA_DeleteOnClose` + `if(start()==false) return`
++ `exec()` with no else-delete, modal preserved, store ownership untouched. 9 new ASan slots (11→20), full ctest 26/26.
+**Gate evidence, orchestrator-executed:** own mutation of the post-`open()` self-bail → `heap-use-after-free` at
+CloudService.cpp:418, restored byte-identical (md5 `dba7edb8…`, `cmp`); FILES reconciled (62 dirty = 59 pre-existing + 3
+touched, zero residue); `MainWindow.cpp` diff read line-by-line = COMMENT-ONLY with the Coach owner's hunks intact.
+**TEST-080's gating question HELD** — `QDialog::exec()` does self-protect when `this` dies mid-loop on Qt 6.8.2 here, so
+DEC-029 Option B is not falsified. **Two governance defects found by the BUILDER, in the orchestrator's own DEC text**
+(O-R019-01 → LSN-045): DEC-029 named `MainWindow::uploadCloud` as the construction site (it is `CloudService::upload`;
+the same DEC cited it correctly two paragraphs earlier), and shipped an alignment probe unsatisfiable under the very
+idiom it mandated. Both corrected in place. This is the SECOND briefing-accuracy failure this wave after the LSN-034
+proximity-grep miss — the delegation hatch caught both, which is the only reason neither cost anything. Six residuals
+open (B-R019-01..06), none blocking; B-R019-02 is a real latent UAF one edit away.
+Prior (superseded): **BRANCH LANDED + REQ-019 WAVE OPENED 2026-08-07 (user decided both).** (i) `garmin/req017-lifecycle-uaf`
+(4 ahead / 0 behind) was **fast-forwarded onto `master`** — `master` is now `2f0de993d`, carrying REQ-017 (`ae5a7a8ab`),
+its docs record (`3651de222`), the ORCH-001 build fix (`427da745b`) and its docs record. Landed via `git branch -f
+master HEAD` + checkout rather than a merge-from-master, deliberately: 52 pre-session dirty entries (Coach/Gui/CMake/
+vcpkg/skill WIP) would have blocked a branch switch, and the ff-in-place touches zero working-tree files — all 53
+entries verified preserved after (53 = the 52 + this cursor). **Nothing pushed**; local `master` is 50 ahead of
+`origin/master`, which is the user's call. (ii) **DEC-029 ALLOCATED** (WIKI bumped next:garmin-030) for the REQ-019
+Upload-UAF fix shape; `qgdw-scout` dispatched with a grep-verified briefing (upload-path lines re-verified on disk
+today; Upload-capable services enumerated from `capabilities()` = ~11 shipped integrations incl. Strava via the
+CloudService.h:104 base default, NOT Garmin-only — LSN-034 pre-flight honoured). Scout must also propose the elaborated
+REQ-019 acceptance criterion. Known seam for the proof: `testGarminConnectSyncDialogClose` (unittests/Core/
+garminconnect/CMakeLists.txt:1339-1457) is an EXISTING ASan+offscreen ctest target and the direct template; no Upload
+ASan test exists yet. **SCOUT RETURNED + Verification-Gate PASS; DEC-029 ACCEPTED (Option B) and REQ-019 DISPATCHED to
+`qgdw-builder` on branch `garmin/req019-upload-uaf` — see NEXT_GATE.** The scout FALSIFIED the orchestrator's own
+briefing premise (LSN-034 recur:2, saves:1 miss:2): the pasted service list was built by a PROXIMITY grep
+(`-A3 … | grep -B1 Upload`) which asserts co-occurrence, not membership — it wrongly named Azum/Nolio/Withings AND
+GarminConnect itself as Upload-capable when all four omit the bit (`GarminConnect.h:76` = `Query|Download`, DEC-005).
+Corrected membership: 6 explicit (RideWithGPS, CyclingAnalytics, Selfloops, SportsPlusHealth, TrainingsTageBuch, Xert)
++ 5 inheriting the `CloudService.h:104` base default (Strava, Dropbox, SixCycle, SportTracks, LocalFileStore) = 11.
+**REQ-019 is therefore a NON-Garmin fix living in the Garmin ledger** — hence ORCH-008 (test-home misnomer, accepted).
+Byproducts merged: DEC-029 full entry + trace DEC row + REQ-019 trace row + elaborated prd acceptance + ORCH-008
+finding + WIKI bumps (DEC next:030, TEST next:T-081, ORCH next:009).
+Prior (superseded): **ORCH-001 FIXED + COMMITTED `427da745b` 2026-08-07 (DEC-028) — the clean-checkout gate now RUNS, for the
 first time in this project.** `git worktree`/`git archive` extract of the staged tree → configure+generate OK, lrelease
 emits all 13 `.qm`, `GoldenCheetah` (27.9 MB) + 26 test executables link, **ctest 26/26**. Committed tree hash is
 byte-identical to the verified tree (`d8dfe490…`), so evidence and commit cannot have drifted. **ORCH-001 turned out to
@@ -297,9 +351,71 @@ Garmin only; final CLV VAL-015 PASS; pre-commit clang-format/ruff/mypy passed af
 + 2 files reformatted, re-verified per LSN-007). Prior: **REQ-007 DONE + COMMITTED `d312886a6`** (docs-record
 `f637c138b`).
 
-NEXT_GATE: **AWAITING USER — REQ-017 closed, ORCH-001 fixed and clean-build-verified. Two open calls: (i) land the
-branch on master, (ii) start the REQ-019/020 follow-up wave.**
-1. **Branch disposition — the blocker is GONE.** `garmin/req017-lifecycle-uaf` = 3 ahead / 0 behind `master`,
+NEXT_GATE: **AWAITING USER — REQ-019 is closed (feature `e8833682f` + this docs record). Two open calls, in priority
+order.**
+1. **REQ-021 — the collaborator-lifetime UAF axis (A3-R019-F1/F2). Recommend this next.** It is the only BLOCKING item,
+   it spans BOTH the upload dialog and the **already-shipped** sync dialog (F2 is live on master via `ae5a7a8ab`), and
+   it needs a DEC plus harness work FIRST: a purpose-built owner that deletes its Context synchronously while deferring
+   its own `deleteLater()`, since `ImportSeamStubs` cannot express production's two-phase order. Fixing the stubs also
+   closes A3-R019-F3 / B-R019-05.
+2. **REQ-020 — OAuth-wizard UAF** (`AddCloudWizard::AddAuth::doAuth`), the last known member of the ORIGINAL
+   dialog-lifetime class. Note REQ-021 may change the recipe REQ-020 should apply, so REQ-021 first is the cheaper order.
+3. **Branch disposition:** `garmin/req019-upload-uaf` is 1 ahead of `master`, unmerged, clean-build-verified — a
+   fast-forward is available whenever you want it (same in-place `git branch -f` technique as last time; the 62 dirty
+   working-tree entries make a branch switch unsafe otherwise).
+4. **Cheap, non-blocking bench:** A3-R019-F3/F4/F5/F6, B-R019-01..06, ORCH-008 (test-home misnomer), plus the older
+   A3-R012/B-R017/B-R018 items and VAL-016's two coverage WARNs. F6 in particular is an UNANSWERED sibling-scan question
+   (CloudDB* dialogs) — cheap to answer, and this project has been burned twice by skipped sibling scans (LSN-041).
+5. **Not the agent's call:** the pre-session Coach/skill/tooling dirt stays with its owners; nothing has been pushed to
+   `origin` (local master is 50 ahead).
+--- superseded (kept for provenance) ---
+NEXT_GATE-PRIOR-COMMIT: **REQ-019 COMMIT GATE — IN PROGRESS 2026-08-08.** A3 is DONE (verdict FINDINGS; F1/F2 confirmed by
+orchestrator spot-check and routed by user decision into the new REQ-021, whose lifecycle row lives in
+traceability.md; F3-F6 open non-blocking; four A3 hypotheses
+REFUTED with evidence, incl. the TEST-080 ESC/self-close worry and B-R019-02). Changeset STAGED via plumbing:
+3 whole files (CloudService.{h,cpp}, the ASan test) + `src/Gui/MainWindow.cpp` HUNK-SPLIT to 16 lines (the comment hunk
+only — the Coach owner's 4 hunks excluded; staged blob verified to contain ZERO Coach content, working tree md5-verified
+untouched). Clean-checkout gate RUNNING against `git write-tree` extract (configure OK, `BUILD_TESTS=ON`; full build in
+flight). Remaining: build+ctest green from clean → commit (b) feat → commit (d) governance/docs. THEN the queue is
+REQ-021 (collaborator-lifetime axis, covers BOTH dialogs, F2 half is live on master) and REQ-020 (OAuth wizard).
+--- superseded (kept for provenance) ---
+NEXT_GATE-PRIOR-A3: **REQ-019 A3 GATE — `qgdw-adversary` dispatched 2026-08-08 against the built, Verification-Gate-PASSED
+changeset (uncommitted, branch `garmin/req019-upload-uaf`).** The build is DONE and independently verified (20/20 ASan
+slots, ctest 26/26, own orchestrator mutation → UAF at CloudService.cpp:418, restored byte-identical). A3 is briefed to
+attack 8 specific things, chief among them: the TEST-080 `exec()`-self-protection conclusion (verifies Qt, not the fix,
+and had no pre-fix RED), the DELIBERATELY-OMITTED DEC-024 close-gate (falsify "no close route exists during blocking
+work"), a **sibling scan** (LSN-041 — skipping it four DECs ago is precisely how REQ-019 was born), and the latent
+B-R019-02. On A3 return: disposition findings with the user, re-spawn only what fails, then the COMMIT GATE. **Note the
+commit gate will need hunk-splitting again** — `src/Gui/MainWindow.cpp` carries the Coach owner's uncommitted work
+alongside this changeset's comment-only hunk (LSN-007/010; never `git add -A`). AFTER commit: REQ-020 (OAuth-wizard
+UAF) is the last known member of this UAF class.
+--- superseded (kept for provenance) ---
+NEXT_GATE-PRIOR-0: **REQ-019 BUILD GATE — `qgdw-builder` dispatched 2026-08-07 on branch `garmin/req019-upload-uaf` (@ `2f0de993d`,
+branched off the freshly-landed master).** DEC-029 is ACCEPTED (Option B): two-phase `start()` + heap/`WA_DeleteOnClose`,
+modal `exec()` PRESERVED, store ownership UNCHANGED, DEC-024's close-gate deliberately OMITTED (no user-close route
+exists during upload's blocking work — `okcancel` is unconnected until `completed()` fires). TEST-079 + TEST-080
+allocated to the builder; test home = the existing ASan target `testGarminConnectSyncDialogClose` (knowing misnomer,
+ORCH-008). **TEST-080 is the gating probe:** it must EXECUTE-verify that `QDialog::exec()` self-protects when `this`
+dies mid-loop — the one DEC-029 claim that is reasoned, not executed, and the thing that lets `closeAndDeleteStore(db)`
+stay unguarded at MainWindow.cpp:2563. If it does NOT hold, DEC-029 Option B is partly falsified and RE-OPENS (builder
+was told to stop and report, not to work around it). On return: Verification Gate (contract / independent re-run +
+own mutation of a guard / goal audit vs the verbatim acceptance criterion), then merge byproducts, then A3 with the
+adversary. **Hazard the builder was warned about:** `src/Gui/MainWindow.cpp` is ALREADY DIRTY with the Coach owner's
+uncommitted work — no `git checkout --`/`git restore` on it under any circumstances (LSN-032); `.orig` copies + `cmp`.
+REQ-020 (OAuth-wizard UAF) stays queued behind this.
+--- superseded (kept for provenance) ---
+NEXT_GATE-PRIOR-1: **DEC-029 DECISION GATE — the REQ-019 (Upload UAF, HIGH) fix shape.** → RESOLVED 2026-08-07: user chose Option B + reuse-the-Garmin-harness. `qgdw-scout` is researching the three
+options against the proven DEC-024..027 recipe; on return the orchestrator runs the Verification Gate (three REAL
+options? scores justified? sibling count re-verified? cascade concrete?) and PRESENTS the proposal to the user. On the
+user's choice: append the full DEC entry + index line, elaborate the REQ-019 acceptance criterion in prd.md, allocate
+TEST ids from WIKI (next:garmin-T-079), branch off `master`, and dispatch `qgdw-builder`. REQ-020 (OAuth-wizard UAF)
+stays queued behind it. Evidence bar for this wave is non-negotiable (lifetime/ownership slice): the acceptance
+evidence must be an EXECUTED ASan test that tears the parent down mid-upload, and the guard must sit on the layer that
+performs the unsafe operation. Blast radius is ~11 shipped non-Garmin integrations — shared-code caution per LSN-034.
+--- superseded (kept for provenance) ---
+NEXT_GATE-PRIOR-2: **AWAITING USER — REQ-017 closed, ORCH-001 fixed and clean-build-verified. Two open calls: (i) land the
+branch on master, (ii) start the REQ-019/020 follow-up wave.** → BOTH ANSWERED 2026-08-07: (i) ff-merged, (ii) started.
+1. **Branch disposition — the blocker is GONE.** `garmin/req017-lifecycle-uaf` = 4 ahead / 0 behind `master` (re-measured 2026-08-07, after the ORCH-001 docs-record commit `2f0de993d`),
    unmerged, fast-forward available. **ORCH-001 is FIXED (`427da745b`), so branch HEAD now configures, builds and
    passes 26/26 from a clean checkout — the gate that blocked verified merging for three commits.** The two prior
    Garmin commits carry an ORCH-001 caveat in their messages that is now historical, not live. Recommend merging.
@@ -593,7 +709,22 @@ GC_WANT_GARMINCONNECT GarminMfaPage.cpp hunk (hunk-split from the unrelated Coac
 tree still carries unrelated pre-session edits (`src/Coach/*`, `src/Gui/*`, root `CMakeLists.txt`, `vcpkg.json`,
 `.claude/skills/**`, `.claude/agents/*`) — NOT Garmin; the Garmin commit must stay path-scoped, never `git add -A`.
 
-BLOCKING: **A3-R027-F1 (Upload path) + A3-R027-F2 (OAuth wizard auth) — the SAME UAF class in SIBLING dialogs, both
+BLOCKING: **A3-R019-F1 + A3-R019-F2 (NEW 2026-08-08, A3 on REQ-019) — a SECOND UAF axis nobody had looked at:
+the guards protect the DIALOG's lifetime; NOTHING protects `context`/`item`.** The dialog is parented to MainWindow,
+but Context/RideItem belong to the narrower-lived AthleteTab, and `MainWindow::removeAthleteTab` (MainWindow.cpp:2183-85)
+deletes them SYNCHRONOUSLY while MainWindow's own WA_DeleteOnClose deletion is DEFERRED — so the dialog reliably
+OUTLIVES its Context, every `self.isNull()` bail stays false, and `start()` resumes onto freed memory at
+CloudService.cpp:424 and :443-445. Reachable by ordinary window close (closeEvent :1103) AND by single-tab close
+(`AthleteView.cpp:213` → `closeAthleteTab`). **F2: the identical gap is in the SHIPPED sync dialog** (CloudService.cpp:1070,
+:1094-1099 — REQ-017/DEC-026/027, commit `ae5a7a8ab`, already on master), which weakens the A3-R027-CLOSURE "sync class
+CLOSURE assertion, and the "proven recipe" premise that decision leaned on.
+Orchestrator spot-checked all four cited sites for F1
+and F2 and CONFIRMED. NOT executable in the current harness (MainWindow/Context/RideItem are inert stubs in
+`ImportSeamStubs.cpp`) and TEST-079's `killOwner` structurally cannot express it (it deletes owner+context back-to-back,
+so the dialog always dies first). **AWAITING A USER SCOPE DECISION** — same shape as the A3-R027-F1/F2 call. Lessons
+[[LSN-046]] (self-guard ≠ collaborator guard) + [[LSN-047]] (inert stubs cannot prove the fault they are credited with).
+The REQ-019 dialog-lifetime fix itself is DONE, verified and NOT in question — it closes the axis it targeted.
+Superseded (kept for provenance): **A3-R027-F1 (Upload path) + A3-R027-F2 (OAuth wizard auth) — the SAME UAF class in SIBLING dialogs, both
 PRE-EXISTING and OUT of REQ-017 scope.** These block a "class closed codebase-wide" claim but do NOT block committing
 the DEC-024..027 SYNC changeset (which is verified done — the sync class IS closed, A3-R027-CLOSURE, and the changeset
 neither introduces nor worsens F1/F2). **Disposition is a user SCOPE decision** (ship sync + new REQs for F1/F2, or
