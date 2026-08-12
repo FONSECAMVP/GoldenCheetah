@@ -37,9 +37,9 @@ wrong in this repo before.
 **One deliberate exclusion:** `.claude/hooks/anti_duplication_guard.py` is byte-identical to its install source
 (md5 `658575d4…` both), so it is a sync artifact of the USER's pre-session skill update, not this wave's work. Left
 uncommitted with the rest of the skill/tooling churn, which remains the user's call.
-**STILL TO DO: the clean-worktree configure+build of the COMMITTED tree** — the gate that caught ORCH-005/006/007, and
-the only gate that does not run inside the developer's working tree. Until it passes, this wave is committed but not
-verified-from-clean.
+**CLEAN-WORKTREE GATE: PASSED 2026-08-13 on the committed tree** (`4c3608e89`, tree `37335557f…`) — 822/822 targets,
+`GoldenCheetah` 27,984,000 B, 26 test executables, ctest 26/26, the wave's ASan target 42/42. Details in NEXT_GATE.
+**This wave is committed AND verified-from-clean.**
 
 Prior (superseded): **AT THE COMMIT GATE 2026-08-12. The A3 re-clear found one BLOCKING defect, it was fixed under REQ-026, and the
 fix is orchestrator-verified BY EXECUTION (42/42 ASan, 26/26 ctest, both guards mutation-proven load-bearing under a
@@ -492,7 +492,43 @@ Garmin only; final CLV VAL-015 PASS; pre-commit clang-format/ruff/mypy passed af
 + 2 files reformatted, re-verified per LSN-007). Prior: **REQ-007 DONE + COMMITTED `d312886a6`** (docs-record
 `f637c138b`).
 
-NEXT_GATE: **THE CLEAN-WORKTREE BUILD GATE — the last step of this wave's close. Commits (a) `6dc794caf` and
+NEXT_GATE: **WAVE CLOSED. The clean-worktree gate PASSED on the COMMITTED tree 2026-08-13. Nothing is running, nothing is
+blocked, and the next action is the user picking the next REQ from the queue below.**
+
+**CLEAN-EXTRACT GATE — PASS, run on `git archive HEAD` of `4c3608e89` (tree `37335557f156ed175bc5427ba73b284b6d711327`),
+extracted to a scratch dir with its own fresh build tree:**
+configure + generate clean (Qt 6.8.2, C++17, Release, Ninja) with **Garmin Connect: ON** and **Unit Tests: ON** (note
+`BUILD_TESTS` defaults to **OFF**, so a gate that forgets it proves nothing about the tests) · **822/822 targets built** ·
+`src/GoldenCheetah` linked, **27,984,000 bytes** · **26 test executables** · **`ctest` 26/26** · the wave's own ASan
+target **42/42**, including both REQ-026 slots by name
+(`anAbortInsideUploadNextMustStopTheLoopNotJustProveTheDialogIsAlive`,
+`anAbortInsideUncompressRideMustStopCompletedReadFinishingSaveRide`).
+**Completion was verified properly, not read off a log line:** the background build's `BUILD EXIT: 0` was `tail`'s status,
+not cmake's — the pipe swallowed the real one — so completion was re-established by re-running the build and getting
+`ninja: no work to do` with an unpiped exit 0, plus the artifact counts above. A pipeline's `$?` is not the build's `$?`.
+**Pre-existing warning, not ours, not fixed:** `GarminConnect.cpp:60` uses the deprecated `QDateTime::setTimeSpec(Qt::UTC)`
+(Qt 6 wants `setTimeZone()`). Cosmetic, predates this wave, left alone deliberately.
+**Evidence-vs-commit integrity:** the gate ran against the tree of `4c3608e89`. The clean-gate RESULT is recorded in a
+SEPARATE follow-up commit rather than by amending `4c3608e89`, precisely so the verified tree stays byte-identical to the
+tree that was verified — amending would have made the recorded evidence describe a tree that no longer existed.
+
+**THE QUEUE — user picks (nothing here is blocked):** a new REQ for **B-R026-01** (the silent sync stall — newly found,
+and arguably the most user-visible item: a frozen sync with no error) · a new REQ for **A3-R021b-F2** (file-IO layer,
+`RideFile.cpp:999`) · **REQ-024** (Strava store-side UAF at `blockingCallDepth == 0`; needs a sibling scan of the other
+16 subclasses first — only Xert was checked) · **REQ-020** (OAuth wizard, WIDENED to `AddCloudWizard`) · **REQ-022**
+(QThread cross-thread: `OpenData`, `CloudServiceAutoDownload` — scout-reported, NOT orchestrator-verified, spot-check
+first) · **REQ-023** (store-layer `uncompressRide`) · **B-R025-03's DEC** (the `blockingCallDepth` predicate question) ·
+**ORCH-014** (repair CLV Check 5's grep — vacuous since 2026-08-08) · ORCH-011/012/013 · B-R026-02 (harness
+`rideMetadata` UB) on the next slice touching `ImportSeamStubs.cpp`.
+**Also worth deciding soon:** promoting [[LSN-034]] to MECHANISM (recur:5, five-for-five hatch catches, never once
+costly) — the same path LSN-001 and LSN-008 took. Restating it a sixth time is the option this project has already
+learned not to take.
+**Housekeeping left to the user, unchanged:** the 52 dirty entries (Coach/Gui/CMake/vcpkg/skill churn incl.
+`.claude/hooks/anti_duplication_guard.py`, byte-identical to its install source) and whether to merge/push
+`garmin/req021-collaborator-uaf` (7 ahead of `master`, 0 behind, NOT merged, NOTHING PUSHED).
+
+--- prior gate (resolved 2026-08-13 — clean gate PASSED) ---
+NEXT_GATE-PRIOR-CLEAN: **THE CLEAN-WORKTREE BUILD GATE — the last step of this wave's close. Commits (a) `6dc794caf` and
 (b) `3f44c447f` are DONE; (c) this docs record is being written now. What remains is a configure+build+ctest of the
 COMMITTED tree from a clean extract (`git archive HEAD` / `git worktree`), which is mandatory at a feature close and is
 the gate that caught ORCH-005/006/007. Every other gate this wave ran inside the developer's working tree.**
