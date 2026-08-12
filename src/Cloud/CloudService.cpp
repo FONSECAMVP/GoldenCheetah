@@ -22,6 +22,7 @@
 #include "RideCache.h"
 #include "RideItem.h"
 #include "MainWindow.h"
+#include "AthleteTab.h"     // DEC-garmin-030 - both dialogs parent to context->tab
 #include "JsonRideFile.h"
 #include "CsvRideFile.h"
 #include "Colors.h"
@@ -64,6 +65,32 @@ CloudService::~CloudService()
     list_.clear();
 }
 
+// DEC-garmin-030 (REQ-021) / A3-R021-F3 - WHO THE CLOUD DIALOGS HANG OFF.
+//
+// The athlete tab, because it OWNS the Context, Athlete and RideItem these
+// dialogs point at (MainWindow::removeAthleteTab, MainWindow.cpp:2183-2185, frees
+// all of them synchronously) - so as its child a dialog is destroyed strictly
+// before them and every self-bail becomes true again.
+//
+// But context->tab is NULL for a real window: AthleteTab's constructor assigns it
+// (AthleteTab.cpp:35) LATER than the Context is built and published
+// (MainWindow::openAthleteTab, MainWindow.cpp:2038), so a dialog raised in that
+// window would get no parent at all - and a PARENTLESS top-level modeless QDialog
+// is not a neutral choice. Measured on Qt 6.8.2 (A3-R021-F3): it blocks nothing
+// (QDialog::open() sets Qt::WindowModal, which with no transient parent has
+// nothing to be modal to), it survives the main window's close, and
+// quitOnLastWindowClosed never fires while it is up - i.e. an orphan visible
+// window that keeps the application alive.
+//
+// So fall back to the window. That is the pre-REQ-021 parent: it reintroduces the
+// outliving-the-Context exposure for that window only, which is exactly what the
+// collaborator guards (part 2 of DEC-030) exist to cover.
+static QWidget *cloudDialogParent(Context *context)
+{
+    if (context->tab != NULL) return context->tab;
+    return context->mainWindow;
+}
+
 // get a new filestore entry
 CloudServiceEntry *
 CloudService::newCloudServiceEntry()
@@ -92,7 +119,33 @@ CloudService::upload(QWidget *parent, Context *context, CloudService *store, Rid
     // Upload stays MODAL and blocking - exec(), not open(). It is a per-ride,
     // short operation, and going modeless would race the store teardown at
     // MainWindow.cpp:2563 (see DEC-029 option A, rejected).
-    CloudServiceUploadDialog *uploader = new CloudServiceUploadDialog(parent, context, store, item);
+    //
+    // DEC-garmin-030 (REQ-021) - THE PARENT IS THE ATHLETE TAB, NOT `parent`.
+    //
+    // `parent` is the MainWindow (MainWindow.cpp:2556), which OUTLIVES this
+    // dialog's collaborators: MainWindow::removeAthleteTab frees the tab, the
+    // Athlete and the Context synchronously (MainWindow.cpp:2183-2185) and
+    // MainWindow's own destruction is deferred (WA_DeleteOnClose,
+    // MainWindow.cpp:143). A window-parented dialog therefore sails through an
+    // athlete close with every `QPointer self(this)` bail still FALSE, holding
+    // raw pointers into three freed objects - proven under ASan by TEST-082/083.
+    //
+    // context->tab owns the Context (AthleteTab.cpp:35), so as a child of the tab
+    // this dialog is destroyed by ~QObject's deleteChildren() at `delete tab` -
+    // the FIRST of those three deletes - and every existing self-bail becomes
+    // true again. Modality is unaffected: exec() is application-modal wherever
+    // the dialog hangs (TEST-085), and a child QDialog WINDOW does not follow its
+    // parent widget's hide on athlete switch (TEST-081, measured on Qt 6.8.2).
+    //
+    // `parent` is consequently unused. The signature is kept as it is because it
+    // is the public entry point for eleven services and reads as "who is asking";
+    // the athlete tab is derived from `context`, which is the same call's second
+    // argument.
+    //
+    // A3-R021-F3 - context->tab is not always set (see cloudDialogParent above),
+    // so the window is the fallback rather than no parent at all.
+    Q_UNUSED(parent);
+    CloudServiceUploadDialog *uploader = new CloudServiceUploadDialog(cloudDialogParent(context), context, store, item);
     uploader->setAttribute(Qt::WA_DeleteOnClose);
 
     // NO `else delete uploader` (the DEC-027 precedent): when start() fails it
@@ -408,13 +461,45 @@ CloudServiceUploadDialog::start()
 {
     QPointer<CloudServiceUploadDialog> self(this);
 
+    // DEC-garmin-030 (REQ-021) part 2 - THE COLLABORATORS, GUARDED TOO.
+    //
+    // The reparent (CloudService::upload, above) fixes the ORDER: this dialog is
+    // a child of context->tab, so an athlete close destroys it BEFORE the objects
+    // it points at and `self` alone covers every frame below. This rider covers
+    // the case that reparent cannot reach - a dialog hosted by something
+    // longer-lived than the tab whose Context it holds (context->tab unset, or a
+    // future caller that parents it elsewhere). Then `self` stays non-null while
+    // `context` and `item` are freed, and the very next statements are
+    // item->isDirty() and the Save branch's context / context->ride /
+    // context->mainWindow. Context and RideItem are both QObjects (Context.h:106,
+    // RideItem.h:41), so QPointer tracks them for real.
+    //
+    // EVERY `ctx`/`ride` WIDENING IN THIS FUNCTION IS MUTATION-PROVEN (A3-R021-F5).
+    // There are two, and only two, statements after a suspension point here that
+    // dereference a collaborator rather than `this`:
+    //
+    //   * item->isDirty() (:471) and the whole body below it, after store->open();
+    //   * the Save branch (:490-492) - context->notifyMetadataFlush(),
+    //     context->ride->notifyRideMetadataChanged(),
+    //     context->mainWindow->saveSilent(context, item) - after the
+    //     unsaved-changes QMessageBox::exec().
+    //
+    // Those two bails carry `ctx`/`ride`; drop either and TEST-083's
+    // window-hosted runs abort under ASan. The remaining bails in this function
+    // are `self`-only ON PURPOSE: what follows them is a call on `this` and
+    // nothing else, so a `ctx` test there would be a guard no test could ever
+    // make fail - and REQ-021's criterion is that each guard be shown
+    // load-bearing, not that guards be applied uniformly.
+    QPointer<Context> ctx(context);
+    QPointer<RideItem> ride(item);
+
     // lets open the store
     QStringList errors;
     // For most services this is a real nested QEventLoop over network I/O. Land
     // the result in a LOCAL: if the athlete window was torn down inside it,
     // `this` is already freed and only the bool survives.
     bool opened = store->open(errors);
-    if (self.isNull()) return false;
+    if (self.isNull() || ctx.isNull() || ride.isNull()) return false;
     status = opened;
 
     // compress and upload if opened successfully.
@@ -436,7 +521,7 @@ CloudServiceUploadDialog::start()
                 // like to answer, and the athlete window can close underneath it.
                 // `ret` is a LOCAL, so a teardown here costs only the bail below.
                 int ret = msgBox.exec();
-                if (self.isNull()) return false;
+                if (self.isNull() || ctx.isNull() || ride.isNull()) return false;
                 switch (ret) {
                 case QMessageBox::Save:
                     // save
@@ -449,6 +534,10 @@ CloudServiceUploadDialog::start()
                     break;
                 case QMessageBox::Cancel:
                     QApplication::processEvents();
+                    // `self`-only: the only statement after this is a call on
+                    // `this`. A ctx/ride test here would additionally SUPPRESS
+                    // the queued close on a live dialog, which is the wrong
+                    // trade for a guard nothing can prove (A3-R021-F5).
                     if (self.isNull()) return false;
                     QMetaObject::invokeMethod(this, "close", Qt::QueuedConnection);
                     return false;
@@ -459,18 +548,47 @@ CloudServiceUploadDialog::start()
 
         }
 
-        // get a compressed version
+        // DEC-garmin-030 (REQ-025) - THE LAZY OPEN IS A SUSPENSION POINT, and the
+        // comment that used to stand here said it was not.
         //
-        // compressRide() runs no nested event loop - it is QTemporaryFile plus a
-        // RideFileReader::writeRideFile, and the only QEventLoop anywhere in the
-        // file writers is on the FIT READ path (FitRideFile.cpp:172, reached from
-        // openRideFile) - so a separate self-bail between it and writeFile would
-        // be unreachable and untestable. The one below covers the pair.
-        store->compressRide(item->ride(), data, QFileInfo(item->fileName).baseName() + ".json");
+        // It said: "compressRide() runs no nested event loop ... and the only
+        // QEventLoop anywhere in the file writers is on the FIT READ path
+        // (FitRideFile.cpp:172, reached from openRideFile) - so a separate
+        // self-bail between it and writeFile would be unreachable and
+        // untestable." THE FIT READ PATH IS REACHED FROM HERE.
+        // `item->ride()` is RideItem::ride(bool open = true), which opens the
+        // ride file through RideFileFactory::openRideFile whenever it is not
+        // already in memory (RideItem.cpp:175-181) - and for a .fit activity that
+        // waits up to five seconds on a network reply inside a nested QEventLoop.
+        //
+        // An athlete tab closing inside that loop destroys THIS dialog (it is a
+        // child of context->tab, DEC-030 part 1), and the very next statement
+        // reads `store` and hands over the `data` MEMBER: measured as an ASan
+        // heap-use-after-free at the writeFile below (TEST-092).
+        //
+        // Opened ONCE, into a local, so the second call at writeFile cannot
+        // suspend again and cannot dereference `item` a second time.
+        //
+        // The bail is `self`-only ON PURPOSE (A3-R021-F5): what follows touches
+        // `this`, `store` and `item`, and `item` is the object this suspension is
+        // executing ON - RideItem::ride resumes by writing its own `ride_`, so a
+        // collaborator test here could never be the thing that saves anything,
+        // and no run can make it fail. `self` is proven load-bearing by TEST-092.
+        //
+        // NOT a BlockingCall: this dialog does not own its store (the caller
+        // does, MainWindow.cpp:2563) and carries none of DEC-024's machinery -
+        // see the note above start().
+        RideFile *rideFile = item->ride();
+        if (self.isNull()) return false;
+
+        // get a compressed version
+        store->compressRide(rideFile, data, QFileInfo(item->fileName).baseName() + ".json");
 
         // ok, so now we can kickoff the upload. LOCAL first: `status = ...` here
         // would BE the use-after-free if writeFile blocked and the window closed.
-        bool wrote = store->writeFile(data, QFileInfo(item->fileName).baseName() + store->uploadExtension(), item->ride());
+        bool wrote = store->writeFile(data, QFileInfo(item->fileName).baseName() + store->uploadExtension(), rideFile);
+        // `self`-only: everything below this line touches `this` and `store`,
+        // never `context` or `item` (A3-R021-F5).
         if (self.isNull()) return false;
         status = wrote;
     }
@@ -487,6 +605,8 @@ CloudServiceUploadDialog::start()
         // Another unbounded nested loop; the teardown lands here too, and the
         // very next statement is a call on `this`.
         msgBox.exec();
+        // `self`-only, as for the pair below: this branch calls hide(),
+        // processEvents() and close() - all on `this` (A3-R021-F5).
         if (self.isNull()) return false;
 
         QWidget::hide(); // don't show just yet...
@@ -821,10 +941,24 @@ FolderNameDialog::FolderNameDialog(QWidget *parent) : QDialog(parent)
 // After it returns `this` is a fully-constructed object. Everything from
 // store->open() onward moved to start(), which runs on that complete object and
 // is therefore covered by DEC-024/025 like every other resuming frame.
+//
+// DEC-garmin-030 (REQ-021) - THE PARENT IS THE ATHLETE TAB, NOT THE WINDOW.
+//
+// This dialog used to parent itself to context->mainWindow, which outlives the
+// Context, Athlete and RideCache its modeless slots dereference: an athlete
+// close frees all three synchronously (MainWindow.cpp:2183-2185) while the
+// window - and therefore this dialog - lives on. context->tab owns the Context
+// (AthleteTab.cpp:35), so as its child this dialog is destroyed at `delete tab`,
+// strictly before them, and DEC-024/025/026's self-bails do the rest. Both
+// construction sites (MainWindow::syncCloud and AddCloudWizard.cpp:892) are
+// covered by this one line. See TEST-081 (a child QDialog window does not follow
+// its parent's hide, so athlete switching does not hide it) and TEST-084.
+// A3-R021-F3 - context->tab is not always set (see cloudDialogParent, above), so
+// the window is the fallback rather than no parent at all.
 CloudServiceSyncDialog::CloudServiceSyncDialog(Context *context, CloudService *store)
-    : QDialog(context->mainWindow, Qt::Dialog), context(context), store(store),
+    : QDialog(cloudDialogParent(context), Qt::Dialog), context(context), store(store),
       downloading(false), sync(false), aborted(false),
-      blockingCallDepth(0), closeDeferred(false),
+      blockingCallDepth(0), closeDeferred(false), reaper(NULL),
       listindex(0),
       tabs(nullptr), athleteCombo(nullptr), refreshButton(nullptr),
       cancelButton(nullptr), downloadButton(nullptr), from(nullptr), to(nullptr),
@@ -854,12 +988,42 @@ CloudServiceSyncDialog::start()
     QPointer<CloudServiceSyncDialog> self(this);
     BlockingCall blocking(this);
 
+    // DEC-garmin-030 (REQ-021) part 2 - THE COLLABORATOR, GUARDED TOO.
+    //
+    // The reparent (this dialog's constructor, above) fixes the ORDER, so for a
+    // dialog that IS a child of context->tab `self` already covers everything
+    // below. This rider covers the case it cannot reach - a dialog hosted by
+    // something longer-lived than the tab whose Context it holds - where `self`
+    // stays non-null while `context` is freed and the widget build below reads
+    // context->athlete->cyclist (:987) and context->athlete->rideCache->rides()
+    // (:1147). Context is a QObject (Context.h:106), so QPointer tracks it.
+    //
+    // EVERY `ctx` WIDENING IN THIS FUNCTION IS MUTATION-PROVEN (A3-R021-F5):
+    //
+    //   * after store->open() - the widget build below reads
+    //     context->athlete->cyclist (:987) and context->athlete->rideCache
+    //     (:1147). Drop it and TEST-084's window-hosted run aborts at :987.
+    //   * after the unsaved-changes prompt - the SaveAll branch calls
+    //     context->notifyMetadataFlush(), context->ride->... and
+    //     context->mainWindow->saveSilent(). Drop it and TEST-084's
+    //     window-hosted dirty-prompt run aborts at :1171.
+    //   * after the tail refreshClicked() - which now stands down on a freed
+    //     Context of its own accord (A3-R021-F2), so without this test start()
+    //     would report SUCCESS and its callers would open() a dialog whose
+    //     Context is gone. Drop it and TEST-086 fails.
+    //
+    // The other bails in this function are `self`-only ON PURPOSE: what follows
+    // them is a call on `this` and nothing else, so no test could ever make a
+    // `ctx` test there fail (REQ-021's criterion is load-bearing guards, not
+    // uniform ones).
+    QPointer<Context> ctx(context);
+
     QStringList errors;
     // store->open() is GarminConnect::blockingRestore - a real nested QEventLoop.
     // Land the result in a LOCAL; if the owning window was torn down inside the
     // loop, `this` is already gone and only the bool survives.
     bool opened = store->open(errors);
-    if (self.isNull()) return false;
+    if (self.isNull() || ctx.isNull()) return false;
 
     if (opened == false) {
         QWidget::hide(); // meh
@@ -873,6 +1037,8 @@ CloudServiceSyncDialog::start()
         // QMessageBox::exec() is an UNBOUNDED nested loop - the same teardown can
         // land here too.
         msgBox.exec();
+        // `self`-only, as for the pair below: this branch calls hide(),
+        // processEvents() and close() - all on `this` (A3-R021-F5).
         if (self.isNull()) return false;
 
         QWidget::hide(); // don't show just yet...
@@ -1088,7 +1254,7 @@ CloudServiceSyncDialog::start()
         // Another unbounded nested loop; `ret` is a LOCAL, so a teardown inside
         // it costs only the bail below.
         int ret = msgBox.exec();
-        if (self.isNull()) return false;
+        if (self.isNull() || ctx.isNull()) return false;
         switch (ret) {
         case QMessageBox::SaveAll:
             context->notifyMetadataFlush();
@@ -1105,6 +1271,16 @@ CloudServiceSyncDialog::start()
             break;
         case QMessageBox::Cancel:
             QApplication::processEvents();
+            // S-R021-01 - THE BAIL THIS BRANCH WAS MISSING. processEvents() is an
+            // event-delivery frame like any other: an athlete close lands here and
+            // destroys this dialog, and the very next statement invokes a method
+            // ON IT. CloudServiceUploadDialog::start()'s structurally identical
+            // Cancel branch has carried this bail since DEC-029.
+            //
+            // `self`-only: the only statement after it is a call on `this`, so a
+            // ctx test would be unprovable and would additionally suppress the
+            // queued close on a live dialog (A3-R021-F5).
+            if (self.isNull()) return false;
             QMetaObject::invokeMethod(this, "close", Qt::QueuedConnection);
             return false;
         default:
@@ -1119,6 +1295,25 @@ CloudServiceSyncDialog::start()
     // start() touches no member before returning.
     refreshClicked();
     if (self.isNull()) return false;
+
+    // B-R021-12 - THE ORPHAN THIS BAIL USED TO LEAVE BEHIND.
+    //
+    // `this` survived but the Context did not, so the two bails above are not
+    // interchangeable. Both callers are `if (start()) open();` with no else, and
+    // by this line the dialog has already been show()n (:1204) and carries
+    // WA_DeleteOnClose - so returning false alone leaves a VISIBLE, modeless
+    // dialog holding a dangling `context`, and the next Refresh click walks freed
+    // memory. Every other failure exit from this function that can leave a live
+    // dialog behind already posts this queued close (the open-failure branch at
+    // :1021, and DEC-029's upload-failure branch at :594); this one did not.
+    //
+    // Queued, not direct, for the same reason they are: close() on a
+    // WA_DeleteOnClose dialog self-deletes, and this frame still has a
+    // BlockingCall on it.
+    if (ctx.isNull()) {
+        QMetaObject::invokeMethod(this, "close", Qt::QueuedConnection);
+        return false;
+    }
 
     return true;
 }
@@ -1147,15 +1342,54 @@ CloudServiceSyncDialog::~CloudServiceSyncDialog()
     // The guard therefore sits on the unsafe OPERATION rather than on the routes
     // to it, so any future direct `delete dialog` is covered by construction.
     //
-    // The store is deliberately LEAKED in that case. That is precisely the
-    // pre-REQ-017 behaviour on this path (there was no destructor at all), and it
-    // is strictly better than a use-after-free. Nothing is deferred: at
-    // parent-teardown time the application is already tearing down, so there is
-    // no live event loop left for a reaper to run on. See TEST-072; TEST-073 is
-    // the control that the ordinary, idle case still closes and deletes.
-    if (blockingCallDepth > 0) return;
+    // DEC-garmin-031 (REQ-022) - AND THE STORE IS NO LONGER LEAKED.
+    //
+    // DEC-025 dropped the store here on the ground that "at parent-teardown time
+    // the application is already tearing down, so there is no live event loop
+    // left for a reaper to run on". REQ-021 falsified that: this dialog is a
+    // child of context->tab now, and closing ONE athlete tab out of several (or
+    // one MainWindow out of several) destroys it while the application carries
+    // on. What was a once-per-exit leak became a per-close accumulating one, and
+    // for GarminConnect every occurrence strands a live worker thread and an
+    // interpreter session.
+    //
+    // So the store is handed to the per-dialog orphan record instead, and the
+    // LAST BlockingCall to unwind closes and deletes it - the point at which no
+    // store call this dialog made is on the stack any more. Not deleteLater():
+    // TEST-089 measures that a deferred deletion posted from inside a nested
+    // QEventLoop is delivered BY that loop, i.e. under the frame executing on the
+    // store. See the StoreReaper comment in CloudService.h.
+    //
+    // `reaper` is non-NULL whenever blockingCallDepth is - both are set by the
+    // same BlockingCall constructor - but the test is written as the condition it
+    // actually is: without a record to hand the store to there is nothing to
+    // reap it, and dropping it (DEC-025's behaviour) remains strictly better than
+    // freeing it under a live call.
+    if (blockingCallDepth > 0) {
+        if (reaper) {
+            reaper->adopt(store);
+            store = NULL;
+        }
+        return;
+    }
 
     closeAndDeleteStore(store);
+}
+
+// DEC-garmin-031 - THE REAP. Runs from ~BlockingCall as the last suspended frame
+// unwinds, so nothing this dialog called is on the stack: closing the store here
+// tears down the worker thread and interpreter session with nothing left to
+// interrupt. A record whose dialog closed normally never adopted anything and
+// simply goes away.
+void
+CloudServiceSyncDialog::StoreReaper::release()
+{
+    if (--refs > 0) return;
+
+    // closeAndDeleteStore clears the pointer BEFORE close()+delete, so a
+    // re-entrant path through this record cannot see a dangling store.
+    closeAndDeleteStore(orphan);
+    delete this;
 }
 
 //
@@ -1172,24 +1406,49 @@ CloudServiceSyncDialog::~CloudServiceSyncDialog()
 // count raised would wedge the dialog permanently un-closable - a worse bug than
 // the one being fixed.
 //
-CloudServiceSyncDialog::BlockingCall::BlockingCall(CloudServiceSyncDialog *dialog) : dialog(dialog)
+CloudServiceSyncDialog::BlockingCall::BlockingCall(CloudServiceSyncDialog *dialog) : dialog(dialog), reaper(NULL)
 {
     dialog->blockingCallDepth++;
+
+    // DEC-garmin-031 - the FIRST frame creates the dialog's orphan record; every
+    // frame holds a reference to it. Held here as well as on the dialog because
+    // the dialog can be destroyed while this frame is suspended, and it is THIS
+    // frame's unwinding that has to release it.
+    if (dialog->reaper == NULL) dialog->reaper = new StoreReaper;
+    reaper = dialog->reaper;
+    reaper->retain();
 }
 
 CloudServiceSyncDialog::BlockingCall::~BlockingCall()
 {
+    // DEC-garmin-031 - one release, on EVERY exit path below, and taken into a
+    // local first because the last release destroys the record.
+    StoreReaper *record = reaper;
+    reaper = NULL;
+
     // DEC-garmin-025 - the dialog was destroyed while this frame was suspended
     // in a nested event loop (parent teardown: Qt destroys child widgets from
     // ~QObject, which no gate on close() or done() can intercept). There is no
     // depth left to decrement and no close left to replay - both would be writes
     // into freed memory, and this destructor is the FIRST thing that runs as the
-    // loop unwinds. Standing down here is what makes the leak in
-    // ~CloudServiceSyncDialog the only casualty.
-    if (dialog.isNull()) return;
+    // loop unwinds. Standing down here is what makes the store the only
+    // casualty - and since DEC-031 not even that: the release below is what
+    // eventually closes and deletes the store the destructor handed over, once
+    // the LAST of these frames has gone.
+    if (dialog.isNull()) {
+        record->release();
+        return;
+    }
+
+    // The dialog is alive, so it still owns its store and the record has nothing
+    // to reap; but this frame's reference goes back all the same, and when it is
+    // the last one the record dies with it - so the dialog must let go FIRST.
+    const bool lastFrame = (--dialog->blockingCallDepth == 0);
+    if (lastFrame) dialog->reaper = NULL;
+    record->release();
 
     // an OUTER blocking frame is still live - it is not safe yet
-    if (--dialog->blockingCallDepth > 0) return;
+    if (!lastFrame) return;
 
     if (!dialog->closeDeferred) return;
 
@@ -1300,13 +1559,31 @@ CloudServiceSyncDialog::refreshClicked()
         // guard below could ever run - it would be the use-after-free itself.
         QPointer<CloudServiceSyncDialog> self(this);
 
+        // DEC-garmin-030 (REQ-021) part 2, A3-R021-F2 - THE COLLABORATOR HALF.
+        //
+        // `self` alone is not enough HERE. For a dialog hosted by something
+        // longer-lived than the tab whose Context it holds (context->tab unset,
+        // or a caller that parents it elsewhere) an athlete close inside readdir
+        // frees the Context and leaves the dialog standing - and eleven lines
+        // below this call we walk context->athlete->rideCache->rides() (:1401),
+        // then again at :1454 and :1526. start()'s own ctx bail cannot cover it:
+        // it sits AFTER refreshClicked() returns (:1204), by which time the walk
+        // has already happened. Proven by mutation: drop `ctx` from the guard
+        // below and TEST-086 aborts with heap-use-after-free at :1401.
+        QPointer<Context> ctx(context);
+
         BlockingCall blocking(this);
         found = store->readdir(store->home(), errors, from->dateTime(), to->dateTime());
 
         // The entries in `found` are owned by the store (newCloudServiceEntry
         // keeps them in list_ and ~CloudService frees them), so dropping them
         // here leaks nothing this dialog owns.
-        if (self.isNull()) return;
+        //
+        // readdir is the ONLY suspension point in this function: everything after
+        // it is widget construction plus non-blocking store accessors
+        // (home()/useEndDate/useMetric/capabilities()), so this one guard covers
+        // the whole tail.
+        if (self.isNull() || ctx.isNull()) return;
     }
     workouts = found;
 
@@ -1741,22 +2018,57 @@ CloudServiceSyncDialog::syncNext()
                 // read in the file
                 QStringList errors;
                 QFile file(context->athlete->home->activities().canonicalPath() + "/" + curr->text(1));
-                RideFile *ride = RideFileFactory::instance().openRideFile(context, file, errors);
 
-                if (ride) {
+                // DEC-garmin-024 (REQ-025) - THE UNCOUNTED LOOP THAT ENCLOSES
+                // COUNTED ONES.
+                //
+                // openRideFile is not a store call, but it runs a nested
+                // QEventLoop all the same: the FIT reader waits up to five
+                // seconds on a network reply (FitRideFile.cpp:172-184), and .fit
+                // is what GarminConnect downloads. So GUI events - including a
+                // Refresh, which IS wrapped (:1548), and the athlete-tab close it
+                // can carry - are delivered from inside this call.
+                //
+                // Left uncounted, that made blockingCallDepth an INCOMPLETE
+                // predicate and broke the one DEC-031 rests on: the reaper fires
+                // when the last COUNTED frame unwinds, so an uncounted frame
+                // enclosing a counted one had the store close()d and deleted
+                // underneath it, and this function resumed onto it at
+                // compressRide below. See TEST-091 (B-R031-01).
+                //
+                // The frame therefore spans the suspension AND the two store
+                // calls that consume its result: those are what would resume onto
+                // a reaped store, and writeFile can suspend on its own account.
+                QPointer<CloudServiceSyncDialog> self(this);
+                {
+                    BlockingCall blocking(this);
 
-                    // get a compressed version
-                    QByteArray data;
-                    store->compressRide(ride, data, QFileInfo(curr->text(1)).baseName() + ".json");
+                    RideFile *ride = RideFileFactory::instance().openRideFile(context, file, errors);
 
-                    store->writeFile(data, QFileInfo(curr->text(1)).baseName() + store->uploadExtension(), ride);
-                    QApplication::processEvents();
-                    delete ride; // clean up!
-                    return true;
+                    // DEC-garmin-025 - the teardown that arrives inside that loop
+                    // DESTROYS this dialog, and `store`, `curr` and every widget
+                    // below are reads on it. The ride is ours, so it goes with us.
+                    if (self.isNull()) {
+                        delete ride;
+                        return true;
+                    }
 
-                } else {
-                    curr->setText(7, tr("Parse failure"));
-                    QApplication::processEvents();
+                    if (ride) {
+
+                        // get a compressed version
+                        QByteArray data;
+                        store->compressRide(ride, data, QFileInfo(curr->text(1)).baseName() + ".json");
+
+                        store->writeFile(data, QFileInfo(curr->text(1)).baseName() + store->uploadExtension(), ride);
+                        QApplication::processEvents();
+                        delete ride; // clean up!
+                        return true;
+
+                    } else {
+                        curr->setText(7, tr("Parse failure"));
+                        QApplication::processEvents();
+                        if (self.isNull()) return true;
+                    }
                 }
 
             }
@@ -1862,6 +2174,12 @@ CloudServiceSyncDialog::downloadNext()
 void
 CloudServiceSyncDialog::completedRead(QByteArray *data, QString name, QString /*message*/)
 {
+    // DEC-garmin-030 (REQ-021), A3-R021-F1 - see the note on
+    // CloudServiceSyncDialog::start(): the reparent makes THIS slot destructible
+    // under itself. `delete tab` runs synchronously from inside event delivery,
+    // and the processEvents() below is an event-delivery frame.
+    QPointer<CloudServiceSyncDialog> self(this);
+
     QTreeWidget *which = sync ? rideListSync : rideListDown;
     int col = sync ? 7 : 5;
 
@@ -1881,10 +2199,50 @@ CloudServiceSyncDialog::completedRead(QByteArray *data, QString name, QString /*
     // different to what we asked for (sometimes the data is converted
     // from one file format to another).
     QStringList errors;
-    RideFile *ride = store->uncompressRide(data, name, errors);
+    RideFile *ride = NULL;
+    {
+        // DEC-garmin-024 (REQ-025) - uncompressRide stages the bytes and then
+        // hands them to RideFileFactory::openRideFile (:363), so this is the same
+        // uncounted nested loop syncNext has (FitRideFile.cpp:172-184), reached
+        // on the DOWNLOAD half of the sync. It ENCLOSES anything the GUI
+        // dispatches from inside it - a Refresh is a counted readdir (:1548) -
+        // and while it was invisible to blockingCallDepth, DEC-031's reaper fired
+        // on that inner frame and freed the store under this one. See TEST-091.
+        //
+        // The frame ends with the call: nothing below this block touches the
+        // store, only this dialog's own widgets - which is what the bail covers.
+        BlockingCall blocking(this);
+        ride = store->uncompressRide(data, name, errors);
+    }
 
     // was allocated in before calling readfile
     delete data;
+
+    // DEC-garmin-025 - the athlete teardown delivered inside that loop destroyed
+    // this dialog; progressBar, downloadcounter, `which` and saveRide() below are
+    // all on `this`. The parsed ride is ours, so it goes with us.
+    if (self.isNull()) {
+        delete ride;
+        return;
+    }
+
+    // REQ-026 (A3-R021b-F3) - RE-READ THE ABORT. The check at the top of this
+    // slot was made BEFORE the suspension above: uncompressRide runs a nested
+    // QEventLoop on the read path (:363 -> FitRideFile.cpp:172-184), so the user
+    // can press Abort from inside it and `aborted` becomes true while this
+    // invocation is parked. The QPointer bail one line up does not cover that -
+    // it establishes that we are still alive, not that the transfer is still
+    // wanted - and without this line saveRide() below writes the activity into
+    // the athlete's folder and counts it as processed anyway. Symmetric with the
+    // entry check (:2187): the row is marked Aborted and we stand down, leaving
+    // the batch to whoever restarts it. See TEST-094.
+    if (aborted == true) {
+        delete ride;
+
+        QTreeWidgetItem *curr = which->invisibleRootItem()->child(listindex-1);
+        curr->setText(col, tr("Aborted"));
+        return;
+    }
 
     progressBar->setValue(++downloadcounter);
 
@@ -1904,6 +2262,12 @@ CloudServiceSyncDialog::completedRead(QByteArray *data, QString name, QString /*
     }
 
     QApplication::processEvents();
+    // A3-R021-F1 - the athlete tab can have been closed inside that call, and
+    // this dialog is its child (DEC-garmin-030), so `this` may be gone. `sync`
+    // one line below is a member READ, and syncNext/downloadNext are calls ON
+    // this object. Nothing here needs replaying: the sync is over with its
+    // dialog. Proven by mutation (TEST-087).
+    if (self.isNull()) return;
 
     if (sync)
         syncNext();
@@ -1932,6 +2296,10 @@ CloudServiceSyncDialog::completedRead(QByteArray *data, QString name, QString /*
 void
 CloudServiceSyncDialog::failedRead(QByteArray *data, QString, QString reason)
 {
+    // A3-R021-F1 - as in completedRead: the processEvents() below can deliver the
+    // athlete teardown that destroys this dialog.
+    QPointer<CloudServiceSyncDialog> self(this);
+
     QTreeWidget *which = sync ? rideListSync : rideListDown;
     int col = sync ? 7 : 5;
 
@@ -1951,6 +2319,8 @@ CloudServiceSyncDialog::failedRead(QByteArray *data, QString, QString reason)
     curr->setText(col, reason);
 
     QApplication::processEvents();
+    // A3-R021-F1 - `sync` below is a member read on a possibly destroyed `this`.
+    if (self.isNull()) return;
 
     if (sync)
         syncNext();
@@ -1961,6 +2331,13 @@ CloudServiceSyncDialog::failedRead(QByteArray *data, QString, QString reason)
 bool
 CloudServiceSyncDialog::uploadNext()
 {
+    // A3-R021-F1 - as in completedRead. Here the member touched after the
+    // suspension point is the LOOP'S OWN condition: the parse-failure branch
+    // below runs processEvents() and then simply continues, so the next
+    // evaluation of `rideListUp->invisibleRootItem()` (the line under this one)
+    // is the use-after-free.
+    QPointer<CloudServiceSyncDialog> self(this);
+
     for (int i=listindex; i<rideListUp->invisibleRootItem()->childCount(); i++) {
         QTreeWidgetItem *curr = rideListUp->invisibleRootItem()->child(i);
         QCheckBox *check = (QCheckBox*)rideListUp->itemWidget(curr, 0);
@@ -1983,9 +2360,28 @@ CloudServiceSyncDialog::uploadNext()
             // read in the file - TEMPORARILY *** WE DON'T USE IN MEMORY VERSION ***
             QStringList errors;
             QFile file(context->athlete->home->activities().canonicalPath() + "/" + curr->text(1));
-            RideFile *ride = RideFileFactory::instance().openRideFile(context, file, errors);
 
-            if (ride) {
+            // DEC-garmin-024 (REQ-025) - the upload tab's copy of syncNext's
+            // uncounted loop: openRideFile runs a nested QEventLoop on the FIT
+            // read path (FitRideFile.cpp:172-184), the GUI is pumped inside it,
+            // and a Refresh dispatched from there is a COUNTED frame nested
+            // inside this UNCOUNTED one - which is what let DEC-031's reaper free
+            // the store before compressRide/writeFile below ran on it. Same
+            // frame, same span, same reason as syncNext (:1994). See TEST-091.
+            {
+                BlockingCall blocking(this);
+
+                RideFile *ride = RideFileFactory::instance().openRideFile(context, file, errors);
+
+                // DEC-garmin-025 - `this` may have been destroyed inside that
+                // loop, and `store`, `curr` and the loop's own condition are all
+                // reads on it.
+                if (self.isNull()) {
+                    delete ride;
+                    return true;
+                }
+
+                if (ride) {
 
                     // get a compressed version
                     QByteArray data;
@@ -1995,9 +2391,34 @@ CloudServiceSyncDialog::uploadNext()
                     delete ride; // clean up!
                     return true;
 
-            } else {
-                curr->setText(7, tr("Parse failure"));
-                QApplication::processEvents();
+                } else {
+                    curr->setText(7, tr("Parse failure"));
+                    QApplication::processEvents();
+                    // A3-R021-F1 - the only bail this function used to have, and
+                    // it has to be HERE rather than after the loop: this is the
+                    // one branch that suspends and then carries on iterating.
+                    // Returning true means "still working"; our callers ignore
+                    // the result and touch nothing, exactly as syncNext's guard
+                    // does.
+                    if (self.isNull()) return true;
+
+                    // REQ-026 - AND THE ABORT, which is a DIFFERENT question.
+                    // The bail above establishes that this dialog is still
+                    // alive; it says nothing about whether the user still wants
+                    // the work done. The processEvents() one line up is an
+                    // event-delivery frame, and the event it delivers can be the
+                    // Abort button: downloadClicked (:1908) sees downloading ==
+                    // true, sets `aborted` and returns WITHOUT stopping us. This
+                    // is the only branch in this function that then keeps
+                    // iterating - every other path returns, and re-entry comes
+                    // through completedWrite, which does check (:2421) - so
+                    // without this line the next checked row is compressed and
+                    // written (:2370-2371) after the user aborted. Nothing is
+                    // relabelled: row `i` really did fail to parse, and that
+                    // remains its verdict; what stands down is the LOOP. See
+                    // TEST-093.
+                    if (aborted == true) return true;
+                }
             }
         }
     }
@@ -2025,6 +2446,10 @@ CloudServiceSyncDialog::uploadNext()
 void
 CloudServiceSyncDialog::completedWrite(QString, QString result)
 {
+    // A3-R021-F1 - as in completedRead: the processEvents() below can deliver the
+    // athlete teardown that destroys this dialog.
+    QPointer<CloudServiceSyncDialog> self(this);
+
     QTreeWidget *which = sync ? rideListSync : rideListUp;
 
     // was abort pressed?
@@ -2040,6 +2465,8 @@ CloudServiceSyncDialog::completedWrite(QString, QString result)
     curr->setText(7, result);
     if (result == tr("Completed.")) successful++;
     QApplication::processEvents();
+    // A3-R021-F1 - `sync` below is a member read on a possibly destroyed `this`.
+    if (self.isNull()) return;
 
     if (sync)
         syncNext();

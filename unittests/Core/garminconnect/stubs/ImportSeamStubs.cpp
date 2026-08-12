@@ -83,6 +83,31 @@ QString gcroot;
 double dpiXFactor = 1.0;
 double dpiYFactor = 1.0;
 
+// --- TEST-082 (REQ-021) — the member-touch observation channel --------------
+// Three of the stand-ins below are reached with a COLLABORATOR that a suspended
+// dialog frame may have had freed underneath it, and in the real program each of
+// them dereferences that object:
+//   * Context::metadataFlush and RideItem::notifyRideMetadataChanged are SIGNALS
+//     (Context.h:341, RideItem.h:89), so calling one runs
+//     QMetaObject::activate(this, ...) — a load of `this->d_ptr`;
+//   * MainWindow::saveSilent (SaveDialogs.cpp:125) dereferences both of its
+//     arguments (rideItem->path, context->athlete->rideCache).
+// An empty `{}` body does NONE of that, so a lifetime test asserting "this call
+// would have used freed memory" could pass on a corpse and prove nothing — which
+// is exactly what findings A3-R019-F3 and B-R019-05 recorded.
+//
+// So each of those bodies now performs one real load through its object and
+// publishes what it loaded here. A store to a `volatile` at namespace scope
+// cannot be elided and cannot be hoisted above the load that feeds it, so the
+// dereference survives -O2 (this target is built Release). TEST-082 reads these
+// to prove the touches are load-bearing rather than decorative.
+namespace gcstub {
+volatile quintptr contextMemberTouch = 0;
+volatile quintptr rideItemMemberTouch = 0;
+volatile quintptr saveSilentThisTouch = 0;
+volatile quintptr saveSilentArgTouch = 0;
+} // namespace gcstub
+
 namespace {
 // appsettings is dereferenced by the ride readers (e.g. FitRideFile reads the
 // "fix garmin smart recording" preference), so it must be a live object, not a
@@ -205,11 +230,29 @@ GC_STUB_METAOBJECT(Athlete)
 Context::Context(MainWindow* mainWindow) : mainWindow(mainWindow)
 {
     athlete = nullptr;
+    // REQ-021 / DEC-garmin-030 - both cloud dialogs now take context->tab as
+    // their PARENT (CloudService.cpp:119 and :884). The REAL Context::Context
+    // (Context.cpp:141-162) does NOT initialise `tab` either - AthleteTab's
+    // constructor sets it (AthleteTab.cpp:35) - so a test Context that never
+    // gets a tab would hand QDialog whatever the heap happened to hold. Nulled
+    // here so the shape is DEFINED: no tab means a parentless dialog, which is
+    // what every fixture that does not model an athlete tab expects.
+    tab = nullptr;
+    ride = nullptr;
 }
 
 Context::~Context() {}
 
-void Context::metadataFlush() {}
+// A SIGNAL in the real program (Context.h:341), so the real body is
+// QMetaObject::activate(this, ...) — an unconditional load of `this`. See the
+// gcstub note above: this stand-in performs one, on a member the constructor
+// above actually initialises, so a freed Context faults here as it would in
+// production instead of sailing through an inert `{}`.
+void Context::metadataFlush()
+{
+    gcstub::contextMemberTouch = reinterpret_cast<quintptr>(athlete);
+}
+
 void Context::autoDownloadStart() {}
 void Context::autoDownloadEnd() {}
 void Context::autoDownloadProgress(QString s, double x, int i, int n)
@@ -294,11 +337,38 @@ double Specification::secsEnd() const
 }
 
 // --- RideItem / RideCache / RideMetadata / RideMetric ----------------------
-RideItem::RideItem(RideFile* ride, Context* context) : context(context), ride_(ride) {}
+// `isdirty` is initialised DELIBERATELY. The real RideItem is built by the
+// RideCache and is never dirty on arrival; leaving the flag as whatever the heap
+// held made the upload dialog take the unsaved-changes branch at random
+// (CloudService.cpp:436), which surfaced as a HANG in an unasked-for modal
+// prompt rather than as a failure. Finding B-R019-04.
+RideItem::RideItem(RideFile* ride, Context* context) : context(context), ride_(ride)
+{
+    isdirty = false;
+}
 
+// REQ-025 / TEST-092 — THE LAZY OPEN, MODELLED RATHER THAN STUBBED AWAY.
+//
+// The real RideItem::ride(bool open = true) (RideItem.cpp:175-181) OPENS the
+// ride file through RideFileFactory when `ride_` is null, and openRideFile runs
+// a nested QEventLoop on the FIT read path (FitRideFile.cpp:172-184). That makes
+// every `item->ride()` a SUSPENSION POINT — which is exactly what the comment at
+// CloudService.cpp:556 claimed it was not ("compressRide() runs no nested event
+// loop ... so a separate self-bail between it and writeFile would be unreachable
+// and untestable"). CloudServiceUploadDialog::start() calls item->ride() twice,
+// at :558 and :562.
+//
+// A stand-in that just returns ride_ cannot express that, so this one does what
+// production does when the ride is not already in memory. The metric, override
+// and interval bookkeeping the real function performs AFTERWARDS is omitted:
+// none of it is on the path under test and none of it can suspend.
 RideFile* RideItem::ride(bool open)
 {
-    Q_UNUSED(open);
+    if (!open || ride_)
+        return ride_;
+
+    QFile file(path + "/" + fileName);
+    ride_ = RideFileFactory::instance().openRideFile(context, file, errors_);
     return ride_;
 }
 
@@ -309,7 +379,13 @@ double RideItem::getForSymbol(QString name, bool useMetricUnits)
     return 0;
 }
 
-void RideItem::notifyRideMetadataChanged() {}
+// Also a SIGNAL (RideItem.h:89), reached at CloudService.cpp:444 as
+// `context->ride->notifyRideMetadataChanged()` — i.e. on an object the athlete
+// tab may have freed. Same treatment, same reason.
+void RideItem::notifyRideMetadataChanged()
+{
+    gcstub::rideItemMemberTouch = reinterpret_cast<quintptr>(context);
+}
 
 RideItem::~RideItem() {}
 
@@ -380,10 +456,28 @@ bool qstringascend(const QString& s1, const QString& s2)
 } // namespace Utils
 
 // --- MainWindow ------------------------------------------------------------
+// Reached at CloudService.cpp:445 as `context->mainWindow->saveSilent(context,
+// item)`, with all three of those objects owned by an athlete tab that may have
+// been closed while the dialog was suspended.
+//
+// The load through `this` is QObject-level ON PURPOSE, and is a PRAGMATIC close
+// rather than a strict one: no target in this tree can afford a real MainWindow,
+// so the "MainWindow" here is a reinterpret_cast of a plain QWidget (see the
+// upload harness in testGarminConnectSyncDialogClose.cpp) and reading a
+// MainWindow-specific member would be undefined behaviour. isWidgetType() reads
+// d_ptr in the QObject subobject, which is at offset 0 of both types and does
+// fault on freed storage. NOTE that the real saveSilent (SaveDialogs.cpp:125)
+// touches no MainWindow member at all, so this stand-in is deliberately STRICTER
+// than production on `this` — it can over-report a freed MainWindow, never
+// under-report one.
+//
+// The two ARGUMENT loads are exact, though: the real function dereferences
+// rideItem->path, rideItem->ride() and context->athlete->rideCache.
 void MainWindow::saveSilent(Context* context, RideItem* item)
 {
-    Q_UNUSED(context);
-    Q_UNUSED(item);
+    gcstub::saveSilentThisTouch = isWidgetType() ? 1 : 2;
+    gcstub::saveSilentArgTouch =
+        reinterpret_cast<quintptr>(context->athlete) ^ reinterpret_cast<quintptr>(item->context);
 }
 
 // --- ride writers (upload/save paths, never executed here) -----------------

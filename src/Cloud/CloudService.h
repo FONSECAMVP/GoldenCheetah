@@ -494,6 +494,84 @@ class CloudServiceSyncDialog : public QDialog
         // with destroying/closing the dialog.
         bool deferCloseIfBusy();
 
+        // DEC-garmin-031 (REQ-022) - THE ORPHAN RECORD, and the end of DEC-025's
+        // deliberate leak.
+        //
+        // DEC-025 declined to delete the store when the destructor was reached
+        // with a blocking call still suspended, and LEAKED it, on the stated
+        // ground that "at parent-teardown time the application is already tearing
+        // down, so there is no live event loop left for a reaper to run on".
+        // REQ-021 falsified that: this dialog is now a child of context->tab, and
+        // MainWindow::removeAthleteTab deletes that tab on routes after which the
+        // application keeps running (two or more athlete tabs, or two or more
+        // MainWindows). A once-per-exit leak became a per-close ACCUMULATING one -
+        // and for GarminConnect each occurrence is a live OS thread plus a
+        // resident interpreter session, because close() is what quit()+wait()s the
+        // download worker and releases the adapter.
+        //
+        // WHY NOT store->deleteLater(). Deferred deletion is delivered by the
+        // event loop the call was made FROM, and on this path that loop is the
+        // store's OWN suspended nested loop - so deleteLater() frees the store
+        // under the frame executing on it, which is the use-after-free DEC-025
+        // exists to prevent. Not assumed: MEASURED by TEST-089, which posts a
+        // deleteLater() and a Qt::QueuedConnection invokeMethod from inside a
+        // nested QEventLoop through production's exact geometry and finds BOTH
+        // delivered before that loop returns (with a plain-delete control proving
+        // the apparatus sees deaths, and a late-delete control proving it can also
+        // report life).
+        //
+        // So the trigger is not the event loop but the FRAME COUNT: the last
+        // BlockingCall to unwind is, by construction, the point at which no store
+        // call this dialog made is on the stack any more. That release performs
+        // the close+delete the destructor could not.
+        //
+        // PER-DIALOG AND REFCOUNTED, not a static counter: two sync dialogs can
+        // have suspended frames on the same stack, and one shared counter would
+        // let either dialog's unwinding reap the other's store early. No
+        // production route to two concurrent sync dialogs was found, but the bug
+        // that shape would cause is silent, and the correct shape costs one
+        // pointer. The record is created by the FIRST BlockingCall and held by
+        // every one of them, so it OUTLIVES the dialog exactly as the frames do.
+        //
+        // See TEST-090 (the mechanism, including the two-dialog case), TEST-072
+        // and TEST-084 (the store is now closed and deleted exactly once, and only
+        // after the nested loop returned) and TEST-073 (the idle control: an
+        // ordinary teardown still closes and deletes promptly, so this cannot have
+        // merely relocated the leak).
+        class StoreReaper
+        {
+            public:
+                StoreReaper() : refs(0), orphan(NULL) {}
+
+                // One more BlockingCall frame is holding this record.
+                void retain() { refs++; }
+
+                // Take ownership of the store the destructor declined to delete.
+                // Called only by ~CloudServiceSyncDialog, at most once - the
+                // dialog is being destroyed as it calls this.
+                void adopt(CloudService *store) { orphan = store; }
+
+                // Release ONE frame. The last release closes+deletes whatever was
+                // adopted and destroys the record; a record nobody adopted a store
+                // into simply goes away.
+                void release();
+
+            private:
+                // Destroyed only by its own last release().
+                ~StoreReaper() {}
+
+                StoreReaper(const StoreReaper &);            // not copyable
+                StoreReaper &operator=(const StoreReaper &); // not assignable
+
+                int refs;             // live BlockingCall frames holding this
+                CloudService *orphan; // the store the destructor could not delete
+        };
+
+        // NULL whenever no blocking call is on the stack. Created by the first
+        // BlockingCall and dropped by the last, so this pointer is only ever read
+        // while at least one frame holds the record alive.
+        StoreReaper *reaper;
+
         // RAII, deliberately: an early return, a `continue`, or an exception out
         // of a store call must not leave the depth count raised, or this dialog
         // could never be closed again.
@@ -514,6 +592,13 @@ class CloudServiceSyncDialog : public QDialog
                 BlockingCall(const BlockingCall &);            // not copyable
                 BlockingCall &operator=(const BlockingCall &); // not assignable
                 QPointer<CloudServiceSyncDialog> dialog;
+
+                // DEC-garmin-031 - a RAW pointer on purpose, and the reason the
+                // record is refcounted: it must stay readable after the QPointer
+                // above has gone null, because the whole job of this frame's
+                // unwinding is to hand one release to a record the DIALOG no
+                // longer exists to own.
+                StoreReaper *reaper;
         };
 
         // Quick lists for checking if file exists

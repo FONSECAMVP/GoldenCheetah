@@ -140,6 +140,14 @@ bool Context::isValid(Context *p) { return p != NULL &&_contexts.contains(p); }
 
 Context::Context(MainWindow *mainWindow): mainWindow(mainWindow)
 {
+    // DEC-garmin-030 (REQ-021) - `tab` is assigned by AthleteTab's constructor
+    // (AthleteTab.cpp:35), which runs LATER than this: MainWindow::openAthleteTab
+    // (MainWindow.cpp:2038) builds a Context and emits openingAthlete with it well
+    // before loadCompleted() creates the AthleteTab. Until REQ-021 nothing read
+    // `tab` in that window, so it was left uninitialised; both cloud dialogs now
+    // parent themselves to it, and an uninitialised pointer handed to QDialog is
+    // undefined behaviour rather than a null-parent top-level. Initialise it.
+    tab = NULL;
     ride = NULL;
     workout = NULL;
     videosync = NULL;
