@@ -167,9 +167,53 @@ def find_ids(line):
     return list(found.items())
 
 
+# --- Assignment-shape discrimination (ORCH-010, 2026-08-12).
+#
+# The original rule was pure CO-OCCURRENCE: any id token plus any status token on one line was
+# a violation. That is the same error [[LSN-034]] warns about — co-occurrence asserted as
+# membership — and it made ordinary English unusable in the governance files. Two tokens had
+# already been DELETED to buy precision ("committed", "in progress"); deleting a third
+# ("deferred") would have cost a real vocabulary word. Detecting the SHAPE is the right fix.
+#
+# The discriminator: a status word immediately followed by a lowercase noun is being used as an
+# ADJECTIVE and is prose, not an assignment —
+#     "frame-counted deferred reaper"   "deferred-deletion semantics"   "drafted proposal"
+# whereas a status word that ends the phrase, hits punctuation/a table cell, or is followed by a
+# function word is an assignment —
+#     "| REQ-007 | GREEN |"   "DES-013 — DEFERRED"   "REQ-019 DEFERRED to REQ-021"
+#
+# Deliberately CONSERVATIVE: it only ever suppresses when the very next thing is a lowercase
+# non-function word. Anything else (punctuation, end of line, a capitalised word, a digit) still
+# flags, so the failure mode stays "flags too much", never "misses drift".
+STATUS_FOLLOWERS = frozenset((
+    "to", "in", "on", "at", "by", "for", "from", "until", "pending", "because", "since",
+    "as", "and", "or", "after", "before", "when", "while", "with", "per", "via", "than",
+))
+
+# A hyphen or run of spaces, then a lowercase word: the adjectival shape.
+_FOLLOWER_RE = re.compile(r"(?:-|\s+)([a-z][a-zA-Z]*)")
+
+
+def _is_adjectival(line, end):
+    """True if the status token ending at `end` is modifying a following lowercase noun."""
+    m = _FOLLOWER_RE.match(line, end)
+    if not m:
+        return False                      # punctuation / EOL / capitalised → assignment shape
+    return m.group(1) not in STATUS_FOLLOWERS
+
+
 def find_statuses(line):
-    """Return the distinct status tokens present on the line (in STATUS_TOKENS order)."""
-    return [tok for tok, rx in STATUS_PATTERNS if rx.search(line)]
+    """Return the distinct status tokens ASSIGNED on the line (in STATUS_TOKENS order).
+
+    A token that appears only adjectivally (see _is_adjectival) is prose and is not returned.
+    A token appearing more than once counts if ANY occurrence is in assignment shape."""
+    out = []
+    for tok, rx in STATUS_PATTERNS:
+        for m in rx.finditer(line):
+            if not _is_adjectival(line, m.end()):
+                out.append(tok)
+                break
+    return out
 
 
 # ----------------------------- per-file scan -----------------------------

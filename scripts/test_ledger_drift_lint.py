@@ -207,6 +207,64 @@ class LedgerDriftLintTest(unittest.TestCase):
         code = lint.main([self.root, "extra"])
         self.assertEqual(code, 2)
 
+    # ---------------------------------------------------------------------
+    # ORCH-010 — assignment-shape discrimination. Added 2026-08-12 after the
+    # lint flagged 27 lines for the phrase "deferred reaper" (a MECHANISM NAME)
+    # and "deferred-deletion semantics". Both directions are asserted: prose
+    # must pass AND every genuine assignment shape must still be caught.
+    # ---------------------------------------------------------------------
+
+    # 16. PROSE PASSES: a status word used adjectivally is not an assignment.
+    def test_status_word_as_adjective_not_flagged(self):
+        mkfile(self.root, "STATE.md",
+               "DEC-031 ACCEPTED (Option B - frame-counted deferred reaper).\n"
+               "T-089 measures Qt loop-level deferred-deletion semantics.\n"
+               "DEC-030 chose the reparent; the drafted proposal is in decisions.md.\n")
+        code, out = run(self.root)
+        self.assertEqual(code, 0, "adjectival status words must not be flagged; got:\n" + out)
+        self.assertEqual(out, "")
+
+    # 17. ASSIGNMENT STILL CAUGHT: token followed by a function word.
+    def test_status_followed_by_function_word_still_flagged(self):
+        mkfile(self.root, "STATE.md", "REQ-019 DEFERRED to REQ-021 pending the harness.\n")
+        code, out = run(self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("REQ-019", out)
+        self.assertIn("DEFERRED", out)
+
+    # 18. ASSIGNMENT STILL CAUGHT: table-cell shape (token then a pipe).
+    def test_status_in_table_cell_still_flagged(self):
+        mkfile(self.root, "WIKI.md", "| REQ-007 | download chain | GREEN |\n")
+        code, out = run(self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("REQ-007", out)
+        self.assertIn("GREEN", out)
+
+    # 19. ASSIGNMENT STILL CAUGHT: token at end of line.
+    def test_status_at_end_of_line_still_flagged(self):
+        mkfile(self.root, "wiki/architecture.md", "DES-013 sidebar wiring - CLOSED\n")
+        code, out = run(self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("DES-013", out)
+        self.assertIn("CLOSED", out)
+
+    # 20. MIXED LINE: one adjectival use and one real assignment on the same line
+    #     must still be caught (the "any occurrence in assignment shape" rule).
+    def test_adjectival_and_assignment_on_same_line_flagged(self):
+        mkfile(self.root, "STATE.md",
+               "DEC-031 deferred reaper landed; REQ-019 is DEFERRED.\n")
+        code, out = run(self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("DEFERRED", out)
+
+    # 21. A capitalised word after the token is NOT treated as an adjectival use —
+    #     the suppression is deliberately narrow, so this still flags.
+    def test_capitalised_follower_still_flagged(self):
+        mkfile(self.root, "STATE.md", "T-015 harness CLOSED Friday\n")
+        code, out = run(self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("T-015", out)
+
 
 if __name__ == "__main__":
     unittest.main()
