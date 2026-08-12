@@ -5,14 +5,155 @@
 
 TEAM: on (5 agents: scout, builder, adversary, validator, librarian)
 RIGOR: FULL (Phase 0 backfill 2026-07-11; project ran A0–A5 + STRIDE + per-slice CLV = FULL de facto)
-BUDGETS: WIKI 10.8k chars/cap-ok (compacted 2026-08-05 from 18.3k) · LSN active:42 guards:28 mech:2 ·
+BUDGETS: WIKI ~13.5k chars/cap-ok (compacted 2026-08-05 from 18.3k; grew across the REQ-021 wave) · LSN active:57 guards:42 mech:2 ·
+  NOTE 2026-08-12: findings.md and STATE.md both grew substantially this wave (11 A3-R021 + 13 B-R021/B-R025 + 4 ORCH
+  + 2 S- findings; 6 new lessons). Neither is a hot read (index heads only), so no cap breach — but a librarian Job-3
+  compaction is worth CONSIDERING at the next phase close, not now. ·
   decisions.md 107k + findings.md 109k + lessons.md 98k = COLD entry files, drilled by id, not hot reads
   (the hot reads are their index heads). No cap breach; librarian Job-3 compaction NOT due.
-COUNTS: REQ 20(+NF) · DEC 28 · DES 14(+2) · TEST 78 · VAL 17 · LSN 44 · ORCH-findings 7   (registries → WIKI.md; per-id status → traceability.md)
+COUNTS: REQ 26(+NF) · DEC 31 · DES 14(+2) · TEST 94 alloc/94 built · VAL 17 · LSN 57 · ORCH-findings 14 · S-findings 7   (registries → WIKI.md; per-id status → traceability.md)
 
 PHASE: Phase 2.2 — Garmin Connect integration. Per-REQ/DES/TEST/VAL status → traceability.md.
 
-CURRENT: **REQ-019 COMMITTED `e8833682f` 2026-08-08 — the upload-dialog UAF is closed on the axis it targeted, and the
+CURRENT: **THE WAVE IS COMMITTED 2026-08-13 (user said proceed). Feature `6dc794caf` + lint fix `3f44c447f` + this docs
+record, on branch `garmin/req021-collaborator-uaf` (now 5 ahead of `master`, NOT merged, NOTHING PUSHED — pushing is the
+user's call).** The wave covers REQ-021 + DEC-030 + DEC-031 + REQ-025 + REQ-026.
+**Feature commit `6dc794caf`** — 5 files, +4730/-94: `src/Cloud/CloudService.{h,cpp}`, `src/Core/Context.cpp`,
+`unittests/Core/garminconnect/testGarminConnectSyncDialogClose.cpp` + `stubs/ImportSeamStubs.cpp`.
+**Lint commit `3f44c447f`** — 3 files, +150/-4 (ORCH-010: `scripts/ledger_drift_lint.py` + its test + the installed
+`.claude/hooks/` copy).
+**NO HUNK-SPLITTING WAS NEEDED — and that was verified, not assumed.** Unlike REQ-017/REQ-019, this changeset reaches
+neither `src/Gui/MainWindow.cpp` nor `src/CMakeLists.txt`, so every file was staged WHOLE by explicit path. A scan of the
+added lines in all eight code/tooling files for `coach|anthropic|openai|gemini|libusb|calendar` returned zero in each.
+**The Coach owner's work was proven intact, not hoped intact:** an md5 baseline of eight at-risk files
+(`MainWindow.cpp`, `src/CMakeLists.txt`, root `CMakeLists.txt`, `vcpkg.json`, `AnthropicClient.cpp`, `KurtInRide.cpp`,
+`application.qrc`, the skill `SKILL.md`) was taken BEFORE staging and re-checked after **both** pre-commit stash cycles —
+all eight `OK` every time.
+**clang-format DID rewrite both test files on attempt 1** and aborted the commit (the [[LSN-007]] pattern, third wave
+running). Proven cosmetic the strong way — with all whitespace stripped, the formatted and staged files were
+byte-identical (md5 `8baffc5f…` / `7c1df818…`) and zero `#include` lines moved — and then **re-verified BY EXECUTION
+anyway** (rebuild, ASan 42/42, full ctest 26/26) before re-staging and retrying, because "obviously cosmetic" has been
+wrong in this repo before.
+**One deliberate exclusion:** `.claude/hooks/anti_duplication_guard.py` is byte-identical to its install source
+(md5 `658575d4…` both), so it is a sync artifact of the USER's pre-session skill update, not this wave's work. Left
+uncommitted with the rest of the skill/tooling churn, which remains the user's call.
+**STILL TO DO: the clean-worktree configure+build of the COMMITTED tree** — the gate that caught ORCH-005/006/007, and
+the only gate that does not run inside the developer's working tree. Until it passes, this wave is committed but not
+verified-from-clean.
+
+Prior (superseded): **AT THE COMMIT GATE 2026-08-12. The A3 re-clear found one BLOCKING defect, it was fixed under REQ-026, and the
+fix is orchestrator-verified BY EXECUTION (42/42 ASan, 26/26 ctest, both guards mutation-proven load-bearing under a
+SIMULTANEOUS revert). Nothing is running; nothing is blocked on evidence. The next action writes git history, so it waits
+for the user.** The wave was uncommitted on `garmin/req021-collaborator-uaf` (3 ahead of `master`, HEAD `da07b2227`).
+**The lesson of this session, stated plainly:** the wave had already passed a Verification Gate and stood at 40/40 + 26/26
+green when the A3 was proposed as "not a formality". It found a defect that shipped rides to a third-party service after
+the user pressed Abort. Three A3s in a row have now found real defects behind a green suite.
+
+Prior (superseded): **A3 RE-CLEAR DONE 2026-08-12 — VERDICT NOT CLEAR. The wave is NO LONGER shippable as it stands: one BLOCKING
+defect (A3-R021b-F1, `uploadNext` never reads `aborted`) must be dispositioned before the commit gate. Nothing is
+running; the next action is a user decision (→ NEXT_GATE). Everything below about the built state remains accurate —
+the suite is still 40/40 + 26/26 green, which is precisely the point: the defect is invisible to it.**
+
+Prior (still accurate as a description of the built tree): **SESSION SAVE-POINT 2026-08-12 — the whole REQ-021 wave sits built and Verification-Gate-passed in the
+working tree, UNCOMMITTED (per-id lifecycle → traceability.md), on branch `garmin/req021-collaborator-uaf` (3 ahead of `master`, HEAD `da07b2227`, 67 dirty
+entries of which 9 are ours). NOTHING IS IN FLIGHT — no agent running, no gate half-done. NEXT ACTION IS A DECISION,
+see NEXT_GATE.**
+
+**Green everywhere, independently re-verified by the orchestrator, not read from reports:** ASan target
+`testGarminConnectSyncDialogClose` **40/40** · full `ctest` **26/26** · `src/GoldenCheetah` links · drift lint exit 0
+(both the canonical `scripts/` copy and the installed `.claude/hooks/` copy) · `test_ledger_drift_lint.py` **21/21** ·
+`guard_selftest.py` 0 core / 0 gap failures.
+
+**OUR 9 DIRTY FILES (everything else in the 67 is other owners' pre-session work — Coach/Gui/CMake/vcpkg/skill):**
+`src/Cloud/CloudService.cpp` + `.h` (REQ-021 reparent + riders, DEC-031 reaper, REQ-025 frames) ·
+`src/Core/Context.cpp` (one line, `tab = NULL;`, O-R021-02) ·
+`unittests/Core/garminconnect/testGarminConnectSyncDialogClose.cpp` + `stubs/ImportSeamStubs.cpp` (TEST-081..092) ·
+`scripts/ledger_drift_lint.py` + `scripts/test_ledger_drift_lint.py` + `.claude/hooks/ledger_drift_lint.py` (ORCH-010
+fix + sync) · `.claude/hooks/anti_duplication_guard.py` (re-copied by `install_hook.py`, byte-identical to its install
+source — verified, nothing clobbered, ORCH-013).
+
+**WHAT LANDED THIS WAVE, in dependency order:**
+1. **REQ-021 / DEC-030** — collaborator-lifetime UAF. Both cloud dialogs reparented to `context->tab` via a
+   `cloudDialogParent(context)` helper (`context->tab ?: context->mainWindow`, the A3-R021-F3 fallback), plus
+   `QPointer<Context>`/`QPointer<RideItem>` riders in both `start()`s covering the pre-delete window at
+   MainWindow.cpp:2148-2171. Gated on TEST-081, which MEASURED that child `QDialog` windows do NOT follow a parent
+   widget's hide on Qt 6.8.2 (with a sensitivity control proving the apparatus can see a hide).
+2. **A3 remediation** — A3-R021-F1 (four `processEvents()`→`this` sites in the modeless completion slots, newly
+   exposed BY the reparent), F2 (an EXECUTED UAF: `refreshClicked`'s guard was self-only while `start()` checked `ctx`
+   too late), F3, F5, F6.
+3. **DEC-031** — reopened DEC-025. Its deliberate store leak was justified by "the application is already tearing
+   down", which the reparent falsified. Replaced by a frame-counted, per-dialog, REFCOUNTED `StoreReaper` drained by
+   the unwinding `BlockingCall`. TEST-089 probe first: both naive `deleteLater` and queued-invoke forms die INSIDE the
+   nested loop, so the naive reaper would free the store under its own frame — the frame-counted shape was required.
+   Five assertion sites inverted from "the store leaks" to "closed and deleted exactly once, only after the loop
+   returned"; TEST-073 byte-unchanged as the discriminator.
+4. **REQ-025** — DEC-031 was UNSAFE alone (B-R031-01): an UNCOUNTED nested loop can ENCLOSE a counted one, so the
+   reaper fired while an outer frame was suspended. Counted three sync-dialog sites + added the upload-dialog lazy-open
+   bail. RED-verified then closed; orchestrator reproduced the UAF independently by stripping the site-1 frame+bail.
+5. **ORCH-010** — the DEC-015 drift lint (a MECHANISM) was repaired, not routed around, after escalating from 1 false
+   positive to 27. `find_statuses()` gained assignment-shape discrimination; 15 pre-existing cases still pass + 6 new
+   two-directional cases = 21/21, mutation-proven, installed copy synced.
+
+Prior (superseded): **REQ-021 PHASES 1+2 BUILT + Verification-Gate PASS 2026-08-11 (working tree); A3 RUNNING.** The collaborator
+UAF is fixed per DEC-030: both dialogs reparented to `context->tab` (so `delete tab` at MainWindow.cpp:2183 destroys them
+BEFORE the Athlete and Context they point at), `QPointer<Context>`/`QPointer<RideItem>` riders in both `start()`s covering
+the pre-delete window at :2148-2171, and S-R021-01's missing bail closed. **ASan target 32/32 (was 25), full ctest 26/26,
+`GoldenCheetah` links.** Production diff is `src/Cloud/CloudService.cpp` ONLY — `CloudService.h` and `MainWindow.cpp`
+untouched, so the Coach owner's uncommitted work was never at risk.
+**Orchestrator-executed gate evidence (not read):** reproduced the Phase-1 probe including its sensitivity control; own
+mutation reverting **BOTH** reparents simultaneously → **5 slots FAIL** (the builder had only reverted them singly);
+own mutation of the harness (stop deleting the Context) → all 3 harness slots FAIL; restorations byte-identical
+(md5 `873de31f…` and `65eec658…`, `cmp` clean, zero `.orig` residue); FILES reconciled exactly.
+**One HAZARD THE FIX ITSELF INTRODUCED, found by the BUILDER in its own work and confirmed + fixed by the orchestrator
+(O-R021-02 → [[LSN-049]]):** the fix makes both dialog ctors READ `Context::tab`, which `Context::Context` never
+initialised — it is assigned only by `AthleteTab`'s ctor, and `MainWindow::openAthleteTab` (:2038) publishes a Context via
+`openingAthlete` well before that. An uninitialised pointer handed to `QDialog` is undefined behaviour, i.e. strictly
+worse than the UAF being fixed. Closed with one line (`tab = NULL;` + comment) in `src/Core/Context.cpp`, verified 26/26.
+**The POLICY residual was deliberately left undecided and routed to A3**, not silently chosen: a null parent makes the
+dialog an unparented top-level that nothing destroys, versus falling back to `mainWindow`.
+**Builder self-disclosed five more residuals rather than burying them (B-R021-05..09)** — chief among them a NEGATIVE
+mutation result kept on the record: only 3 of the 11 widened bails are load-bearing; the other 7 survive removal at
+32/32. Also: the sync dialog's modality is REASONED not measured (B-R021-08), and `QTest::mouseClick(QWidget*)` turned out
+to be BLIND to modal blocking on Qt 6.8.2, which produced a false alarm before the `QWindow` overload fixed it →
+[[LSN-050]]. That is the second time this wave a green test proved nothing because the apparatus could not see the
+phenomenon ([[LSN-047]] was the first).
+Prior (superseded): **REQ-021 PHASE 1 DONE + Verification-Gate PASS 2026-08-10 — the GATING PROBE CLEARED Option B; Phase 2 (the
+production fix) is IN FLIGHT.** TEST-081/082 built on branch `garmin/req021-collaborator-uaf`; ASan target 25/25, full
+ctest 26/26, **zero `src/` changes — the stop gate was honoured.** **PROBE VERDICT (measured, not reasoned): child
+`QDialog` windows do NOT follow their parent widget's hide** on Qt 6.8.2 here — a modeless `QDialog(tab, Qt::Dialog)`
+stayed visible through a raw `hide()` AND through `QStackedWidget::setCurrentIndex` (the mechanism `switchAthleteTab`
+actually uses), with no sticky hide, while a non-window control child DID go invisible, so the apparatus is demonstrably
+sensitive rather than vacuously green. **Orchestrator verification was independent, not a read:** re-ran the target and
+reproduced the measurement incl. the control, reconciled FILES exactly (2 modified under `unittests/`, `src/Cloud/
+CloudService.{h,cpp}` entirely CLEAN, zero REQ-021 content anywhere in `src/`), and ran its OWN mutation — the harness
+`closeAthleteTab` stops deleting the Context → **all THREE harness slots FAIL** — then restored byte-identical (md5
+`65eec658…`, `cmp` clean, no `.orig` residue) and re-confirmed 26/26. Closes A3-R019-F3, B-R019-04, B-R019-05.
+**The builder caught a FALSE PREMISE in the orchestrator's own briefing, and it was the probe's own premise** (O-R021-01,
+[[LSN-034]] recur:3): the briefing said `MainWindow::switchAthleteTab` hides tabs "at MainWindow.cpp:2165" — :2165 is a
+CALL SITE, the definition is at :2367 and contains no compiled `hide()` at all (only `#if 0` blocks); the real mechanism
+is `tabStack->setCurrentIndex()` at :2389. **It cost nothing only because the builder probed BOTH routes.** The guard's
+failure shape is now pinned: quoting a line number for a symbol without opening that symbol's DEFINITION — three for
+three caught by the delegation hatch. Builder also self-disclosed four honest residuals (B-R021-01..04), the sharpest
+being that its `saveSilent` stub load is STRICTER than production, which never touches a MainWindow member.
+Prior (superseded): **REQ-021 OPENED + DEC-030 ACCEPTED 2026-08-10; `qgdw-builder` BUILDING PHASE 1 (harness + gating probe) on
+branch `garmin/req021-collaborator-uaf`.** The scout's research changed the answer's shape twice, and both changes were
+orchestrator-verified on disk before they were acted on. (i) **`Context` and `RideItem` are BOTH `QObject`s**
+(Context.h:106, RideItem.h:41) — the fact the briefing told the scout to CHECK rather than assume — which makes the
+hand-rolled abandonment-signal option (C) redundant rather than merely costly. (ii) **The sync dialog's collaborator
+surface is ~8× larger than REQ-021's stub claimed** (S-R021-02): `MainWindow::syncCloud` opens it MODELESSLY
+(`open()`, not `exec()`), so it outlives its caller and keeps running slots — nine further `context->` derefs across
+`refreshClicked`/`syncNext`/`downloadNext`/`uploadNext`/`saveRide`, all nine spot-checked and confirmed. **That
+correction is what selected the option**: a per-site guard closes ~18% of the surface, a structural reparent closes
+100% for two lines → [[LSN-048]]. (iii) The scout also found **S-R021-01, a live one-line `this`-axis gap on master**
+that four adversarial cycles missed: the sync dialog's Cancel branch runs `processEvents()` (:1107) then
+`invokeMethod(this,"close")` (:1108) with no `self.isNull()` between them, while the upload dialog's identical branch
+HAS it (:451-452) — folded into REQ-021 by user decision. **DEC-030 = Option B (reparent to `context->tab`),
+PROBE-FIRST, + Option A guards as a rider** covering the pre-delete window (MainWindow.cpp:2148-2171) that reparenting
+cannot reach. The scout REFUSED to assert the one Qt premise it could not source (child-window hide semantics) — correct
+per this project's execution-over-reasoning rule — so TEST-081 measures it and the fallback to Option A across all 11
+sites is pre-authorised. Sibling scan routed by user: `AddCloudWizard`→REQ-020 (widened), QThread cases→**REQ-022**,
+store layer→**REQ-023**, and a dedicated pass queued for the six-class tail + A3-R019-F6 (S-R021-06).
+Prior (superseded): **REQ-019 COMMITTED `e8833682f` 2026-08-08 — the upload-dialog UAF is closed on the axis it targeted, and the
 clean-checkout gate passed on the ACTUAL COMMITTED TREE.** 4 files, +697/-14, on branch `garmin/req019-upload-uaf`
 (now 1 ahead of master). Staged via plumbing: 3 whole files + `src/Gui/MainWindow.cpp` HUNK-SPLIT to its 16-line comment
 hunk — the committed copy contains ZERO Coach content and the worktree copy is md5-identical to its pre-session state
@@ -351,8 +492,308 @@ Garmin only; final CLV VAL-015 PASS; pre-commit clang-format/ruff/mypy passed af
 + 2 files reformatted, re-verified per LSN-007). Prior: **REQ-007 DONE + COMMITTED `d312886a6`** (docs-record
 `f637c138b`).
 
-NEXT_GATE: **AWAITING USER — REQ-019 is closed (feature `e8833682f` + this docs record). Two open calls, in priority
-order.**
+NEXT_GATE: **THE CLEAN-WORKTREE BUILD GATE — the last step of this wave's close. Commits (a) `6dc794caf` and
+(b) `3f44c447f` are DONE; (c) this docs record is being written now. What remains is a configure+build+ctest of the
+COMMITTED tree from a clean extract (`git archive HEAD` / `git worktree`), which is mandatory at a feature close and is
+the gate that caught ORCH-005/006/007. Every other gate this wave ran inside the developer's working tree.**
+
+--- prior gate (resolved 2026-08-13 — user said proceed; commits landed) ---
+NEXT_GATE-PRIOR-COMMIT: **THE COMMIT GATE. REQ-026 is BUILT and Verification-Gate-PASSED; the A3 blocker is closed; nothing is
+running and nothing is blocked on evidence. AWAITING USER GO — the next action writes git history, so it is not taken
+unasked.**
+
+**WHAT SHIPS:** the REQ-021 wave + DEC-031 + REQ-025 + REQ-026, i.e. 11 of the working tree's 67 dirty entries.
+**OUR FILES ARE NOW ELEVEN** (was 9 — REQ-026 touched two that were already ours, so the set is unchanged in membership):
+`src/Cloud/CloudService.cpp` + `.h` · `src/Core/Context.cpp` · `unittests/Core/garminconnect/
+testGarminConnectSyncDialogClose.cpp` + `stubs/ImportSeamStubs.cpp` · `scripts/ledger_drift_lint.py` +
+`scripts/test_ledger_drift_lint.py` + `.claude/hooks/ledger_drift_lint.py` + `.claude/hooks/anti_duplication_guard.py` ·
+plus the governance ledgers (`STATE.md`, `WIKI.md`, `lessons.md`, `.claude/workflow-garminconnect/*`).
+
+**HUNK-SPLITTING IS NOT NEEDED THIS WAVE — re-verified on disk 2026-08-12, do not carry the REQ-017/REQ-019 constraint
+forward by habit.** Those waves had to hunk-split because their changesets reached into `src/Gui/MainWindow.cpp` and
+`src/CMakeLists.txt`, which carry the Coach owner's work. **This wave touches neither** (both confirmed untouched by both
+agents), and every one of our files is EXCLUSIVELY ours: a scan of the added lines in all eight code/tooling files for
+`coach|anthropic|openai|gemini|libusb|calendar` returns **zero** in each, and `src/Core/Context.cpp`'s entire diff is the
+one `tab = NULL;` statement plus its comment. So whole-file staging is safe and `git add <path>` per file is the method.
+**`git add -A` remains forbidden** ([[LSN-007]]/[[LSN-010]]/[[LSN-032]]) — 56 of the 67 entries are other owners'.
+**ONE EXCLUSION, deliberate:** `.claude/hooks/anti_duplication_guard.py` is **byte-identical to its install source**
+(md5 `658575d4…` both) — it is a sync artifact of the USER's pre-session skill update, not this wave's work, so it stays
+uncommitted with the rest of the skill churn, matching the standing rule that pre-session tooling churn is the user's
+call. That makes it 10 files to stage, not 11.
+Proposed split, in order:
+(a) **feat(garmin)** — `src/Cloud/CloudService.{h,cpp}` + `src/Core/Context.cpp` + the two test files. This is REQ-021 +
+    DEC-030 + DEC-031 + REQ-025 + REQ-026 as one coherent lifetime-and-abort changeset.
+(b) **fix(workflow)** — the three lint files (ORCH-010's assignment-shape repair, 21/21, mutation-proven).
+(c) **docs(garmin)** — the governance ledgers.
+**Then the clean-worktree gate, which is NOT optional:** `git archive HEAD` / `git worktree` extract → configure →
+generate → full build → `ctest`. This is the gate that caught ORCH-005/006/007, and every other gate this session ran
+inside the developer's working tree. Expect pre-commit `clang-format` to rewrite files on the first attempt; if it does,
+**re-verify BY EXECUTION before retrying** ([[LSN-007]]) rather than assuming the reformat was cosmetic.
+
+**THE QUEUE AFTER THE COMMIT, in priority order:** a new REQ for **B-R026-01** (the silent sync stall — newly found, and
+arguably the most user-visible thing on this list: a frozen sync with no error) · a new REQ for **A3-R021b-F2** (file-IO
+layer, `RideFile.cpp:999`) · **REQ-024** (Strava store-side UAF at `blockingCallDepth == 0`; needs a sibling scan of the
+other 16 subclasses first — only Xert was checked) · **REQ-020** (OAuth wizard, WIDENED to `AddCloudWizard`) ·
+**REQ-022** (QThread cross-thread: `OpenData`, `CloudServiceAutoDownload` — scout-reported, NOT orchestrator-verified,
+spot-check first) · **REQ-023** (store-layer `uncompressRide`) · **B-R025-03's DEC** (the predicate question) ·
+**ORCH-014** (repair CLV Check 5's grep — it has been vacuous since 2026-08-08) · ORCH-011/012/013 (guard `cd`-blindness;
+guard blocks the mandated `cp` restore; `install_hook.py` side effects) · B-R026-02 (harness `rideMetadata` UB) on the
+next slice that touches `ImportSeamStubs.cpp`.
+
+**ALSO WORTH A DECISION SOON, not urgent:** [[LSN-034]] is at recur:5 with five-for-five hatch catches and no cost ever
+incurred. That is the profile of a guard that should become MECHANISM (a lint extracting every `file:NNN` claim from a
+briefing and re-reading it), exactly as LSN-001 and LSN-008 did. Restating it a sixth time is the option this project has
+already learned not to take.
+
+--- prior gate (resolved 2026-08-12 — REQ-026 built + gate PASS) ---
+NEXT_GATE-PRIOR-REQ026: **REQ-026 BUILD GATE — `qgdw-builder` DISPATCHED 2026-08-12 to close A3-R021b-F1 (BLOCKING) + F3, RED-first.**
+User chose "fix F1+F3 now, then commit" over committing first or bundling B-R025-03's predicate decision. **B-R025-03
+therefore stays QUEUED and is explicitly out of the builder's scope** — the four bare `processEvents()` at
+:2012/:2144/:2246/:2303 must be left alone, because wrapping them would defer the very close they exist to deliver.
+
+**No DEC was written, deliberately:** the fix shape is forced, not chosen (re-read the abort flag in the one branch that
+suspends and keeps iterating), so it is not a one-way door and the Three Options Doctrine does not apply. The DEC-worthy
+question in this family — should `blockingCallDepth` become a complete predicate — is B-R025-03's, and it stays open.
+
+**REQ-026 written to prd.md** with an outcome-shaped criterion ("when the user aborts, no further ride is transferred"),
+NOT a restatement of the fix. IDs allocated and passed in the briefing: **TEST-093** (the F1 abort test) and
+**TEST-094** (F3's `completedRead` re-read, CONDITIONAL — if the builder cannot drive it, it must stay unbuilt with a
+recorded residual rather than shipping an untestable guard; the TEST-076/LSN-022 precedent).
+
+**Briefing pre-flight, honoured ([[LSN-034]]):** every identifier was opened on disk first — `uploadNext` bracketed
+2314-2411 by DEFINITION line, all three `aborted` reads (:2187/:2292/:2421) and the lone :2399 assignment enumerated one
+line per read, `deferCloseIfBusy` at :1471, `downloadClicked` at :1908 with the :1916 assignment and :1918 relabel,
+the parse-failure branch at :2376-2387, DEC-024/025/031 titles read from decisions.md (:699/:759/:946) rather than
+recalled, and the harness machinery confirmed (`obs::writeFileCalls` :255/:274/:482-485, `namespace rideopen` :551-566,
+`BlockingRideFileReader::openRideFile` :568+, `store->closeAction` :513/:516/:371-380, TEST-087's `UploadNextParsePE`
+model at :3988/:4083-4101). The briefing also names the ONE thing that makes this not a copy-paste job: the fixture needs
+**asymmetric** rows — row[0] missing, row[1] parseable — because if both are missing the slot cannot distinguish
+"stopped correctly" from "continued and failed again", and would pass for the wrong reason.
+
+**ON RETURN — Verification Gate, orchestrator-EXECUTED not read:** re-run the ASan target (41+ slots) and full `ctest`
+(26/26 baseline) myself · confirm `src/GoldenCheetah` links · diff FILES against `git status`/`git diff --stat` ·
+**mutate the new guard myself and confirm the extra upload returns** (this slice's whole point IS a guard, so "tests
+pass" is not evidence — "tests fail when I break it" is) · verify the RED output was genuinely observed pre-fix ·
+confirm `blockingCallDepth`/`StoreReaper`/`BlockingCall` are byte-unchanged · confirm `MainWindow.cpp` and
+`src/CMakeLists.txt` were not touched · all mutations under the [[LSN-032]] `cp`/`cmp` snapshot mandate with zero
+`.orig` residue. Then the commit gate.
+
+--- prior gate (resolved 2026-08-12 — user chose: fix F1+F3 now, then commit) ---
+NEXT_GATE-PRIOR-A3FINDINGS: **A3 RE-CLEAR RETURNED FINDINGS 2026-08-12 — VERDICT: NOT CLEAR. One BLOCKING defect (A3-R021b-F1),
+orchestrator-CONFIRMED and found to be MORE reachable than reported. AWAITING USER DISPOSITION. Nothing is running.**
+
+**THE A3 WAS WORTH RUNNING.** It found a real, outward-facing defect that 40 green ASan slots and a passed Verification
+Gate had both missed: `uploadNext` never reads `aborted`, so an abort during its parse-failure branch uploads one more
+ride to the cloud service after the user said stop (full detail → BLOCKING). Third A3 in a row to find a genuine defect
+in a changeset that had already passed a Verification Gate.
+
+**WHAT THE ADVERSARY ALSO DID, and it matters for how much to trust the rest:** it REFUTED five of its own hypotheses
+with EXECUTED evidence rather than reasoning — TEST-089's deleteLater/queuedInvoke measurement carries a working
+positive AND negative control in one run (`deleteLater=1 queuedInvoke=1` vs `late(inverse control)=0`); TEST-081's
+child-window-hide measurement still shows its sensitivity control (`dialog rawHide=1` vs `control child rawHide=0`);
+the shared-stub change was verified against ALL THREE targets that compile `ImportSeamStubs.cpp` (40/40, 4/4, 4/4 —
+→ [[LSN-056]]); TEST-090 Part 1's nesting was shown REACHABLE from one ordinary user action (Refresh during a download),
+not synthetic; and — importantly — **the literal B-R031-01 shape was REFUTED for all four uncounted `processEvents()`
+sites**: at each of :2012/:2144/:2246/:2303 `blockingCallDepth` has already returned to 0, so the reaper cannot fire
+underneath them. The danger at those sites turned out to be the ABORT flag, not the reaper. `StoreReaper::release()`
+calling `closeAndDeleteStore(NULL)` on ordinary unwinds was also refuted as a bug (documented null-tolerant path).
+
+**THE DECISION NOW (asked 2026-08-12, not yet answered):** A3-R021b-F1 blocks the commit gate. Three shapes —
+(1) **fix F1 (+F3) now, then commit**: dispatch `qgdw-builder` for a RED-first `if (aborted) return true;` beside the
+existing bail at :2385, plus the prescribed test (Upload tab, 2 checked rows, row[0]'s file missing, abort injected from
+inside row[0]'s `processEvents()` via the queued pattern TEST-090/091 already use, assert row[1] never opened/written).
+Bundle F3 or leave it. (2) **commit the wave as-is and fix F1 as its own REQ** — defensible only if F1 is judged
+pre-existing, which it is NOT purely: the branch is old, but REQ-025 is the wave that made this window counted and
+`self.isNull()`-guarded, so the wave touched it and left the abort half undone. (3) **fix F1 and take B-R025-03's
+predicate decision at the same time**, since F1/F3/B-R025-03 share one root cause (the depth counter is treated as a
+complete predicate, and guards stand in for it).
+
+**STILL TRUE, and unchanged by the A3:** the commit gate needs hunk-splitting — 67 dirty entries, only 9 ours (listed in
+CURRENT). **Never `git add -A`** (LSN-007/010/032). `src/Gui/MainWindow.cpp` and `src/CMakeLists.txt` carry the Coach
+owner's work and must NOT be staged. Split: (a) feat — `src/Cloud/CloudService.{h,cpp}` + `src/Core/Context.cpp` + the
+two test files; (b) fix(workflow) — the three lint files (ORCH-010); (c) docs — the governance ledgers. A clean-worktree
+configure+build of the COMMITTED tree is mandatory at the feature close (the gate that caught ORCH-005/006/007).
+
+**THE QUEUE AFTER THAT, in priority order:** a new REQ for A3-R021b-F2 (file-IO layer, `RideFile.cpp:999`) · REQ-024
+(Strava store-side UAF at `blockingCallDepth == 0`, needs a sibling scan of the other 16 subclasses first — only Xert was
+checked) · REQ-020 (OAuth wizard, WIDENED to `AddCloudWizard`) · REQ-022 (QThread cross-thread: `OpenData`,
+`CloudServiceAutoDownload` — scout-reported, NOT orchestrator-verified, spot-check first) · REQ-023 (store-layer
+`uncompressRide`) · B-R025-03's DEC (fold with F1/F3 if option 3 is chosen) · **ORCH-014** (repair CLV Check 5's grep) ·
+ORCH-011/012/013 (guard `cd`-blindness; guard blocks the mandated `cp` restore; `install_hook.py` side effects).
+
+**UNMEASURED, carried forward honestly (adversary's own list):** whether F1's blast radius is bounded at exactly one
+extra row under real Qt event-delivery timing (reasoned, not instrumented) · A3-R021b-F2's end-to-end reachability (needs
+a fixture the read-only adversary could not write) · real `GarminConnect::readFile`/`uncompressRide` timing beyond the
+stub's comments · MainWindow/AthleteTab's actual Context-vs-tab destruction order (out of the adversary's scope; it
+relied on the verified anchor) · suite flakiness under parallel/loaded CI (wall-clock fixtures, 5000ms watchdogs) ·
+an exhaustive per-slot audit of whether B-R025-02's RideCache strictness makes any of the 40 slots vacuous (spot-checked
+only).
+
+--- prior gate (resolved 2026-08-12 — A3 ran, returned FINDINGS) ---
+NEXT_GATE-PRIOR-A3RECLEAR: **REQ-021 WAVE A3 RE-CLEAR — `qgdw-adversary` DISPATCHED 2026-08-12 against the working tree.** User chose
+A3-before-commit (the recommended option) over committing first. The adversary is pointed, in order, at the six surfaces
+enumerated in the prior gate below: B-R025-03 (the four uncounted `processEvents()` — the reaper reasons as though the
+`blockingCallDepth` predicate were complete), B-R025-01 (the file-IO layer at `src/FileIO/RideFile.cpp:999`), DEC-031's
+two second-order timing shifts, the four self-disclosed harness shortcuts, B-R025-02's deliberate strictness (flag only
+if it makes a slot vacuous), and TEST-090 part 2's shape-only refcount coverage.
+
+**Briefing pre-flight, honoured before dispatch ([[LSN-034]] recur:4, [[LSN-023]]):** every identifier in the briefing was
+OPENED first, not recalled. `RideFile.cpp:999` confirmed as exactly the `context->athlete->cyclist` deref; all four
+uncounted loops confirmed at 2012/2144/2246/2303 with their enclosing symbols bracketed BY DEFINITION LINE, not by call
+site (`syncNext` 1967-2105, `downloadNext` 2106-2174, `completedRead` 2175-2278, `failedRead` 2279-2313); the
+`StoreReaper`/`BlockingCall` anchors confirmed at `CloudService.h:490/541-568/573/583-604` and
+`CloudService.cpp:961/1369-1370/1385/1409-1419/1426-1447`. A FRESH `git status --porcelain` was pasted because the
+adversary has no git tools and its own prompt snapshot is frozen; the 58 out-of-scope dirty entries were named as
+out-of-scope explicitly so it cannot raise findings against another owner's work.
+
+**ON RETURN — the Verification Gate applies to the adversary too:** spot-check 1-2 cited findings at their cited
+locations before accepting the verdict; the adversary is read-only, so any mutation it prescribes is MINE to execute
+under the [[LSN-032]] snapshot mandate (`cp file file.orig`, restore from the copy, `cmp` — NEVER `git checkout --` on
+these files, all nine carry uncommitted work). Then disposition with the user and proceed to the commit gate as
+described below.
+
+--- prior gate (resolved 2026-08-12 — user chose A3 first) ---
+NEXT_GATE-PRIOR-DECISION: **AWAITING USER — one decision, then the path to commit is short. Nothing is running.**
+
+**THE DECISION (asked 2026-08-12, ANSWERED 2026-08-12 → A3 first):** run a **fresh A3 re-clear on the working tree BEFORE committing**
+(recommended), or **commit REQ-021 + DEC-031 + REQ-025 as one changeset first** and run A3 against the committed tree.
+Why it is not a formality: the changeset has grown a new lifetime mechanism (`StoreReaper`), four newly-counted frames,
+five inverted assertions and three self-disclosed harness shortcuts since the last adversarial pass — and **the previous
+A3 found two BLOCKING defects in a changeset that had already passed a Verification Gate**, while the one before it
+found the axis that created REQ-021 in the first place.
+
+**IF A3 IS CHOSEN — dispatch `qgdw-adversary` and point it at these, in order:**
+1. **B-R025-03 — `blockingCallDepth` is STILL not a complete predicate.** Four bare `QApplication::processEvents()`
+   remain uncounted (`syncNext` :2012, `downloadNext` :2144, `completedRead` :2246, `failedRead` :2303). They are safe
+   by GUARD (each is followed by a `self.isNull()` bail), not by PREDICATE — **and DEC-031's reaper reasons as though
+   the predicate were complete.** Wrapping them would defer the very close they exist to deliver, so it needs a DEC.
+2. **B-R025-01 — a THIRD layer of the same bug class**, unfixed: `RideFileFactory::openRideFile` derefs
+   `context->athlete->cyclist` at **`src/FileIO/RideFile.cpp:999`** AFTER the reader's nested loop. An athlete close
+   during a FIT open faults inside the file-IO layer, upstream of every guard this wave built. Class is now
+   dialog (REQ-021) → store (REQ-024) → file-IO (this).
+3. **DEC-031's two second-order timing shifts** (builder-disclosed, no existing assertion observes them):
+   `completedRead` now raises depth on EVERY download completion, so a close arriving during `uncompressRide` is now
+   DEFERRED and replayed from `~BlockingCall`; same for `uploadNext`'s parse-failure `processEvents()`.
+4. **Harness shortcuts, all self-disclosed:** TEST-092's fixture deliberately KEEPS THE CONTEXT ALIVE to dodge
+   B-R025-01, making it a WEAKER teardown than production; TEST-087 invokes completion slots directly rather than via
+   `store->notifyReadComplete()`; the suspending reader uses a synthetic `.gcblock` suffix, not a real `.fit`;
+   `RideItem::ride` in `ImportSeamStubs.cpp` is shared by THREE targets; wall-clock timing fixtures throughout.
+5. **B-R025-02** — the harness is STRICTER than production (`RideCache::~RideCache()` does not delete its `RideItem`s,
+   so they leak). Do not "correct" it; several `ride`-guard proofs depend on the stricter model.
+6. TEST-090 part 2 (two-dialog refcount) is a SHAPE test — no production route to two concurrent sync dialogs was found.
+
+**THEN THE COMMIT GATE.** Hunk-splitting is required — 67 dirty entries, only 9 ours (listed in CURRENT). **Never
+`git add -A`** (LSN-007/010/032). `src/Gui/MainWindow.cpp` and `src/CMakeLists.txt` carry the Coach owner's work and
+must NOT be staged. Suggested split: (a) feat — `src/Cloud/CloudService.{h,cpp}` + `src/Core/Context.cpp` + the two test
+files; (b) fix(workflow) — the three lint files (ORCH-010); (c) docs — the governance ledgers. A clean-worktree
+configure+build of the committed tree is mandatory at the feature close (this is the gate that caught ORCH-005/006/007).
+
+**AFTER THE COMMIT, the queue in priority order:** REQ-024 (Strava store-side UAF at `blockingCallDepth == 0`, needs a
+sibling scan of the other 16 subclasses first — only Xert was checked) · a new REQ for B-R025-01 (file-IO layer) ·
+REQ-020 (OAuth wizard, WIDENED to cover `AddCloudWizard` itself) · REQ-022 (QThread cross-thread: `OpenData`,
+`CloudServiceAutoDownload` — scout-reported, NOT orchestrator-verified, spot-check first) · REQ-023 (store-layer
+`uncompressRide`) · B-R025-03's DEC · ORCH-011/012/013 (guard `cd`-blindness; guard blocks the mandated `cp` restore;
+`install_hook.py` side effects).
+--- prior gate (resolved) ---
+NEXT_GATE-PRIOR-REMED: **REQ-021 A3-REMEDIATION IN FLIGHT + DEC-031 ACCEPTED, ITS BUILD QUEUED BEHIND IT (2026-08-11).**
+A3 returned FINDINGS (2 blocking, orchestrator-confirmed). User dispositioned all three questions.
+**(1) `qgdw-builder` IS RUNNING** on the five A3 fixes: F2 (the EXECUTED UAF — `QPointer<Context>` in `refreshClicked`,
+widen the :1392 guard, then audit the rest of that function), F1 (self-bails at the four `processEvents()`→`this`
+completion-slot sites **plus a full sibling sweep of every member function in both dialogs, already-safe ones included**),
+F3 (the `context->tab ? context->tab : context->mainWindow` fallback at both construction sites — `tab = NULL` stays),
+F5 (**DROP** the 7 unproven widenings so every remaining `ctx` guard is mutation-proven), F6 (drive the 5th sync
+suspension point or prove it undrivable). TEST-086/087/088 allocated. The destructor was explicitly FENCED OFF as
+DEC-031's territory, including its now-stale comment.
+**(2) DEC-031 ACCEPTED (Option B — frame-counted deferred reaper), build NOT yet dispatched** — it edits the same file
+as the in-flight builder, so it is sequenced behind. Gating Qt loop-level probe first (a naive `store->deleteLater()`
+would delete the store under its own suspended loop; this project already had one `deleteLater` loop-level claim
+falsified). The per-dialog refcounted orphan record is SPECIFIED in the DEC, not left for the builder to discover.
+**(3) TEST-084's inversion is DEC-031's evidence bar and BLOCKS REQ-021 closing** (user decision) — the suite currently
+asserts the leak as REQUIRED across 8 runs, so REQ-021 cannot close on a decision that contradicts its own tests.
+Sequence to the commit gate: A3-remediation builder → verify → DEC-031 probe+build → verify → **fresh A3 re-clear**
+(this A3 found two blocking defects first time through; re-clearing is not a formality) → commit gate (hunk-split; 63+
+dirty entries of other owners' work; never `git add -A`).
+**REQ-024 (S-R031-01, the Strava store-side UAF at `blockingCallDepth == 0`) is TRACKED, build AFTER REQ-021 closes**,
+and needs a sibling scan of the other 16 subclasses first.
+--- prior gate (resolved) ---
+NEXT_GATE-PRIOR-A3: **REQ-021 A3 GATE — `qgdw-adversary` DISPATCHED 2026-08-11** against the built, Verification-Gate-PASSED
+changeset (uncommitted, branch `garmin/req021-collaborator-uaf`). Briefed to attack 8 things, and told plainly that the
+last FOUR A3s each found a new axis so a clean pass is not the expected outcome. The three where this changeset is
+genuinely weak, in order: (1) **O-R021-02's undecided residual** — is a dialog on a tab-less Context reachable, and is
+`tab = NULL` the right policy versus falling back to `mainWindow`? The orchestrator fixed the undefined behaviour and
+deliberately did NOT decide the policy. (2) **Do the NINE modeless sync derefs actually get protected?** That is the
+entire reason Option B beat per-site guards, and the protection is STRUCTURAL (asserted via `dialogDestroyed` /
+`dialogDiedBeforeItsContext`) — no test drives those nine slots directly. (3) A **sibling scan of the reparent's own
+blast radius**: anything assuming a cloud dialog's parent is the MainWindow (`parentWidget()` walks, `window()` calls,
+geometry/centring, modality, multi-monitor placement). Also: B-R021-05's negative result (7 of 11 bails not
+load-bearing — keep or drop?), B-R021-08 (sync-dialog modality is REASONED, not measured), B-R021-04 (offscreen QPA
+only), B-R021-06 (the `reinterpret_cast` harness rewiring), and the acceptance criterion read VERBATIM.
+On A3 return: disposition findings with the user, re-spawn only what fails, then the COMMIT GATE. **The commit gate will
+need hunk-splitting again** — the tree carries 63 dirty entries of other owners' work; `src/Cloud/CloudService.cpp` and
+`src/Core/Context.cpp` are ours and clean-but-for-this-slice, but never `git add -A` (LSN-007/010/032).
+AFTER commit the queue is REQ-020 (OAuth wizard + `AddCloudWizard` itself), then REQ-022 (QThread) / REQ-023 (store layer).
+--- prior gate (resolved) ---
+NEXT_GATE-PRIOR-P2: **REQ-021 PHASE-2 GATE (the production fix) — `qgdw-builder` DISPATCHED 2026-08-10.** Phase 1 is DONE and
+Verification-Gate PASSED, and **the gating probe CLEARED Option B**, so no decision is pending — Phase 2 builds the
+pre-authorised path. Three parts: (1) the REPARENT — `CloudService::upload` (def :78) passes `context->tab` at :95, and
+`CloudServiceSyncDialog`'s ctor (def :824) becomes `QDialog(context->tab, Qt::Dialog)` at :825; (2) the RIDER — Option A
+collaborator `QPointer`s in BOTH `start()`s (defs :407 and :852) covering the pre-delete window at MainWindow.cpp:2148-2171
+that the reparent cannot reach; (3) **S-R021-01** — the missing `self.isNull()` bail between :1107 and :1108.
+TEST-083/084/085 allocated (upload teardown / sync teardown incl. a slot that fails without part 3 / the two structural
+controls the reparent obliges: tab-switch visibility + `exec()` app-modality). Every guard AND the reparent must be
+mutation-proven load-bearing. On return: Verification Gate (independent re-run + orchestrator's OWN mutation + goal audit
+against the elaborated criterion verbatim), then **A3 with `qgdw-adversary`** — mandatory for this class, and the last
+four A3s each found a new axis, so budget for findings rather than a clean pass.
+**Every line number in the Phase-2 briefing was re-verified as a DEFINITION, not a call site** — the specific LSN-034
+failure shape recorded this session (O-R021-01).
+--- prior gate (resolved) ---
+NEXT_GATE-PRIOR-P1: **REQ-021 PHASE-1 GATE (harness + GATING PROBE) — `qgdw-builder` DISPATCHED 2026-08-10 on new branch
+`garmin/req021-collaborator-uaf`** (created at `da07b2227`; branch creation touched zero working-tree files — 58 dirty
+entries verified preserved before and after). **DEC-030 is ACCEPTED: Option B (reparent both dialogs to `context->tab`),
+PROBE-FIRST, with Option A's collaborator `QPointer` guards as a RIDER.** Scope = all 11 sites if the fix ends up
+per-site (user pre-authorised the fallback, so no second decision round); S-R021-01 folded in.
+**The builder is under a STOP GATE and may not touch `src/` this phase.** It builds TEST-082 (the `FakeAthleteWindow`
+harness modelling synchronous Context deletion + deferred owner `deleteLater()`, which the existing `killOwner` helper
+structurally cannot express) and then runs TEST-081 — the gating probe: **does hiding an AthleteTab-equivalent parent
+hide a child `QDialog` window on Qt 6.8.2 here?** That single measured answer decides the production change:
+visible → Option B reparent (2 lines); hidden → Option B is DEAD on UX grounds and the fix falls back to Option A across
+all 11 sites. The probe exists because DEC-030's one unverifiable premise is a Qt behaviour with no primary source, and
+this project decides framework semantics by execution (the scout correctly refused to assert it).
+On return: Verification Gate (contract / independent re-run of the ASan target + own mutation of the new stub touches /
+goal audit vs the elaborated criterion), then present the probe verdict + Phase-2 dispatch (TEST-083/084/085).
+**Hazard the builder was warned about:** 58 dirty entries of other owners' work, incl. `src/Gui/MainWindow.cpp` and
+`src/CMakeLists.txt` — no `git checkout --`/`restore`/`stash`/`add -A` under any circumstances (LSN-032); `.orig` copies
++ `cmp` only.
+--- prior gate (resolved) ---
+NEXT_GATE-PRIOR-DEC030: **DEC-030 DECISION GATE — the REQ-021 collaborator-lifetime UAF fix shape. `qgdw-scout` DISPATCHED 2026-08-10**
+→ RESOLVED 2026-08-10: scout returned, Verification-Gate PASS (orchestrator spot-checked the QObject-ness of
+`Context`/`RideItem`, all nine claimed modeless derefs, the :1107 gap, the single `delete context`, and the single
+`CloudService::upload` caller — all CONFIRMED). User chose Option B probe-first + all-11-site fallback scope + fold in
+S-R021-01 + route all four sibling groups. Byproducts merged: DEC-030 full entry (6 alignment probes RUN against the
+tree per LSN-045), DEC index row, slice row, REQ-021 acceptance ELABORATED in prd.md, REQ-020 WIDENED to cover
+`AddCloudWizard` itself, NEW REQ-022 (QThread cross-thread) + REQ-023 (store layer) stubs + trace rows, findings
+S-R021-01..06 registered (new `S-` scout-found prefix, added to WIKI REGISTRIES), WIKI bumps (REQ next:garmin-024,
+DEC next:garmin-031, TEST next:garmin-T-086, LSN next:049), LSN-048 captured, saves recorded on LSN-034/041/045/047.
+(user chose REQ-021-first over REQ-020/ff-merge/bench, 2026-08-10). DEC-030 ALLOCATED (WIKI bumped next:garmin-031).
+The briefing was built from facts the orchestrator **re-grepped on disk today** (LSN-034/LSN-045 pre-flight): the three
+synchronous deletes in `removeAthleteTab` (MainWindow.cpp ~:2179-85), `closeEvent`'s per-tab call (~:1101-03) vs the
+DEFERRED WA_DeleteOnClose self-delete, the second route `AthleteView.cpp:213` → `closeAthleteTab(QString)`
+(MainWindow.cpp:2103) → `closeTabClicked`, both dialogs' unguarded derefs (upload ~:424/:443-445/:469/:473; sync
+~:1070/:1094-99), the sync dialog's explicit `QDialog(context->mainWindow)` parenting at :824-825, the four inert stub
+bodies in `ImportSeamStubs.cpp` (:210/:212/:312/:314/:383), and a **predicate** enumeration of the blast radius
+(`grep -rn "public CloudService" src/Cloud/*.h` = **17 subclasses**, one line per hit — membership, not proximity).
+Scout is required to return: (A) a by-predicate SIBLING SCAN accounting for `OAuthDialog` (OAuthDialog.cpp:32 — REQ-020),
+`OpenDataDialog` (OpenData.cpp:355) and `AddCloudWizard` as same-bug/tracked/dormant/N-A — a missing enumeration is
+itself a report defect (LSN-041, burned twice); (B) three real options; (C) Four Pillars; (D) cascade vs DEC-024..029 +
+TEST-070..080 + A3-R019-F1/F2/F3 + B-R019-05; (E) recommendation; (F) **the HARNESS sub-decision** — the minimum
+`ImportSeamStubs`/target change that models the real two-phase teardown AND makes freed collaborators actually FAULT
+(this also closes A3-R019-F3 / B-R019-05); (G) the elaborated REQ-021 acceptance criterion; (H) explicit flagging of
+anything unverified. On return: Verification Gate (three REAL options? scores justified? sibling scan complete? is
+`Context`/`RideItem` actually a QObject — the scout was told to CHECK, not assume? cascade concrete?), then the
+orchestrator PRESENTS to the user. REQ-020 stays queued behind this because REQ-021 may change the recipe it applies.
+--- prior gate, still-live user-facing items (kept) ---
+NEXT_GATE-PRIOR-AWAITING: **AWAITING USER — REQ-019 is closed (feature `e8833682f` + this docs record). Two open calls, in priority
+order.** → ANSWERED 2026-08-10: item 1 (REQ-021) chosen and started; items 3/4 remain available.
 1. **REQ-021 — the collaborator-lifetime UAF axis (A3-R019-F1/F2). Recommend this next.** It is the only BLOCKING item,
    it spans BOTH the upload dialog and the **already-shipped** sync dialog (F2 is live on master via `ae5a7a8ab`), and
    it needs a DEC plus harness work FIRST: a purpose-built owner that deletes its Context synchronously while deferring
@@ -360,7 +801,8 @@ order.**
    closes A3-R019-F3 / B-R019-05.
 2. **REQ-020 — OAuth-wizard UAF** (`AddCloudWizard::AddAuth::doAuth`), the last known member of the ORIGINAL
    dialog-lifetime class. Note REQ-021 may change the recipe REQ-020 should apply, so REQ-021 first is the cheaper order.
-3. **Branch disposition:** `garmin/req019-upload-uaf` is 1 ahead of `master`, unmerged, clean-build-verified — a
+3. **Branch disposition:** `garmin/req019-upload-uaf` is **3 ahead / 0 behind** `master` (re-measured 2026-08-10:
+   `e8833682f` feat + `30a5a58ad` docs-record + `da07b2227` ORCH-009 docs), unmerged, clean-build-verified — a
    fast-forward is available whenever you want it (same in-place `git branch -f` technique as last time; the 62 dirty
    working-tree entries make a branch switch unsafe otherwise).
 4. **Cheap, non-blocking bench:** A3-R019-F3/F4/F5/F6, B-R019-01..06, ORCH-008 (test-home misnomer), plus the older
@@ -709,7 +1151,86 @@ GC_WANT_GARMINCONNECT GarminMfaPage.cpp hunk (hunk-split from the unrelated Coac
 tree still carries unrelated pre-session edits (`src/Coach/*`, `src/Gui/*`, root `CMakeLists.txt`, `vcpkg.json`,
 `.claude/skills/**`, `.claude/agents/*`) — NOT Garmin; the Garmin commit must stay path-scoped, never `git add -A`.
 
-BLOCKING: **A3-R019-F1 + A3-R019-F2 (NEW 2026-08-08, A3 on REQ-019) — a SECOND UAF axis nobody had looked at:
+BLOCKING: **NONE OPEN as of 2026-08-12 — `A3-R021b-F1` is FIXED and the fix is orchestrator-verified by execution.**
+Closed under **REQ-026** (TEST-093 + TEST-094), both **RED-verified before the fix**. Two additive production hunks and
+nothing else: `if (aborted == true) return true;` in `uploadNext` (now `CloudService.cpp:2420`, beside the existing
+`self.isNull()` bail and deliberately NOT relabelling the row — row `i` really did fail to parse; what stands down is the
+LOOP), and the symmetric `delete ride` + "Aborted" + `return` block in `completedRead` (:2239), mirroring the entry check
+at :2187. **A3-R021b-F3 turned out DRIVEABLE, so it was BUILT rather than deferred as an untestable guard.**
+**Gate evidence, orchestrator-EXECUTED not read:** ASan target **42/42** (was 40) and full **ctest 26/26** re-run here ·
+FILES reconciled against `git status` (exactly 2 files moved, `CloudService.h`/`Context.cpp`/`ImportSeamStubs.cpp`
+byte-identical, no new files, no CMake edit) · **my own mutation removed BOTH new guards SIMULTANEOUSLY** — the builder
+had only reverted them singly — and **exactly the 2 new slots FAILED while the other 40 stayed green**, so each guard is
+independently load-bearing AND neither propped up a pre-existing slot · restored byte-identical (md5
+`a722806a9aa95baa5b38832eab648265`, `cmp` silent, zero `.orig` residue) and re-confirmed 42/42.
+**Goal audit PASS:** TEST-093 encodes BOTH halves of the criterion as written — `writeFileCalls == 0` AND
+`rideOpens == 0` — behind seven anti-vacuity premise assertions, including that the button really was labelled "Abort"
+and that `downloadClicked` really took its abort branch. Not a weaker paraphrase.
+**One NEW defect found by the builder and confirmed by the orchestrator, deliberately NOT fixed (B-R026-01):** a SILENT
+STALL. `syncNext`'s parse-failure branch returns without arming ANY of syncNext's four re-entry points
+(:2273/:2326/:2472/:1962), because a parse failure emits no async work at all — so a sync with one unparseable local file
+freezes on that row forever. A hang, not an over-transfer; out of REQ-026's scope, needs its own REQ. → [[LSN-057]].
+Also carried: B-R026-02..06 (harness `rideMetadata` UB; both slots observe "the call was made" not "bytes moved"; `.tcx`
+vs `.fit` fidelity; row-order asserted not controlled; only one of two abort routes executed) and **O-R021-06** (my
+briefing put the "Abort" relabel at :1918 — it is :1924; :1918 is the `return`. Caught by the builder, no code impact,
+[[LSN-034]] now recur:5 and a mechanism candidate).
+Still open, NON-blocking, unchanged by this build: **A3-R021b-F2** (file-IO third layer, `src/FileIO/RideFile.cpp:999`) ·
+**B-R025-03** (the `blockingCallDepth` predicate decision — deliberately left queued; the four bare `processEvents()`
+were NOT wrapped) · **ORCH-014** (CLV Check 5's grep).
+Superseded (kept for provenance): **ONE OPEN as of 2026-08-12 — `A3-R021b-F1`, raised by the A3 re-clear and CONFIRMED by the orchestrator.**
+**`CloudServiceSyncDialog::uploadNext` (CloudService.cpp:2314-2411) never READS `aborted`.** Every read of that member in
+the whole file is at :2187 (`completedRead`), :2292 (`failedRead`) and :2421 (`completedWrite`) — grep-verified, one line
+per read; inside `uploadNext` the identifier appears only at :2399, as an ASSIGNMENT in the completion tail. So an abort
+arriving during the parse-failure branch's `processEvents()` (:2378) clears the `self.isNull()` bail at :2385 — a
+MEMORY-SAFETY check, not a stop-when-asked check — and the loop **falls through to the next row and compresses + uploads
+it to the cloud service after the user said stop.** The success path is safe only incidentally (it `return`s, and
+re-entry goes through `completedWrite`'s :2421 check), so the gap is exactly the one branch that suspends and keeps
+iterating. **Untested by construction:** TEST-087's `UploadNextParsePE` slot (test file :3988, :4083-4101) drives PARENT
+TEARDOWN into this branch, never a user abort — all 40 green ASan slots are silent on it.
+**Orchestrator spot-check found it MORE reachable than reported (O-R021-05):** the adversary argued it only through
+`deferCloseIfBusy()` (:1471-1478, gated on `blockingCallDepth > 0`), but `downloadClicked` (:1908) relabels the Download
+button to "Abort" (:1918) mid-batch and sets `aborted=true` at :1916 **synchronously** — no deferral, no depth condition,
+no teardown. The primary documented abort control reaches it. → [[LSN-054]], [[LSN-055]].
+This is an outward-facing effect (ride data sent to a third party post-cancel) and it **blocks the commit gate**.
+Also newly open, NON-blocking: **A3-R021b-F2** (the file-IO third layer, `src/FileIO/RideFile.cpp:999` — orchestrator-
+verified as exactly `if (context) result->setTag("Athlete", context->athlete->cyclist);`, the null check guarding the
+POINTER and never the object; needs its own REQ, and the harness is deliberately blind to it) · **A3-R021b-F3**
+(`completedRead` reads `aborted` at entry only, :2187 — same root cause as F1, lower stakes) · **ORCH-014** (CLV Check
+5's blocking-finding grep has been vacuous since 2026-08-08 because findings.md's severity column switched from a bare
+token to bold prose — a mechanism whose predicate stopped matching its data, ORCH-010's class; repair, don't route
+around).
+Superseded (kept for provenance): **NONE OPEN as of 2026-08-12.** All three blockers raised earlier this wave are CLOSED and independently re-verified:
+A3-R021-F1 (four `processEvents()`→`this` sites the reparent exposed) and A3-R021-F2 (the EXECUTED `refreshClicked` UAF)
+were fixed in the A3 remediation; **B-R031-01** (DEC-031's reaper firing under an enclosing UNCOUNTED frame — it
+converted a latent leak into a live UAF on GarminConnect's mainline `.fit` path) was closed by REQ-025, RED-verified by
+the builder and reproduced independently by the orchestrator before and after.
+**Nothing blocks the commit gate on evidence.** What remains open is a queue of NON-blocking findings and new REQs
+(see NEXT_GATE), plus one honest caveat worth carrying into any A3: **B-R025-03 — `blockingCallDepth` is still not a
+complete predicate, and DEC-031's reaper reasons as though it were.** It is sound today because the four uncounted
+`processEvents()` sites are each guarded, which is a weaker guarantee than the DEC's own reasoning assumes.
+Superseded (kept for provenance): **A3-R021-F1 + A3-R021-F2 (2026-08-11, A3 on REQ-021) — the REQ-021 fix is INCOMPLETE, and one hole is an
+EXECUTED use-after-free.** **F2 (executed):** the Part-2 rider has a hole on the tail path — `start()` calls
+`refreshClicked()` at CloudService.cpp:1203 and only checks `ctx.isNull()` at :1204, while `refreshClicked`'s own
+post-`readdir` guard at :1392 is `self`-ONLY and it then walks `context->athlete->rideCache->rides()` at :1401. The
+adversary re-pointed one existing slot's suspension (one token) and got `heap-use-after-free READ of size 8` at :1401.
+This directly contradicts the changeset's own comment at :919-923. **F1 (read, orchestrator-confirmed at all four sites):
+the REPARENT ITSELF newly exposes four unguarded `processEvents()` → call-on-`this` sequences** in the modeless
+completion slots (:1989→:1991 `completedRead`, :2036→:2038 `failedRead`, :2125→:2127 `completedWrite`, :2083→:2047
+`uploadNext`) — reachable now because `delete tab` is SYNCHRONOUS from inside ordinary event delivery, which
+`processEvents` delivers, whereas MainWindow died only via a posted `DeferredDelete`, which it does not. **The reparent
+closed the `context` axis in those slots and opened a `this` axis in the same slots** → [[LSN-051]].
+Orchestrator spot-checked F1 (all four), F2 (full control flow) and F4 (both quoted clauses) and CONFIRMED all three.
+**AWAITING USER DISPOSITION.** Also open from this A3: F3 (`tab = NULL` is the WRONG policy — MEASURED: a parentless
+dialog blocks nothing, survives MainWindow close, and keeps `quitOnLastWindowClosed` from firing; adopt the
+`context->tab ? context->tab : context->mainWindow` fallback), F4 (DEC-025's premise FALSIFIED — its deliberate store
+leak was justified by "the application is already tearing down", but parent teardown is now a ROUTINE athlete close, so
+a once-per-exit leak became once-per-close, and TEST-084 asserts it as REQUIRED → [[LSN-052]]), F5/F6/F7 (three
+acceptance clauses unmet or unfalsifiable as written), F8 (the ENTIRE sync transfer loop is green but DEAD — no test
+executes any of it, which is where all nine S-R021-02 derefs and all four F1 holes live), F9/F10/F11.
+**A3 also REFUTED seven hypotheses with evidence**, including O-R021-02(a) reachability (by control-flow proof, not
+"unlikely"), B-R021-08 sync modality (MEASURED identical blocked set), and the reparent creating a new sibling class
+(no `parentWidget()`/`window()` walks anywhere in src/Cloud).
+Superseded (kept for provenance): **A3-R019-F1 + A3-R019-F2 (2026-08-08, A3 on REQ-019) — a SECOND UAF axis nobody had looked at:
 the guards protect the DIALOG's lifetime; NOTHING protects `context`/`item`.** The dialog is parented to MainWindow,
 but Context/RideItem belong to the narrower-lived AthleteTab, and `MainWindow::removeAthleteTab` (MainWindow.cpp:2183-85)
 deletes them SYNCHRONOUSLY while MainWindow's own WA_DeleteOnClose deletion is DEFERRED — so the dialog reliably
