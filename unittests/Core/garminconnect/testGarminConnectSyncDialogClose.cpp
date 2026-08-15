@@ -88,6 +88,7 @@
 #include "RideFile.h"
 #include "RideItem.h"
 
+#include <QAbstractEventDispatcher>
 #include <QApplication>
 #include <QByteArray>
 #include <QCheckBox>
@@ -96,7 +97,9 @@
 #include <QDialog>
 #include <QDir>
 #include <QEventLoop>
+#include <QFileInfo>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QList>
 #include <QMessageBox>
 #include <QMetaObject>
@@ -123,6 +126,7 @@
 
 #include <cstring>
 #include <functional>
+#include <memory>
 #include <new>
 
 // TEST-082 — the member-touch observation channel defined in
@@ -262,10 +266,17 @@ bool openResumed = false;
 int writeFileCalls = 0;
 bool writeResumed = false;              // writeFile ran its tail after the nested loop
 const void* lastUploadBuffer = nullptr; // the dialog MEMBER QByteArray it was handed
-bool teardownSawModal = false;          // the teardown landed while a modal box was up
-bool teardownFired = false;             // ...and it fired at all
-bool startReturned = false;             // has start() handed control back yet?
-bool teardownAfterStart = false;        // ...had it, when the teardown landed?
+
+// TEST-095 (REQ-027) — WHICH row was written, not merely how many. Criterion (a)
+// says "store->writeFile called exactly once, FOR row[1]", and a count alone
+// cannot tell a batch that skipped row[0] and wrote row[1] from one that somehow
+// wrote row[0]. syncNext passes QFileInfo(curr->text(1)).baseName() +
+// store->uploadExtension() (CloudService.cpp:2062), so this names the row.
+QString lastWriteName;
+bool teardownSawModal = false;   // the teardown landed while a modal box was up
+bool teardownFired = false;      // ...and it fired at all
+bool startReturned = false;      // has start() handed control back yet?
+bool teardownAfterStart = false; // ...had it, when the teardown landed?
 
 void reset()
 {
@@ -281,6 +292,7 @@ void reset()
     writeFileCalls = 0;
     writeResumed = false;
     lastUploadBuffer = nullptr;
+    lastWriteName.clear();
     teardownSawModal = false;
     teardownFired = false;
     startReturned = false;
@@ -288,6 +300,113 @@ void reset()
 }
 
 } // namespace obs
+
+// ---------------------------------------------------------------------------
+// insideframe — PUTTING THE USER'S ACTION INSIDE THE FRAME THAT IS UNDER TEST.
+//
+// THE MISTAKE THIS EXISTS TO REPLACE. Every slot in this file whose subject is a
+// suspension - "the abort arrives inside completedRead's processEvents()", "the
+// athlete tab dies inside failedRead's" - has to get an action to run at one
+// exact point in a production frame: AFTER the slot's last read of the state it
+// is about to be judged on, and BEFORE the guard reads it. The fixtures used to
+// do that by QUEUEING the action (QMetaObject::invokeMethod ... QueuedConnection)
+// behind the completion and letting the production QApplication::processEvents()
+// inside the slot deliver it.
+//
+// That is not a guarantee, and the suite paid for assuming it was. Posting order
+// fixes the order events are DELIVERED IN; it says nothing about which of them a
+// NOMINATED processEvents() call delivers. QApplication::processEvents() is one
+// non-blocking g_main_context_iteration, and whether GLib dispatches Qt's
+// posted-event source in that single iteration does not follow from the queue
+// having something in it. Measured, same machine, same binary, same dispatcher
+// class (QPAEventDispatcherGlib): under QPA `offscreen` it was dispatched and the
+// suite was green; under `minimal` and under an ambient wayland session it was
+// not, the queued action was still pending when the guard ran, and the guard
+// correctly read the un-aborted / not-yet-destroyed state. Forcing
+// QCoreApplication::sendPostedEvents(nullptr, 0) immediately before the
+// production processEvents() turned the same run green - the event was queued and
+// reachable the whole time.
+//
+// SO NOTHING HERE WAITS TO BE NOTICED. Both stages are ordinary synchronous
+// function calls made by code that is already running inside the frame:
+//
+//   stage 1  QProgressBar::valueChanged, a DIRECT connection, emitted by
+//            production's own `progressBar->setValue(++downloadcounter)`. That
+//            call sits inside every frame these slots test and, in all five of
+//            them, strictly AFTER the last upstream read of `aborted`
+//            (CloudService.cpp:2337 after the re-read at :2329; :2418 after the
+//            entry check at :2412; :2610 after :2604; :2531 and :2123 in the two
+//            parse-failure branches). It anchors us in the right invocation.
+//
+//   stage 2  QAbstractEventDispatcher::awake(), which QEventDispatcherGlib emits
+//            as the FIRST statement of processEvents() whenever the caller did
+//            not ask to wait - and QApplication::processEvents() never does. It
+//            is emitted unconditionally, not as a consequence of dispatching
+//            anything, so it does not care what is or is not in the queue.
+//            Measured with a standalone probe under all three backends: a bare
+//            nested processEvents() with NOTHING posted emits awake() exactly
+//            once.
+//
+// Stage 2 is what makes a DESTRUCTIVE action safe. Deleting the dialog from
+// stage 1 would be a use-after-free the fixture invented rather than one
+// production is guilty of: QProgressBar::setValue touches its own d-pointer after
+// emitting (repaintRequired/repaint), completedRead reads `listindex` and its
+// tree two lines later (:2339), completedWrite writes `successful` at :2614. By
+// the time awake() fires, every one of those has already happened and the very
+// next thing production does is the guard.
+//
+// The action therefore runs INSIDE the processEvents() call the slot is being
+// judged on, with the state it changes ALREADY APPLIED - `aborted` genuinely
+// true, the tab genuinely destroyed - rather than merely pending.
+// ---------------------------------------------------------------------------
+namespace insideframe {
+
+// Run `action` exactly once, inside the next QApplication::processEvents() on
+// this thread. See stage 2 above.
+inline void atNextProcessEvents(const std::function<void()>& action)
+{
+    QAbstractEventDispatcher* dispatcher = QAbstractEventDispatcher::instance();
+    if (dispatcher == nullptr || !action)
+        return;
+
+    auto link = std::make_shared<QMetaObject::Connection>();
+    *link = QObject::connect(
+        dispatcher, &QAbstractEventDispatcher::awake, dispatcher,
+        [link, action]() {
+            QObject::disconnect(*link); // fires once
+            action();
+        },
+        Qt::DirectConnection);
+}
+
+// Run `action` exactly once, inside the processEvents() of whichever completion
+// slot (or parse-failure branch) next counts a row on `dialog`'s progress bar.
+// See stages 1 and 2 above.
+//
+// `value <= 0` is ignored on purpose: downloadClicked() rewrites the bar's range
+// and value at the start of every batch (CloudService.cpp:1960-1962), and only
+// `setValue(++downloadcounter)` can produce a positive value.
+inline void atTheNextCountedRow(QWidget* dialog, const std::function<void()>& action)
+{
+    if (dialog == nullptr || !action)
+        return;
+    QProgressBar* bar = dialog->findChild<QProgressBar*>();
+    if (bar == nullptr)
+        return;
+
+    auto link = std::make_shared<QMetaObject::Connection>();
+    *link = QObject::connect(
+        bar, &QProgressBar::valueChanged, bar,
+        [link, action](int value) {
+            if (value <= 0)
+                return;
+            QObject::disconnect(*link); // arms once
+            atNextProcessEvents(action);
+        },
+        Qt::DirectConnection);
+}
+
+} // namespace insideframe
 
 // ---------------------------------------------------------------------------
 // BlockingStore — GarminConnect's SHAPE, reduced to the part that bites.
@@ -471,13 +590,61 @@ class BlockingStore : public CloudService
         if (!completeRead)
             return true;
 
+        // TEST-102 (A3-R027-F4) — the EXPLICIT failure channel, which
+        // completedRead's sibling slot consumes. GarminConnect posts one or the
+        // other per invocation (postReadComplete / postReadFailed), never both.
+        if (failRead) {
+            QMetaObject::invokeMethod(
+                this, [this, data, remotename]() { notifyReadFailed(data, remotename, tr("service refused")); },
+                Qt::QueuedConnection);
+            armCompletionAction();
+            return true;
+        }
+
         // GarminConnect posts its completion deferred (m_completionContext), so
         // do the same: the dialog observes it in the processEvents() syncNext
         // runs immediately after readFile returns.
         QMetaObject::invokeMethod(
             this, [this, data, remotename]() { notifyReadComplete(data, remotename, tr("Completed.")); },
             Qt::QueuedConnection);
+        armCompletionAction();
         return true;
+    }
+
+    // TEST-102 (A3-R027-F4) — the user's action, ARMED for the completion slot
+    // this store has just queued.
+    //
+    // The abort has to land in a very specific place: after the slot's last read
+    // of `aborted` - completedRead's REQ-026 re-read (CloudService.cpp:2329),
+    // failedRead's entry check (:2412), completedWrite's (:2604) - and before the
+    // guard that the abort must reach (:2372 / :2432 / :2626). The only
+    // production statement between those two points is the slot's own
+    // QApplication::processEvents() (:2354 / :2423 / :2615), so the action has to
+    // run INSIDE that call.
+    //
+    // THIS DEPENDS ON TIMING AND SAYING OTHERWISE IS WHAT HID A REAL DEFECT FOR A
+    // WHOLE WAVE. This used to queue the action behind the completion and rely on
+    // that processEvents() to deliver it, with a comment claiming it worked "by
+    // ordering rather than by timing". Queue order guarantees the order of
+    // delivery; it does not guarantee delivery WITHIN a nominated processEvents()
+    // call, and under QPA `minimal` and under wayland the action was still
+    // pending when the guard ran. See the insideframe block comment for the
+    // measurement and for the two synchronous seams used instead.
+    //
+    // THE CONSTRAINT THE MECHANISM RELIES ON: between production's
+    // `progressBar->setValue(++downloadcounter)` and the processEvents() a few
+    // lines below it, the slot must not itself pump events - otherwise the
+    // one-shot lands in the wrong frame. It does not: what sits in that gap is a
+    // QTreeWidgetItem::setText, a `successful++`, and (on the ride-bearing branch
+    // of completedRead, which these runs do not take because their rows are
+    // .gcfail) saveRide().
+    void armCompletionAction()
+    {
+        if (!afterCompletionAction)
+            return;
+        std::function<void()> a = afterCompletionAction;
+        afterCompletionAction = nullptr; // fires once
+        insideframe::atTheNextCountedRow(dialog, a);
     }
 
     // REQ-019 / DEC-garmin-029 — the UPLOAD path's store call.
@@ -498,6 +665,7 @@ class BlockingStore : public CloudService
         Q_UNUSED(ride);
         ++obs::writeFileCalls;
         obs::lastUploadBuffer = &data;
+        obs::lastWriteName = remotename;
 
         if (blockInWrite) {
             fireActionThenBlock();
@@ -515,26 +683,30 @@ class BlockingStore : public CloudService
         if (!writeSucceeds)
             return false;
 
-        if (completeWrite)
+        if (completeWrite) {
             QMetaObject::invokeMethod(
                 this, [this, remotename]() { notifyWriteComplete(remotename, tr("Completed.")); },
                 Qt::QueuedConnection);
+            armCompletionAction(); // TEST-102: the completedWrite site (:2610/:2615)
+        }
         return true;
     }
 
     QStringList entryNames;
-    QDialog* dialog = nullptr;             // where the close is sent
-    std::function<void()> closeAction;     // what the user does, inside the loop
-    std::function<void()> nextAction;      // ...and what happens inside the NEXT one (TEST-090)
-    ReapLog* log = nullptr;                // per-store reap record, when one store is not enough
-    QObject* closeActionContext = nullptr; // who it is delivered to (default: dialog)
-    bool blockInReaddir = false;           // does readdir run a nested loop too?
-    bool blockInOpen = false;              // does open() run a nested loop too? (TEST-075)
-    bool openFailMode = false;             // does open() FAIL, taking start()'s open-failure branch? (TEST-077)
-    bool blockInWrite = false;             // does writeFile run a nested loop? (TEST-079)
-    bool writeSucceeds = true;             // ...and does it report the upload started?
-    bool completeWrite = false;            // ...and does writeComplete ever arrive? (TEST-080)
-    bool completeRead = true;              // ...and does readComplete? (TEST-087 drives it itself)
+    QDialog* dialog = nullptr;                   // where the close is sent
+    std::function<void()> closeAction;           // what the user does, inside the loop
+    std::function<void()> nextAction;            // ...and what happens inside the NEXT one (TEST-090)
+    ReapLog* log = nullptr;                      // per-store reap record, when one store is not enough
+    QObject* closeActionContext = nullptr;       // who it is delivered to (default: dialog)
+    bool blockInReaddir = false;                 // does readdir run a nested loop too?
+    bool blockInOpen = false;                    // does open() run a nested loop too? (TEST-075)
+    bool openFailMode = false;                   // does open() FAIL, taking start()'s open-failure branch? (TEST-077)
+    bool blockInWrite = false;                   // does writeFile run a nested loop? (TEST-079)
+    bool writeSucceeds = true;                   // ...and does it report the upload started?
+    bool completeWrite = false;                  // ...and does writeComplete ever arrive? (TEST-080)
+    bool completeRead = true;                    // ...and does readComplete? (TEST-087 drives it itself)
+    bool failRead = false;                       // ...or does the read REFUSE instead? (TEST-102)
+    std::function<void()> afterCompletionAction; // what the user does behind that completion (TEST-102)
     QPointer<QDialog> dialogGuard;
     int blockingMs = 120;
 
@@ -569,15 +741,42 @@ int blockingMs = 300;         // ...and how long that loop lasts
 int opens = 0;                // was the reader reached at all?
 bool resumed = false;         // ...and did its loop run to completion?
 
+// TEST-103 (A3-R027-F5) — WAS THE PARSED RIDE FREED?
+//
+// syncNext/uploadNext own every RideFile RideFileFactory hands them, and the
+// REQ-027 abort branches return with one in hand: without their `delete ride`
+// the activity leaks once per aborted upload. The suite cannot see that with
+// ASan's leak checker - the ctest entry runs with detect_leaks=0
+// (unittests/Core/garminconnect/CMakeLists.txt:1457) precisely because this
+// target leaks elsewhere - so the RIDE COUNTS ITS OWN DESTRUCTION instead.
+//
+// ~RideFile is virtual (RideFile.h:240), so a subclass destructor really does
+// run on the production `delete ride` through a RideFile*. Nothing in
+// ImportSeamStubs.cpp is touched to get this (LSN-056: that file is compiled
+// into three targets).
+int created = 0;
+int destroyed = 0;
+
 void reset()
 {
     action = nullptr;
     blockingMs = 300;
     opens = 0;
     resumed = false;
+    created = 0;
+    destroyed = 0;
 }
 
 } // namespace rideopen
+
+// The RideFile production is handed, and whose destruction is observable. No
+// behaviour of its own: it exists to be counted.
+class CountingRideFile : public RideFile
+{
+  public:
+    CountingRideFile() { ++rideopen::created; }
+    ~CountingRideFile() override { ++rideopen::destroyed; }
+};
 
 class BlockingRideFileReader : public RideFileReader
 {
@@ -614,8 +813,57 @@ class BlockingRideFileReader : public RideFileReader
         // A RideFile with NO tags and NO intervals on purpose: the tag-rewriting
         // tail of RideFileFactory::openRideFile (RideFile.cpp:930-960) walks
         // GlobalContext::context()->rideMetadata, which is null in this target's
-        // stubs.
-        return new RideFile();
+        // stubs. TEST-103: the subclass counts its own destruction and changes
+        // nothing else.
+        return new CountingRideFile();
+    }
+};
+
+// ---------------------------------------------------------------------------
+// TEST-096 (REQ-027) — FailingRideFileReader: the row that CANNOT be parsed,
+// COUNTED.
+//
+// Criterion (b) turns on invoking the failing reader "exactly N times", because
+// that single number separates the two failure modes REQ-027 sits between: a
+// driver that re-enters over-counts, a driver that stalls under-counts. Neither
+// is visible in the end state alone — a stalled batch and a correct one both
+// leave N rows on screen.
+//
+// A MISSING file cannot supply that number. TEST-093's unparseable row is a
+// .tcx that is not on disk, and TcxFileReader returns NULL the moment
+// file.open() fails — true to production, but it counts nothing and it conflates
+// "the reader refused" with "the reader was never asked". So this reader is
+// registered for ".gcfail" and does the two things the criterion needs: it
+// COUNTS, and it always returns NULL.
+//
+// It is reached through production's own dispatch: RideFileFactory::openRideFile
+// selects on the SUFFIX alone (RideFile.cpp:899-900) and never stats the file, so
+// exactly one invocation reaches exactly one call. The fixture writes the files
+// anyway, so the situation on disk is a corrupt activity rather than an absent
+// one — which is what "row[0] is an Upload row whose local file cannot be parsed"
+// describes.
+// ---------------------------------------------------------------------------
+namespace ridefail {
+
+int opens = 0; // how many times the unparseable rows were actually attempted
+
+void reset()
+{
+    opens = 0;
+}
+
+} // namespace ridefail
+
+class FailingRideFileReader : public RideFileReader
+{
+  public:
+    RideFile* openRideFile(QFile& file, QStringList& errors, QList<RideFile*>* list) const override
+    {
+        Q_UNUSED(file);
+        Q_UNUSED(list);
+        ++ridefail::opens;
+        errors << QStringLiteral("TEST-096 unparseable activity");
+        return NULL;
     }
 };
 
@@ -1438,6 +1686,11 @@ class TestGarminConnectSyncDialogClose : public QObject
         // and :363, and by RideItem::ride) is production's own.
         RideFileFactory::instance().registerReader(
             QStringLiteral("gcblock"), QStringLiteral("TEST-091 blocking reader"), new BlockingRideFileReader);
+
+        // TEST-096 (REQ-027) — the ride file whose reader COUNTS and then
+        // REFUSES. Same real factory singleton, same production dispatch.
+        RideFileFactory::instance().registerReader(QStringLiteral("gcfail"), QStringLiteral("TEST-096 failing reader"),
+                                                   new FailingRideFileReader);
     }
 
     void cleanupTestCase()
@@ -4006,11 +4259,28 @@ class TestGarminConnectSyncDialogClose : public QObject
 
     // Which completion slot the athlete teardown is delivered into.
     enum CompletionFrame {
-        CompletedReadPE,  // completedRead's processEvents  (:2007) -> syncNext()  (:2009)
-        FailedReadPE,     // failedRead's                   (:2054) -> syncNext()  (:2056)
-        CompletedWritePE, // completedWrite's               (:2143) -> syncNext()  (:2145)
-        UploadNextParsePE // uploadNext's parse-failure     (:2101) -> the loop's
-                          //   own `rideListUp->invisibleRootItem()`  (:2065)
+        CompletedReadPE,   // completedRead's processEvents  (:2007) -> syncNext()  (:2009)
+        FailedReadPE,      // failedRead's                   (:2054) -> syncNext()  (:2056)
+        CompletedWritePE,  // completedWrite's               (:2143) -> syncNext()  (:2145)
+        UploadNextParsePE, // uploadNext's parse-failure     (:2101) -> the loop's
+                           //   own `rideListUp->invisibleRootItem()`  (:2065)
+
+        // TEST-101 (A3-R027-F1) — syncNext's parse-failure processEvents
+        // (CloudService.cpp:2120) -> the `aborted` read at :2146 and the loop's
+        // own `rideListSync->invisibleRootItem()` after the `continue`.
+        //
+        // THE GUARD THAT CHANGED STATUS WITHOUT APPEARING IN A DIFF (LSN-058).
+        // The bail at :2121 is not new - it predates REQ-027. What DEC-032
+        // changed is what stands behind it: before, this branch fell through to
+        // an unconditional `return true` and touched nothing afterwards, so the
+        // bail was dead code and mutating it changed nothing. Now it stands in
+        // front of a loop that KEEPS ITERATING on `this`, and `this` is destroyed
+        // synchronously when the athlete tab closes (DEC-030). Deleting :2121
+        // left the whole suite green until this frame existed, because the four
+        // frames above drive a readFile row on the sync tab and a parse-failure
+        // row only on the UPLOAD tab - the one combination not covered was
+        // sync-tab parse failure.
+        SyncNextParsePE
     };
 
     struct CompletionOutcome
@@ -4021,6 +4291,8 @@ class TestGarminConnectSyncDialogClose : public QObject
         bool timedOut = false;
         int upListCount = 0;   // (UploadNextParsePE premise: there was a row to fail on)
         int readFileCalls = 0; // did the sync carry on behind a destroyed dialog?
+        int syncListCount = 0; // (SyncNextParsePE premise: there was a row to fail on)
+        int failOpens = 0;     // ...and the parse-failure branch really was reached
     };
 
     // The three tree widgets are private members reparented into their tab pages,
@@ -4037,17 +4309,27 @@ class TestGarminConnectSyncDialogClose : public QObject
 
     // One run: a REAL sync dialog, parented by its own constructor to the athlete
     // tab (the REQ-021 shape), driven into one completion slot with the athlete
-    // teardown queued directly behind it so that the slot's own processEvents()
-    // is what delivers it.
+    // teardown ARMED to run inside that slot's own processEvents().
     //
     //   QEventLoop (stands in for QApplication::exec())
     //     -> queued call  [event delivery: scopeLevel bumped]
     //          -> FakeAthleteWindow + one athlete tab
     //          -> CloudServiceSyncDialog(ctx, store) + WA_DeleteOnClose
     //          -> start() / open() / select all / Download   [the user's sync]
-    //          -> queued: the completion slot          }  posted back to back, so
-    //          -> queued: the athlete teardown         }  the slot's processEvents
-    //                                                     delivers the teardown
+    //          -> arm: the athlete teardown, on the next counted row
+    //          -> queued: the completion slot
+    //                 -> progressBar->setValue(++downloadcounter)  [stage 1]
+    //                 -> processEvents()                          [stage 2: the
+    //                                                              teardown runs]
+    //                 -> the guard under test reads a DESTROYED `this`
+    //
+    // The teardown used to be POSTED behind the completion instead, on the
+    // assumption that the slot's processEvents() would deliver it. It does not
+    // reliably: under QPA `minimal` and under wayland it was still pending when
+    // the guard ran, `self` was not null, and the slot handed control to the next
+    // row - which is what this run exists to forbid. See the insideframe block
+    // comment for the measurement and for why both seams used now are ordinary
+    // synchronous calls.
     //
     // The completion slot is invoked DIRECTLY rather than through
     // store->notifyReadComplete(). Both are public slots reached from event
@@ -4058,6 +4340,9 @@ class TestGarminConnectSyncDialogClose : public QObject
     CompletionOutcome runCompletionSlotTeardown(CompletionFrame frame)
     {
         obs::reset();
+        rideopen::reset();
+        ridefail::reset();
+        rideopen::blockingMs = 5; // nothing in these runs needs a long suspension
 
         CompletionOutcome out;
         QPointer<CloudServiceSyncDialog> dialogGuard;
@@ -4077,8 +4362,26 @@ class TestGarminConnectSyncDialogClose : public QObject
                 // cloud entries and be marked as already uploaded.
                 slot->item->dateTime = QDateTime::currentDateTime().addDays(-1);
 
+                if (frame == SyncNextParsePE) {
+                    // TEST-101 — the athlete's one activity becomes the SYNC
+                    // list's one UPLOAD row (CloudService.cpp:1774), and its
+                    // suffix is the one FailingRideFileReader is registered for,
+                    // so RideFileFactory hands syncNext a null ride and the
+                    // parse-failure branch executes for real. `planned` is not
+                    // initialised by this target's RideItem stand-in and the
+                    // upload walk skips planned rides (:1723).
+                    slot->item->fileName = slot->item->dateTime.toString(QStringLiteral("yyyy_MM_dd_HH_mm_ss")) +
+                                           QStringLiteral(".gcfail");
+                    slot->item->path = slot->context->athlete->home->activities().absolutePath();
+                    slot->item->planned = false;
+                }
+
                 BlockingStore* store = new BlockingStore(slot->context);
-                store->entryNames = threeActivities();
+                // TEST-101 — NOTHING remote for the sync-parse frame: a remote
+                // entry would put DOWNLOAD rows in the sync list AHEAD of the
+                // upload row (:1682), and syncNext would take its readFile branch
+                // and return long before reaching the parse-failure branch.
+                store->entryNames = (frame == SyncNextParsePE) ? QStringList() : threeActivities();
                 store->blockingMs = 5;       // nothing suspends in THIS scenario
                 store->completeRead = false; // ...and no completion arrives by itself
                 store->closeActionContext = qApp;
@@ -4117,9 +4420,32 @@ class TestGarminConnectSyncDialogClose : public QObject
                     if (QTreeWidget* up = rideListWithHeader(dialog, QStringLiteral("File")))
                         out.upListCount = up->invisibleRootItem()->childCount();
 
-                    QMetaObject::invokeMethod(qApp, teardown, Qt::QueuedConnection);
+                    // ARMED before the click: the first row uploadNext counts is
+                    // the one it fails to parse (CloudService.cpp:2531), and the
+                    // processEvents() one line below that (:2533) is the frame
+                    // under test. Nothing earlier in this batch counts a row -
+                    // the "File exists" skip (:2464) needs a matching cloud
+                    // entry, and this run's ride is dated a day back precisely so
+                    // that there is none.
+                    insideframe::atTheNextCountedRow(dialog, teardown);
                     inSlot = true;
                     dialog->downloadClicked(); // -> uploadNext()
+                    inSlot = false;
+                } else if (frame == SyncNextParsePE) {
+                    // The SYNC tab - index 2 only because this store advertises
+                    // Upload (:1059-1061) - then Select All and Synchronize. As
+                    // above: the parse-failure branch counts the row it failed on
+                    // (:2123) and then suspends (:2125), and that suspension is
+                    // the frame under test.
+                    if (QTabWidget* tabs = dialog->findChild<QTabWidget*>())
+                        tabs->setCurrentIndex(2);
+                    dialog->selectAllSyncChanged(Qt::Checked);
+                    if (QTreeWidget* s = rideListWithHeader(dialog, QStringLiteral("Source")))
+                        out.syncListCount = s->invisibleRootItem()->childCount();
+
+                    insideframe::atTheNextCountedRow(dialog, teardown);
+                    inSlot = true;
+                    dialog->downloadClicked(); // -> syncNext()
                     inSlot = false;
                 } else {
                     dialog->selectAllSyncChanged(Qt::Checked);
@@ -4144,12 +4470,20 @@ class TestGarminConnectSyncDialogClose : public QObject
                                 dialog->completedWrite(threeActivities().at(0), QStringLiteral("Completed."));
                                 break;
                             case UploadNextParsePE:
+                            case SyncNextParsePE:
                                 break; // handled above
                             }
                             inSlot = false;
                         },
                         Qt::QueuedConnection);
-                    QMetaObject::invokeMethod(qApp, teardown, Qt::QueuedConnection);
+                    // The three completion slots all count the row they just
+                    // finished (CloudService.cpp:2337 / :2418 / :2610) and then
+                    // suspend (:2354 / :2423 / :2615), and that suspension is the
+                    // frame under test. Arming here rather than one line into the
+                    // slot is safe because nothing between this statement and the
+                    // slot counts a row: syncNext's download branch (:1987-2027)
+                    // has no progressBar->setValue at all.
+                    insideframe::atTheNextCountedRow(dialog, teardown);
                 }
 
                 QTimer::singleShot(300, qApp, [win]() { delete win; });
@@ -4165,6 +4499,7 @@ class TestGarminConnectSyncDialogClose : public QObject
         out.teardownFired = obs::teardownFired;
         out.dialogGoneAtEnd = dialogGuard.isNull();
         out.readFileCalls = obs::readFileCalls;
+        out.failOpens = ridefail::opens;
         return out;
     }
 
@@ -4372,6 +4707,43 @@ class TestGarminConnectSyncDialogClose : public QObject
         // on, so uploadNext really did enter its loop body.
         QVERIFY2(upload.upListCount > 0,
                  "the upload list was empty - uploadNext never entered its loop and this run proves nothing");
+    }
+
+    // -- TEST-101 (A3-R027-F1) -------------------------------------------
+    // syncNext's PARSE-FAILURE branch, which DEC-032 turned from a dead end into
+    // a suspension the loop resumes from - and in doing so promoted the bail at
+    // CloudService.cpp:2121 from dead code to the only thing standing between a
+    // destroyed dialog and the `aborted` read at :2146.
+    //
+    // THE KILLING OBSERVATION IS THE ASan ABORT, not a QVERIFY: the target runs
+    // with halt_on_error=1, so a use-after-free ends the process and the slot
+    // never returns. The assertions below are the PREMISES that make that
+    // meaningful - that the teardown fired, landed inside the branch, and really
+    // did destroy the dialog. Delete :2121 and this run reports
+    //   AddressSanitizer: heap-use-after-free ... syncNext() CloudService.cpp:2145
+    //
+    // See the SyncNextParsePE comment for why the other four frames could not
+    // reach this branch, and LSN-058 for the class of gap it belongs to.
+    void syncNextParseFailureStandsDownWhenTheAthleteTabDiesInItsProcessEvents()
+    {
+        const CompletionOutcome out = runCompletionSlotTeardown(SyncNextParsePE);
+        assertCompletionSlotStoodDown("syncNext parse-failure processEvents (:2120)", out);
+        if (QTest::currentTestFailed())
+            return;
+
+        // ---- THE PREMISES THAT ARE SPECIFIC TO THIS FRAME. Without both of
+        //      these the run could be green having never entered the branch.
+        QVERIFY2(out.syncListCount > 0,
+                 "the sync list was empty - syncNext never entered its loop and this run proves nothing");
+        QVERIFY2(out.failOpens == 1,
+                 qPrintable(QStringLiteral("the failing reader was invoked %1 time(s), not once - syncNext did not "
+                                           "reach its parse-failure branch (or re-entered it behind a destroyed "
+                                           "dialog) and this run proves nothing")
+                                .arg(out.failOpens)));
+
+        // ...and no store call was ever made on this path, so nothing here can be
+        // confused with the readFile branch the other frames drive.
+        QCOMPARE(out.readFileCalls, 0);
     }
 
     // -- TEST-088 (A3-R021-F6) -------------------------------------------
@@ -5961,6 +6333,1516 @@ class TestGarminConnectSyncDialogClose : public QObject
                  qPrintable(QStringLiteral("completedRead counted the aborted activity as processed "
                                            "(progressBar = %1) - it carried on past the abort")
                                 .arg(out.progressValue)));
+    }
+
+  private:
+    // =====================================================================
+    // TEST-095..097, TEST-099, TEST-100 (REQ-027, DEC-garmin-032) — THE
+    // BATCH THAT DIES SILENTLY, AND THE THREE THINGS THAT KEEP IT ALIVE.
+    // =====================================================================
+    //
+    // THE DEFECT (B-R026-01). syncNext's parse-failure branch
+    // (CloudService.cpp:2067-2071) labels the row, runs processEvents(), bails if
+    // the dialog died - and then falls out of the else and hits the UNCONDITIONAL
+    // `return true` at :2075. Returning is how every OTHER branch of this function
+    // stands down, and it is correct for them because they have all armed
+    // something first: readFile arms completedRead/failedRead (:2273/:2326),
+    // writeFile arms completedWrite (:2472). This branch arms NOTHING. So the four
+    // re-entry points syncNext has - :1962, :2273, :2326, :2472 - are all
+    // unreachable from here, and the batch is over: no further row is attempted,
+    // the completion tail (:2079-2102) never runs, and the progress bar freezes at
+    // whatever the last transferred row left it. The user is shown a dialog that
+    // is doing nothing and does not say so.
+    //
+    // DEC-garmin-032 Option A: `continue`, which is the shape uploadNext already
+    // ships for the identical branch (:2394-2420, REQ-026, TEST-093).
+    //
+    // WHAT THESE FIVE SLOTS COVER, and why it takes five.
+    //
+    //   TEST-095 (a)+(c) PROGRESSION. One unparseable row followed by a parseable
+    //            one: the second row must be ATTEMPTED, and the batch must reach
+    //            its completion tail. This is the slot the defect fails.
+    //   TEST-096 (b)     TERMINATION + SINGLE ATTEMPT. N unparseable rows, N=2 and
+    //            a scale run at N=100. The failing reader must be invoked EXACTLY
+    //            N times. A re-entering driver over-counts; a stalled one
+    //            under-counts. Both failure modes, one number.
+    //   TEST-097 (d)     THE ABORT IN THE FAILING BRANCH. Continuing means the
+    //            processEvents() at :2069 is now a suspension the loop RESUMES
+    //            from, so the abort it delivers has to be re-read. This is the
+    //            hazard Option A creates and the reason uploadNext:2420 exists.
+    //   TEST-099 (f)     S-R027-01, AND IT IS NOT NEW. Neither loop re-reads
+    //            `aborted` between openRideFile (:2046 / :2374) and writeFile
+    //            (:2062 / :2389), so an abort delivered during a PARSEABLE row's
+    //            parse uploads it anyway. Live in committed code; RED without any
+    //            of this slice.
+    //   TEST-100          THE BATCH GENERATION. Two clicks in one processEvents()
+    //            burst leave a STALE frame iterating alongside a NEW batch. A
+    //            return-shaped branch stands the stale frame down; a
+    //            continue-shaped one does not. Live in uploadNext today.
+    //
+    // WHAT THIS HARNESS CANNOT SEE, stated rather than faked. Criterion (b)'s
+    // literal property is "the stack did not grow unboundedly"; nothing here
+    // observes stack depth, and the invocation count is a PROXY for it (an
+    // unbounded recursion would over-count long before it exhausted the stack, so
+    // the proxy fails loudly in the same direction - but it is a proxy). RECORDED
+    // RESIDUAL, not covered.
+    //
+    // ...and criterion (a) asks for `downloading == false`, which is PRIVATE
+    // (CloudService.h:466) with no friend access from this target. The three side
+    // effects asserted instead are the completion tail's: progressLabel
+    // "Processed x of n successfully", downloadButton "Synchronize", and every
+    // sync checkbox cleared.
+    //
+    // A3-R027-F7 — the button text is NOT set only by the tail: tabChanged
+    // (CloudService.cpp:1828) sets it too, when the user switches tabs. So no ONE
+    // of the three implies the tail on its own. Their CONJUNCTION does: only the
+    // tail clears every checkbox AND writes the "...successfully" sentence, and
+    // the fixture switches tabs once, before the batch starts, so a tabChanged
+    // relabel cannot be what these read. `downloading=false` is one line inside
+    // that same tail. It is a PROXY FOR THE PRIVATE FLAG, labelled as one
+    // wherever it is asserted (B-R027-05).
+
+    // Which loop is under test. Both are the SAME defect in two functions, and
+    // scope item 2 and the batch-generation rider apply to both, so every fixture
+    // below runs on either.
+    enum BatchTab {
+        SyncTabRun,  // tabs index 2 -> syncNext
+        UploadTabRun // tabs index 1 -> uploadNext
+    };
+
+    enum BatchAbort {
+        NoAbort,
+        AbortInParseFailure, // delivered by the parse-failure processEvents (:2069 / :2396)
+        AbortInRideOpen,     // delivered from INSIDE openRideFile (:2046 / :2374) - clause (f)
+        AbortThenRestart     // two clicks in one burst - the batch-generation rider
+    };
+
+    struct BatchSpec
+    {
+        BatchTab tab = SyncTabRun;
+        int failRows = 1;                 // rows whose reader counts and returns NULL
+        bool trailingParseableRow = true; // ...plus one row that yields a RideFile
+        BatchAbort abort = NoAbort;
+        bool completeWrite = true;        // does writeComplete ever arrive?
+        bool sampleBarInRideOpen = false; // read the bar from inside the parseable row's open
+    };
+
+    struct BatchOutcome
+    {
+        bool timedOut = false;
+
+        // -- premises: did this run reach the situation it claims to test?
+        int listCount = 0;
+        int checkedRows = 0;
+        QString row0File;
+        QString lastRowFile;
+        QString row0Action; // sync list column 6: "Upload" or "Download"
+        QString lastRowAction;
+        bool abortDelivered = false;
+        bool sawAbortLabel = false;
+        bool abortTookTheAbortBranch = false;
+        bool restartDelivered = false;
+        bool restartTookTheStartBranch = false;
+        bool parseableOpenResumed = false;
+
+        // -- the verdict
+        int failOpens = 0;      // the counting always-fails reader
+        int rideOpens = 0;      // the parseable reader
+        int writeFileCalls = 0; // store->writeFile
+        QString lastWriteName;  // ...and for WHICH row
+        QStringList statuses;   // column 7 of every row, in row order
+        int progressValue = -1;
+        int progressMax = -1;
+        int barAtParseableOpen = -1; // the bar, sampled mid-flight
+        QString progressText;
+        QString buttonTextAtEnd;
+        int stillCheckedAtEnd = -1; // the tail clears every checkbox (:2092-2095)
+        int ridesCreated = 0;       // TEST-103: RideFiles handed to the loop...
+        int ridesDestroyed = 0;     // ...and RideFiles it freed
+    };
+
+    // The unparseable rows. Distinct times so the row order is well defined and
+    // the dialog's own targetnosuffix bookkeeping (:1760-1769) cannot collide
+    // them; the scale run needs 100, hence minutes rather than hours.
+    static QString failActivity(int i)
+    {
+        return QDate::currentDate().toString(QStringLiteral("yyyy_MM_dd")) + QStringLiteral("_%1_%2_00.gcfail")
+                                                                                 .arg(i / 60, 2, 10, QLatin1Char('0'))
+                                                                                 .arg(i % 60, 2, 10, QLatin1Char('0'));
+    }
+
+    // The row that CAN be parsed. 23:00 so it sorts last on every ascending
+    // column the two lists offer, which is what makes it "row[1]" / "the last
+    // row" rather than something the sort could move.
+    static QString parseableActivity()
+    {
+        return QDate::currentDate().toString(QStringLiteral("yyyy_MM_dd")) + QStringLiteral("_23_00_00.gcblock");
+    }
+
+    // One run:
+    //
+    //   QEventLoop (stands in for QApplication::exec())
+    //     -> queued call (event delivery, so scopeLevel is bumped)
+    //          -> owner QWidget                       [stands in for the tab]
+    //          -> CloudServiceSyncDialog, a child of it
+    //          -> Sync|Upload tab / Select all / Synchronize
+    //               -> syncNext|uploadNext
+    //                    -> row[0..n-1]  openRideFile -> NULL -> parse failure
+    //                    -> row[n]       openRideFile -> RideFile -> writeFile
+    //
+    // The store advertises NOTHING remote (entryNames empty), which matters twice:
+    // no remote entry means no Download row can appear in the sync list ahead of
+    // the Upload rows (:1682), and no local ride is marked as already existing, so
+    // the "File exists" skip (:2114 / :2347) cannot swallow a row.
+    //
+    // Nothing here destroys the dialog: `self` stays non-null throughout, so a
+    // lifetime bail cannot be what produces any of these verdicts.
+    BatchOutcome runBatch(const BatchSpec& spec)
+    {
+        obs::reset();
+        rideopen::reset();
+        ridefail::reset();
+        rideopen::blockingMs = 5;
+
+        BatchOutcome out;
+        QPointer<CloudServiceSyncDialog> dialogGuard;
+        QEventLoop appLoop;
+
+        const QDir activities = context->athlete->home->activities();
+        QDir().mkpath(activities.absolutePath());
+
+        // The activities, on disk and in the ride cache. Written for real so that
+        // the situation is a corrupt activity rather than a missing one - the
+        // reader's refusal is then the reader's own verdict.
+        QList<RideItem*> items;
+        QStringList paths;
+        for (int i = 0; i < spec.failRows; i++) {
+            const QString name = failActivity(i);
+            QFile f(activities.absolutePath() + "/" + name);
+            f.open(QIODevice::WriteOnly);
+            f.write("gcfail");
+            f.close();
+            paths << f.fileName();
+
+            RideItem* item = new RideItem(nullptr, context);
+            item->fileName = name;
+            item->path = activities.absolutePath();
+            item->dateTime = QDateTime(QDate::currentDate(), QTime(i / 60, i % 60, 0));
+            item->planned = false; // the upload list skips planned rides (:1723)
+            items << item;
+        }
+        if (spec.trailingParseableRow) {
+            const QString name = parseableActivity();
+            QFile f(activities.absolutePath() + "/" + name);
+            f.open(QIODevice::WriteOnly);
+            f.write("gcblock");
+            f.close();
+            paths << f.fileName();
+
+            RideItem* item = new RideItem(nullptr, context);
+            item->fileName = name;
+            item->path = activities.absolutePath();
+            item->dateTime = QDateTime(QDate::currentDate(), QTime(23, 0, 0));
+            item->planned = false;
+            items << item;
+        }
+        for (RideItem* item : items)
+            rideCache->rides().push_back(item);
+
+        QMetaObject::invokeMethod(
+            this,
+            [&]() {
+                QWidget* owner = new QWidget;
+
+                BlockingStore* store = new BlockingStore(context);
+                store->entryNames = QStringList();
+                store->blockingMs = 5;
+                store->closeActionContext = qApp;
+                // Whether the upload is ever ACKNOWLEDGED. With it off the batch
+                // parks after writeFile exactly as a real one waits on the
+                // network - which is the state TEST-100 needs, because a batch
+                // that has already run its completion tail has unchecked every
+                // row and a stale frame would then find nothing left to transfer.
+                store->completeWrite = spec.completeWrite;
+
+                CloudServiceSyncDialog* dialog = new CloudServiceSyncDialog(context, store);
+                dialog->setParent(owner, Qt::Dialog);
+                dialog->start();
+                dialog->open();
+                dialogGuard = dialog;
+                store->dialog = dialog;
+                store->dialogGuard = dialog;
+
+                // The tab, picked as the user picks it. Index 2 is the Sync tab
+                // ONLY because this store advertises Upload (:1059-1061).
+                QTreeWidget* list = nullptr;
+                if (QTabWidget* tabs = dialog->findChild<QTabWidget*>())
+                    tabs->setCurrentIndex(spec.tab == SyncTabRun ? 2 : 1);
+                if (spec.tab == SyncTabRun) {
+                    dialog->selectAllSyncChanged(Qt::Checked);
+                    list = rideListWithHeader(dialog, QStringLiteral("Source"));
+                } else {
+                    dialog->selectAllUpChanged(Qt::Checked);
+                    list = rideListWithHeader(dialog, QStringLiteral("File"));
+                }
+
+                if (list != nullptr) {
+                    QTreeWidgetItem* root = list->invisibleRootItem();
+                    out.listCount = root->childCount();
+                    for (int i = 0; i < out.listCount; i++) {
+                        QCheckBox* check = qobject_cast<QCheckBox*>(list->itemWidget(root->child(i), 0));
+                        if (check != nullptr && check->isChecked())
+                            out.checkedRows++;
+                    }
+                    if (out.listCount > 0) {
+                        out.row0File = root->child(0)->text(1);
+                        out.row0Action = root->child(0)->text(6);
+                        out.lastRowFile = root->child(out.listCount - 1)->text(1);
+                        out.lastRowAction = root->child(out.listCount - 1)->text(6);
+                    }
+                }
+
+                // Watched from here on, rather than looked up again by label:
+                // this is the dialog's one download/abort button and its TEXT is
+                // the observable.
+                QPushButton* abortButton = pushButtonWithText(dialog, QStringLiteral("Synchronize"));
+                if (abortButton == nullptr)
+                    abortButton = pushButtonWithText(dialog, QStringLiteral("Upload"));
+
+                // THE ACTION DELIVERED FROM INSIDE THE PARSEABLE ROW'S OPEN.
+                // BlockingRideFileReader queues it and then runs its nested loop
+                // (:596-610), so it lands while syncNext/uploadNext is suspended
+                // between openRideFile and writeFile - the S-R027-01 window.
+                if (spec.abort == AbortInRideOpen || spec.sampleBarInRideOpen) {
+                    rideopen::blockingMs = 300;
+                    rideopen::action = [&, dialog]() {
+                        if (QProgressBar* bar = dialog->findChild<QProgressBar*>())
+                            out.barAtParseableOpen = bar->value();
+                        if (spec.abort != AbortInRideOpen)
+                            return;
+                        out.abortDelivered = true;
+                        out.sawAbortLabel = (pushButtonWithText(dialog, QStringLiteral("Abort")) != nullptr);
+                        dialog->downloadClicked();
+                        out.abortTookTheAbortBranch =
+                            (abortButton != nullptr && abortButton->text() == QStringLiteral("Download"));
+                    };
+                }
+
+                // THE ABORT, and (for the generation rider) THE RESTART BEHIND
+                // IT. Both queued on qApp BEFORE the batch starts, so ONE
+                // processEvents() burst delivers them back to back - the posting
+                // discipline TEST-087 and TEST-093 already use.
+                if (spec.abort == AbortInParseFailure || spec.abort == AbortThenRestart) {
+                    QMetaObject::invokeMethod(
+                        qApp,
+                        [&, dialog]() {
+                            out.abortDelivered = true;
+                            out.sawAbortLabel = (pushButtonWithText(dialog, QStringLiteral("Abort")) != nullptr);
+                            dialog->downloadClicked();
+                            // The abort branch relabels that same button
+                            // "Download" (:1914), so this is the observable proof
+                            // that :1910-1918 ran and `aborted` is now true.
+                            out.abortTookTheAbortBranch =
+                                (abortButton != nullptr && abortButton->text() == QStringLiteral("Download"));
+                        },
+                        Qt::QueuedConnection);
+                }
+                if (spec.abort == AbortThenRestart) {
+                    QMetaObject::invokeMethod(
+                        qApp,
+                        [&, dialog]() {
+                            out.restartDelivered = true;
+                            // downloading is false now, so THIS click takes the
+                            // START branch (:1919-1926): aborted=false,
+                            // listindex=0, counters zeroed, and syncNext/
+                            // uploadNext re-driven from scratch - all of it from
+                            // INSIDE the first batch's suspended frame.
+                            dialog->downloadClicked();
+                            out.restartTookTheStartBranch =
+                                (abortButton != nullptr && abortButton->text() == QStringLiteral("Abort"));
+                        },
+                        Qt::QueuedConnection);
+                }
+
+                dialog->downloadClicked(); // -> syncNext() / uploadNext()
+
+                // The verdict, read the instant the batch hands control back.
+                out.writeFileCalls = obs::writeFileCalls;
+                out.lastWriteName = obs::lastWriteName;
+                out.failOpens = ridefail::opens;
+                out.rideOpens = rideopen::opens;
+                out.parseableOpenResumed = rideopen::resumed;
+                // TEST-103 — read HERE, the instant the batch hands control back,
+                // so nothing the fixture's own teardown frees can be mistaken for
+                // the loop having freed it.
+                out.ridesCreated = rideopen::created;
+                out.ridesDestroyed = rideopen::destroyed;
+                if (list != nullptr) {
+                    QTreeWidgetItem* root = list->invisibleRootItem();
+                    out.stillCheckedAtEnd = 0;
+                    for (int i = 0; i < root->childCount(); i++) {
+                        out.statuses << root->child(i)->text(7);
+                        QCheckBox* check = qobject_cast<QCheckBox*>(list->itemWidget(root->child(i), 0));
+                        if (check != nullptr && check->isChecked())
+                            out.stillCheckedAtEnd++;
+                    }
+                }
+                if (QProgressBar* bar = dialog->findChild<QProgressBar*>()) {
+                    out.progressValue = bar->value();
+                    out.progressMax = bar->maximum();
+                }
+                out.progressText = progressLabelText(dialog);
+                if (abortButton != nullptr)
+                    out.buttonTextAtEnd = abortButton->text();
+
+                QTimer::singleShot(100, qApp, [owner]() { delete owner; });
+                QTimer::singleShot(200, &appLoop, &QEventLoop::quit);
+
+                bool* timedOutp = &out.timedOut;
+                QTimer::singleShot(20000, &appLoop, [timedOutp]() {
+                    *timedOutp = true;
+                    QCoreApplication::exit(1);
+                });
+            },
+            Qt::QueuedConnection);
+
+        appLoop.exec();
+        for (int i = 0; i < 50; ++i)
+            QApplication::processEvents(QEventLoop::AllEvents, 5);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+        for (RideItem* item : items) {
+            rideCache->rides().removeAll(item);
+            delete item->ride(false);
+            delete item;
+        }
+        for (const QString& p : paths)
+            QFile::remove(p);
+
+        return out;
+    }
+
+    // The progress LABEL, not the bar: the one widget carrying the completion
+    // tail's sentence. Identified by content rather than by child order, and only
+    // the tail's own wording is accepted, so an empty or "n of m selected" label
+    // reads back empty and the assertions fail rather than silently matching.
+    static QString progressLabelText(QWidget* dialog)
+    {
+        const QList<QLabel*> labels = dialog->findChildren<QLabel*>();
+        for (QLabel* l : labels)
+            if (l->text().contains(QStringLiteral("successfully")))
+                return l->text();
+        return QString();
+    }
+
+  private slots:
+
+    // -- TEST-095 (REQ-027 (a)+(c)) --------------------------------------
+    // A batch of two checked Sync Upload rows, row[0] unparseable and row[1]
+    // parseable. row[1] must be ATTEMPTED and the batch must reach its completion
+    // tail. See the block comment above for the defect.
+    //
+    // RED, before the fix:
+    //   FAIL!  : ... the batch died on the unparseable row: store->writeFile was
+    //            called 0 time(s), so row[1] was never attempted
+    void aParseFailureInSyncNextMustNotKillTheRestOfTheBatch()
+    {
+        BatchSpec spec;
+        spec.tab = SyncTabRun;
+        spec.failRows = 1;
+        spec.trailingParseableRow = true;
+        spec.sampleBarInRideOpen = true; // (c): read the bar mid-flight
+        const BatchOutcome out = runBatch(spec);
+
+        QVERIFY2(out.timedOut == false, "the sync never came back - a guard wedged it");
+
+        // ---- THE PREMISES. Every one is a way this run could be green while
+        //      seeing nothing at all (LSN-047, LSN-050).
+        QCOMPARE(out.listCount, 2);
+        QCOMPARE(out.checkedRows, 2);
+        QCOMPARE(out.row0File, failActivity(0));
+        QCOMPARE(out.lastRowFile, parseableActivity());
+        // Both must be UPLOAD-side sync rows, or the parse path at :2014-2074 is
+        // never reached at all (syncNext:1981 branches on this cell).
+        QCOMPARE(out.row0Action, QStringLiteral("Upload"));
+        QCOMPARE(out.lastRowAction, QStringLiteral("Upload"));
+        QCOMPARE(out.failOpens, 1);
+        QCOMPARE(out.statuses.value(0), QStringLiteral("Parse failure"));
+
+        // ---- (a) PROGRESSION. row[1] attempted, exactly once, and it is row[1]
+        //      that was written.
+        QVERIFY2(out.writeFileCalls == 1,
+                 qPrintable(QStringLiteral("the batch died on the unparseable row: store->writeFile was called %1 "
+                                           "time(s), so row[1] was never attempted")
+                                .arg(out.writeFileCalls)));
+        QCOMPARE(out.rideOpens, 1);
+        QVERIFY2(
+            out.lastWriteName.startsWith(QFileInfo(parseableActivity()).baseName()),
+            qPrintable(QStringLiteral("writeFile was called for \"%1\", which is not row[1]").arg(out.lastWriteName)));
+
+        // ---- (a) THE COMPLETION TAIL. `downloading == false` is PRIVATE
+        //      (CloudService.h:466); these three are its TAIL-EXCLUSIVE side
+        //      effects and stand in for it (B-R027-05).
+        QCOMPARE(out.progressText, QStringLiteral("Processed 1 of 2 successfully"));
+        QCOMPARE(out.buttonTextAtEnd, QStringLiteral("Synchronize"));
+        QCOMPARE(out.stillCheckedAtEnd, 0);
+
+        // ---- (c) VISIBILITY. The failed row NAMES its failure; the bar advanced
+        //      FOR IT (sampled from inside row[1]'s open, i.e. after row[0] was
+        //      counted and before row[1] could be); and the tail's `successful`
+        //      is strictly less than `downloadtotal` - 1 of 2, read off the tail's
+        //      own sentence, which is the only place either private counter is
+        //      visible.
+        QVERIFY2(!out.statuses.value(0).isEmpty(), "the failed row's status cell is empty - the user is told nothing");
+        QVERIFY2(out.barAtParseableOpen == 1,
+                 qPrintable(QStringLiteral("the progress bar did not advance for the failed row: it read %1 while "
+                                           "row[1] was being opened, not 1")
+                                .arg(out.barAtParseableOpen)));
+        QCOMPARE(out.progressValue, 2);
+        QCOMPARE(out.progressMax, 2);
+    }
+
+    // -- TEST-096 (REQ-027 (b)) ------------------------------------------
+    // N checked all-unparseable Sync Upload rows. The batch must TERMINATE in its
+    // completion tail with every row labelled and the bar at maximum, and the
+    // failing reader must have been invoked EXACTLY N times - a re-entering driver
+    // over-counts, a stalled one under-counts.
+    //
+    // RED, before the fix:
+    //   FAIL!  : ... N=2: the failing reader was invoked 1 time(s), not 2 - the
+    //            batch neither completed nor re-entered, it STALLED
+    void anAllUnparseableSyncBatchTerminatesHavingAttemptedEachRowExactlyOnce()
+    {
+        assertAllUnparseableBatch(SyncTabRun, 2);
+        if (QTest::currentTestFailed())
+            return;
+
+        // THE SCALE RUN. Two rows cannot distinguish "advanced once" from
+        // "advanced correctly"; a hundred can, and it is also where an unbounded
+        // re-entry would show up as a count in the thousands.
+        assertAllUnparseableBatch(SyncTabRun, 100);
+        if (QTest::currentTestFailed())
+            return;
+
+        // THE UPLOAD TAB, which criterion (b) does not name. It is here because
+        // B-R027-04 - giving uploadNext's parse-failure branch the same
+        // ++downloadcounter syncNext's now has - is otherwise an UNCOVERED change:
+        // with only the sync runs above, deleting that line leaves the whole suite
+        // green (measured: mutation M7 survived until this run existed).
+        //
+        // HONESTY ABOUT WHAT THIS RUN IS. uploadNext has iterated past parse
+        // failures since REQ-026, so every assertion in the shared verdict except
+        // the two about the BAR is a PIN on behaviour that already worked. The bar
+        // assertions are the coverage; the rest is regression fencing.
+        assertAllUnparseableBatch(UploadTabRun, 2);
+    }
+
+    // -- TEST-097 (REQ-027 (d)) ------------------------------------------
+    // An abort delivered by the processEvents() INSIDE the parse-failure branch
+    // must stop the batch. Option A turns that call from a dead end into a
+    // suspension the loop resumes from, so this is the hazard the fix CREATES.
+    //
+    // THIS SLOT IS A PIN, NOT COVERAGE, AGAINST UNMODIFIED PRODUCTION (LSN-022
+    // honesty). Before the fix the branch returns unconditionally at :2075, so
+    // nothing further happens for the trivial reason that nothing further ever
+    // happens - the slot passes while the defect it is aimed at is not even
+    // reachable. It is load-bearing against the FIX: remove the `if (aborted ==
+    // true) return true;` from syncNext's parse-failure branch and it fails with
+    //   FAIL!  : ... syncNext kept iterating after the user aborted: row[1] was
+    //            uploaded anyway (store->writeFile was called 1 time(s))
+    void anAbortInsideSyncNextsParseFailureMustStopTheBatch()
+    {
+        BatchSpec spec;
+        spec.tab = SyncTabRun;
+        spec.failRows = 1;
+        spec.trailingParseableRow = true;
+        spec.abort = AbortInParseFailure;
+        const BatchOutcome out = runBatch(spec);
+
+        QVERIFY2(out.timedOut == false, "the sync never came back - a guard wedged it");
+
+        // ---- THE PREMISES.
+        QCOMPARE(out.listCount, 2);
+        QCOMPARE(out.checkedRows, 2);
+        QCOMPARE(out.row0File, failActivity(0));
+        QCOMPARE(out.lastRowFile, parseableActivity());
+        QVERIFY2(out.abortDelivered, "the queued abort never ran - this run proves nothing");
+        QVERIFY2(out.sawAbortLabel,
+                 "the download button was not labelled \"Abort\" while the batch ran, so downloadClicked() could "
+                 "not have been the abort control - this run proves nothing");
+        QVERIFY2(out.abortTookTheAbortBranch,
+                 "downloadClicked() did not take its abort branch (CloudService.cpp:1910-1918), so `aborted` was "
+                 "never set - this run proves nothing");
+        QCOMPARE(out.statuses.value(0), QStringLiteral("Parse failure"));
+
+        // ---- THE POINT, observed three independent ways: row[1] was never
+        //      written, never opened, and never even labelled.
+        //
+        // A3-R027-F9 — WHICH OF THESE IS THE KILLING ASSERTION. `writeFileCalls`
+        // encodes clause (d) verbatim, but it is NOT what kills the removal of
+        // the abort re-read at CloudService.cpp:2146: with that guard gone the
+        // loop still advances onto row[1], and the S-R027-01 guard (:2088) then
+        // catches the write one step later, so this stays 0. `rideOpens` below is
+        // the assertion that dies. DO NOT DROP IT as redundant - clause (d) goes
+        // uncovered the moment it goes.
+        QVERIFY2(out.writeFileCalls == 0,
+                 qPrintable(QStringLiteral("syncNext kept iterating after the user aborted: row[1] was uploaded "
+                                           "anyway (store->writeFile was called %1 time(s))")
+                                .arg(out.writeFileCalls)));
+        QVERIFY2(out.rideOpens == 0,
+                 qPrintable(QStringLiteral("syncNext kept iterating after the user aborted: row[1]'s ride file was "
+                                           "OPENED (%1 open(s)) - the abort did not stop the loop, it only failed "
+                                           "to reach writeFile")
+                                .arg(out.rideOpens)));
+        QVERIFY2(out.statuses.value(1).isEmpty(),
+                 qPrintable(QStringLiteral("syncNext advanced onto row[1] after the abort - its status cell reads "
+                                           "\"%1\"")
+                                .arg(out.statuses.value(1))));
+
+        // ...and it stopped by BAILING, not by running the completion tail, which
+        // would have relabelled the button and cleared `aborted` behind the user.
+        QCOMPARE(out.buttonTextAtEnd, QStringLiteral("Download"));
+
+        // ---- TEST-104 (A3-R027-F6) — WHERE THE COUNTER IS INCREMENTED, MEASURED.
+        //      row[0] failed to parse and the loop then stood down on the abort.
+        //      The row was still one of the two the user asked for and it is
+        //      finished with, so it is counted: the bar reads 1, not 0. Move
+        //      CloudService.cpp:2118 down to just before the `continue` and this
+        //      is the assertion that dies - it is the only observation in the
+        //      suite that can tell the two placements apart, because on every
+        //      other path the increment happens either way.
+        QVERIFY2(out.progressValue == 1,
+                 qPrintable(QStringLiteral("the row that failed to parse was not counted before the loop stood "
+                                           "down on the abort: the bar reads %1, not 1")
+                                .arg(out.progressValue)));
+    }
+
+    // -- TEST-099 (REQ-027 (f), S-R027-01) -------------------------------
+    // An abort delivered inside openRideFile of a PARSEABLE row must leave
+    // writeFile uncalled - on BOTH loops. Neither re-reads `aborted` between
+    // openRideFile (:2046 / :2374) and writeFile (:2062 / :2389) today, so an
+    // abort during a parseable row's parse uploads it anyway. This is LIVE in
+    // committed code and RED without any other part of this slice.
+    //
+    // RED, before the fix:
+    //   FAIL!  : ... syncNext uploaded the row after the user aborted during its
+    //            parse: store->writeFile was called 1 time(s)
+    void anAbortInsideOpenRideFileMustLeaveTheRowUnwritten()
+    {
+        assertAbortInOpenStopsTheWrite(SyncTabRun, "syncNext");
+        if (QTest::currentTestFailed())
+            return;
+
+        assertAbortInOpenStopsTheWrite(UploadTabRun, "uploadNext");
+    }
+
+    // -- TEST-100 (REQ-027, the batch-generation rider) ------------------
+    // TWO CLICKS IN ONE processEvents() BURST.
+    //
+    // The batch is suspended in its parse-failure branch. That call delivers click
+    // one, which downloadClicked (:1910-1918) turns into an ABORT; and then click
+    // two, which the same slot (:1919-1926) turns into a fresh START - aborted
+    // back to false, listindex back to 0, the counters zeroed and the loop
+    // RE-DRIVEN, all from inside the first batch's own frame. When that returns,
+    // the suspended frame resumes, finds `aborted == false` (the restart cleared
+    // it, so the abort re-read cannot see this) and, being continue-shaped, KEEPS
+    // GOING - a stale driver iterating the same list as the live one, addressing
+    // rows by a `listindex` that now belongs to somebody else (:2193/:2242/:2249/
+    // :2311/:2318/:2457/:2464).
+    //
+    // MEASURED, NOT ARGUED, and on the loop where it is LIVE TODAY: uploadNext
+    // already ships the continue shape (REQ-026), so the upload run is RED against
+    // unmodified production. The sync run is the same claim about the branch
+    // Option A creates.
+    //
+    // The store does not acknowledge the upload (completeWrite off), so the
+    // restarted batch PARKS after writeFile exactly as a real one waits on the
+    // network. That matters: a batch that had already run its completion tail
+    // would have unchecked every row (:2092-2095/:2437-2441) and the stale frame
+    // would find nothing left to transfer - the hazard would hide, not vanish.
+    //
+    // RED, before the fix (upload run):
+    //   FAIL!  : ... uploadNext: a STALE batch frame kept transferring alongside
+    //            the restarted one - store->writeFile was called 2 time(s) for a
+    //            single parseable row
+    void aRestartInsideTheFailingBranchMustStandTheStaleFrameDown()
+    {
+        assertStaleFrameStandsDown(UploadTabRun, "uploadNext");
+        if (QTest::currentTestFailed())
+            return;
+
+        assertStaleFrameStandsDown(SyncTabRun, "syncNext");
+    }
+
+    // -- TEST-102 (REQ-027, A3-R027-F4) ----------------------------------
+    // An abort delivered by a COMPLETION SLOT's processEvents must stop the
+    // batch. See the block comment on AbortAfterSite for the three sites, why
+    // the entry checks cannot see this abort, and what each site uniquely proves.
+    void anAbortInsideACompletionSlotMustStopTheNextTransfer()
+    {
+        assertAbortBehindCompletionStops(AfterCompletedRead, "completedRead");
+        if (QTest::currentTestFailed())
+            return;
+
+        assertAbortBehindCompletionStops(AfterFailedRead, "failedRead");
+        if (QTest::currentTestFailed())
+            return;
+
+        assertAbortBehindCompletionStops(AfterCompletedWrite, "completedWrite");
+    }
+
+    // -- TEST-105 (REQ-027 (f), DEC-garmin-035) --------------------------
+    // syncNext's DOWNLOAD branch. See the block comment on
+    // BeforeTransferLoop for the asymmetry this exists to close and for what
+    // it deliberately does NOT claim.
+    //
+    // RED, before the fix:
+    //   FAIL!  : ... syncNext:2058: the transfer was ISSUED for a row the user
+    //            had already aborted: store->readFile was called 1 time(s),
+    //            expected 0
+    //
+    // The label names the GUARD's line, not the old comment's. A3-R027c-F3:
+    // these strings used to read ":2011" / ":2225", carried over from the
+    // pre-DEC-035 comment - and ":2225" is not even inside downloadNext (it is
+    // rideCache->save() in syncNext's tail; downloadNext starts at :2231). A
+    // stale file:NNN in an ASSERTION MESSAGE is read only when a test has gone
+    // red, i.e. exactly when the reader is least able to doubt it, so it sent
+    // whoever followed it into the wrong function. Re-derive these from the
+    // guard whenever it moves.
+    void anAbortAlreadySetMustStopSyncNextIssuingTheDownload()
+    {
+        assertAbortBeforeTransferStopsIt(InSyncNext, "syncNext:2058");
+    }
+
+    // -- TEST-106 (REQ-027 (f), DEC-garmin-035) --------------------------
+    // downloadNext, the function that contained NO abort read anywhere.
+    void anAbortAlreadySetMustStopDownloadNextIssuingTheDownload()
+    {
+        assertAbortBeforeTransferStopsIt(InDownloadNext, "downloadNext:2317");
+    }
+
+  private:
+    // The shared verdict for TEST-096's runs. NOT a slot.
+    void assertAllUnparseableBatch(BatchTab tab, int n)
+    {
+        BatchSpec spec;
+        spec.tab = tab;
+        spec.failRows = n;
+        spec.trailingParseableRow = false;
+        const BatchOutcome out = runBatch(spec);
+
+        // The two loops' completion tails word the same sentence differently and
+        // reset the button to their own tab's verb (:2182/:2171 and :2593/:2583).
+        // Criterion (c) forbids touching either string - ~16 services share them
+        // and changing one reopens translations - so the expectation follows the
+        // code rather than the other way round.
+        const bool isSync = (tab == SyncTabRun);
+        const QString tailVerb = isSync ? QStringLiteral("Processed") : QStringLiteral("Uploaded");
+        const QString idleButton = isSync ? QStringLiteral("Synchronize") : QStringLiteral("Upload");
+
+        const QString where = QStringLiteral("%1 N=%2: ").arg(isSync ? "sync" : "upload").arg(n);
+        QVERIFY2(out.timedOut == false, qPrintable(where + QStringLiteral("the sync never came back")));
+
+        // ---- THE PREMISES.
+        QCOMPARE(out.listCount, n);
+        QCOMPARE(out.checkedRows, n);
+
+        // ---- SINGLE ATTEMPT. The one number that catches both failure modes.
+        QVERIFY2(out.failOpens == n,
+                 qPrintable(where + QStringLiteral("the failing reader was invoked %1 time(s), not %2 - the batch "
+                                                   "either re-entered (over-count) or STALLED (under-count)")
+                                        .arg(out.failOpens)
+                                        .arg(n)));
+        QCOMPARE(out.writeFileCalls, 0);
+
+        // ---- TERMINATION. The completion tail, reached - and `downloading ==
+        //      false` with it (B-R027-05: PROXY, the flag is private).
+        QCOMPARE(out.progressText, QStringLiteral("%1 0 of %2 successfully").arg(tailVerb).arg(n));
+        QCOMPARE(out.buttonTextAtEnd, idleButton);
+        QCOMPARE(out.stillCheckedAtEnd, 0);
+
+        // ---- EVERY ROW LABELLED, and the bar at maximum.
+        QCOMPARE(out.statuses.count(), n);
+        QCOMPARE(out.statuses.count(QStringLiteral("Parse failure")), n);
+        QCOMPARE(out.progressMax, n);
+        QVERIFY2(out.progressValue == n,
+                 qPrintable(where + QStringLiteral("the batch finished with the progress bar at %1 of %2 - the "
+                                                   "failed rows were never counted, so the bar ends short of "
+                                                   "maximum by exactly the number of unparseable activities")
+                                        .arg(out.progressValue)
+                                        .arg(n)));
+    }
+
+    // The shared verdict for TEST-099's two loops. NOT a slot.
+    //
+    // The CONTROL comes first and is what makes the abort run mean anything: the
+    // same single parseable row with NO abort delivered must reach writeFile. If
+    // this apparatus could not see the upload happening, the run below would pass
+    // for the wrong reason (LSN-047, LSN-050).
+    void assertAbortInOpenStopsTheWrite(BatchTab tab, const char* loop)
+    {
+        const QString where = QString::fromLatin1(loop) + QStringLiteral(": ");
+
+        BatchSpec control;
+        control.tab = tab;
+        control.failRows = 0;
+        control.trailingParseableRow = true;
+        control.sampleBarInRideOpen = true; // arms the reader's action WITHOUT aborting
+        const BatchOutcome base = runBatch(control);
+        QVERIFY2(base.timedOut == false, qPrintable(where + QStringLiteral("control: never came back")));
+        QCOMPARE(base.listCount, 1);
+        QVERIFY2(base.rideOpens == 1, qPrintable(where + QStringLiteral("control: the row was never opened")));
+        QVERIFY2(base.parseableOpenResumed,
+                 qPrintable(where + QStringLiteral("control: the reader's nested loop never ran to completion")));
+        QVERIFY2(base.writeFileCalls == 1,
+                 qPrintable(where + QStringLiteral("control: writeFile was called %1 time(s), not once - this "
+                                                   "apparatus cannot see an upload happening at all")
+                                        .arg(base.writeFileCalls)));
+
+        BatchSpec spec;
+        spec.tab = tab;
+        spec.failRows = 0;
+        spec.trailingParseableRow = true;
+        spec.abort = AbortInRideOpen;
+        const BatchOutcome out = runBatch(spec);
+
+        QVERIFY2(out.timedOut == false, qPrintable(where + QStringLiteral("the batch never came back")));
+
+        // ---- THE PREMISES.
+        QCOMPARE(out.listCount, 1);
+        QVERIFY2(out.rideOpens == 1, qPrintable(where + QStringLiteral("the row was never opened")));
+        QVERIFY2(out.parseableOpenResumed,
+                 qPrintable(where + QStringLiteral("the reader's nested loop never resumed - the loop was not "
+                                                   "suspended where this test needs it")));
+        QVERIFY2(out.abortDelivered,
+                 qPrintable(where + QStringLiteral("the abort was never delivered inside openRideFile")));
+        QVERIFY2(out.sawAbortLabel,
+                 qPrintable(where + QStringLiteral("the download button was not labelled \"Abort\" while the batch "
+                                                   "ran, so downloadClicked() could not have been the abort "
+                                                   "control")));
+        QVERIFY2(out.abortTookTheAbortBranch,
+                 qPrintable(where + QStringLiteral("downloadClicked() did not take its abort branch "
+                                                   "(CloudService.cpp:1910-1918), so `aborted` was never set")));
+
+        // ---- THE POINT.
+        QVERIFY2(out.writeFileCalls == 0,
+                 qPrintable(where + QStringLiteral("uploaded the row after the user aborted during its parse: "
+                                                   "store->writeFile was called %1 time(s)")
+                                        .arg(out.writeFileCalls)));
+
+        // ...and the row SAYS so, in the vocabulary completedWrite already uses
+        // for this outcome (:2458).
+        QCOMPARE(out.statuses.value(0), QStringLiteral("Aborted"));
+
+        // ---- TEST-103 (A3-R027-F5) — AND THE RIDE IS FREED ON THE WAY OUT.
+        //      The abort branch returns holding a RideFile that RideFileFactory
+        //      made for it and that nothing else owns, so without its `delete
+        //      ride` the activity leaks once per aborted upload. ASan's leak
+        //      checker cannot say so - the ctest entry runs detect_leaks=0
+        //      (CMakeLists.txt:1457) - so the ride counts its own destruction
+        //      instead (~RideFile is virtual, RideFile.h:240).
+        //
+        //      The CONTROL above establishes the counter works on the ordinary
+        //      path, where the SAME number of rides is created and freed at
+        //      :2100. Here the freeing is the abort branch's own.
+        QVERIFY2(base.ridesCreated == 1 && base.ridesDestroyed == 1,
+                 qPrintable(where + QStringLiteral("control: %1 ride(s) created and %2 freed on the ORDINARY "
+                                                   "path - this counter cannot see a ride being freed at all")
+                                        .arg(base.ridesCreated)
+                                        .arg(base.ridesDestroyed)));
+        QVERIFY2(out.ridesCreated == 1,
+                 qPrintable(where + QStringLiteral("the reader produced %1 ride(s), not 1 - nothing was in hand "
+                                                   "when the abort branch ran and this proves nothing")
+                                        .arg(out.ridesCreated)));
+        QVERIFY2(out.ridesDestroyed == 1,
+                 qPrintable(where + QStringLiteral("the abort branch returned WITHOUT freeing the ride it was "
+                                                   "holding: %1 created, %2 freed - one leaked activity per "
+                                                   "aborted upload")
+                                        .arg(out.ridesCreated)
+                                        .arg(out.ridesDestroyed)));
+    }
+
+    // =====================================================================
+    // TEST-102 (REQ-027, A3-R027-F4) — THE ABORT IS NOT HONOURED ON THE READ
+    // SIDE.
+    // =====================================================================
+    //
+    // Every completion slot checks `aborted` on ENTRY and then SUSPENDS in a
+    // processEvents() before handing control to the next row:
+    //
+    //   completedRead   :2354  ->  guard :2372  ->  syncNext() / downloadNext()
+    //   failedRead      :2423  ->  guard :2432  ->  syncNext() / downloadNext()
+    //   completedWrite  :2615  ->  guard :2626  ->  syncNext() / uploadNext()
+    //
+    // The abort the user presses is delivered BY that processEvents, so the entry
+    // check cannot see it and the QPointer bail beside it answers a different
+    // question (is this dialog alive, not is this transfer still wanted). Without
+    // these guards the batch issues ANOTHER download after the user stopped it.
+    // For GarminConnect that is a worker thread and an interpreter session
+    // started for an activity the user already abandoned.
+    //
+    // AMENDED 2026-08-15 (DEC-garmin-035). This paragraph used to continue
+    // "Neither downloadNext nor syncNext's download branch reads `aborted` at all
+    // before issuing the next store->readFile (:2011 / :2225)". True when written,
+    // FALSE now: DEC-035 added a read immediately ahead of both transfers
+    // (TEST-105/106) exactly because the guards tested here - in a DIFFERENT
+    // function, across a return - were the only thing covering them. These guards
+    // remain load-bearing and individually mutation-proven; they are now the
+    // OUTER of two layers. Left as an amendment rather than a silent rewrite,
+    // because a comment that quietly stops being true is what this wave spent
+    // three cycles learning to distrust.
+    //
+    // EACH SITE VERIFIED INDIVIDUALLY, not assumed identical - see the build
+    // report for what each one uniquely contributes. In particular the
+    // completedWrite site's WRITE is already stopped by this slice's S-R027-01
+    // guard (:2088/:2507), so what the guard there uniquely prevents is the next
+    // row being OPENED and relabelled; its killing assertion is rideOpens, not
+    // writeFileCalls, and the slot says so.
+    //
+    // RED, before the fix:
+    //   FAIL!  : ... completedRead: a further store->readFile was issued after
+    //            the user aborted (2 read(s) in total, expected 1)
+    enum AbortAfterSite {
+        AfterCompletedRead, // Download tab -> completedRead:2265 -> downloadNext
+        AfterFailedRead,    // Download tab -> failedRead:2399    -> downloadNext
+        AfterCompletedWrite // Upload tab   -> completedWrite:2595 -> uploadNext
+    };
+
+    struct AbortAfterOutcome
+    {
+        bool timedOut = false;
+
+        // -- premises
+        int listCount = 0;
+        int checkedRows = 0;
+        bool abortDelivered = false;
+        bool sawAbortLabel = false;
+        bool abortTookTheAbortBranch = false;
+        bool slotRan = false; // the completion slot really did execute
+
+        // -- the verdict
+        int readFileCalls = 0;
+        int rideOpens = 0;
+        int writeFileCalls = 0;
+        QString row1Status;
+    };
+
+    // The two remote activities the Download tab lists.
+    //
+    // THE SUFFIX IS .gcfail AND THAT IS LOAD-BEARING, not incidental. With
+    // .gcblock the abort would be consumed by the NESTED EVENT LOOP inside
+    // uncompressRide's reader (:2305 -> BlockingRideFileReader's loop), i.e.
+    // BEFORE completedRead's REQ-026 re-read at :2329 - so TEST-094's guard
+    // catches it, the slot never reaches :2354, and this run passes while proving
+    // nothing about the site it names. (Measured: with .gcblock the completedRead
+    // site went green before any guard existed, while failedRead - which never
+    // calls uncompressRide - went RED.)
+    //
+    // FailingRideFileReader runs NO nested loop, so nothing between the entry
+    // check and :2354 can consume the abort, and the abort is armed for the
+    // counted row at :2337 - downstream of BOTH upstream reads of `aborted`.
+    // completedRead then takes its no-ride branch (:2350-2352), which still
+    // reaches :2354 - the suspension under test.
+    static QStringList twoRemoteActivities()
+    {
+        const QString day = QDate::currentDate().toString(QStringLiteral("yyyy_MM_dd"));
+        return QStringList() << (day + QStringLiteral("_13_00_00.gcfail"))
+                             << (day + QStringLiteral("_14_00_00.gcfail"));
+    }
+
+    // One run. `deliverTheAbort` false is the CONTROL: identical in every other
+    // respect, so a green run proves this apparatus can see the SECOND row being
+    // started when nothing stops it.
+    AbortAfterOutcome runAbortBehindCompletion(AbortAfterSite site, bool deliverTheAbort)
+    {
+        obs::reset();
+        rideopen::reset();
+        ridefail::reset();
+        rideopen::blockingMs = 5;
+
+        AbortAfterOutcome out;
+        QEventLoop appLoop;
+
+        const QDir activities = context->athlete->home->activities();
+        QDir().mkpath(activities.absolutePath());
+        QDir().mkpath(context->athlete->home->temp().absolutePath());
+
+        // The upload site needs two LOCAL parseable activities; the two read
+        // sites need none (their rows come from the store's listing, and a local
+        // ride carrying the same timestamp would mark the row as already present
+        // and skip it).
+        QList<RideItem*> items;
+        QStringList paths;
+        if (site == AfterCompletedWrite) {
+            for (int i = 0; i < 2; i++) {
+                const QString name = QDate::currentDate().toString(QStringLiteral("yyyy_MM_dd")) +
+                                     QStringLiteral("_1%1_00_00.gcblock").arg(i + 5);
+                QFile f(activities.absolutePath() + "/" + name);
+                f.open(QIODevice::WriteOnly);
+                f.write("gcblock");
+                f.close();
+                paths << f.fileName();
+
+                RideItem* item = new RideItem(nullptr, context);
+                item->fileName = name;
+                item->path = activities.absolutePath();
+                item->dateTime = QDateTime(QDate::currentDate(), QTime(15 + i, 0, 0));
+                item->planned = false;
+                items << item;
+                rideCache->rides().push_back(item);
+            }
+        }
+
+        QMetaObject::invokeMethod(
+            this,
+            [&]() {
+                QWidget* owner = new QWidget;
+
+                BlockingStore* store = new BlockingStore(context);
+                store->entryNames = (site == AfterCompletedWrite) ? QStringList() : twoRemoteActivities();
+                store->blockingMs = 5;
+                store->closeActionContext = qApp;
+                // GarminConnect's own setting (GarminConnect.cpp:102): it stages
+                // UNCOMPRESSED bytes, and uncompressRide's first guard (:320)
+                // rejects outright on the CloudService default.
+                store->downloadCompression = CloudService::none;
+                store->failRead = (site == AfterFailedRead);
+                store->completeWrite = (site == AfterCompletedWrite);
+
+                CloudServiceSyncDialog* dialog = new CloudServiceSyncDialog(context, store);
+                dialog->setParent(owner, Qt::Dialog);
+                dialog->start();
+                dialog->open();
+                store->dialog = dialog;
+                store->dialogGuard = dialog;
+
+                QTreeWidget* list = nullptr;
+                if (QTabWidget* tabs = dialog->findChild<QTabWidget*>())
+                    tabs->setCurrentIndex(site == AfterCompletedWrite ? 1 : 0);
+                if (site == AfterCompletedWrite) {
+                    dialog->selectAllUpChanged(Qt::Checked);
+                    list = rideListWithHeader(dialog, QStringLiteral("File"));
+                } else {
+                    // The DOWNLOAD tab. No slot in this tree had ever driven it
+                    // before TEST-102 (there is no other caller of
+                    // selectAllChanged), so every premise below is load-bearing.
+                    //
+                    // Its column-1 header is "Workout Name" (CloudService.cpp:1100),
+                    // NOT "File" - the download list is the one built from the
+                    // SERVICE's listing rather than from local files, and only the
+                    // upload list calls column 1 "File" (:1127). Asking for "File"
+                    // here silently returns the (empty) upload list and every
+                    // count reads zero.
+                    dialog->selectAllChanged(Qt::Checked);
+                    list = rideListWithHeader(dialog, QStringLiteral("Workout Name"));
+                }
+
+                if (list != nullptr) {
+                    QTreeWidgetItem* root = list->invisibleRootItem();
+                    out.listCount = root->childCount();
+                    for (int i = 0; i < out.listCount; i++) {
+                        QCheckBox* check = qobject_cast<QCheckBox*>(list->itemWidget(root->child(i), 0));
+                        if (check != nullptr && check->isChecked())
+                            out.checkedRows++;
+                    }
+                }
+
+                QPushButton* watched = pushButtonWithText(dialog, QStringLiteral("Download"));
+                if (watched == nullptr)
+                    watched = pushButtonWithText(dialog, QStringLiteral("Upload"));
+
+                if (deliverTheAbort) {
+                    store->afterCompletionAction = [&, dialog, watched]() {
+                        out.abortDelivered = true;
+                        out.sawAbortLabel = (pushButtonWithText(dialog, QStringLiteral("Abort")) != nullptr);
+                        dialog->downloadClicked();
+                        out.abortTookTheAbortBranch =
+                            (watched != nullptr && watched->text() == QStringLiteral("Download"));
+                    };
+                }
+
+                dialog->downloadClicked();
+
+                out.readFileCalls = obs::readFileCalls;
+                out.rideOpens = rideopen::opens;
+                out.writeFileCalls = obs::writeFileCalls;
+                out.slotRan = (obs::readFileCalls > 0 || obs::writeFileCalls > 0);
+                if (list != nullptr && list->invisibleRootItem()->childCount() > 1)
+                    out.row1Status = list->invisibleRootItem()->child(1)->text(site == AfterCompletedWrite ? 7 : 5);
+
+                QTimer::singleShot(100, qApp, [owner]() { delete owner; });
+                QTimer::singleShot(200, &appLoop, &QEventLoop::quit);
+
+                bool* timedOutp = &out.timedOut;
+                QTimer::singleShot(10000, &appLoop, [timedOutp]() {
+                    *timedOutp = true;
+                    QCoreApplication::exit(1);
+                });
+            },
+            Qt::QueuedConnection);
+
+        appLoop.exec();
+        for (int i = 0; i < 50; ++i)
+            QApplication::processEvents(QEventLoop::AllEvents, 5);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+        for (RideItem* item : items) {
+            rideCache->rides().removeAll(item);
+            delete item->ride(false);
+            delete item;
+        }
+        for (const QString& p : paths)
+            QFile::remove(p);
+
+        return out;
+    }
+
+    // The shared verdict for TEST-102's three sites. NOT a slot.
+    void assertAbortBehindCompletionStops(AbortAfterSite site, const char* what)
+    {
+        const QString where = QString::fromLatin1(what) + QStringLiteral(": ");
+        const bool isWrite = (site == AfterCompletedWrite);
+
+        // ---- THE CONTROL FIRST. With no abort the batch MUST start the second
+        //      row, or the run below proves nothing at all (LSN-047, LSN-050).
+        const AbortAfterOutcome base = runAbortBehindCompletion(site, false);
+        QVERIFY2(base.timedOut == false, qPrintable(where + QStringLiteral("control: never came back")));
+        QCOMPARE(base.listCount, 2);
+        QCOMPARE(base.checkedRows, 2);
+        if (isWrite)
+            QVERIFY2(base.rideOpens == 2,
+                     qPrintable(where + QStringLiteral("control: only %1 row(s) were opened - this apparatus "
+                                                       "cannot see the second row being started")
+                                            .arg(base.rideOpens)));
+        else
+            QVERIFY2(base.readFileCalls == 2,
+                     qPrintable(where + QStringLiteral("control: only %1 read(s) were issued - this apparatus "
+                                                       "cannot see the second row being started")
+                                            .arg(base.readFileCalls)));
+
+        // ---- THE RUN.
+        const AbortAfterOutcome out = runAbortBehindCompletion(site, true);
+        QVERIFY2(out.timedOut == false, qPrintable(where + QStringLiteral("the batch never came back")));
+        QCOMPARE(out.listCount, 2);
+        QCOMPARE(out.checkedRows, 2);
+        QVERIFY2(out.slotRan, qPrintable(where + QStringLiteral("no transfer was ever started")));
+        QVERIFY2(out.abortDelivered,
+                 qPrintable(where + QStringLiteral("the abort queued behind the completion never ran")));
+        QVERIFY2(out.sawAbortLabel,
+                 qPrintable(where + QStringLiteral("the download button was not labelled \"Abort\" while the batch "
+                                                   "ran, so downloadClicked() could not have been the abort "
+                                                   "control")));
+        QVERIFY2(out.abortTookTheAbortBranch,
+                 qPrintable(where + QStringLiteral("downloadClicked() did not take its abort branch "
+                                                   "(CloudService.cpp:1910-1918), so `aborted` was never set")));
+
+        if (isWrite) {
+            // THE KILLING ASSERTION FOR THIS SITE. The WRITE is already stopped
+            // by S-R027-01 (:2497) even without the completedWrite guard, so
+            // writeFileCalls cannot be what proves this one. What the guard
+            // uniquely prevents is row[1] being OPENED at all - a nested event
+            // loop and a full file parse - and then relabelled.
+            QVERIFY2(out.rideOpens == 1,
+                     qPrintable(where + QStringLiteral("row[1]'s ride file was OPENED after the user aborted (%1 "
+                                                       "open(s), expected 1) - the completion slot handed control "
+                                                       "to the next row anyway")
+                                            .arg(out.rideOpens)));
+            QCOMPARE(out.writeFileCalls, 1);
+        } else {
+            // THE KILLING ASSERTION FOR THE TWO READ SITES, and the criterion's
+            // own: no further store->readFile after the abort. For GarminConnect
+            // each one is a worker thread and an interpreter session.
+            QVERIFY2(out.readFileCalls == 1,
+                     qPrintable(where + QStringLiteral("a further store->readFile was issued after the user "
+                                                       "aborted (%1 read(s) in total, expected 1)")
+                                            .arg(out.readFileCalls)));
+        }
+
+        // ...and row[1] was never even labelled as started.
+        QVERIFY2(out.row1Status != QStringLiteral("Downloading") && out.row1Status != QStringLiteral("Uploading"),
+                 qPrintable(where +
+                            QStringLiteral("row[1] was labelled \"%1\" after the user aborted").arg(out.row1Status)));
+    }
+
+    // The shared verdict for TEST-100's two loops. NOT a slot.
+    void assertStaleFrameStandsDown(BatchTab tab, const char* loop)
+    {
+        const QString where = QString::fromLatin1(loop) + QStringLiteral(": ");
+
+        BatchSpec spec;
+        spec.tab = tab;
+        spec.failRows = 1;
+        spec.trailingParseableRow = true;
+        spec.abort = AbortThenRestart;
+        spec.completeWrite = false; // the restarted batch PARKS, rows stay checked
+        const BatchOutcome out = runBatch(spec);
+
+        QVERIFY2(out.timedOut == false, qPrintable(where + QStringLiteral("the batch never came back")));
+
+        // ---- THE PREMISES. Both clicks delivered, and each took the branch this
+        //      test needs it to take.
+        QCOMPARE(out.listCount, 2);
+        QCOMPARE(out.checkedRows, 2);
+        QCOMPARE(out.row0File, failActivity(0));
+        QCOMPARE(out.lastRowFile, parseableActivity());
+        QVERIFY2(out.abortDelivered, qPrintable(where + QStringLiteral("the queued abort never ran")));
+        QVERIFY2(out.abortTookTheAbortBranch,
+                 qPrintable(where + QStringLiteral("click one did not take downloadClicked's abort branch")));
+        QVERIFY2(out.restartDelivered, qPrintable(where + QStringLiteral("the queued restart never ran")));
+        QVERIFY2(out.restartTookTheStartBranch,
+                 qPrintable(where + QStringLiteral("click two did not take downloadClicked's START branch "
+                                                   "(:1919-1926) - the button did not go back to \"Abort\", so no "
+                                                   "second batch was started and this run proves nothing")));
+
+        // ---- THE POINT. ONE parseable row exists, and exactly ONE batch is
+        //      entitled to transfer it. Two transfers means the stale frame kept
+        //      driving alongside the restarted one.
+        QVERIFY2(out.writeFileCalls == 1,
+                 qPrintable(where + QStringLiteral("a STALE batch frame kept transferring alongside the restarted "
+                                                   "one - store->writeFile was called %1 time(s) for a single "
+                                                   "parseable row")
+                                        .arg(out.writeFileCalls)));
+        QVERIFY2(out.rideOpens == 1,
+                 qPrintable(where + QStringLiteral("the parseable row was opened %1 time(s) - the stale frame "
+                                                   "re-opened it")
+                                        .arg(out.rideOpens)));
+
+        // The unparseable row is attempted once per batch, and there really were
+        // TWO batches (the original and the restart), so twice - by the live
+        // driver, not by a third.
+        QVERIFY2(out.failOpens == 2,
+                 qPrintable(where + QStringLiteral("the unparseable row was attempted %1 time(s); two batches ran, "
+                                                   "so it should be exactly 2")
+                                        .arg(out.failOpens)));
+    }
+
+    // =====================================================================
+    // TEST-105 / TEST-106 (REQ-027 (f), DEC-garmin-035) — THE TRANSFER
+    // ITSELF IS GUARDED.
+    // =====================================================================
+    //
+    // THE MEASURED ASYMMETRY. `aborted` reads per function, counted on the tree
+    // this slice started from:
+    //
+    //   uploadNext    2 — one IMMEDIATELY before its irreversible writeFile
+    //                     (S-R027-01)
+    //   syncNext      2 — the parse-failure branch and the pre-`continue`
+    //                     re-check, but NEITHER before its readFile
+    //   downloadNext  0 — none at all; it issues a third-party download with no
+    //                     abort read anywhere in the function
+    //
+    // (Counted by symbol, not by line: this block cited ":2507/:2088/:2151/
+    // :2372/:2432/:2626" until 2026-08-15 and not one of them still pointed at
+    // an abort read — see ORCH-020. Production line numbers do not survive
+    // edits to production, and this comment cannot be re-verified by anyone
+    // reading it in isolation. Name the symbol.)
+    //
+    // The only guard that protected downloadNext's readFile sat in a DIFFERENT
+    // function — the completion slots in completedRead / failedRead /
+    // completedWrite — across a return and
+    // a call. That is TEST-102's subject and it remains true and useful; what it
+    // is not is a statement of the invariant AT the transfer. These two slots
+    // make the invariant local: whatever route control took to get here, if
+    // `aborted` is set when the loop reaches its transfer statement, the transfer
+    // is not issued.
+    //
+    // WHAT THESE SLOTS DELIBERATELY DO NOT CLAIM, stated here rather than left to
+    // be inferred (this ledger has already spent a wave on a test comment that
+    // claimed more than its mechanism delivered):
+    //
+    //   · They do NOT stop an abort pressed AFTER the guard has run. Nothing at
+    //     this layer can: between the guard and store->readFile sit the buffer
+    //     allocation, a QPointer construction and a BlockingCall construction,
+    //     none of which pumps events — so the window is empty, but "empty" is a
+    //     property of today's statements, not a mechanism.
+    //   · They do NOT close the processEvents() delivery gap. The abort still has
+    //     to have been DELIVERED to be visible, and which processEvents() call
+    //     delivers a given posted event is not something ordering guarantees (see
+    //     the insideframe block comment). These runs therefore do not rely on a
+    //     posted abort being noticed: they set the state SYNCHRONOUSLY.
+    //
+    // HOW THE ABORT IS DELIVERED, and why it is not a queued click.
+    // `rideListSync->setCurrentItem(curr)` in syncNext's Download branch and
+    // `rideListDown->setCurrentItem(curr)` in downloadNext are production's own
+    // statements, they sit between the row's "Downloading" label and the
+    // transfer, and QTreeWidget::currentItemChanged is emitted from them
+    // SYNCHRONOUSLY. A one-shot direct connection to it therefore runs
+    // downloadClicked() — the real abort control, taking its real abort branch —
+    // at a point in the real frame that is strictly after the loop has committed
+    // to this row and strictly before it issues the transfer. No event is posted,
+    // nothing waits to be noticed, and the result does not vary by QPA backend.
+    //
+    // That seam is a FIXTURE DEVICE and is labelled as one: a real user's click
+    // cannot be delivered there, because no event loop runs at that point. What
+    // it establishes is exactly the criterion's premise — "an abort that is
+    // ALREADY delivered when the loop reaches its transfer statement" — and
+    // nothing about how such an abort comes to be set.
+    //
+    // WHAT REACHES THESE GUARDS IN PRODUCTION TODAY: NOTHING. Corrected here
+    // after A3-R027c-F1/F2, because the sentence that used to sit at this spot
+    // ("the realistic routes are TEST-093/094/097/099/102's subject, not this
+    // one's") credited five tests with covering a route none of them takes —
+    // each is intercepted earlier by an OLDER guard (TEST-093 and TEST-099 by
+    // the two S-R027-01 reads in uploadNext and syncNext; TEST-094 by
+    // completedRead's abort re-read; TEST-097 by syncNext's parse-failure
+    // branch; TEST-102 by the completion slots) and control never
+    // returns to syncNext/downloadNext with `aborted` still set. A reader was
+    // being told the realistic case was covered somewhere. It is covered
+    // nowhere, because it does not currently exist.
+    //
+    // WHY THE GUARDS ARE STILL WORTH HAVING, and why this is NOT the same as the
+    // "UNTESTED-BY-DESIGN" `self.isNull()` dead code two lines below each guard.
+    // Those are unreachable for a LOCAL reason — nothing in their window can
+    // destroy the dialog — which any reader confirms in fifteen lines. These are
+    // unreachable only because all four callers happen to re-establish
+    // `aborted == false` in the same statement block before calling
+    // (completedRead, failedRead and completedWrite each read it immediately
+    // before dispatching; downloadClicked assigns it false when it starts a
+    // batch), and because syncNext's one suspension-crossing
+    // `continue` re-checks both `aborted` and the batch generation. That is a DISTRIBUTED
+    // invariant: no reader of syncNext can verify it, and a fifth caller added
+    // without the re-check breaks it silently. The guards convert it into a
+    // local one. So these two slots are REGRESSION LOCKS on a local invariant,
+    // not proof of a live fix — and the guards must not be deleted as dead code
+    // on the strength of a mutation run, which measures coverage and says
+    // nothing about reachability. See LSN-063.
+    //
+    // WHICH ASSERTION KILLS THE MUTANT, and which one does NOT.
+    // The killing assertion is the criterion's own: readFileCalls == 0. The row
+    // label is CORROBORATING ONLY and must not be mistaken for the verdict —
+    // without these guards the read is issued, the store queues its completion,
+    // and completedRead's ENTRY check labels that same row "Aborted" all
+    // by itself. A test that asserted only the label would go green against a
+    // tree with no guard at either site. Post-fix the label is set synchronously
+    // by the guard before it returns, so reading it the instant downloadClicked()
+    // hands back is deterministic; pre-fix it depends on whether the completion
+    // was delivered yet, which is why it is ordered after the read count and
+    // never asserted on the control.
+    enum BeforeTransferLoop {
+        InSyncNext,    // Sync tab (index 2)     -> syncNext's Download branch -> :2058
+        InDownloadNext // Download tab (index 0) -> downloadNext               -> :2317
+    };
+
+    struct BeforeTransferOutcome
+    {
+        bool timedOut = false;
+
+        // -- premises: did this run reach the situation it claims to test?
+        int listCount = 0;
+        int checkedRows = 0;
+        QString rowAction; // sync list column 6 — must be "Download"
+        bool seamFired = false;
+        bool abortDelivered = false;
+        bool sawAbortLabel = false;
+        bool abortTookTheAbortBranch = false;
+
+        // -- the verdict
+        int readFileCalls = 0;
+        QString rowStatus;
+    };
+
+    // ONE remote activity and no local ride, so: the download list has exactly
+    // one row and its "Exists" box is clear (the "File exists" skip at :2204
+    // cannot swallow it), and the sync list has exactly one row whose Action is
+    // "Download" (:1708) with no Upload rows to reach first.
+    //
+    // .gcfail rather than .gcblock, for the same reason TEST-102 gives: if the
+    // read IS issued (the pre-fix and mutant runs), the completion that follows
+    // must not run a nested event loop of its own inside uncompressRide, or the
+    // run's own bookkeeping stops being synchronous.
+    static QString oneRemoteActivity()
+    {
+        return QDate::currentDate().toString(QStringLiteral("yyyy_MM_dd")) + QStringLiteral("_12_00_00.gcfail");
+    }
+
+    // One run. `deliverTheAbort` false is the CONTROL: identical in every other
+    // respect — the same seam armed, the same row, the same store — so a green
+    // control proves this apparatus can see the transfer being ISSUED, and that
+    // arming the seam is not itself what stops it (LSN-047, LSN-050).
+    BeforeTransferOutcome runAbortBeforeTransfer(BeforeTransferLoop loop, bool deliverTheAbort)
+    {
+        obs::reset();
+        rideopen::reset();
+        ridefail::reset();
+        rideopen::blockingMs = 5;
+
+        BeforeTransferOutcome out;
+        QEventLoop appLoop;
+
+        QDir().mkpath(context->athlete->home->activities().absolutePath());
+        QDir().mkpath(context->athlete->home->temp().absolutePath());
+
+        QMetaObject::invokeMethod(
+            this,
+            [&]() {
+                QWidget* owner = new QWidget;
+
+                BlockingStore* store = new BlockingStore(context);
+                store->entryNames = QStringList() << oneRemoteActivity();
+                store->blockingMs = 5;
+                store->closeActionContext = qApp;
+                // GarminConnect's own setting (GarminConnect.cpp:102).
+                store->downloadCompression = CloudService::none;
+
+                CloudServiceSyncDialog* dialog = new CloudServiceSyncDialog(context, store);
+                dialog->setParent(owner, Qt::Dialog);
+                dialog->start();
+                dialog->open();
+                store->dialog = dialog;
+                store->dialogGuard = dialog;
+
+                const int statusColumn = (loop == InSyncNext) ? 7 : 5; // :1172 / :1104
+
+                QTreeWidget* list = nullptr;
+                if (QTabWidget* tabs = dialog->findChild<QTabWidget*>())
+                    tabs->setCurrentIndex(loop == InSyncNext ? 2 : 0);
+                if (loop == InSyncNext) {
+                    dialog->selectAllSyncChanged(Qt::Checked);
+                    list = rideListWithHeader(dialog, QStringLiteral("Source"));
+                } else {
+                    // The download list's column-1 header is "Workout Name"
+                    // (CloudService.cpp:1100), NOT "File" — see TEST-102.
+                    dialog->selectAllChanged(Qt::Checked);
+                    list = rideListWithHeader(dialog, QStringLiteral("Workout Name"));
+                }
+
+                if (list != nullptr) {
+                    QTreeWidgetItem* root = list->invisibleRootItem();
+                    out.listCount = root->childCount();
+                    for (int i = 0; i < out.listCount; i++) {
+                        QCheckBox* check = qobject_cast<QCheckBox*>(list->itemWidget(root->child(i), 0));
+                        if (check != nullptr && check->isChecked())
+                            out.checkedRows++;
+                    }
+                    if (out.listCount > 0)
+                        out.rowAction = root->child(0)->text(6);
+                }
+
+                // The one download/abort button, watched by IDENTITY from here
+                // on: its text is what says which branch downloadClicked took.
+                // "Download" on the download tab, "Synchronize" on the sync tab
+                // (tabChanged, :1828).
+                QPushButton* watched = pushButtonWithText(dialog, QStringLiteral("Download"));
+                if (watched == nullptr)
+                    watched = pushButtonWithText(dialog, QStringLiteral("Synchronize"));
+
+                // THE SEAM. Cleared first so that production's setCurrentItem is
+                // guaranteed to be a CHANGE: if the view had already made this row
+                // current (showing a tree can), Qt would emit nothing and the run
+                // would prove nothing — `seamFired` would then be false and the
+                // premise below fails loudly rather than passing quietly.
+                QTreeWidgetItem* transferRow = nullptr;
+                if (list != nullptr) {
+                    list->setCurrentItem(nullptr);
+                    auto link = std::make_shared<QMetaObject::Connection>();
+                    *link = QObject::connect(
+                        list, &QTreeWidget::currentItemChanged, list,
+                        [&, link, dialog, watched](QTreeWidgetItem* current, QTreeWidgetItem*) {
+                            if (current == nullptr)
+                                return;
+                            QObject::disconnect(*link); // fires once
+                            out.seamFired = true;
+                            transferRow = current;
+                            if (!deliverTheAbort)
+                                return;
+                            out.abortDelivered = true;
+                            out.sawAbortLabel = (pushButtonWithText(dialog, QStringLiteral("Abort")) != nullptr);
+                            dialog->downloadClicked();
+                            // The abort branch relabels that same button
+                            // "Download" (:1914), so this is the observable proof
+                            // that :1910-1918 ran and `aborted` is now true.
+                            out.abortTookTheAbortBranch =
+                                (watched != nullptr && watched->text() == QStringLiteral("Download"));
+                        },
+                        Qt::DirectConnection);
+                }
+
+                dialog->downloadClicked(); // -> syncNext() / downloadNext()
+
+                // The verdict, read the instant the batch hands control back —
+                // everything the guard does is synchronous, so nothing here waits
+                // on an event being delivered.
+                out.readFileCalls = obs::readFileCalls;
+                if (transferRow != nullptr)
+                    out.rowStatus = transferRow->text(statusColumn);
+
+                QTimer::singleShot(100, qApp, [owner]() { delete owner; });
+                QTimer::singleShot(200, &appLoop, &QEventLoop::quit);
+
+                bool* timedOutp = &out.timedOut;
+                QTimer::singleShot(10000, &appLoop, [timedOutp]() {
+                    *timedOutp = true;
+                    QCoreApplication::exit(1);
+                });
+            },
+            Qt::QueuedConnection);
+
+        appLoop.exec();
+        for (int i = 0; i < 50; ++i)
+            QApplication::processEvents(QEventLoop::AllEvents, 5);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+        return out;
+    }
+
+    // The shared verdict for TEST-105 / TEST-106. NOT a slot.
+    void assertAbortBeforeTransferStopsIt(BeforeTransferLoop loop, const char* what)
+    {
+        const QString where = QString::fromLatin1(what) + QStringLiteral(": ");
+
+        // ---- THE CONTROL FIRST. With the seam armed but no abort delivered the
+        //      row MUST be transferred, or the run below proves nothing at all.
+        const BeforeTransferOutcome base = runAbortBeforeTransfer(loop, false);
+        QVERIFY2(base.timedOut == false, qPrintable(where + QStringLiteral("control: never came back")));
+        QCOMPARE(base.listCount, 1);
+        QCOMPARE(base.checkedRows, 1);
+        QVERIFY2(base.seamFired,
+                 qPrintable(where + QStringLiteral("control: production's setCurrentItem never reached the "
+                                                   "fixture, so the abort in the run below could not have been "
+                                                   "delivered inside the frame under test")));
+        QVERIFY2(base.readFileCalls == 1,
+                 qPrintable(where + QStringLiteral("control: store->readFile was called %1 time(s), not once - "
+                                                   "this apparatus cannot see a transfer being issued at all")
+                                        .arg(base.readFileCalls)));
+
+        // ---- THE RUN.
+        const BeforeTransferOutcome out = runAbortBeforeTransfer(loop, true);
+        QVERIFY2(out.timedOut == false, qPrintable(where + QStringLiteral("the batch never came back")));
+
+        // ---- THE PREMISES.
+        QCOMPARE(out.listCount, 1);
+        QCOMPARE(out.checkedRows, 1);
+        if (loop == InSyncNext) {
+            // ...and it really is syncNext's DOWNLOAD branch (:1996), not the
+            // upload branch that has carried S-R027-01 since :2088.
+            QCOMPARE(out.rowAction, QStringLiteral("Download"));
+        }
+        QVERIFY2(out.seamFired,
+                 qPrintable(where + QStringLiteral("production's setCurrentItem never reached the fixture")));
+        QVERIFY2(out.abortDelivered, qPrintable(where + QStringLiteral("the abort was never delivered")));
+        QVERIFY2(out.sawAbortLabel,
+                 qPrintable(where + QStringLiteral("the download button was not labelled \"Abort\" while the batch "
+                                                   "ran, so downloadClicked() could not have been the abort "
+                                                   "control")));
+        QVERIFY2(out.abortTookTheAbortBranch,
+                 qPrintable(where + QStringLiteral("downloadClicked() did not take its abort branch "
+                                                   "(CloudService.cpp:1910-1918), so `aborted` was never set")));
+
+        // ---- THE POINT, and THE KILLING ASSERTION. The criterion's own number:
+        //      with abort set, store->readFile is called 0 further times from
+        //      this site. For GarminConnect each one is a worker thread and an
+        //      interpreter session started for an activity the user has already
+        //      stopped.
+        QVERIFY2(out.readFileCalls == 0,
+                 qPrintable(where + QStringLiteral("the transfer was ISSUED for a row the user had already "
+                                                   "aborted: store->readFile was called %1 time(s), expected 0")
+                                        .arg(out.readFileCalls)));
+
+        // ...and the row SAYS so. CORROBORATING ONLY - see the block comment:
+        // completedRead's entry check labels this same row "Aborted" when the
+        // read is allowed to happen, so this assertion cannot kill the mutant and
+        // is not what this test rests on.
+        QCOMPARE(out.rowStatus, QStringLiteral("Aborted"));
     }
 };
 

@@ -612,6 +612,37 @@ class CloudServiceSyncDialog : public QDialog
             successful,         // how many downloaded ok?
             listindex;          // where in rideList we've got to
 
+        // DEC-garmin-032 (REQ-027) - WHICH BATCH A SUSPENDED FRAME BELONGS TO.
+        //
+        // syncNext/uploadNext/downloadNext keep their position in `listindex`, a
+        // MEMBER, but the loop they are executing lives in a stack frame. That was
+        // survivable while every branch that suspended also RETURNED: one frame,
+        // one batch. DEC-032 made the parse-failure branch `continue` instead, so
+        // there is now a frame that SUSPENDS AND THEN KEEPS ITERATING - and the
+        // event delivered inside that suspension can be a second click on the
+        // download button.
+        //
+        // Two clicks in one processEvents() burst is all it takes: the first is an
+        // ABORT (downloadClicked :1910-1918), the second a fresh START
+        // (:1919-1926), which resets `aborted` to false, `listindex` to 0 and the
+        // counters, and re-drives the loop from inside the first batch's own
+        // suspended frame. When that returns, the suspended frame resumes with
+        // `aborted == false` - so the abort re-read cannot see this - and carries
+        // on transferring rows that now belong to somebody else, addressing them
+        // by a `listindex` the live batch is also moving (:2193/:2242/:2249/:2311/
+        // :2318/:2457/:2464).
+        //
+        // So each batch is NUMBERED. The number is bumped by the start branch and
+        // snapshotted into a LOCAL at loop entry; a frame whose snapshot no longer
+        // matches is not the current batch and stands down. A counter rather than
+        // a bool because the question is "is this still MY batch", which two
+        // successive restarts would answer wrongly with any flag that only toggles.
+        //
+        // Wraparound is not guarded: it needs 2^31 clicks on one dialog, and the
+        // failure it would cause is one stale frame surviving one iteration.
+        // See TEST-100.
+        int batchGeneration;
+
         bool saveRide(RideFile *, QStringList &);
         bool syncNext();        // kick off another download/upload
                                 // returns false if none left

@@ -1455,3 +1455,32 @@ add_test(NAME testGarminConnectSyncDialogClose COMMAND testGarminConnectSyncDial
 set_tests_properties(testGarminConnectSyncDialogClose PROPERTIES
     LABELS "garmin-fast"
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;ASAN_OPTIONS=detect_leaks=0:abort_on_error=0:halt_on_error=1")
+
+# THE SAME EXECUTABLE, REGISTERED A SECOND TIME UNDER A SECOND QPA BACKEND.
+#
+# WHY TWICE. Every gate in this project pinned exactly ONE QT_QPA_PLATFORM, so
+# every gate in this project was a SINGLE-ENVIRONMENT gate: whatever the pinned
+# backend happened to hide, the suite could not see. This target is the proof of
+# that. Its completion-slot fixtures used to queue an action behind a completion
+# and rely on the production QApplication::processEvents() inside the slot to
+# deliver it, and a nested processEvents() is ONE non-blocking
+# g_main_context_iteration - not a guaranteed drain. Under `offscreen` the queued
+# action happened to be dispatched there and the suite was 49/0 green; under
+# `minimal` - same dispatcher class, same machine, same binary - it was not, and
+# a slot that had been COMMITTED green failed (48/1). Under an ambient wayland
+# session two slots failed (47/2). One pinned backend meant that defect lived in
+# the tree, committed and green, for a whole wave.
+#
+# So the backend is a DIMENSION of the gate, not a constant of it, and this
+# second registration is the guard against the single-environment gate coming
+# back. `minimal` deliberately: it is headless, ships with Qt, needs no display
+# server and no compositor, so it is as CI-portable as `offscreen` is. Wayland
+# (which fails differently again) is NOT registered - it needs a live compositor
+# and is a developer-machine check only.
+#
+# Same LABELS as its sibling so `ctest -L garmin-fast` runs BOTH: a gate the
+# label selection can silently drop half of is the same defect one level up.
+add_test(NAME testGarminConnectSyncDialogClose_minimal COMMAND testGarminConnectSyncDialogClose)
+set_tests_properties(testGarminConnectSyncDialogClose_minimal PROPERTIES
+    LABELS "garmin-fast"
+    ENVIRONMENT "QT_QPA_PLATFORM=minimal;ASAN_OPTIONS=detect_leaks=0:abort_on_error=0:halt_on_error=1")

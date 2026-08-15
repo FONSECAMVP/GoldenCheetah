@@ -959,7 +959,7 @@ CloudServiceSyncDialog::CloudServiceSyncDialog(Context *context, CloudService *s
     : QDialog(cloudDialogParent(context), Qt::Dialog), context(context), store(store),
       downloading(false), sync(false), aborted(false),
       blockingCallDepth(0), closeDeferred(false), reaper(NULL),
-      listindex(0),
+      listindex(0), batchGeneration(0),
       tabs(nullptr), athleteCombo(nullptr), refreshButton(nullptr),
       cancelButton(nullptr), downloadButton(nullptr), from(nullptr), to(nullptr),
       selectAll(nullptr), rideListDown(nullptr), selectAllUp(nullptr),
@@ -1921,6 +1921,15 @@ CloudServiceSyncDialog::downloadClicked()
         rideListUp->setSortingEnabled(true);
         downloading=true;
         aborted=false;
+
+        // DEC-garmin-032 (REQ-027) - A NEW BATCH STARTS HERE, and this is the one
+        // place a batch can start. Bumped BEFORE the loop below is re-driven so
+        // that any frame still suspended from the previous batch - which this
+        // click can be executing INSIDE, via the processEvents() in the
+        // parse-failure branch - resumes to find its snapshot stale and stands
+        // down. See the member's comment in CloudService.h and TEST-100.
+        batchGeneration++;
+
         downloadButton->setText(tr("Abort"));
         cancelButton->hide();
     }
@@ -1969,6 +1978,12 @@ CloudServiceSyncDialog::syncNext()
     // the actual download/upload is kicked off using the uploader / downloader
     // if in sync mode the completedRead / completedWrite functions
     // just call completedSync to get the next Sync done
+
+    // DEC-garmin-032 (REQ-027) - WHOSE BATCH THIS FRAME IS RUNNING. Snapshotted
+    // before the loop and compared before the one branch below that suspends and
+    // then keeps iterating; see the member's comment in CloudService.h.
+    const int generation = batchGeneration;
+
     for (int i=listindex; i<rideListSync->invisibleRootItem()->childCount(); i++) {
         QTreeWidgetItem *curr = rideListSync->invisibleRootItem()->child(i);
         QCheckBox *check = (QCheckBox*)rideListSync->itemWidget(curr, 0);
@@ -1981,6 +1996,69 @@ CloudServiceSyncDialog::syncNext()
             if (curr->text(6) == tr("Download")) {
                 curr->setText(7, tr("Downloading"));
                 rideListSync->setCurrentItem(curr);
+
+                // DEC-garmin-035 (REQ-027 (f)) - THE TRANSFER ITSELF, GUARDED.
+                //
+                // THE ASYMMETRY THIS CLOSES, counted rather than argued. Reads of
+                // `aborted` per function before this line existed: uploadNext 2,
+                // one of them IMMEDIATELY before its irreversible writeFile
+                // (S-R027-01); syncNext 2 - the parse-failure branch and the
+                // pre-`continue` re-check further down this function - but
+                // NEITHER of them before THIS readFile; downloadNext 0. So the
+                // upload half of this very loop states the invariant at its
+                // transfer and the download half did not - it relied on the
+                // guards in the completion slots (completedRead, failedRead,
+                // completedWrite), which are in a DIFFERENT
+                // function, across a return and a call. That is a true-by-luck
+                // arrangement: it holds only as long as every route into this loop
+                // happens to have read `aborted` on the way. This line makes it
+                // local - however control got here, an abort that is already set
+                // when the loop reaches its transfer means no transfer.
+                //
+                // WHAT IT DOES NOT DO, so that nobody reads more into it than the
+                // mechanism delivers: it does not stop an abort pressed AFTER it
+                // has run, and it does not close the processEvents() delivery gap
+                // - the abort still has to have been delivered to be visible here.
+                // Nothing at this layer can do either.
+                //
+                // PLACED ABOVE THE BUFFER, not between the buffer and the call:
+                // returning after `new QByteArray` would leak it once per abort,
+                // which is precisely the defect A3-R017-F3 fixed in completedRead.
+                // What separates this read from the call is the
+                // allocation, a QPointer construction and a BlockingCall
+                // construction; none of them pumps events and none is
+                // irreversible. Shape, label and return value are uploadNext's and
+                // the parse-failure branch's, because this row WAS being
+                // transferred. See TEST-105.
+                //
+                // REACHABILITY (A3-R027c-F1, 2026-08-15): no production route
+                // arrives here with `aborted` already true. All four callers of
+                // this function re-establish it false in the same statement block
+                // before calling (completedRead, failedRead and completedWrite
+                // each read it immediately before dispatching; downloadClicked
+                // assigns it false when it starts a batch), and this loop's own
+                // suspension-crossing `continue` re-checks both `aborted` and the
+                // batch generation first. That does NOT make this dead code in the
+                // sense the `self.isNull()` guard below is: that one is
+                // unreachable LOCALLY - nothing in its window can destroy the
+                // dialog - while this one is unreachable only because four REMOTE
+                // callers each happen to re-check, which is the "true-by-luck"
+                // arrangement named above and exactly what this line converts into
+                // a local invariant. A fifth caller written without the re-check
+                // reintroduces the defect silently. Do not delete this on the
+                // strength of a mutation run: mutation measures coverage, not
+                // reachability. See the twin comment in downloadNext and LSN-063.
+                //
+                // NOTE ON CITATIONS: this block deliberately names SYMBOLS, not
+                // line numbers. Its previous version cited ":2088/:2151/:2372/
+                // :2432/:2626/:2507", none of which pointed at an abort read by
+                // the time anyone read them - and two pointed into unrelated
+                // DEC-031 and TEST-097 prose. A file under active edit invalidates
+                // its own line numbers (ORCH-020, LSN-034).
+                if (aborted == true) {
+                    curr->setText(7, tr("Aborted"));
+                    return true;
+                }
 
                 QByteArray *data = new QByteArray;
                 // DEC-garmin-025 - `this` can be DESTROYED inside the call below
@@ -2055,6 +2133,27 @@ CloudServiceSyncDialog::syncNext()
 
                     if (ride) {
 
+                        // REQ-027 (S-R027-01) - AND THE ABORT, RE-READ. The
+                        // openRideFile above is a nested QEventLoop of its own
+                        // (FitRideFile.cpp:172-184), so the user can press Abort
+                        // from inside a PARSEABLE row's parse. The QPointer bail
+                        // one line up does not cover that - it establishes that
+                        // this dialog is still alive, not that the transfer is
+                        // still wanted - and `aborted` is not read again anywhere
+                        // between here and the writeFile below, so without this
+                        // line the activity is compressed and uploaded after the
+                        // user stopped the batch. Symmetric with the check
+                        // completedWrite makes on the other side of that call
+                        // (:2456), and it labels the row the same way, because
+                        // this row WAS being uploaded - unlike the parse-failure
+                        // branch below, whose row has its own verdict to keep.
+                        // The ride is ours. See TEST-099.
+                        if (aborted == true) {
+                            delete ride;
+                            curr->setText(7, tr("Aborted"));
+                            return true;
+                        }
+
                         // get a compressed version
                         QByteArray data;
                         store->compressRide(ride, data, QFileInfo(curr->text(1)).baseName() + ".json");
@@ -2066,8 +2165,62 @@ CloudServiceSyncDialog::syncNext()
 
                     } else {
                         curr->setText(7, tr("Parse failure"));
+
+                        // The row is COUNTED before we move on: it was one of the
+                        // `downloadtotal` the user asked for and it is finished
+                        // with, so leaving the bar behind would understate the
+                        // work done and leave it short of maximum at the end.
+                        // Deliberately NOT `successful`, which the tail reports
+                        // separately - the row failed.
+                        //
+                        // BEFORE the suspension, and what that is worth is
+                        // exactly this: the row is counted even on the paths that
+                        // then stand the loop down, so an abort delivered one line
+                        // below still leaves the bar reflecting the row that
+                        // failed. That is the difference TEST-097 measures
+                        // (A3-R027-F6). It ALSO means the repaint the
+                        // processEvents() runs already shows the advance - not
+                        // measured, and not claimed as more than a reason.
+                        // uploadNext does the identical thing in the identical
+                        // place (B-R027-04).
+                        progressBar->setValue(++downloadcounter);
+
                         QApplication::processEvents();
                         if (self.isNull()) return true;
+
+                        // DEC-garmin-032 (REQ-027) - THE BRANCH THAT ARMED
+                        // NOTHING.
+                        //
+                        // Every other branch of this function stands down by
+                        // RETURNING, and that is correct for them because each has
+                        // armed a re-entry first: readFile arms completedRead /
+                        // failedRead (:2273/:2326), writeFile arms completedWrite
+                        // (:2472). This one arms NOTHING - no store call is made,
+                        // no signal is in flight - so returning ended the batch
+                        // outright: no later row was ever attempted, the
+                        // completion tail below never ran, and the user was left
+                        // with a frozen progress bar and a dialog that did not say
+                        // it had given up. `continue` instead, which is the shape
+                        // uploadNext already ships for this same branch (:2394)
+                        // and the whole of what the two loops had to converge on.
+                        //
+                        // The abort, which the processEvents() one line up
+                        // can just have delivered. This is now a SUSPENSION THE
+                        // LOOP RESUMES FROM rather than a dead end, so the same
+                        // re-read uploadNext needs (:2420) is needed here.
+                        // Nothing is relabelled: row `i` really did fail to parse
+                        // and that remains its verdict; what stands down is the
+                        // LOOP. See TEST-097.
+                        if (aborted == true) return true;
+
+                        // ...and the batch itself may have been REPLACED while we
+                        // were suspended - two clicks in one processEvents() burst
+                        // (abort, then start) leave `aborted` false again with a
+                        // new batch already running. Continuing here would put a
+                        // second driver on the same list. See TEST-100.
+                        if (batchGeneration != generation) return true;
+
+                        continue;
                     }
                 }
 
@@ -2123,6 +2276,48 @@ CloudServiceSyncDialog::downloadNext()
             curr->setText(5, tr("Downloading"));
             rideListDown->setCurrentItem(curr);
             progressLabel->setText(QString(tr("Downloaded %1 of %2")).arg(downloadcounter).arg(downloadtotal));
+
+            // DEC-garmin-035 (REQ-027 (f)) - THE TRANSFER ITSELF, GUARDED, and
+            // this function is the reason the clause exists: it contained NO read
+            // of `aborted` ANYWHERE. It issued a third-party download - for
+            // GarminConnect a worker thread and an interpreter session - with the
+            // nearest guard sitting in a different function (the completion slots
+            // in completedRead / failedRead / completedWrite),
+            // across a return and a call. See the twin of this comment in
+            // syncNext for the full count and for what this does NOT claim: it
+            // does not stop an abort pressed after it has run, and it does not
+            // close the processEvents() delivery gap.
+            //
+            // The label column is 5, not 7: the download list has SIX columns and
+            // its Status header is 5 (:1104-1106), where the sync list's is 7
+            // (:1172) - both of those are set well above this function and do not
+            // move. completedRead and failedRead pick between them the same way,
+            // with `int col = sync ? 7 : 5`. [ORCH-018: this citation pointed at
+            // ":2274" until 2026-08-15, which is a DEC-025 comment a few lines
+            // BELOW this one, not completedRead at all.]
+            //
+            // Above the buffer for the reason syncNext's twin gives (A3-R017-F3).
+            // See TEST-106.
+            //
+            // REACHABILITY, measured by A3-R027c and stated so nobody has to
+            // re-derive it: no production route arrives here with `aborted`
+            // already true. All four callers re-establish `aborted == false` in
+            // the same statement block before calling (completedRead, failedRead
+            // and completedWrite each read it immediately before dispatching;
+            // downloadClicked assigns it false when it starts a batch). This
+            // guard is therefore reinforcement - but NOT in the same sense as the
+            // "UNTESTED-BY-DESIGN" `self.isNull()` guard below, and the
+            // difference is the reason both stay: that one is unreachable for a
+            // LOCAL reason, this one only because four REMOTE callers each happen
+            // to re-check. A fifth caller written without the re-check
+            // reintroduces the defect silently, and no reader of this function
+            // could see it coming. Do not delete this on the strength of a
+            // mutation run: mutation measures coverage, not reachability.
+            // See LSN-063.
+            if (aborted == true) {
+                curr->setText(5, tr("Aborted"));
+                return true;
+            }
 
             QByteArray *data = new QByteArray; // gets deleted when read completes
             // DEC-garmin-025 - as in syncNext: the call below can destroy `this`
@@ -2269,6 +2464,25 @@ CloudServiceSyncDialog::completedRead(QByteArray *data, QString name, QString /*
     // dialog. Proven by mutation (TEST-087).
     if (self.isNull()) return;
 
+    // REQ-027 (A3-R027-F4) - AND THE ABORT, WHICH THAT CALL CAN HAVE DELIVERED.
+    // The entry check (:2299) and the REQ-026 re-read (:2318) are both UPSTREAM
+    // of the processEvents one line up, and the bail beside this one answers a
+    // different question - whether this dialog is alive, not whether the user
+    // still wants the rest of the batch. Without this line the abort costs
+    // another download: for GarminConnect a worker thread and an interpreter
+    // session for an activity the user already stopped. THIS row keeps its
+    // verdict - it really did complete - and what stands down is the LOOP.
+    // See TEST-102.
+    //
+    // AMENDED 2026-08-15 (DEC-garmin-035): this comment used to add "Neither
+    // downloadNext nor syncNext's download branch reads `aborted` before issuing
+    // the next store->readFile". That WAS true and is now FALSE - DEC-035 put a
+    // read immediately ahead of each of those two transfers (TEST-105/106),
+    // precisely because the only guard covering them was this one, sitting in a
+    // different function across a return. This guard is still load-bearing and
+    // still mutation-proven; it is now the OUTER of two, not the only one.
+    if (aborted == true) return;
+
     if (sync)
         syncNext();
     else
@@ -2322,6 +2536,13 @@ CloudServiceSyncDialog::failedRead(QByteArray *data, QString, QString reason)
     // A3-R021-F1 - `sync` below is a member read on a possibly destroyed `this`.
     if (self.isNull()) return;
 
+    // REQ-027 (A3-R027-F4) - the abort, as in completedRead. This slot has only
+    // an ENTRY check (:2395), so the window here is wider than its sibling's:
+    // there is no intervening re-read at all, and this slot runs no nested loop
+    // of its own, which makes the processEvents one line up the FIRST and only
+    // thing that can deliver an abort inside it. See TEST-102.
+    if (aborted == true) return;
+
     if (sync)
         syncNext();
     else
@@ -2337,6 +2558,12 @@ CloudServiceSyncDialog::uploadNext()
     // evaluation of `rideListUp->invisibleRootItem()` (the line under this one)
     // is the use-after-free.
     QPointer<CloudServiceSyncDialog> self(this);
+
+    // DEC-garmin-032 (REQ-027) - as in syncNext: whose batch this frame is
+    // running. The parse-failure branch below has kept iterating since REQ-026,
+    // so this loop has carried the stale-frame hazard for longer than syncNext
+    // has. See the member's comment in CloudService.h and TEST-100.
+    const int generation = batchGeneration;
 
     for (int i=listindex; i<rideListUp->invisibleRootItem()->childCount(); i++) {
         QTreeWidgetItem *curr = rideListUp->invisibleRootItem()->child(i);
@@ -2383,6 +2610,18 @@ CloudServiceSyncDialog::uploadNext()
 
                 if (ride) {
 
+                    // REQ-027 (S-R027-01) - syncNext's re-read (:2056), for the
+                    // identical window: openRideFile above runs a nested
+                    // QEventLoop (FitRideFile.cpp:172-184), `aborted` is not read
+                    // again between it and the writeFile below, and the QPointer
+                    // bail covers lifetime rather than intent. Same reason, same
+                    // label, same ownership of the ride. See TEST-099.
+                    if (aborted == true) {
+                        delete ride;
+                        curr->setText(7, tr("Aborted"));
+                        return true;
+                    }
+
                     // get a compressed version
                     QByteArray data;
                     store->compressRide(ride, data, QFileInfo(curr->text(1)).baseName() + ".json");
@@ -2393,6 +2632,16 @@ CloudServiceSyncDialog::uploadNext()
 
                 } else {
                     curr->setText(7, tr("Parse failure"));
+
+                    // REQ-027 (B-R027-04) - COUNT THE FAILED ROW, as syncNext's
+                    // twin of this branch now does. It was one of the
+                    // `downloadtotal` the user asked for and it is finished with,
+                    // so without this the bar ends short of maximum by exactly the
+                    // number of unparseable activities. Placed BEFORE the
+                    // suspension because nothing below it may assume this frame is
+                    // still the live batch's.
+                    progressBar->setValue(++downloadcounter);
+
                     QApplication::processEvents();
                     // A3-R021-F1 - the only bail this function used to have, and
                     // it has to be HERE rather than after the loop: this is the
@@ -2418,6 +2667,17 @@ CloudServiceSyncDialog::uploadNext()
                     // remains its verdict; what stands down is the LOOP. See
                     // TEST-093.
                     if (aborted == true) return true;
+
+                    // DEC-garmin-032 (REQ-027) - AND WHETHER THIS BATCH IS STILL
+                    // THE ONE RUNNING, which the line above cannot answer. Two
+                    // clicks delivered by that same processEvents() - an abort,
+                    // then a fresh start - leave `aborted` back at false with a
+                    // NEW batch already iterating this list; carrying on here
+                    // would make this frame a second driver over the same rows,
+                    // re-uploading what the live batch has already done and
+                    // relabelling by a `listindex` that is no longer ours. See
+                    // TEST-100.
+                    if (batchGeneration != generation) return true;
                 }
             }
         }
@@ -2467,6 +2727,15 @@ CloudServiceSyncDialog::completedWrite(QString, QString result)
     QApplication::processEvents();
     // A3-R021-F1 - `sync` below is a member read on a possibly destroyed `this`.
     if (self.isNull()) return;
+
+    // REQ-027 (A3-R027-F4) - the abort, as in completedRead/failedRead. What this
+    // one uniquely prevents is NOT the next write: S-R027-01 (:2088/:2497) already
+    // stops that, one openRideFile later. It is the OPEN ITSELF - a nested event
+    // loop and a full file parse for a row the user abandoned - and the
+    // "Uploading" label that goes on the row before it. On the sync tab the next
+    // row can equally be a DOWNLOAD row, and then this is the same wasted
+    // store->readFile completedRead's guard prevents. See TEST-102.
+    if (aborted == true) return;
 
     if (sync)
         syncNext();
