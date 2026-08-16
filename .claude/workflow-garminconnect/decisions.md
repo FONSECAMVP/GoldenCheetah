@@ -978,3 +978,179 @@ grep -n 'blockingCallDepth > 0' src/Cloud/CloudService.cpp        # the decline 
 grep -c 'deleteLater' src/Cloud/CloudService.cpp                   # expect NO naive store->deleteLater() after
 grep -n 'storeDestroyed\|storeClosed' unittests/Core/garminconnect/testGarminConnectSyncDialogClose.cpp   # assertions that must INVERT
 ```
+
+---
+
+## DEC-032 — Closing the silent stall: an in-loop `continue` in the branch that arms nothing (REQ-027)
+- Status: accepted (A — in-loop `continue`, adopting `uploadNext`'s already-shipped shape)
+- Reversibility: cheap (3 lines in one branch + 2 read-side checks; revert is a diff)
+- Decided / last-reviewed: 2026-08-13
+- Serves: REQ-027; closes B-R026-01, O-R027-01, S-R027-01, S-R027-04; constrained by DEC-024 (BlockingCall depth), DEC-025/026 (guard placement), DEC-030 (synchronous parenting), DEC-031 (reaper drains on last counted frame), and REQ-026's abort invariant
+- Dependents: TEST-095..100; B-R025-03 stays queued and is NOT resolved here
+
+### The question
+`CloudServiceSyncDialog::syncNext` (defined `CloudService.cpp:1967`) processes one checked row per
+invocation and relies on a completion callback to re-drive it. Its four re-entry points are :1962,
+:2273, :2326, :2472. The upload-side **parse-failure branch (:2067-2071)** initiates no async work
+and falls to the unconditional `return true` at :2075, arming none of them — the batch stalls
+silently. How should the loop re-drive itself without unbounded re-entry or stack growth?
+
+### Alternatives
+| Opt | Rel | Scal | Maint | BP |
+|---|---|---|---|---|
+| A in-loop `continue` (adopt `uploadNext`'s shape) | 5 — adds no suspension point; the one new hazard (`~BlockingCall` replaying `close()` under `continue`) is excluded by a grep-verified invariant, not a Qt semantic: `closeDeferred` is set true at :1475 only, and :1476 sets `aborted` on the next line | 4 — zero stack growth for any N, strictly better than today's baseline (S-R027-03); N failures run in one GUI turn, but :2069 pumps events each pass so Abort still lands | 5 — smallest diff, and it REMOVES a divergence: `syncNext` and `uploadNext` end with one shape between them | 4 — "return to the event loop between units of work" is the general consensus, which this does not do; wins here on smallest-change + shared-across-16-services, and the failing step is wholly synchronous so there is nothing to wait for |
+| B queued self-invoke (`invokeMethod(this,"syncNext",Qt::QueuedConnection)`) | 3 — turns on Qt delivery semantics, and TEST-089 ALREADY MEASURED the adverse one: a queued invoke posted from inside a nested QEventLoop is delivered BEFORE that loop returns, in production's exact geometry (`CloudService.h:512-521`) | 4 — constant stack when the post lands on the main loop; one row per event-loop turn keeps the GUI repainted | 3 — header change + a second, invisible driver of a loop whose callbacks address rows by `listindex-1`; if a re-drive ever coexists with an in-flight transfer, `completedWrite` labels the WRONG row — silent, not a crash | 4 — the canonical idiom, but it buys a queue round-trip per failure to solve a problem this frame does not have |
+| C explicit `StepOutcome` enum (split driver from step) | 4 — makes the defect unrepresentable, but relocates the code that DEC-024/025/026/030/031's PLACEMENT-sensitive guards are pinned to | 5 — one driver frame for any N; natural seam for a later yield policy | 3 — best shape to inherit, worst to land today: rewrites three functions and invalidates ~60 lines of DEC-provenance comments citing current line numbers | 5 — an explicit state machine is what a reviewer would ask for if this file were new |
+
+### Decision
+**Option A.** Three reasons, in the user's own constraint terms. (1) Smallest change that closes the
+class: 3 lines in `syncNext` plus one read-side check each at :1996/:2135, and all ~16 services are
+fixed with no seam change and no per-service work. (2) It is not a new design — `uploadNext:2394-2421`
+has run this exact control flow since REQ-026 shipped, held by TEST-093, so A **converges** the two
+functions rather than adding a third idiom. (3) It is the only option resting on a locally provable
+invariant rather than a Qt delivery semantic — and where this project HAS measured that semantic
+(TEST-089), the measurement argues against B. C is the better six-month shape and is the right
+follow-up if this loop is reopened for other reasons; it is the wrong first move because it
+re-derives five prior DECs' guard placements in order to fix one branch.
+
+### Scope folded in by user decision (2026-08-13)
+- **S-R027-01 — the live REQ-026 escape.** Neither `syncNext:2046-2062` nor `uploadNext:2374-2389`
+  re-reads `aborted` between `openRideFile`'s nested loop and `compressRide`/`writeFile`, so an abort
+  during a PARSEABLE row's parse still transfers that ride. One line at each site. Folded in rather
+  than deferred because A's `continue` makes `syncNext` re-enter that path within the same frame, so
+  leaving it open would weaken A's own abort story.
+- **O-R027-01 — the discarded `readFile` bool**, closed on the READ side only, at :1996 and :2135.
+  Sound because every implementation returns false only on paths that started nothing and will emit
+  nothing (verified across LocalFileStore/Strava/Dropbox/Xert/SportTracks/CyclingAnalytics/PolarFlow/
+  Nolio/SixCycle/GarminConnect). **NOT extended to `writeFile`** (:2062, :2389): `LocalFileStore`
+  emits `writeComplete` AND returns false (`LocalFileStore.cpp:162-165`), so the same rule would
+  double-drive the loop. The asymmetry is recorded in the code comment (S-R027-02).
+- **S-R027-04 — the progress bar**, which does not advance for a failed row even in the branch that
+  already continues. One line per site; it is what makes clause (c) real.
+- **The batch-generation rider (S-R027-05).** Option A EXTENDS a pre-existing hazard from `uploadNext`
+  to `syncNext`: two clicks delivered inside one `processEvents()` burst make `downloadClicked` reset
+  `aborted=false, listindex=0` (:1923) and re-drive the loop, and a `continue`-shaped branch keeps the
+  STALE frame iterating alongside the new batch, after which `listindex-1` addressing labels the wrong
+  rows. A `return`-shaped branch stands the stale frame down. Because this fix is what extends the
+  hazard, the guard ships WITH it rather than as a follow-up: one `int batchGeneration` member,
+  incremented in `downloadClicked`'s start branch, snapshotted at loop entry, compared before each
+  `continue`. This also closes the existing `uploadNext` instance. **This is an orchestrator scope
+  call, recorded here rather than left to the builder** — it is in scope because Option A makes it so.
+
+### Deliberately NOT in scope
+- **B-R025-03** (the four uncounted `processEvents()` at :2012/:2144/:2246/:2303) stays its own queued
+  decision. Option A adds no uncounted `processEvents` and relies on no property of `blockingCallDepth`
+  beyond ">0 defers close", which is already true, so it does not depend on that incompleteness.
+- **No completion-tail string change.** Adding "N failed" to :2097/:2166/:2442 is user-visible text in
+  three tails shared by ~16 services and reopens translations. Visibility rests instead on the per-row
+  status cell, the now-advancing bar, and `successful < downloadtotal`. Orchestrator call; revisit if
+  a user reports the tail as confusing.
+
+### Alignment probe (run against the CURRENT tree; must fail NOW in the way that proves it will pass after)
+```
+grep -n 'continue;' src/Cloud/CloudService.cpp | sed -n '1,40p'    # expect NO continue in syncNext's parse branch now
+grep -c 'batchGeneration' src/Cloud/CloudService.h                  # expect 0 now, >=1 after
+sed -n '2046,2062p' src/Cloud/CloudService.cpp                      # expect NO 'aborted' read between openRideFile and writeFile now
+sed -n '2374,2389p' src/Cloud/CloudService.cpp                      # same, uploadNext
+grep -n 'store->readFile' src/Cloud/CloudService.cpp                # expect the bool DISCARDED at :1996 and :2135 now
+```
+
+### AMENDMENT 2026-08-13 — scope item 3 REMOVED from DEC-032, routed to DEC-033 (B-R027-01)
+The builder fired the stop-and-report hatch before writing any code, and it was right. This DEC's
+scope item 3 rested on the premise that `readFile` returning `false` means "armed nothing". That is
+**false for the majority implementation**: `GarminConnect::readFile` has eight `return false` sites
+and seven post a completion on the line above, via `Qt::QueuedConnection` posters (:765-770, :780-785)
+that land AFTER the return. Only :452 is silent — the one site the orchestrator sampled and
+generalised from. Building item 3 as specified would have double-driven the loop on ~11 integrations
+(synchronous bar-advance + continue, then the queued completion advancing again, labelling
+`child(listindex-1)` and re-driving), i.e. exactly the double-drive this DEC correctly forbade for
+`writeFile`, and a regression of DEC-022/023.
+**Item 3 is not fixable at the call site**: `readFile` returns a bare bool, and "returned false AND
+armed nothing" — the condition criterion (e) was phrased against — is never communicated to the
+caller. It needs a contract decision (**DEC-033**): widen `readFile` to a tri-state/out-param across
+~11 overrides; or make GarminConnect return true on the paths where it emitted (touching REQ-017/023
+and their tests); or a deferred watchdog that advances only if no completion arrived. Also folded into
+DEC-033: **B-R027-02**, the caller-allocated `QByteArray` (`syncNext:1985`, `downloadNext:2127`,
+freed only in `completedRead:2191/2219` / `failedRead:2307`) which the briefed branch would have
+leaked once per silent refusal, and **B-R027-03**, the requirement that any fixture return false
+AFTER queueing a completion rather than emitting nothing.
+**DEC-032 STANDS UNCHANGED for scope items 1, 2 and 4** — the in-loop `continue` (B-R026-01), the
+S-R027-01 abort re-read, and the batch-generation rider. None of the three depends on the `readFile`
+bool. Criterion clause (e) is DEFERRED to DEC-033 with REQ-027 clauses (a)-(d) and (f) unchanged.
+Two riders adopted from the builder's report: **B-R027-04** — `uploadNext`'s parse-failure branch
+gets the same `++downloadcounter` as `syncNext`'s, so the fix does not create a new divergence
+between the two loops it exists to converge; and **B-R027-05** — criterion (a)'s `downloading == false`
+is unreadable (private, `CloudService.h:466`) and is replaced by the tail-EXCLUSIVE proxies
+(`progressLabel` :2097, `downloadButton` :2086, checkboxes :2092-2095), **recorded as a proxy**.
+Scope item 4 is UNBLOCKED by this amendment: with item 3 gone, the `continue` sites are known and
+finite, so the generation guard's coverage is fully specified. The builder additionally argued from
+the code (not measured) that the double-click IS deliverable in the existing harness, so TEST-100 is
+writable and must NOT be recorded as a dead guard without a measurement.
+
+---
+
+## DEC-035 — Where the abort guard lives: co-locate it with the irreversible call (REQ-027)
+- Status: accepted (B — guard the irreversible call)
+- Reversibility: cheap (two guarded returns in one file; no schema, no interface, diff-sized revert)
+- Decided / last-reviewed: 2026-08-15
+- Serves: REQ-027(d); raised by the A3-R027b-F1 diagnosis
+- Constrained by: DEC-032 (the shape it converges on), DEC-030/DEC-031/DEC-025 (lifetime machinery — deliberately untouched), REQ-026 (re-entrant abort logic — untouched)
+- Dependents: TEST-105, TEST-106
+
+### The question
+`QApplication::processEvents()` is not a guaranteed drain — it is one non-blocking
+`g_main_context_iteration`, and whether a pending queued call is dispatched inside it is not a
+function of the queue's contents. Measured this week: same binary, same machine, outcome varied by
+QPA backend. So DEC-032's completion-slot guard is **best-effort by construction** — it stops the
+batch whenever the abort has landed and cannot when it has not.
+
+### Alternatives
+| Opt | Rel | Scal | Maint | BP |
+|---|---|---|---|---|
+| A accept best-effort, reword REQ-027(d) only | 3 — no regression risk, but leaves `downloadNext` with zero abort reads | 5 — zero marginal cost | 5 — no new code in an already guard-dense class | 2 — leaves the criterion asserting a guarantee the measurement contradicts |
+| **B co-locate the read with the irreversible call** | **4 — makes the "nothing pumps between check and call" invariant LOCAL, and on the download path adds the ONLY abort read in the loop** | **4 — one branch per row, same cost shape as the existing :2088 guard** | **3 — grows the guard count in a class already flagged for proliferation; needs comments + mutation-proof tests** | **4 — converges on the shape DEC-032 already accepted for the upload path rather than inventing a third idiom** |
+| C bounded drain loop at every `processEvents()` | 3 — improves the odds, guarantees nothing, adds a new failure mode | 4 — bounded per call but runs per row; real UI stall at high row counts | 2 — a cap value nobody can re-derive in six months | 2 — leans on the exact API Qt's docs say to avoid, and reopens DEC-031's frame-counting reasoning |
+
+### Why B
+**The asymmetry is the argument, and it was measured, not assumed.** Abort reads per function:
+`uploadNext` **2**, one of them immediately before its irreversible `writeFile` (S-R027-01, :2507);
+`syncNext` **2**, but NEITHER before its `readFile` at :2011; `downloadNext` **0 — none at all**.
+`downloadNext` issues a third-party download with no abort read anywhere in the function, and the
+only guard protecting it sits in a DIFFERENT function, across a return and a call. The production
+comment at :2367 already states this. So B is not merely "make an implicit invariant local" — on the
+download path it adds the first abort read that exists in that loop, closing the upload/download
+asymmetry that S-R027-01 closed on one side and never closed on the other.
+
+**What B honestly does NOT buy.** It does not stop an abort the user presses one microsecond later,
+and it does not close the `processEvents` delivery gap — nothing at this layer can. It buys locality
+(the invariant becomes self-evident at the call site instead of true-by-luck across two functions)
+and it forecloses a class of future silent regressions where someone inserts a pumping call between
+the last check and the transfer. Claiming more than that would repeat the exact mistake this wave
+just fixed in TEST-102's comment.
+
+### Cascade
+Touches `syncNext:2011` and `downloadNext:2225` only. Additive — does not replace DEC-032's
+`continue`/`batchGeneration` logic, does not touch DEC-030/031/025's lifetime machinery or REQ-026's
+re-entrant abort logic, so none of them is reopened and none needs re-verification. One fix serves
+all ~16 sibling services through the shared dialog; no per-service work, consistent with DEC-032's
+own binding rationale. Requires **TEST-105 and TEST-106**, mutation-proof, so the next maintainer
+cannot mistake these guards for redundant with the completion-slot checks a few lines away — this
+ledger has already had one wave where load-bearing guards were nearly deleted as "dead code" on the
+strength of a surviving mutant ([[LSN-053]]).
+
+### Recorded gaps
+- **Real-user click delivery is UNVERIFIED here.** How a click travels from the window-system socket
+  to `aborted=true` at Qt 6.8.2 could not be sourced or measured — the qpa private headers are not
+  installed. Every claim touching it is labelled unverified rather than asserted, per this ledger's
+  standing rule that an unsourced Qt semantic is worse than an admitted gap.
+- **Interrupting the in-flight request itself** — the only path that would change the real guarantee
+  rather than its locality — needs a cancel-capable contract across `CloudService` and touches all
+  ~16 siblings' implementations. Explicitly out of scope; named here so it is a deliberate omission
+  rather than an oversight.
+- **The scout's proposed REQ-027(d) rewording was checked and NOT made — it was unnecessary.** The
+  draft's open question asked whether (d) should change from "stops the batch" to "stops the batch
+  once delivered". Reading (d) verbatim, it already says *"an abort **delivered by** the
+  `processEvents()` inside the parse-failure branch stops the batch"* — the conditional is already
+  there and was there from the start. Amending it would have been churn dressed as rigour. Recorded
+  because a recommendation that survives into the ledger unchecked is how a criterion silently drifts.
+  What IS added is a new clause (f) for the download path this DEC newly guards.
