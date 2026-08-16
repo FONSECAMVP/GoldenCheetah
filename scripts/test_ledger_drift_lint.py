@@ -265,6 +265,301 @@ class LedgerDriftLintTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("T-015", out)
 
+    # ---------------------------------------------------------------------
+    # ORCH-015 — BINDING SCOPE. Added 2026-08-15 after the lint flagged four
+    # naturally-occurring STATE.md lines where the status word is in ASSIGNMENT
+    # SHAPE (so ORCH-010's adjectival test correctly does not suppress it) but its
+    # SUBJECT is not the id on the line: the id is an incidental citation that
+    # landed on the same wrapped line. Two scope boundaries are asserted:
+    #   (a) SENTENCE — an id in one sentence does not bind a status in the next;
+    #   (b) QUOTATION — a status inside a quoted/code span and an id outside it
+    #       (or inside a DIFFERENT span) are not part of the same assertion.
+    # The four fixture lines below are the real STATE.md lines, VERBATIM. They are
+    # embedded as string literals on purpose: STATE.md is live and its line numbers
+    # move, so nothing here may be keyed to a line number.
+    # Both directions are asserted: each prose line PASSES, and a near-miss variant
+    # of each — where the status genuinely DOES bind to the id — still FLAGS.
+    # ---------------------------------------------------------------------
+
+    # The four real false-positive lines, quoted verbatim from STATE.md (2026-08-15).
+    FP_QUOTED_MENTION_A = (
+        '   fails on `STATE.md:533`, where "GREEN" describes the TEST SUITE and '
+        '`DEC-030` is an incidental citation that landed')
+    FP_QUOTED_MENTION_B = (
+        'shape. `:591` is the cleanest: `47/47 STILL GREEN` is an assignment ABOUT '
+        'THE TEST SUITE while `DEC-030` is an')
+    FP_QUOTED_MENTION_C = (
+        'prose (`STATE.md:533`, where "GREEN" describes the suite and `DEC-030` is '
+        'an incidental citation on the wrapped line).')
+    FP_OTHER_SENTENCE_D = (
+        'dialog (DEC-030) and a loop that keeps iterating on `this`. **I deleted '
+        'that line myself: 47/47 STILL GREEN.** The')
+
+    # 22. PROSE PASSES: all four real STATE.md lines, each in its own fixture tree.
+    def test_real_state_md_false_positive_lines_pass(self):
+        for label, text in (
+                ("A", self.FP_QUOTED_MENTION_A),
+                ("B", self.FP_QUOTED_MENTION_B),
+                ("C", self.FP_QUOTED_MENTION_C),
+                ("D", self.FP_OTHER_SENTENCE_D)):
+            with self.subTest(line=label):
+                with tempfile.TemporaryDirectory() as td:
+                    mkfile(td, "STATE.md", text + "\n")
+                    code, out = run(td)
+                    self.assertEqual(code, 0, f"line {label} must not be flagged; got:\n{out}")
+                    self.assertEqual(out, "")
+
+    # 22b. And all four together in one file (they are all in STATE.md in reality).
+    def test_real_state_md_false_positive_lines_pass_together(self):
+        mkfile(self.root, "STATE.md", "\n".join((
+            self.FP_QUOTED_MENTION_A,
+            self.FP_QUOTED_MENTION_B,
+            self.FP_QUOTED_MENTION_C,
+            self.FP_OTHER_SENTENCE_D)) + "\n")
+        code, out = run(self.root)
+        self.assertEqual(code, 0, "real STATE.md prose must not be flagged; got:\n" + out)
+        self.assertEqual(out, "")
+
+    # 23. NEAR-MISS of A/C: strip the quotation marks so the status and the id sit in
+    #     the SAME (unquoted) region of the SAME sentence -> genuine drift, still flagged.
+    def test_near_miss_unquoted_status_binds_id_still_flagged(self):
+        mkfile(self.root, "STATE.md",
+               "the line where DEC-030 is recorded GREEN, an incidental citation\n")
+        code, out = run(self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("DEC-030", out)
+        self.assertIn("GREEN", out)
+
+    # 24. NEAR-MISS of B: id and status inside the SAME code span bind normally —
+    #     the quotation rule is same-region matching, NOT a blanket backtick amnesty.
+    def test_near_miss_id_and_status_in_same_quote_still_flagged(self):
+        mkfile(self.root, "STATE.md",
+               "the cleanest case is `DEC-030 STILL GREEN and unfixed` in the wrapped line\n")
+        code, out = run(self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("DEC-030", out)
+        self.assertIn("GREEN", out)
+
+    # 25. NEAR-MISS of D: same sentence instead of the next one -> still flagged.
+    def test_near_miss_same_sentence_binding_still_flagged(self):
+        mkfile(self.root, "STATE.md",
+               "**I deleted that line myself: DEC-030 is still GREEN.** The rest stands.\n")
+        code, out = run(self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("DEC-030", out)
+        self.assertIn("GREEN", out)
+
+    # 26. Sentence scoping must not become a hiding place: a real assignment in the
+    #     SECOND sentence of a multi-sentence line is still flagged.
+    def test_assignment_in_second_sentence_still_flagged(self):
+        mkfile(self.root, "STATE.md",
+               "The reaper landed and the UAF is gone. REQ-021 is DEFERRED to REQ-022.\n")
+        code, out = run(self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("REQ-021", out)
+        self.assertIn("DEFERRED", out)
+
+    # 27. Explicit assignment shape for a DEC (the `DEC-030 = <status>` form).
+    #     NOTE: "ACCEPTED" is deliberately NOT in STATUS_TOKENS (case 16 depends on
+    #     that), so the same SHAPE is asserted with a vocabulary token.
+    def test_dec_explicit_assignment_still_flagged(self):
+        mkfile(self.root, "STATE.md", "DEC-030 = GREEN\n")
+        code, out = run(self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("DEC-030", out)
+        self.assertIn("GREEN", out)
+        self.assertIn("decisions.md", out)
+
+    # 28. Real REQ / TEST / VAL status assignments are all still caught.
+    def test_req_test_val_assignments_still_flagged(self):
+        mkfile(self.root, "wiki/architecture.md",
+               "REQ-042 | download chain | GREEN |\n"
+               "TEST-017 harness - CLOSED\n"
+               "VAL-009 cross-layer check DEFERRED to the next wave.\n")
+        code, out = run(self.root)
+        self.assertEqual(code, 1)
+        lines = [ln for ln in out.splitlines() if ln.strip()]
+        self.assertEqual(len(lines), 3, out)
+        self.assertIn("REQ-042", out)
+        self.assertIn("TEST-017", out)
+        self.assertIn("VAL-009", out)
+
+    # 29. MIXED LINE: a quoted MENTION of a status plus a real unquoted assignment
+    #     on the same line -> the real one is still flagged (exactly once).
+    def test_quoted_mention_plus_real_assignment_flagged_once(self):
+        mkfile(self.root, "STATE.md",
+               'the word "GREEN" is vocabulary, but REQ-007 download chain GREEN\n')
+        code, out = run(self.root)
+        self.assertEqual(code, 1)
+        lines = [ln for ln in out.splitlines() if ln.strip()]
+        self.assertEqual(len(lines), 1, out)
+        self.assertIn("REQ-007", out)
+
+    # 30. A quoted span that contains BOTH id and status (a drift line being quoted
+    #     verbatim in a double-quoted string) still flags — same-region rule again.
+    def test_double_quoted_span_with_id_and_status_still_flagged(self):
+        mkfile(self.root, "WIKI.md", 'the row reads "REQ-007 download chain GREEN" today\n')
+        code, out = run(self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("REQ-007", out)
+
+    # 31. An id in one quoted span and a status in a DIFFERENT quoted span do not
+    #     bind (this is the shape of the real STATE.md lines, minimised).
+    def test_id_and_status_in_different_quotes_not_flagged(self):
+        mkfile(self.root, "STATE.md", 'the tokens `GREEN` and `DEC-030` are unrelated here\n')
+        code, out = run(self.root)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out, "")
+
+    # 32. TABLE ROW = ONE RECORD: scope boundaries must not apply inside a row. Modelled on
+    #     a real traceability.md row — a description cell that ENDS A SENTENCE before the
+    #     status cell. Without the table-row exception this drift would be missed.
+    def test_table_row_with_sentence_break_before_status_still_flagged(self):
+        mkfile(self.root, "STATE.md",
+               "| TEST-003 credentials-page contract | REQ-002 wizard-side "
+               "(in-flight disables Next). 9 tests, **GREEN**. |\n")
+        code, out = run(self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("TEST-003", out)
+        self.assertIn("GREEN", out)
+
+    # 33. TABLE ROW: a status cell written in backticks is still a status cell, not a
+    #     quoted mention (this is the exact LSN-008 drift shape lessons.md records).
+    def test_table_row_with_backticked_status_cell_still_flagged(self):
+        mkfile(self.root, "wiki/architecture.md",
+               "| REQ-004 | Per-athlete token storage | `_uncommitted_` |\n")
+        code, out = run(self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("REQ-004", out)
+        self.assertIn("_uncommitted_", out)
+
+    # 33b. Ambiguity must resolve toward FLAGGING: a sentence break INSIDE a quotation does
+    #      not split the quotation, so a drift line quoted verbatim is still caught whole.
+    def test_sentence_break_inside_quote_does_not_split_binding(self):
+        mkfile(self.root, "STATE.md", 'the row reads "REQ-007 landed. GREEN" verbatim\n')
+        code, out = run(self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("REQ-007", out)
+        self.assertIn("GREEN", out)
+
+    # 33c. Ambiguity must resolve toward FLAGGING: a quote character with no closer on the
+    #      line (a wrapped code span) opens NO region, so it cannot shield a real assignment.
+    def test_unbalanced_quote_opener_does_not_shield_assignment(self):
+        mkfile(self.root, "STATE.md",
+               "REQ-007 depends on `AtomicFile and the row still says GREEN\n")
+        code, out = run(self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("REQ-007", out)
+        self.assertIn("GREEN", out)
+
+    # 34. The table-row exception is keyed to the ROW shape, not to the presence of pipes:
+    #     a PROSE line that merely quotes a pipe-separated vocabulary is still scoped.
+    def test_prose_quoting_pipe_vocabulary_not_flagged(self):
+        mkfile(self.root, "STATE.md",
+               "> Status cells use the controlled vocabulary (DEC-015): "
+               "`drafted | GREEN | committed | CLOSED`\n")
+        code, out = run(self.root)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out, "")
+
+    # ---------------------------------------------------------------------
+    # ORCH-015(b) — PARENTHETICAL CITATION. Added 2026-08-15. ORCH-010 taught the
+    # lint the ATTRIBUTIVE position (status word + noun = prose); it never handled
+    # the PREDICATE position ("... is deferred."), where the status word ends the
+    # phrase and so reads as an assignment. Binding scope (ORCH-015a) does not reach
+    # it either: the id and the status are in the SAME sentence and the SAME
+    # quotation region. The discriminator here is the ID's role, not the status's:
+    # an id in PARENTHESES is a CITATION attached to the neighbouring noun phrase,
+    # never the subject of the sentence.
+    #
+    # The four lines below are the coordinator's ORCH-015(b) corpus, VERBATIM, with
+    # the required verdict for each. Line 2 is the trap: it is also a predicate
+    # construction and it MUST keep firing.
+    # ---------------------------------------------------------------------
+
+    PRED_CORPUS = (
+        # (label, line, must_fire)
+        ("1 parenthetical citation, predicate status",
+         "the reaper (DEC-031) is frame-counted and deferred.", False),
+        ("2 bare id in subject position",
+         "DEC-031 was ACCEPTED and its slice is GREEN", True),
+        ("3 attributive status (ORCH-010's case)",
+         "a frame-counted, deferred reaper (DEC-031) drains the loop", False),
+        ("4 parenthetical citation, bare predicate",
+         "the store leak (DEC-025) is deferred.", False),
+    )
+
+    # 35. The ORCH-015(b) corpus, each line in its own fixture tree.
+    def test_predicate_position_corpus(self):
+        for label, text, must_fire in self.PRED_CORPUS:
+            with self.subTest(line=label):
+                with tempfile.TemporaryDirectory() as td:
+                    mkfile(td, "STATE.md", text + "\n")
+                    code, out = run(td)
+                    if must_fire:
+                        self.assertEqual(code, 1, f"{label} MUST still fire: {text}")
+                    else:
+                        self.assertEqual(code, 0, f"{label} must not fire; got:\n{out}")
+
+    # 35b. Line 2's finding is the real one: the id and the status are both named.
+    def test_predicate_true_assignment_names_id_and_status(self):
+        mkfile(self.root, "STATE.md", "DEC-031 was ACCEPTED and its slice is GREEN\n")
+        code, out = run(self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("DEC-031", out)
+        self.assertIn("GREEN", out)
+
+    # 36. WHERE THE BOUNDARY SITS: one line, two ids outside an aside and one inside.
+    #     The BARE ids still bind; the PARENTHESISED citation does not. (REQ-021 is
+    #     reported too — it is the TARGET of "DEFERRED to", not the subject. That
+    #     over-report predates ORCH-015 and needs a different discriminator; it is
+    #     asserted here so the next person sees it rather than rediscovers it.)
+    def test_bare_id_binds_while_parenthesised_id_does_not(self):
+        mkfile(self.root, "STATE.md", "REQ-019 (see DEC-024) is DEFERRED to REQ-021\n")
+        code, out = run(self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("REQ-019", out)
+        self.assertNotIn("DEC-024", out)
+        self.assertIn("REQ-021", out)      # known over-report, documented above
+
+    # 37. NEAR-MISS: id and status INSIDE the same parenthetical bind normally — the
+    #     rule is about crossing the aside boundary, not about parentheses per se.
+    def test_id_and_status_inside_same_parenthetical_still_flagged(self):
+        mkfile(self.root, "STATE.md", "the reaper (DEC-031 DEFERRED) drains the loop\n")
+        code, out = run(self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("DEC-031", out)
+        self.assertIn("DEFERRED", out)
+
+    # 38. THE ASYMMETRY, and why it matters: a STATUS in a parenthetical predicates
+    #     about the phrase it is attached to, so "REQ-019 (DEFERRED)" — a real and
+    #     common drift shape — must still fire even though the tokens are separated
+    #     by the same parenthesis boundary as case 36.
+    def test_status_in_parenthetical_still_binds_outside_id(self):
+        mkfile(self.root, "wiki/architecture.md", "REQ-019 upload dialog (DEFERRED)\n")
+        code, out = run(self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("REQ-019", out)
+        self.assertIn("DEFERRED", out)
+
+    # 39. Ambiguity resolves toward FLAGGING: an unclosed '(' opens no aside, so a
+    #     mistyped or line-wrapped parenthesis cannot shield a real assignment.
+    def test_unbalanced_parenthesis_does_not_shield_assignment(self):
+        mkfile(self.root, "STATE.md", "the reaper (DEC-031 is DEFERRED\n")
+        code, out = run(self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("DEC-031", out)
+
+    # 40. The citation rule does not leak across a table row's cells: a row whose
+    #     PRIMARY id cell is bare still flags even though a later cell cites another
+    #     id parenthetically (modelled on a real traceability.md row).
+    def test_table_row_bare_primary_id_still_flags_with_parenthetical_citation(self):
+        mkfile(self.root, "STATE.md",
+               "| DEC-029 slice | Upload-dialog UAF (REQ-019) | GREEN |\n")
+        code, out = run(self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("DEC-029", out)
+
 
 if __name__ == "__main__":
     unittest.main()

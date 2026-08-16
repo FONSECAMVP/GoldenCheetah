@@ -12,6 +12,10 @@ words (a REQ row citing its governing DEC/DES/TEST; decisions.md cascade-notes).
 scans only the NON-canonical governance set and fails (nonzero exit) whenever a project-id
 token is paired, ON THE SAME LINE, with a lifecycle-status token in one of those files.
 
+"Paired" is narrower than "co-occurring": the status must be in ASSIGNMENT SHAPE (ORCH-010,
+see _is_adjectival) and must share a BINDING SCOPE with the id (ORCH-015, see _scope_map) —
+an id cited incidentally in a neighbouring sentence or a different quotation is not a pairing.
+
 It is deliberately HIGH-PRECISION (few false positives): the status-token list is short and
 high-signal, provenance/appendix blocks are exempt, and archival/quote files are skipped.
 
@@ -158,12 +162,21 @@ def in_scope(parts):
 
 # ----------------------------- token detection -----------------------------
 
+def _id_occurrences(line):
+    """Return [(id_token, id_class, start_offset)] for every id-token OCCURRENCE."""
+    out = []
+    for rx, cls in ID_PATTERNS:
+        for m in rx.finditer(line):
+            out.append((m.group(0), cls, m.start()))
+    out.sort(key=lambda t: t[2])
+    return out
+
+
 def find_ids(line):
     """Return list of (id_token, id_class) for every distinct id token on the line."""
     found = {}
-    for rx, cls in ID_PATTERNS:
-        for m in rx.finditer(line):
-            found.setdefault(m.group(0), cls)
+    for tok, cls, _start in _id_occurrences(line):
+        found.setdefault(tok, cls)
     return list(found.items())
 
 
@@ -202,18 +215,204 @@ def _is_adjectival(line, end):
     return m.group(1) not in STATUS_FOLLOWERS
 
 
+def _status_occurrences(line):
+    """Return [(status_token, start_offset)] for every ASSIGNMENT-SHAPED occurrence.
+
+    Occurrences that are merely adjectival (see _is_adjectival) are prose and are dropped."""
+    out = []
+    for tok, rx in STATUS_PATTERNS:
+        for m in rx.finditer(line):
+            if not _is_adjectival(line, m.end()):
+                out.append((tok, m.start()))
+    out.sort(key=lambda t: t[1])
+    return out
+
+
 def find_statuses(line):
     """Return the distinct status tokens ASSIGNED on the line (in STATUS_TOKENS order).
 
     A token that appears only adjectivally (see _is_adjectival) is prose and is not returned.
     A token appearing more than once counts if ANY occurrence is in assignment shape."""
-    out = []
-    for tok, rx in STATUS_PATTERNS:
-        for m in rx.finditer(line):
-            if not _is_adjectival(line, m.end()):
-                out.append(tok)
-                break
-    return out
+    assigned = {tok for tok, _start in _status_occurrences(line)}
+    return [tok for tok, _rx in STATUS_PATTERNS if tok in assigned]
+
+
+# --- Binding scope (ORCH-015, 2026-08-15).
+#
+# ORCH-010 fixed the SHAPE question ("is this word being used as a status at all?"). It left
+# the BINDING question open: scan_file still flagged a line whenever SOME id and SOME
+# assignment-shaped status appeared anywhere on it. Four naturally-occurring STATE.md lines
+# showed the gap — the status was genuinely an assignment, but its subject was NOT the id;
+# the id was an incidental citation that happened to land on the same wrapped line, e.g.
+#     "... on `this`. **I deleted that line myself: 47/47 STILL GREEN.** The"
+# (GREEN's subject is the TEST SUITE, one sentence away from the DEC-030 earlier on the line).
+#
+# The rule this encodes: an id and a status bind only when they are in the SAME BINDING SCOPE,
+# where a scope is the pair (sentence, quotation-region) the token sits in.
+#   (a) SENTENCE — a sentence-final punctuation mark (. ! ? ;) followed by whitespace or the end
+#       of the line ends the scope. A status in the NEXT sentence has a different subject.
+#   (b) QUOTATION — text inside a backtick code span or a quoted string is QUOTED MATERIAL: it
+#       is being cited, not asserted. A status inside a quotation binds only ids inside that
+#       SAME quotation. This is same-REGION matching, not a blanket amnesty for quoted text:
+#       "`DEC-030 STILL GREEN`" (both inside one span) still flags, and so does an unquoted
+#       assignment elsewhere on a line that also contains a quoted mention.
+#
+# EXCEPTION — a MARKDOWN TABLE ROW is ONE RECORD, so the whole row is a single scope and
+# neither boundary applies inside it. A ledger row is precisely "this id | ... | this status",
+# and the description cells in between routinely contain full sentences and code spans:
+#     "| TEST-003 | ... page-side (in-flight disables Next). 9 tests, **GREEN**. |"
+#     "| REQ-004  | ... | `_uncommitted_` |"
+# Scoping inside such a row would blind the lint to the single most common drift shape there is
+# (measured: 5 of the 49 real pairings in traceability.md are exactly this). Prose lines, where
+# the incidental-citation problem actually occurs, are never table rows.
+#
+# Direction of failure, as with ORCH-010, is deliberately "flags too much": boundaries are only
+# recognised in their unambiguous forms (a sentence break needs the trailing whitespace/EOL; an
+# unbalanced quote character opens nothing), so ambiguity keeps a pairing INSIDE one scope.
+SENTENCE_END_CHARS = frozenset(".!?;")
+
+TABLE_ROW_PREFIX = "|"
+BLOCKQUOTE_CHARS = "> \t"
+
+# Quotation openers -> their closer. Straight double quote and backtick are self-closing;
+# typographic quotes are directional. Single quotes/apostrophes are NOT here: "don't" would
+# open a bogus region.
+QUOTE_PAIRS = {'"': '"', "`": "`", "“": "”"}
+
+
+def _quoted_spans(line):
+    """Return [(start, end)] half-open spans of quoted/code material, outermost, non-nested.
+
+    An opener with no closer on the line is not a quotation and opens nothing."""
+    spans = []
+    i, n = 0, len(line)
+    while i < n:
+        closer = QUOTE_PAIRS.get(line[i])
+        if closer is not None:
+            j = line.find(closer, i + 1)
+            if j != -1:
+                spans.append((i, j + 1))
+                i = j + 1
+                continue
+        i += 1
+    return spans
+
+
+def _is_table_row(line):
+    """True if the line is a markdown table row (optionally blockquoted): one record."""
+    return line.lstrip(BLOCKQUOTE_CHARS).startswith(TABLE_ROW_PREFIX)
+
+
+def _scope_map(line):
+    """Return scope[i] = (sentence_index, quotation_region) for each character of `line`.
+
+    Region 0 is the unquoted body of the line; regions 1..n are the successive quoted spans.
+    Sentence breaks are only counted OUTSIDE quotations, so a quoted sentence break cannot
+    split a pairing that the quotation itself already holds together.
+    A table row is one record and therefore one scope (see the ORCH-015 note above)."""
+    if _is_table_row(line):
+        return [(0, 0)] * len(line)
+
+    region = [0] * len(line)
+    for k, (start, end) in enumerate(_quoted_spans(line), 1):
+        for i in range(start, end):
+            region[i] = k
+
+    scope = []
+    sentence = 0
+    for i, ch in enumerate(line):
+        scope.append((sentence, region[i]))
+        if region[i] == 0 and ch in SENTENCE_END_CHARS:
+            nxt = line[i + 1] if i + 1 < len(line) else ""
+            if nxt == "" or nxt.isspace():
+                sentence += 1
+    return scope
+
+
+# --- Parenthetical citation (ORCH-015b, 2026-08-15).
+#
+# ORCH-010 taught the lint the ATTRIBUTIVE position (a status word modifying a following noun,
+# "deferred reaper"). It never handled the PREDICATE position, where the status word ends the
+# phrase and so still reads as an assignment. Binding scope (above) does not reach that case
+# either — the id and the status are in the same sentence AND the same quotation region:
+#     "the reaper (DEC-031) is frame-counted and deferred."      <- prose, must NOT fire
+#     "the store leak (DEC-025) is deferred."                     <- prose, must NOT fire
+#     "DEC-031 was ACCEPTED and its slice is GREEN"               <- drift, MUST fire
+#
+# All three are predicate constructions, so the status side cannot separate them. The ID's
+# ROLE can: in the first two the id is in PARENTHESES. A parenthesised id is a CITATION —
+# an aside naming the decision that governs the neighbouring noun phrase — and a citation is
+# never the grammatical subject. In the third the id is bare and heads the clause.
+#
+# The rule is DIRECTIONAL, and the direction is the point:
+#   · an id INSIDE an aside does NOT bind a status outside it — the id is a citation;
+#   · a status INSIDE an aside DOES bind an id outside it — a parenthetical predicates about
+#     the phrase it is attached to, which is exactly the common drift shape "REQ-019 (DEFERRED)".
+# Inside one aside, tokens bind each other normally ("(DEC-031 DEFERRED)" fires).
+#
+# HONEST LIMIT: this closes the case where the id is a parenthetical citation, NOT the general
+# predicate problem. "the reaper for DEC-031 is deferred." and "DEC-031's reaper is deferred."
+# still fire, because separating a predicate's true subject from any other id in the same clause
+# needs a parser, and a heuristic that guessed would start MISSING drift such as
+# "DEC-031 is deferred." Erring toward flagging is the standing choice here (see ORCH-010).
+def _paren_spans(line):
+    """Return [(start, end)] half-open spans of OUTERMOST parenthetical asides.
+
+    Nested parens are absorbed into the outermost span. An unclosed '(' opens no aside, so
+    ambiguity keeps the tokens in one scope and the line keeps flagging."""
+    spans = []
+    depth = 0
+    start = -1
+    for i, ch in enumerate(line):
+        if ch == "(":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == ")" and depth:
+            depth -= 1
+            if depth == 0:
+                spans.append((start, i + 1))
+    return spans
+
+
+def _is_parenthetical_citation(id_at, status_at, spans):
+    """True if the id sits in an aside that the status is outside of (id = mere citation)."""
+    for start, end in spans:
+        if start <= id_at < end:
+            return not (start <= status_at < end)
+    return False
+
+
+def find_bound_pairs(line):
+    """Return distinct [(id_token, id_class, status_token)] where the status BINDS the id.
+
+    Binding requires BOTH:
+      · the id occurrence and the assignment-shaped status occurrence share a binding scope
+        (sentence + quotation region, or the whole row for a table row) — see _scope_map; and
+      · the id is not a parenthetical citation relative to that status — see above.
+    Any qualifying occurrence pair is enough."""
+    ids = _id_occurrences(line)
+    if not ids:
+        return []
+    statuses = _status_occurrences(line)
+    if not statuses:
+        return []
+
+    scope = _scope_map(line)
+    parens = _paren_spans(line)
+    pairs, seen = [], set()
+    for id_token, id_class, id_at in ids:
+        for status_token, status_at in statuses:
+            if scope[id_at] != scope[status_at]:
+                continue
+            if _is_parenthetical_citation(id_at, status_at, parens):
+                continue
+            key = (id_token, status_token)
+            if key in seen:
+                continue
+            seen.add(key)
+            pairs.append((id_token, id_class, status_token))
+    return pairs
 
 
 # ----------------------------- per-file scan -----------------------------
@@ -222,9 +421,9 @@ def scan_file(full_path, rel_path):
     """Yield Finding tuples for one in-scope file, honoring provenance-block exemptions.
 
     Only NON-canonical governance files reach here (canonical traceability.md/decisions.md are
-    out of scope), so ANY id-token + status-token co-occurrence on a line is a violation — no
-    per-class home comparison is needed. The finding message still names the id-class's
-    canonical home via CANONICAL_HOME so the fix is obvious ("move it to traceability.md")."""
+    out of scope), so ANY bound id/status pairing on a line is a violation — no per-class home
+    comparison is needed. The finding message still names the id-class's canonical home via
+    CANONICAL_HOME so the fix is obvious ("move it to traceability.md")."""
     out = []
     try:
         with open(full_path, "r", encoding="utf-8", errors="replace") as fh:
@@ -247,18 +446,9 @@ def scan_file(full_path, rel_path):
             in_provenance = True
             continue
 
-        ids = find_ids(line)
-        if not ids:
-            continue
-        statuses = find_statuses(line)
-        if not statuses:
-            continue
-
-        for id_token, id_class in ids:
-            canonical = CANONICAL_HOME[id_class]
-            for status in statuses:
-                out.append(Finding(rel_path, lineno, id_token, status,
-                                   id_class, canonical))
+        for id_token, id_class, status in find_bound_pairs(line):
+            out.append(Finding(rel_path, lineno, id_token, status,
+                               id_class, CANONICAL_HOME[id_class]))
     return out
 
 
