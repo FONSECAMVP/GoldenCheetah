@@ -247,6 +247,14 @@ bool storeDestroyed = false;
 bool storeClosed = false;         // TEST-073 — close() BEFORE delete, or not at all
 QByteArray* lastBuffer = nullptr; // the buffer syncNext preallocated
 
+// TEST-107 (REQ-028 probe) — WHICH ROW that buffer belongs to. syncNext and
+// downloadNext pass `curr->text(1)` as the remotename (CloudService.cpp:2074 /
+// :2331), so this names the row the in-flight read was issued for. The exact
+// counterpart of lastWriteName below, and needed for the same reason: a run that
+// delivers a completion BY HAND has to be able to hand back the name the
+// production loop actually asked for, rather than guess it from a row index.
+QString lastReadName;
+
 // TEST-090 (DEC-garmin-031) — the reaper's bar for every single-store run. See
 // the ReapLog comment above for what it records and why the two bools above
 // stopped being enough.
@@ -287,6 +295,7 @@ void reset()
     storeClosed = false;
     storeReap = ReapLog();
     lastBuffer = nullptr;
+    lastReadName.clear();
     openCalls = 0;
     openResumed = false;
     writeFileCalls = 0;
@@ -565,6 +574,7 @@ class BlockingStore : public CloudService
     {
         ++obs::readFileCalls;
         obs::lastBuffer = data;
+        obs::lastReadName = remotename; // TEST-107 — which row this buffer is for
 
         // ---- the user's click, then blockingDownload().
         fireActionThenBlock();
@@ -7843,6 +7853,352 @@ class TestGarminConnectSyncDialogClose : public QObject
         // read is allowed to happen, so this assertion cannot kill the mutant and
         // is not what this test rests on.
         QCOMPARE(out.rowStatus, QStringLiteral("Aborted"));
+    }
+
+  private slots:
+    // =====================================================================
+    // TEST-107 (REQ-028) — A MEASUREMENT PROBE, NOT A GUARD.
+    //
+    // WHAT THIS SLOT IS. It asserts what unmodified production DOES today, so
+    // that the design that follows is built on measured numbers rather than on
+    // an argument. It is deliberately NOT the shape of the rest of this file:
+    // every other slot here states a rule and would go red if production broke
+    // it, and this one states an OBSERVATION and would go red if production were
+    // FIXED. Whoever fixes A3-R027-F8 must change the two blocks marked
+    // "MEASURED, NOT DESIRED" below and should expect to - that is the point of
+    // recording them. Do not read a green run here as production being correct.
+    //
+    // THE TWO QUESTIONS.
+    //
+    // P1  What does QTreeWidgetItem::child(int) return out of range? Qt does not
+    //     document it, and it decides what A3-R027-F8 costs. After a Refresh
+    //     empties a list (CloudService.cpp:1527-1545 - takeChildren() then
+    //     delete), the three completion slots still address rows as
+    //     `child(listindex-1)` and dereference the result WITHOUT a null check
+    //     (completedRead :2388/:2437/:2444, failedRead :2525/:2532,
+    //     completedWrite :2717/:2724). Null means those sites are a crash; a
+    //     non-null result would mean a silently wrong row. Different defects,
+    //     different guards. Measured with no dialog at all - it is a fact about
+    //     Qt, and mixing it into a dialog run would only make it harder to read.
+    //
+    // P2  Is the STALE-COMPLETION route reachable, and if so what does it hit?
+    //     Start a batch, abort it mid-flight, restart it - downloadClicked bumps
+    //     batchGeneration (:1931) and resets listindex (:1941) - and then let the
+    //     OLD batch's completion arrive. `listindex` now belongs to the NEW
+    //     batch, so the question is which row the old completion lands on.
+    //
+    // HOW THE LATE COMPLETION IS MADE, and it needs no new fixture. BlockingStore
+    // already has `completeRead` (:707): with it false, readFile returns without
+    // notifying anyone, so the batch parks exactly as a real one waits on the
+    // network. The run then delivers each completion BY HAND through
+    // CloudService::notifyReadComplete (CloudService.h:145), which is the same
+    // `emit readComplete(...)` the store would have made, on the same direct
+    // connection - so completedRead runs in the same frame shape it always does.
+    // What changes is only WHEN, which is the whole subject.
+    //
+    // THE CONTROL IS LOAD-BEARING (LSN-047, LSN-050). The identical sequence
+    // WITHOUT the abort+restart delivers the same row's completion at the same
+    // point and must label THAT row. Without it a "the wrong row was labelled"
+    // reading could just as well be an apparatus that cannot tell rows apart.
+    //
+    // THE ROWS ARE .gcfail, for TEST-102's reason: FailingRideFileReader runs no
+    // nested event loop, so completedRead's uncompressRide cannot itself pump
+    // events and re-order anything this run depends on. It also means `ride` is
+    // always NULL, so `successful` (:2448) is never reached - this run measures
+    // `downloadcounter` (:2442), and says nothing about `successful`.
+    void probeWhichRowALateCompletionLabelsAfterARestart()
+    {
+        // ---- P1. Out-of-range indexing on a QTreeWidget's invisible root,
+        //      including a list emptied the way refreshClicked empties one.
+        bool populatedPastEndIsNull = false;
+        bool populatedNegativeIsNull = false;
+        bool emptiedChild0IsNull = false;
+        bool emptiedChildFarIsNull = false;
+        {
+            QTreeWidget tree;
+            tree.setColumnCount(2);
+            for (int i = 0; i < 3; i++)
+                new QTreeWidgetItem(tree.invisibleRootItem(), QStringList() << QString::number(i));
+            QTreeWidgetItem* root = tree.invisibleRootItem();
+            QCOMPARE(root->childCount(), 3);
+
+            populatedPastEndIsNull = (root->child(3) == nullptr);
+            populatedNegativeIsNull = (root->child(-1) == nullptr);
+
+            // refreshClicked's own idiom (CloudService.cpp:1527-1545).
+            foreach (QTreeWidgetItem* curr, root->takeChildren())
+                delete curr;
+            QCOMPARE(root->childCount(), 0);
+
+            emptiedChild0IsNull = (root->child(0) == nullptr); // the F8 index
+            emptiedChildFarIsNull = (root->child(7) == nullptr);
+        }
+
+        // ---- P1, MEASURED, NOT DESIRED. Qt bounds-checks and returns null, so
+        //      `curr->setText(...)` at the six sites listed above is a NULL
+        //      DEREFERENCE whenever listindex-1 is out of range - a crash, not a
+        //      mislabel. Recorded here so the guard that gets written is the
+        //      right kind of guard.
+        QVERIFY2(populatedPastEndIsNull, "child(childCount()) on a POPULATED tree was not null");
+        QVERIFY2(populatedNegativeIsNull, "child(-1) on a POPULATED tree was not null");
+        QVERIFY2(emptiedChild0IsNull, "child(0) on a tree emptied by takeChildren()+delete was not null");
+        QVERIFY2(emptiedChildFarIsNull, "child(7) on an emptied tree was not null");
+
+        // The status cell a completed-but-unparseable row ends up with. NOT the
+        // literal "Parse failure" the sync/upload loops write: completedRead's
+        // no-ride branch puts `errors.join(" ")` in the cell (:2456), so the
+        // string is FailingRideFileReader's own (:875). Named once here so the
+        // four comparisons below cannot drift apart from the fixture.
+        const QString verdict = QStringLiteral("TEST-096 unparseable activity");
+
+        // ---- P2, THE CONTROL. Same delivery, no restart in between.
+        const LateCompletionOutcome base = runLateCompletion(false);
+        QVERIFY2(base.timedOut == false, "control: the run never came back");
+        QCOMPARE(base.listCount, 3);
+        QCOMPARE(base.checkedRows, 3);
+        QVERIFY2(base.firstCompletionDelivered, "control: row 0's read was never issued, so nothing could complete");
+        QVERIFY2(base.lateCompletionDelivered, "control: row 1's read was never issued");
+        QCOMPARE(base.readFileCallsBefore, 2);
+        // The batch is parked on row 1 and row 1 is what completes: the verdict
+        // lands on ROW 1. This is the apparatus proving it can tell rows apart.
+        //
+        // Row 2 changes too, and that is not the completion: completedRead's
+        // tail calls downloadNext (:2489), which dispatches the next row and
+        // labels it "Downloading" (:2276) inside this same delivery. The two are
+        // told apart by the WORD, which is why the full lists are compared.
+        QCOMPARE(base.statusesBefore, QStringList() << verdict << "Downloading" << "");
+        QCOMPARE(base.statusesAfter, QStringList() << verdict << verdict << "Downloading");
+        QCOMPARE(base.rowsRelabelled, QList<int>() << 1 << 2);
+        QCOMPARE(base.barBefore, 1);
+        QCOMPARE(base.barAfter, 2);
+
+        // ---- P2, THE RUN. Abort, restart, and THEN the old batch's completion.
+        const LateCompletionOutcome out = runLateCompletion(true);
+        QVERIFY2(out.timedOut == false, "the run never came back");
+
+        // ---- THE PREMISES. Every one of these is what makes the numbers below
+        //      mean what they are read as.
+        QCOMPARE(out.listCount, 3);
+        QCOMPARE(out.checkedRows, 3);
+        QVERIFY2(out.firstCompletionDelivered, "row 0's read was never issued");
+        QVERIFY2(out.lateCompletionDelivered, "row 1's read was never issued, so there was nothing to deliver late");
+        QVERIFY2(out.sawAbortLabel, "the button was not labelled \"Abort\" while the batch ran, so downloadClicked() "
+                                    "could not have been the abort control");
+        QVERIFY2(out.abortTookTheAbortBranch,
+                 "downloadClicked() did not take its abort branch (CloudService.cpp:1910-1918)");
+        QVERIFY2(out.restartTookTheStartBranch,
+                 "the second click did not take downloadClicked's START branch (CloudService.cpp:1919-1935)");
+        // The old batch was suspended on row 1; the restarted batch is on row 0.
+        // If these were the same row the run would prove nothing.
+        QCOMPARE(out.oldBatchRowName, out.rowNames.value(1));
+        QCOMPARE(out.newBatchRowName, out.rowNames.value(0));
+
+        // ---- P2, MEASURED, NOT DESIRED.
+        //
+        // (i)  child(listindex-1) is NON-NULL on this path: the restart put
+        //      listindex back to 0 and the new batch's own dispatch raised it to
+        //      1, so the index is in range and nothing crashes.
+        // (ii) ...and the row it names is the row the NEW batch is transferring
+        //      (row 0), not the row the completion belongs to (row 1). So the
+        //      harm here is a SILENTLY WRONG ROW, not a crash: row 0 is given a
+        //      verdict for a download that is still in flight for it, and row 1 -
+        //      the row that actually completed - is never told. Row 1 still reads
+        //      "Downloading" afterwards, which is true again only by coincidence:
+        //      the same delivery's tail (see (iv)) re-dispatches it.
+        QCOMPARE(out.rowsRelabelled, QList<int>() << 0);
+        QCOMPARE(out.statusesBefore, QStringList() << "Downloading" << "Downloading" << "");
+        QCOMPARE(out.statusesAfter, QStringList() << verdict << "Downloading" << "");
+
+        // (iii) downloadcounter advances on the restarted batch's progress bar
+        //       for a completion that batch never issued: the restart zeroed it
+        //       (:1938) and no row of the new batch has completed, yet the bar
+        //       reads 1 of 3.
+        QCOMPARE(out.barBefore, 0);
+        QCOMPARE(out.barAfter, 1);
+        QCOMPARE(out.barMax, 3);
+
+        // (iv) THE SECOND DRIVER. completedRead's tail calls downloadNext()
+        //      (:2489), so the stale completion does not merely mislabel - it
+        //      hands the restarted batch's list to a second loop. readFile has
+        //      now been called four times for three checked rows, with row 0 and
+        //      row 1 each transferred twice and row 2 never reached.
+        QCOMPARE(out.readFileCallsBefore, 3);
+        QCOMPARE(out.readFileCallsAfter, 4);
+        QCOMPARE(out.readNames, QStringList() << out.rowNames.value(0) << out.rowNames.value(1) << out.rowNames.value(0)
+                                              << out.rowNames.value(1));
+    }
+
+  private:
+    // Everything one run of the probe leaves behind. NOT a slot.
+    struct LateCompletionOutcome
+    {
+        bool timedOut = false;
+        int listCount = 0;
+        int checkedRows = 0;
+        QStringList rowNames; // column 1 of every row, in row order
+
+        bool firstCompletionDelivered = false;
+        bool lateCompletionDelivered = false;
+        bool sawAbortLabel = false;
+        bool abortTookTheAbortBranch = false;
+        bool restartTookTheStartBranch = false;
+
+        QString oldBatchRowName; // the row whose completion is delivered late
+        QString newBatchRowName; // the row in flight when it is delivered
+
+        // Read either side of that delivery, so "which row changed" is an
+        // observation rather than an inference.
+        QStringList statusesBefore;
+        QStringList statusesAfter;
+        QList<int> rowsRelabelled;
+        int readFileCallsBefore = 0;
+        int readFileCallsAfter = 0;
+        int barBefore = 0;
+        int barAfter = 0;
+        int barMax = 0;
+        QStringList readNames; // every row readFile was called for, in order
+    };
+
+    // Three remote activities the Download tab lists and cannot parse. Today's
+    // date because refreshClicked filters on DATE only (:1613), and .gcfail for
+    // the reason the slot comment gives.
+    static QStringList threeUnparseableRemoteActivities()
+    {
+        const QString day = QDate::currentDate().toString(QStringLiteral("yyyy_MM_dd"));
+        return QStringList() << (day + QStringLiteral("_19_00_00.gcfail")) << (day + QStringLiteral("_20_00_00.gcfail"))
+                             << (day + QStringLiteral("_21_00_00.gcfail"));
+    }
+
+    // One run of the probe. `restartBetween` false is the CONTROL.
+    LateCompletionOutcome runLateCompletion(bool restartBetween)
+    {
+        obs::reset();
+        rideopen::reset();
+        ridefail::reset();
+        rideopen::blockingMs = 5;
+
+        LateCompletionOutcome out;
+        QEventLoop appLoop;
+
+        QMetaObject::invokeMethod(
+            this,
+            [&]() {
+                QWidget* owner = new QWidget;
+
+                BlockingStore* store = new BlockingStore(context);
+                store->entryNames = threeUnparseableRemoteActivities();
+                store->blockingMs = 5;
+                store->closeActionContext = qApp;
+                // GarminConnect's own setting (GarminConnect.cpp:102):
+                // uncompressRide's first guard rejects outright on the default.
+                store->downloadCompression = CloudService::none;
+                // THE WHOLE MECHANISM. readFile returns without notifying, so the
+                // batch parks and this run owns the timing of every completion.
+                store->completeRead = false;
+
+                CloudServiceSyncDialog* dialog = new CloudServiceSyncDialog(context, store);
+                dialog->setParent(owner, Qt::Dialog);
+                dialog->start();
+                dialog->open();
+                store->dialog = dialog;
+                store->dialogGuard = dialog;
+
+                // The DOWNLOAD tab: its column-1 header is "Workout Name"
+                // (CloudService.cpp:1100) and its status column is 5, not 7.
+                if (QTabWidget* tabs = dialog->findChild<QTabWidget*>())
+                    tabs->setCurrentIndex(0);
+                dialog->selectAllChanged(Qt::Checked);
+                QTreeWidget* list = rideListWithHeader(dialog, QStringLiteral("Workout Name"));
+
+                if (list != nullptr) {
+                    QTreeWidgetItem* root = list->invisibleRootItem();
+                    out.listCount = root->childCount();
+                    for (int i = 0; i < out.listCount; i++) {
+                        out.rowNames << root->child(i)->text(1);
+                        QCheckBox* check = qobject_cast<QCheckBox*>(list->itemWidget(root->child(i), 0));
+                        if (check != nullptr && check->isChecked())
+                            out.checkedRows++;
+                    }
+                }
+
+                QPushButton* watched = pushButtonWithText(dialog, QStringLiteral("Download"));
+                QProgressBar* bar = dialog->findChild<QProgressBar*>();
+
+                // ---- BATCH ONE. downloadNext dispatches row 0 and returns.
+                dialog->downloadClicked();
+                QByteArray* row0Buffer = obs::lastBuffer;
+                const QString row0Name = obs::lastReadName;
+                out.readNames << obs::lastReadName;
+
+                // Row 0 completes normally. completedRead's tail re-drives
+                // downloadNext, so the batch moves onto row 1 and parks there.
+                if (row0Buffer != nullptr) {
+                    out.firstCompletionDelivered = true;
+                    store->notifyReadComplete(row0Buffer, row0Name, QStringLiteral("Completed."));
+                }
+                QByteArray* row1Buffer = (obs::lastBuffer != row0Buffer) ? obs::lastBuffer : nullptr;
+                const QString row1Name = obs::lastReadName;
+                if (row1Buffer != nullptr)
+                    out.readNames << row1Name;
+                out.oldBatchRowName = row1Name;
+                out.newBatchRowName = row1Name; // ...unless a restart moves it
+
+                // ---- THE ABORT, AND THE RESTART BEHIND IT.
+                if (restartBetween) {
+                    out.sawAbortLabel = (pushButtonWithText(dialog, QStringLiteral("Abort")) != nullptr);
+                    dialog->downloadClicked(); // :1910-1918, aborted = true
+                    out.abortTookTheAbortBranch = (watched != nullptr && watched->text() == QStringLiteral("Download"));
+
+                    dialog->downloadClicked(); // :1919-1935, a NEW batch from row 0
+                    out.restartTookTheStartBranch = (watched != nullptr && watched->text() == QStringLiteral("Abort"));
+                    out.newBatchRowName = obs::lastReadName;
+                    out.readNames << obs::lastReadName;
+                }
+
+                if (list != nullptr)
+                    for (int i = 0; i < list->invisibleRootItem()->childCount(); i++)
+                        out.statusesBefore << list->invisibleRootItem()->child(i)->text(5);
+                out.readFileCallsBefore = obs::readFileCalls;
+                if (bar != nullptr) {
+                    out.barBefore = bar->value();
+                    out.barMax = bar->maximum();
+                }
+
+                // ---- THE LATE COMPLETION: batch one's row-1 read, arriving now.
+                if (row1Buffer != nullptr) {
+                    out.lateCompletionDelivered = true;
+                    store->notifyReadComplete(row1Buffer, row1Name, QStringLiteral("Completed."));
+                }
+
+                if (list != nullptr)
+                    for (int i = 0; i < list->invisibleRootItem()->childCount(); i++)
+                        out.statusesAfter << list->invisibleRootItem()->child(i)->text(5);
+                for (int i = 0; i < out.statusesAfter.count() && i < out.statusesBefore.count(); i++)
+                    if (out.statusesAfter.at(i) != out.statusesBefore.at(i))
+                        out.rowsRelabelled << i;
+                out.readFileCallsAfter = obs::readFileCalls;
+                if (out.readFileCallsAfter > out.readFileCallsBefore)
+                    out.readNames << obs::lastReadName;
+                if (bar != nullptr)
+                    out.barAfter = bar->value();
+
+                QTimer::singleShot(100, qApp, [owner]() { delete owner; });
+                QTimer::singleShot(200, &appLoop, &QEventLoop::quit);
+
+                bool* timedOutp = &out.timedOut;
+                QTimer::singleShot(10000, &appLoop, [timedOutp]() {
+                    *timedOutp = true;
+                    QCoreApplication::exit(1);
+                });
+            },
+            Qt::QueuedConnection);
+
+        appLoop.exec();
+        for (int i = 0; i < 50; ++i)
+            QApplication::processEvents(QEventLoop::AllEvents, 5);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+        return out;
     }
 };
 
