@@ -15,7 +15,16 @@ COUNTS: REQ 28(+NF) · DEC 35 · DES 14(+2) · TEST 106 alloc/105 built (T-098 a
 
 PHASE: Phase 2.2 — Garmin Connect integration. Per-REQ/DES/TEST/VAL status → traceability.md.
 
-CURRENT: **REQ-027 BUILT + VERIFICATION-GATE PASS 2026-08-14 (uncommitted); A3 RUNNING. DEC-032 accepted (Option A) on `garmin/req027-silent-stall`.** The scout's draft
+CURRENT: **THE WAVE IS CLOSED 2026-08-16 — committed AND verified from a clean extract (per-id lifecycle →
+traceability.md).** Three commits on
+`garmin/req027-silent-stall` (now 10 ahead of `master`, NOT merged, NOTHING PUSHED): `3c7fa7385` (feature — REQ-027 +
+DEC-032 + DEC-035), `b1e4c4fad` (ORCH-021, the ORCH-015 drift-lint repair that had been living in the working tree only
+and therefore was NOT what the gate ran), `ac5d5f67d` (docs record — DEC-035, A3-R027c, LSN-063/064). The clean-extract
+gate PASSED on `ac5d5f67d` — full evidence in NEXT_GATE. Our four files are committed; the 53 dirty entries left in the
+working tree are OTHER OWNERS' pre-session churn (Coach/Gui/CMake/vcpkg/skill), untouched and still theirs to land.
+BLOCKING: none. The next action is a user choice, not a gate.
+
+Prior (superseded — the state before the commits): **REQ-027 BUILT + VERIFICATION-GATE PASS 2026-08-14 (uncommitted); A3 RUNNING. DEC-032 accepted (Option A) on `garmin/req027-silent-stall`.** The scout's draft
 passed the Verification Gate and **found three things that changed the picture, all orchestrator-confirmed at their cited
 locations before anything was recorded:**
 **(1) S-R027-01 — a LIVE REQ-026 escape in code committed yesterday.** REQ-026 added the abort re-read to the
@@ -566,7 +575,39 @@ RESUME-NOTES (read if you are a NEW SESSION picking this up — written 2026-08-
    output.** A crashing process prints neither `FAIL!` nor `Totals:`, which is how B-R027-06 turned the strongest kill
    in the matrix into a reported "survivor".
 
-NEXT_GATE: **THE FEATURE IS COMMITTED — `3c7fa7385` 2026-08-16 (user said "run it"). Branch `garmin/req027-silent-stall`,
+NEXT_GATE: **WAVE CLOSED. The clean-extract gate PASSED on the COMMITTED tree 2026-08-16. Nothing is running, nothing is
+blocked, and the next action is the user's: pick the next item from the queue, or land/push the branch.**
+
+**CLEAN-EXTRACT GATE — PASS, run on `git archive HEAD` of `ac5d5f67d`, extracted to a scratch dir with its own fresh
+build tree:**
+**Evidence-vs-commit integrity was established BEFORE any build, not asserted after:** the extract was re-hashed with its
+own throwaway index and came back `36fddc199d294f4cc77fb7b1eaf461e5049593da` — byte-identical to `HEAD^{tree}`. Every
+number below therefore describes the committed tree and no other.
+configure + generate exit 0 (Qt 6.8.2, C++17, Release, Ninja) with **Garmin Connect: ON** and **Unit Tests: ON** (note
+`BUILD_TESTS` still defaults to **OFF**, so a gate that forgets it proves nothing about the tests) · **822/822 targets
+built, zero errors** · `src/GoldenCheetah` linked, **27,988,096 bytes** · **26 test executables** · **`ctest` 27/27**
+including BOTH registrations of the ASan target (`testGarminConnectSyncDialogClose` **and**
+`…_minimal`) · the wave's own ASan target **51/51 under THREE backends run directly with no ctest
+environment: ambient wayland (`WAYLAND_DISPLAY=wayland-0`) · `offscreen` · `minimal`** — exit 0 and **zero
+`SUMMARY: AddressSanitizer` lines** in all three, read from the process exit code and the SUMMARY grep rather than the
+test output ([[LSN-062]] honoured on the gate that used to be single-environment; the RESUME-NOTE-6 trap avoided).
+**The DEC-035 slots were confirmed BY NAME, not by the aggregate count** —
+`anAbortAlreadySetMustStopSyncNextIssuingTheDownload` (T-105) and
+`anAbortAlreadySetMustStopDownloadNextIssuingTheDownload` (T-106), alongside the five earlier abort slots.
+**Build completion was re-established, not read off a log line:** a second `cmake --build` returned `ninja: no work to
+do` with an UNPIPED exit 0 — the prior wave's `BUILD EXIT: 0` was `tail`'s status, not cmake's.
+**The governance mechanism was gated from the committed artifact too ([[LSN-064]], the ORCH-021 class):** run from
+inside the extract, BOTH copies of the drift lint — canonical `scripts/` and the installed `.claude/hooks/` copy
+pre-commit actually executes — exit **0** on the committed tree and are byte-identical (md5 `1b7b256b…`, the value the
+RESUME-NOTE predicted); the committed test suite runs **44/44**. So the repair is green in the place it failed.
+**Binary size differs from the working tree's 28,736,984 B and that is EXPECTED, not drift:** the working-tree build
+carries the Coach/Gui owner's uncommitted changes. The comparable number is the prior clean gate's 27,984,000 B at
+`4c3608e89`; this tree is 4,096 B larger, consistent with a two-guard production diff.
+**Pre-existing warning, not ours, not fixed:** `GarminConnect.cpp:60` still uses the deprecated
+`QDateTime::setTimeSpec(Qt::UTC)`. Cosmetic, predates this wave, left alone deliberately — same disposition as last wave.
+
+--- prior gate (resolved 2026-08-16 — the clean gate PASSED) ---
+NEXT_GATE-PRIOR-CLEANGATE: **THE FEATURE IS COMMITTED — `3c7fa7385` 2026-08-16 (user said "run it"). Branch `garmin/req027-silent-stall`,
 now 8 ahead of `master`, NOT merged, NOTHING PUSHED — pushing stays the user's call.** 4 files, +2244/-33:
 `src/Cloud/CloudService.{h,cpp}`, `unittests/Core/garminconnect/CMakeLists.txt` + `testGarminConnectSyncDialogClose.cpp`.
 **The wave landed as THREE commits, not two:** `3c7fa7385` (feature), **`b1e4c4fad` (fix(workflow): ORCH-021 — landing
