@@ -48,8 +48,22 @@ WIKI_FILENAMES = ("WIKI.md",)
 
 # ----------------------------- output helpers -----------------------------
 
+# Behavior modes via the QGDW_GUARD_MODE environment variable:
+#   "full"       (default) — deny clobbers, ask to register new unmapped artifacts
+#   "deny-only"  — only deny real clobbers (overwriting an existing path); every "ask"
+#                  becomes a silent passthrough so the dev loop is never interrupted for
+#                  merely-unregistered new files
+#   "off"        — disable the guard entirely (always passthrough)
+_MODE = os.environ.get("QGDW_GUARD_MODE", "full").strip().lower()
+
+
 def emit(decision: str, reason: str) -> None:
     """Print a PreToolUse decision and exit 0 (the documented success path)."""
+    if _MODE == "off":
+        sys.exit(0)
+    if decision == "ask" and _MODE == "deny-only":
+        # Suppress advisory asks in deny-only mode: stay silent, let normal flow proceed.
+        sys.exit(0)
     print(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
@@ -130,16 +144,101 @@ def in_map(path_tokens: set[str], rel: str) -> bool:
 
 import shlex
 
+# Verb regexes are matched against QUOTE-MASKED text (so a verb inside a quoted string —
+# e.g. a grep PATTERN containing "ln " — is DATA, never a command). Argument substrings are
+# then sliced from the ORIGINAL text at the same span, so quoted paths survive intact.
 MKDIR_RE = re.compile(r"\bmkdir\b([^\n;&|]*)")
 TOUCH_RE = re.compile(r"\btouch\b([^\n;&|]*)")
-REDIRECT_CREATE_RE = re.compile(r"(?<![0-9])>>?\s*([^\s;&|>]+)")  # `> file` and `>> file`
-TEE_RE = re.compile(r"\btee\b([^\n;&|]*)")            # tee writes/truncates each FILE arg
-CP_MV_RE = re.compile(r"\b(cp|mv)\b([^\n;&|]*)")       # last operand is the destination
-LN_RE = re.compile(r"\bln\b([^\n;&|]*)")               # last operand is the link name
+# capture the operator so >> (append, content-preserving) is distinguished from > (truncate)
+REDIRECT_RE = re.compile(r"(?<![0-9<>])(>>|>)(?!>)\s*([^\s;&|<>]+)")
+TEE_RE = re.compile(r"\btee\b([^\n;&|]*)")
+CP_MV_RE = re.compile(r"\b(cp|mv)\b([^\n;&|]*)")
+LN_RE = re.compile(r"\bln\b([^\n;&|]*)")
+
+_BACKUP_SUFFIXES = (".orig", ".bak", ".backup")
+
+
+def strip_heredocs(command: str) -> str:
+    """Remove heredoc BODIES (they are data, not commands). The line containing the
+    << marker is kept (its redirect target still gets scanned); everything up to and
+    including the terminator line is dropped."""
+    out, lines, i = [], command.split("\n"), 0
+    while i < len(lines):
+        line = lines[i]
+        out.append(line)
+        m = re.search(r"<<-?\s*['\"]?(\w+)['\"]?", line)
+        if m:
+            term = m.group(1)
+            i += 1
+            while i < len(lines) and lines[i].strip() != term:
+                i += 1
+            i += 1  # skip the terminator line itself
+            continue
+        i += 1
+    return "\n".join(out)
+
+
+def _mask_quoted(s: str) -> str:
+    """Replace the CONTENT of single/double-quoted regions with spaces (same length, so
+    match spans map 1:1 back onto the original). Quote chars themselves are kept.
+
+    Command substitutions are handled as their own parsing context. Per POSIX, the text
+    inside `$( )` is parsed as a NEW command: its quotes are independent of any enclosing
+    double quotes. A flat left-to-right scan gets this wrong — the first `"` inside the
+    substitution closes the outer double quote, quote state desyncs, and quoted DATA
+    downstream is then read as executable text. So on `$(` the current quote state is
+    pushed and parsing restarts unquoted; the matching `)` pops it back.
+
+    The substitution's delimiters are emitted as newlines (length-preserving, and `\\n`
+    already bounds every verb regex and chunk split). That keeps a genuinely executed
+    nested command scannable as its own chunk, while stopping an argument capture from
+    running past the closing paren.
+    """
+    out = list(s)
+    n, i, q, stack = len(s), 0, None, []
+    while i < n:
+        ch = s[i]
+        if q == "'":
+            # single quotes are literal: no escapes, no substitution
+            if ch == "'":
+                q = None
+            else:
+                out[i] = " " if ch != "\n" else "\n"
+            i += 1
+        elif q == '"':
+            if ch == "\\" and i + 1 < n:
+                out[i] = " "
+                if s[i + 1] != "\n":
+                    out[i + 1] = " "
+                i += 2
+            elif ch == '"':
+                q = None
+                i += 1
+            elif ch == "$" and i + 1 < n and s[i + 1] == "(":
+                stack.append(q); q = None
+                out[i] = out[i + 1] = "\n"
+                i += 2
+            else:
+                out[i] = " " if ch != "\n" else "\n"
+                i += 1
+        else:
+            if ch == "$" and i + 1 < n and s[i + 1] == "(":
+                stack.append(q); q = None
+                out[i] = out[i + 1] = "\n"
+                i += 2
+                continue
+            if ch == ")" and stack:
+                q = stack.pop()
+                out[i] = "\n"
+                i += 1
+                continue
+            if ch in ("'", '"'):
+                q = ch
+            i += 1
+    return "".join(out)
 
 
 def _tokens(argstr: str):
-    """Tokenize an argument string, honoring quotes; fall back to naive split."""
     try:
         return shlex.split(argstr)
     except ValueError:
@@ -147,59 +246,119 @@ def _tokens(argstr: str):
 
 
 def _positional(toks):
-    """Return only positional (non-flag) tokens."""
     return [t for t in toks if not t.startswith("-")]
+
+
+def _has_flag(toks, letter):
+    return any(re.fullmatch(r"-\w*%s\w*" % letter, t) for t in toks if t.startswith("-"))
+
+
+def _is_snapshot_restore(srcs, dest):
+    """cp/mv <anywhere>/<name>.orig <path>/<name> is the sanctioned snapshot-restore
+    pattern (LSN-032): restoring a file from its own backup copy is NOT a clobber. The
+    backup may live in a scratchpad dir (/tmp/.../X.cpp.orig -> src/.../X.cpp), so the
+    match is on BASENAME + backup suffix, not on sibling paths."""
+    if len(srcs) != 1:
+        return False
+    sb = os.path.basename(srcs[0])
+    db = os.path.basename(dest.rstrip("/"))
+    return any(sb == db + suf for suf in _BACKUP_SUFFIXES)
 
 
 def shell_targets(command: str):
     """
-    Yield (kind, raw_target) tuples that represent *creation/overwrite* intents.
-    kind in {"mkdir","mkdir_p","touch","redirect","tee","copy_dest","move_dest","link_dest"}.
-    Best-effort and conservative: for cp/mv/ln only the final operand (the destination) is
-    a clobber candidate; sources are never flagged.
+    Yield (kind, raw_target) tuples for creation/overwrite intents.
+    kinds: mkdir, mkdir_p, touch, redirect (truncating >), append (>> — content-preserving,
+    never a clobber), tee, tee_append (tee -a), copy_dest, move_dest, link_dest.
+    Quote-masked verb detection; original-text argument extraction; heredoc bodies ignored;
+    snapshot-restore (cp/mv from a .orig/.bak/.backup of the same path) exempted.
     """
-    for chunk in re.split(r"(?:&&|\|\||;|\n)", command):
-        chunk = chunk.strip()
-        if not chunk:
+    cmd = strip_heredocs(command)
+    masked = _mask_quoted(cmd)
+
+    # chunk on separators found in MASKED text (a ';' inside quotes is data) and slice
+    # both strings by the same spans so indices stay aligned.
+    bounds, prev = [], 0
+    for m in re.finditer(r"(?:&&|\|\||;|\n)", masked):
+        bounds.append((prev, m.start())); prev = m.end()
+    bounds.append((prev, len(masked)))
+
+    for a, b in bounds:
+        mchunk, ochunk = masked[a:b], cmd[a:b]
+        if not mchunk.strip():
             continue
 
-        mk = MKDIR_RE.search(chunk)
+        mk = MKDIR_RE.search(mchunk)
         if mk:
-            toks = _tokens(mk.group(1))
-            has_p = any(re.fullmatch(r"-\w*p\w*", t) for t in toks if t.startswith("-"))
+            toks = _tokens(ochunk[mk.start(1):mk.end(1)])
+            kind = "mkdir_p" if _has_flag(toks, "p") else "mkdir"
             for tok in _positional(toks):
-                yield ("mkdir_p" if has_p else "mkdir", tok)
+                yield (kind, tok)
 
-        tre = TOUCH_RE.search(chunk)
+        tre = TOUCH_RE.search(mchunk)
         if tre:
-            for tok in _positional(_tokens(tre.group(1))):
+            for tok in _positional(_tokens(ochunk[tre.start(1):tre.end(1)])):
                 yield ("touch", tok)
 
-        for rmatch in REDIRECT_CREATE_RE.finditer(chunk):
-            yield ("redirect", rmatch.group(1).strip("'\""))
+        for rm in REDIRECT_RE.finditer(mchunk):
+            target = ochunk[rm.start(2):rm.end(2)].strip("'\"")
+            yield ("append" if rm.group(1) == ">>" else "redirect", target)
 
-        te = TEE_RE.search(chunk)
+        te = TEE_RE.search(mchunk)
         if te:
-            # every positional arg to tee is written/truncated
-            for tok in _positional(_tokens(te.group(1))):
-                yield ("tee", tok)
+            toks = _tokens(ochunk[te.start(1):te.end(1)])
+            kind = "tee_append" if _has_flag(toks, "a") else "tee"
+            for tok in _positional(toks):
+                yield (kind, tok)
 
-        cm = CP_MV_RE.search(chunk)
+        cm = CP_MV_RE.search(mchunk)
         if cm:
             verb = cm.group(1)
-            pos = _positional(_tokens(cm.group(2)))
-            if len(pos) >= 2:  # need at least one source + a destination
+            pos = _positional(_tokens(ochunk[cm.start(2):cm.end(2)]))
+            if len(pos) >= 2 and not _is_snapshot_restore(pos[:-1], pos[-1]):
                 yield ("copy_dest" if verb == "cp" else "move_dest", pos[-1])
 
-        lm = LN_RE.search(chunk)
+        lm = LN_RE.search(mchunk)
         if lm:
-            pos = _positional(_tokens(lm.group(1)))
-            # `ln [opts] target link_name` -> link_name is the path that gets created
+            pos = _positional(_tokens(ochunk[lm.start(1):lm.end(1)]))
             if len(pos) >= 2:
                 yield ("link_dest", pos[-1])
 
 
 # ----------------------------- main logic -----------------------------
+
+def inside_root(ap: str, root: str) -> bool:
+    """True when `ap` IS the project root or a descendant of it.
+
+    Containment is decided before any policy is applied: a path that merely *looks*
+    like a project path (a temp snapshot, another checkout) is not governed by this
+    project's MAP or vendor rules.
+    """
+    try:
+        rel = os.path.relpath(os.path.normpath(ap), root)
+    except ValueError:              # e.g. different drives on Windows
+        return False
+    return rel == os.curdir or not (rel == os.pardir or
+                                    rel.startswith(os.pardir + os.sep))
+
+
+def is_vendor_path(ap: str, root: str) -> bool:
+    """Vendor territory is ROOT-ANCHORED: exactly `<root>/.claude/skills` or a
+    descendant of it — never an arbitrary absolute-path substring.
+
+    `/tmp/snap/.claude/skills/x.md` (outside the project) and
+    `<root>/scratch/.claude/skills/x.md` (inside, but not the vendor tree) are both
+    NOT vendor territory; `<root>/.claude/skills/...` still is.
+    """
+    if not inside_root(ap, root):
+        return False
+    try:
+        rel = os.path.relpath(os.path.normpath(ap), root)
+    except ValueError:
+        return False
+    vendor = os.path.join(".claude", "skills")
+    return rel == vendor or rel.startswith(vendor + os.sep)
+
 
 def main() -> None:
     try:
@@ -238,6 +397,32 @@ def main() -> None:
         rel = rel_to_root(fp)
         exists = os.path.exists(ap)
 
+        # CONTAINMENT FIRST: a target outside the project root is governed by neither
+        # this MAP nor the vendor rule, however its absolute path happens to read.
+        if not inside_root(ap, root):
+            passthrough()
+            return
+
+        # VENDOR TERRITORY: <root>/.claude/skills is replaced wholesale on skill updates.
+        # New project-owned files created there WILL be destroyed by the next update.
+        in_skill_tree = is_vendor_path(ap, root)
+        if in_skill_tree:
+            if not exists:
+                emit("deny",
+                     f"[anti-duplication guard] '{rel}' is inside .claude/skills/ — vendor "
+                     f"territory that is REPLACED wholesale on every skill update; a file "
+                     f"created here will be destroyed. Put project-owned tooling at a "
+                     f"project path (e.g. scripts/ or tools/ at the project root), register "
+                     f"it in the WIKI MAP, and reference it from there.")
+                return
+            else:
+                emit("ask",
+                     f"[anti-duplication guard] '{rel}' is a skill file — local edits are "
+                     f"LOST on the next skill update. Proceed only if intentional, and "
+                     f"record the change so it can be folded upstream (or copy the file to "
+                     f"a project path instead).")
+                return
+
         if tool in ("Edit", "MultiEdit"):
             passthrough()           # edits of existing files are always fine
             return
@@ -272,18 +457,34 @@ def main() -> None:
         # kinds that clobber/recreate an existing path (deny when target exists):
         clobber_kinds = ("mkdir", "touch", "redirect", "tee",
                          "copy_dest", "move_dest", "link_dest")
+        # append (>> / tee -a) preserves content: NEVER a clobber; only ask-to-register new
         # kinds that create a new file (ask-to-register when new + unmapped):
-        newfile_kinds = ("touch", "redirect", "tee", "copy_dest", "move_dest", "link_dest")
+        newfile_kinds = ("touch", "redirect", "append", "tee", "tee_append",
+                         "copy_dest", "move_dest", "link_dest")
 
         for kind, target in shell_targets(command):
             if not target:
                 continue
             ap = abspath(target)
             rel = rel_to_root(target)
-            # A path outside the project root is not governed by this MAP — leave it alone.
-            if rel.startswith(".." + os.sep) or rel == "..":
+            # CONTAINMENT FIRST: a path outside the project root is governed by neither
+            # this MAP nor the vendor rule — leave it alone.
+            if not inside_root(ap, root):
                 continue
             exists = os.path.exists(ap)
+
+            # VENDOR TERRITORY (root-anchored): creating anything new under
+            # <root>/.claude/skills is denied — the tree is replaced wholesale on skill
+            # updates and the file would be lost.
+            if (is_vendor_path(ap, root) and not exists
+                    and kind in ("mkdir", "mkdir_p", "touch", "redirect", "tee",
+                                 "copy_dest", "move_dest", "link_dest")):
+                emit("deny",
+                     f"[anti-duplication guard] '{rel}' is inside .claude/skills/ — vendor "
+                     f"territory replaced wholesale on skill updates; anything created here "
+                     f"will be destroyed. Use a project path (scripts/ or tools/ at the "
+                     f"project root) and register it in the WIKI MAP.")
+                return
 
             # cp/mv into an EXISTING DIRECTORY is legitimate (files land inside it),
             # not a clobber. Only an existing *file* destination is an overwrite.
