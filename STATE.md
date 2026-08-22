@@ -5,24 +5,622 @@
 
 TEAM: on (5 agents: scout, builder, adversary, validator, librarian)
 RIGOR: FULL (Phase 0 backfill 2026-07-11; project ran A0–A5 + STRIDE + per-slice CLV = FULL de facto)
-BUDGETS: WIKI ~13.5k chars/cap-ok (compacted 2026-08-05 from 18.3k; grew across the REQ-021 wave) · LSN active:57 guards:42 mech:2 ·
-  NOTE 2026-08-12: findings.md and STATE.md both grew substantially this wave (11 A3-R021 + 13 B-R021/B-R025 + 4 ORCH
-  + 2 S- findings; 6 new lessons). Neither is a hot read (index heads only), so no cap breach — but a librarian Job-3
-  compaction is worth CONSIDERING at the next phase close, not now. ·
-  decisions.md 107k + findings.md 109k + lessons.md 98k = COLD entry files, drilled by id, not hot reads
-  (the hot reads are their index heads). No cap breach; librarian Job-3 compaction NOT due.
-COUNTS: REQ 28(+NF) · DEC 35 · DES 14(+2) · TEST 106 alloc/105 built (T-098 allocated-unused) · VAL 17 · LSN 64 · ORCH-findings 21 · S-findings 7   (registries → WIKI.md; per-id status → traceability.md)
+BUDGETS: **RE-MEASURED 2026-08-22 (`wc -c`/4) — THE PRIOR "cap-ok / NOT due" VERDICT WAS STALE AND WRONG. WIKI.md
+  35,498 chars = ~8,874 tok against the 700-tok cap = 12.7x BREACH.** The prior line recorded ~13.5k chars from the
+  2026-08-05 compaction and was never re-measured across the REQ-027/REQ-028 waves; ~13.5k was ALREADY 3.4k tok = 4.8x
+  over, so the verdict was wrong when written and is now wrong by an order of magnitude. **librarian Job-3 compaction is
+  DUE, not "worth considering"** — see NEXT_GATE for the seam it runs in ([[LSN-078]]).
+  WHERE the breach lives: the MAP is fine (~50 lines, structural). **REGISTRIES is ~28k of the 35k** — the REQ/DEC/TEST
+  lines have absorbed per-id NARRATIVE the hub is supposed to POINT at (LSN-035 inverted: the hub restating what
+  prd.md/decisions.md/traceability.md own). Job-3's WIKI action here is registry rollup, not MAP directory-rollup.
+  DECIDX: **there is NO one-line-per-DEC index head in decisions.md at all** — the file opens straight into DEC-001's
+  full entry, and its preamble still points at the `state.md ## decs` table DEC-015 deleted. 37 DECs, no active/dormant
+  divider. The Tier-1 decision index the skill assumes is UNBUILT, so its 20-line/500-tok cap has never been measurable.
+  LSN: active:78 guards:62 mech:3 (the prior 57/42/2 was stale by 21 lessons). lessons.md 190k chars — cold entries,
+  index head is the hot read; per-op-tag guard counts not yet computed, so the ~10/op-tag cap is unverified.
+  COLD entry files (drilled by id, not hot reads — no cap applies): decisions.md 197k · findings.md 368k/308 rows ·
+  traceability.md 119k · STATE.md 341k/3177 lines (STATE is a HOT read but its bulk is superseded CURRENT-PRIOR/
+  NEXT_GATE-PRIOR blocks below the live head — an archive candidate at the same seam, not a Job-3 target).
+  DEFERRED BY USER DECISION (unchanged): bulk findings/lesson row compaction — 112 rows need explicit classification,
+  not automatic deletion. That deferral does NOT cover the WIKI REGISTRIES rollup or the missing decision index.
+COUNTS (**RECOMPUTED 2026-08-22 from the source-of-truth files, not copied — commands recorded**): REQ **28** + **11**
+  `REQ-NF-*` (`grep -oE "REQ-NF-[A-Za-z0-9]+" prd.md | sort -u | wc -l`) · DEC **37**, max DEC-037, next 038
+  (`grep -cE "^#+ *DEC-[0-9]{3}" decisions.md`) · LSN **78**, max LSN-078, next 079 (`grep -oE "LSN-[0-9]{3}" lessons.md
+  | sort -u`) — the earlier `LSN 77` was one short · VAL max **VAL-017**, next 018 · TEST allocated to **T-130**;
+  **T-119..T-129 are BUILT (in-source markers present, 2..16 each), T-130 is UNBUILT (zero markers)** — the conditional
+  allocation for ORACLE-F1 was never needed, which must be recorded as a resolved conditional per the TEST-076/[[LSN-022]]
+  precedent, not left dangling · **ASan target declares 73 test functions** (`./testGarminConnectSyncDialogClose
+  -functions | wc -l`), which does NOT reconcile with the `78/0` the prior verdict quotes — treat 78 as unsourced.
+  **Active residuals corrected 2026-08-22 (user disposition, cross-checked against findings.md rows):** B-R028-15 and
+  B-R028-16 CLOSED · B-R028-13 SUPERSEDED by A3-R028c-F7 (which re-diagnoses it as a coverage gap, not a reachability
+  gap — so clause (e)'s reachability exemption narrows) · B-R028-14 RATIFIED · A3-R028c-F3 RESOLVED · A3-R028c-F4..F7
+  OPEN · **A3-R028c-F8 is RESOLVED (2026-08-22) and was absent from the correction list** — it exists, it is the
+  process-audit finding derived from F2, and its row already carries the resolution.
+  Stale prior line, retained for provenance: REQ 28(+NF) · DEC 37 (037 ACCEPTED 2026-08-19, build QUEUED behind the F1/F2 builder — same file, and builders parallelise only on DISJOINT files) · DES 14(+2) · TEST 120 alloc/**120 built** (T-119/120 built 2026-08-19, ASan target 63→**65** both backends) (T-113..116 built 2026-08-18, ASan target 57→**61** both backends; TEST-107 rewritten, TEST-111/112 amended, TEST-087 apparatus repaired) (T-098 allocated-unused; T-107 built 2026-08-16, its verdict unchanged by the Phase-2 fix — which is the marker that clause (c) is open; T-108..T-112 built 2026-08-18, ASan target 52→**57**; per-id verdicts → traceability.md) · VAL 17 · LSN 77 · ORCH-findings 31 · S-findings 8 · **B-R028 16 · A3-R028 7 · A3-R028b 8 · A3-R028c 7**   (registries → WIKI.md; per-id status → traceability.md)
 
 PHASE: Phase 2.2 — Garmin Connect integration. Per-REQ/DES/TEST/VAL status → traceability.md.
 
-CURRENT: **THE WAVE IS CLOSED 2026-08-16 — committed AND verified from a clean extract (per-id lifecycle →
-traceability.md).** Three commits on
-`garmin/req027-silent-stall` (now 10 ahead of `master`, NOT merged, NOTHING PUSHED): `3c7fa7385` (feature — REQ-027 +
+CURRENT: **ORCH-033 REPAIRED AND THE CHECKPOINT IS COMMITTED — `e48f7d123` on `garmin/req028-row-lifetime`, 26 files,
+harness-only fix + the REQ-028 correlation slice. NOT PUSHED. `master` untouched at `82a0de52a`.**
+**Gate evidence, orchestrator-executed and re-collected AFTER pre-commit's clang-format rewrite** (the first commit
+attempt was REJECTED by the hook, which reformatted 472 lines of the test file — so the pre-rewrite evidence described a
+different file and was discarded, [[LSN-064]]): full ASan target **78 passed / 0 failed / 0 `SUMMARY: AddressSanitizer`,
+EXIT=0** under BOTH `QT_QPA_PLATFORM=offscreen` and `=minimal` with the pinned
+`ASAN_OPTIONS=detect_leaks=0:abort_on_error=0:halt_on_error=1`; `ctest -R testGarminConnectSyncDialogClose` **EXIT=0,
+2/2 Passed**; `ctest -L garmin-fast` **25/25**, which is what clears the [[LSN-056]] risk that the shared
+`stubs/ImportSeamStubs.cpp` breaks the 23 other targets. Committed blob md5 == tested worktree md5, verified.
+**THE 73-vs-78 "DISCREPANCY" I RAISED AT THE PREVIOUS GATE WAS MY ERROR, AND IT IS RESOLVED:** `-functions` reports
+**73 declared test functions**; QtTest's `Totals:` reports **78**, which additionally counts `initTestCase`,
+`cleanupTestCase` and data rows. Both numbers are correct and measure different things — the prior verdict's "78" was
+never unsourced. Reporting them separately, as the user required, is what settled it.
+**MUTATION (individually attributable, [[LSN-059]]):** removing ONLY the `notifyWriteComplete` self-guard reproduced the
+original signature — `heap-use-after-free … :726 in oracle::TransferOracle::checkConservation` — on both backends;
+restored from a `cp` snapshot, `cmp` clean, md5 back to `d8055ea3…`. Production `CloudService.{cpp,h}` md5-unchanged
+across the whole exercise.
+**THE USER'S DIAGNOSIS CORRECTED MINE, AND THE CORRECTION WAS LOAD-BEARING.** I reported the queued lambda as running on
+an already-dead store; in fact the store is ALIVE at entry and dies RE-ENTRANTLY inside `CloudService::notifyWriteComplete`
+— the base call invokes the completion slot directly, that slot pumps events, and the teardown deletes dialog-then-store.
+The crash frame at `:1222` is the statement AFTER the base call, which is the proof. A fix aimed only at my window would
+have left the real one open.
+**ALSO CORRECTED, a standing residual that is simply no longer true:** `clang-format` DOES exist in this environment —
+pre-commit ran it and rewrote the file. The note carried at `LAST_CLV`/[[LSN-012]] that "no `clang-format` binary exists
+in this environment" is stale, and the checksum-changes-at-commit-time effect it was used to explain is now DIRECTLY
+OBSERVED rather than reasoned.
+**Prior gate result, superseded by this repair:** COMMIT-SAFETY GATE 2026-08-22 — VERDICT: FAIL. NOTHING WAS STAGED, NOTHING WAS COMMITTED. The wave's recorded
+suite verdict is FALSIFIED BY EXECUTION → ORCH-033 (BLOCKING).** The ASan target aborts at test **32 of 73** on BOTH
+backends with a `heap-use-after-free` at `testGarminConnectSyncDialogClose.cpp:712` in the TEST ORACLE itself
+(`oracle::TransferOracle::checkConservation`), reading its own freed `this`: the oracle is a member of the store, the
+dialog destructor deletes the store (`closeAndDeleteStore`, `CloudService.h:325`), and the queued delivery lambda at
+`:5180` holds `dialog`/`store` as RAW pointers. Deterministic — 4/4 isolated runs, 2 per backend, identical signature.
+**Commands, exit codes, counts (orchestrator-executed, not read):**
+  `QT_QPA_PLATFORM=offscreen ASAN_OPTIONS=detect_leaks=0:abort_on_error=0:halt_on_error=1 ./testGarminConnectSyncDialogClose`
+  → EXIT=1, 31 PASS, 1 `SUMMARY: AddressSanitizer`, 23.6s. Same command with `QT_QPA_PLATFORM=minimal` → EXIT=1, 31 PASS,
+  1 ASan summary, 23.0s. `ctest -R testGarminConnectSyncDialogClose` → **EXIT=8, 0 of 2 passed** (both registrations FAIL).
+  `ninja testGarminConnectSyncDialogClose` → `no work to do`, EXIT=0 (binary 11:42:52 is NEWER than every source it
+  compiles, so this is the built tree, not a stale artifact).
+**THE REPORTED `minimal` HANG DID NOT REPRODUCE.** `GC_FUZZ_SEED=32` and `=447`, run in isolation against
+`randomClickSequencesMustNotBreakTheTransferInvariants` under the pinned ASAN_OPTIONS, PASS on BOTH backends in
+0.22–0.39s (4/4 runs, zero ASan output). What is real is the abort above, which kills the whole-binary run long before
+the fuzzer slot is reached — the most likely thing behind the "hang" report is a whole-binary or ctest invocation.
+**The count itself does not reconcile: the target declares 73 test functions, not the 78 the prior verdict quotes.**
+**Prior verdict, retained as the falsified claim ([[LSN-078]] save #2):** DEC-036 OPTION C IS BUILT AND VERIFIED: explicit write-operation identity, per-dispatch read/write records, row-free Refresh preservation, and post-suspension batch-generation checks. Evidence: full offscreen 78/0, focused offscreen/minimal 7/0 each, seeds 32/447 green on both backends, `garmin-fast` 25/0, GoldenCheetah build green, fresh attack-the-fix with no blockers, and incremental CLV PASS 9/9. TEST-126's final oracle refinement also passes 6/0 on each backend. The sort-route fix remains the following slice, so REQ-028 stays partial/open. The lossless compaction plan is verified; unsafe bulk findings/lesson compaction remains deferred.**
+
+CURRENT-PRIOR-REQ028-ORACLE: **THE INVARIANT ORACLE AND FUZZER ARE BUILT AND THEY WORK — TEST-126/127 INDEPENDENTLY REDISCOVERED A3-R028c-F2
+AND FOUND A THIRD USE-AFTER-FREE THAT SIX ADVERSARIAL CYCLES MISSED. Verification-Gate PASS. THE SUITE IS RED BY
+DESIGN and stays that way until the fixes land. Nothing is running.**
+**THE ACCEPTANCE CRITERION WAS MET WITHOUT BEING HANDED THE ROUTES.** The briefing described the two live defects by
+HARM only and forbade seeding the sequence. The fuzzer found:
+**(1) `GC_FUZZ_SEED=32` — INV-1 `outstanding<=1` violated**, both backends: *"2 transfers outstanding for the LIVE batch
+at once"*. That is A3-R028c-F2, rediscovered mechanically. The builder AUDITED rather than inferred it —
+`__sanitizer_print_stack_trace` names the second dispatch's frame as `downloadNext` ← `completedRead:3016`, a completion
+slot suspended in its own `processEvents()` re-driving the loop for the LIVE batch. **Orchestrator-reproduced in
+isolation: 59ms, deterministic.** Nine further independent INV-1 seeds in 1..446 (77, 128, 244, 271, 312, 336, 395, 402,
+410), some of them WRITE pairs.
+**(2) `GC_FUZZ_SEED=447` — the ASan oracle fired → ORACLE-F1, and it is a THIRD DEFECT, not a restatement of the other
+two.** Orchestrator-diagnosed, because the builder deliberately declined to chase the route and said so: the
+`listGeneration` guard IS correctly placed at `:2876`, above the abort branch at `:2891`, **and it passes** — `row` is a
+stack local copied from `inflight.row` before `uncompressRide`'s nested loop, so a Refresh frees the row and disarms the
+ticket (the amendment working as designed), a restart then re-stamps `batchListGeneration = listGeneration`, and the
+compare sees two EQUAL values while the local points at freed memory. **The ticket disarm cannot help: the pointer was
+copied out before it fired.** Third instance of one shape — a stale thing handed a freshly-valid generation stamp: the
+stale TICKET (A3-R028-F1), the stale RETIRED ENTRY (A3-R028c-F1), and now the stale STACK LOCAL.
+**THE NEGATIVE CONTROL IS WHAT MAKES THIS EVIDENCE AND NOT NOISE, and I verified it myself: all 71 pre-existing slots
+stay green with the oracle live** — including the three slots (TEST-115/124/125) that park an abandoned write across a
+restart ON PURPOSE — **and 436 of 446 seeds pass.** PASS-name lists diffed: not one existing slot changed verdict. Exactly one
+function fails, on both backends, and it is the fuzzer.
+**FILES: the test file ONLY.** Verified: zero oracle markers in `CloudService.{h,cpp}` or the stubs, and
+`CloudService.cpp` still md5 `716406f7…` — the builder was forbidden to touch production and did not.
+**RUNTIME: the oracle costs nothing measurable** (−130ms against a 48881ms baseline, noise); the fuzzer stops at seed 32
+today, so the suite still runs at ~49s/50s per backend.
+**ONE INVARIANT DROPPED HONESTLY RATHER THAN FAKED:** ticket conservation is UNOBSERVABLE — `inflight` and
+`retiredWrites` are private, the target declares no friendship, no accessor and no widget reflects them, and this slice
+was forbidden to touch production. **Not approximated.** Restart idempotence was RELOCATED (it is an action, not a
+passive observation) into the fuzzer's alphabet, ran 757 times, failed 0 — with `listindex` explicitly NOT covered.
+**And it tuned the fuzzer once and UNDID IT, leaving the record in the code:** a weighted action table quadrupled INV-1
+density and **stopped reaching the use-after-free class entirely** in 4096 seeds. The committed draw is uniform. That is
+the single most useful sentence in the report — density is not coverage.
+
+Prior (superseded): **THIRD A3 RE-CLEAR RETURNED 2026-08-21 — VERDICT: FINDINGS, TWO BLOCKING. THE WAVE IS NOT SHIPPABLE, AND THE
+NEXT ACTION IS A USER DECISION ON STRATEGY, NOT A DISPATCH. Nothing is running.**
+**SIXTH CONSECUTIVE ADVERSARIAL CYCLE ON THIS LEDGER TO FIND A REAL DEFECT BEHIND A GREEN SUITE** — this time behind
+71/71 on two backends with zero sanitizer output, in a wave that has now passed five Verification Gates. **Both new
+blocking findings are rooted in decisions I WROTE, not in builder error.**
+**A3-R028c-F1 (BLOCKING) — Abort → REFRESH → restart re-opens A3-R028b-F3 IN FULL.** `refreshClicked` disarms
+(`:1559`) and clears (`:1579`) but **never retires**; the only retire site is `downloadClicked`'s START branch
+(`:2081-2084`), orchestrator-confirmed. So DEC-037's scan has nothing to match and the stale completion is taken for the
+live one. Adversary-executed on TWO routes, including a **single-tab five-click route needing no name coincidence at
+all**: the abandoned batch's verdict lands on the LIVE row, the bar advances for work never done, the loop is re-driven,
+and the live upload's own completion is then swallowed. **DEC-037 justified that clear as "MANDATORY" on MEMORY-SAFETY
+grounds only — and it is right, TEST-125 proves it. Nobody asked what the clear COSTS.** The row must die; the NAME must
+not. → [[LSN-075]].
+**A3-R028c-F2 (BLOCKING) — TWO TRANSFERS, ONE TICKET, and it falsifies an invariant THIS LEDGER RECORDED AS MEASURED.**
+`completedWrite` consumes the ticket, THEN `processEvents()`, THEN re-drives; a restart delivered into that suspension
+arms a fresh ticket and the tail re-drives again. The `aborted` guard below cannot catch it — the restart just reset the
+flag — and **the three completion slots hold no `batchGeneration` snapshot** (read at only `:962`/`:1994`/`:2517`).
+Executed: two rows reading "Uploading" simultaneously. **`CloudService.h:783-789` claims "at most one transfer is
+outstanding per LIVE batch … Measured, not assumed" — the measurement was 61 slots that never drove a burst into a
+completion tail. [[LSN-074]]'s corollary about stating a measurement's SCOPE was captured in THIS WAVE and is exactly
+what just failed.** The drivers were given this guard for this two-click burst (`:2512-2517`); the slots were not.
+**The same shape sits verbatim on the READ path (`:2986-3016`) and `failedRead` (`:3103`) — which ARE on the
+GarminConnect route.**
+**FIVE MORE, non-blocking:** F3 the cap's uncovered eviction branch, whose recorded consequence UNDERSTATES the harm
+("degrades to exactly today's behaviour" IS the blocking harm F1 measures) · F4 DEC-037's disproof argues from a
+behaviour DEC-037 itself changed → [[LSN-076]] · F5 the retired row's lifetime proof is an unstated COUPLING (correct
+today by exhaustion over four mutators; nothing writes it down) · F6 `saveRide`'s suspension census misses
+`autoProcess("Save","ADD")` and `addRide()` · F7 the two untraced `saveRide` guards are a COVERAGE gap, not a
+reachability one — **drivable through the seam this wave already built**.
+**NINE REFUTATIONS, and they closed FOUR of my own open findings.** B-R028-15 refuted as a code defect — writing
+`result` is **strictly MORE compliant** with clause (c) than "Aborted", which would name the user's action on a
+different dead batch; the defect is in the RECORD (→F4). B-R028-16 refuted — TEST-115's flip is a measurement, not an
+argument, with three order-independent invariants still asserted beside it. B-R028-13 superseded — the keep-argument and
+the ORDERING are both correct and the guards are drivable (→F7). **B-R028-14 RATIFIED — the shipped DEC-035 trade is
+right, and the comment UNDERSELLS it: by `addRide()` the activity is already REGISTERED WITH THE ATHLETE, so the only
+thing lost on the stale path is the status cell.** Also refuted: that `retiredrow` can dangle on any reachable route
+(exhaustion over all four mutators), that the `:3336` return can strand a retired ticket, the empty-id allowance, and
+the writes-only scope. Tautology scan clean.
+
+Prior (superseded): **ALL THREE BLOCKING RE-CLEAR FINDINGS ARE NOW CLOSED AND ORCHESTRATOR-VERIFIED; the last of them was closed
+by the retired-ticket build (DEC-037) on 2026-08-20, Verification-Gate PASS on all three checks. A THIRD A3 RE-CLEAR IS IN FLIGHT; nothing else is running.**
+**EVIDENCE — orchestrator-EXECUTED:** **71/71 under BOTH backends, EXIT=0, zero `SUMMARY: AddressSanitizer`** (69 + 2
+new) · **ctest 27/27** · FILES matched `git status` · no slot dropped (PASS-name lists diffed: all 69 prior names
+present, exactly 2 new).
+**M-ORCH-V — the line DEC-037 called MANDATORY is mandatory, and I proved it rather than trusting the entry:** removing
+`retiredWrites.clear()` from `refreshClicked` ALONE manufactures exactly the use-after-free the decision warned of —
+`heap-use-after-free … QTreeWidgetItem::setText … completedWrite CloudService.cpp:3453`, freed at
+`refreshClicked:1607` — caught by TEST-125 on both backends. Restored `cmp`-clean (md5 `716406f7…`), 71/71 again.
+**THE BRIEFED PHASE-1 DEPENDENCY DID NOT EXIST, and the builder proved it instead of building it.** I briefed a
+completion-ORDER hook as "the single biggest cost" of this option. The harness already owns the timing
+(`completeWrite=false` makes the test body the sole emitter), and because the two transfers' ids are BYTE-IDENTICAL,
+"which arrived first" IS "which result string was emitted first". **So DEC-037's exhaustion argument over both arrival
+orders is MEASURED, not reasoned** — the clause (e) label the entry reserved is not needed. Tenth briefing premise this
+ledger's hatch has caught, and the fourth of mine about the EVIDENCE apparatus rather than the code.
+**Mutation, measured not predicted:** sites 2 and 4 each kill three slots (T-124, T-125, TEST-115); site 3 kills by
+process death under ASan on both backends; **the empty-id allowance SURVIVES and is labelled "reasoned, not traced";
+the cap's `removeFirst` eviction branch is executed by NO test and its policy is written down rather than claimed.**
+**TWO DISCLOSURES → B-R028-15 and B-R028-16, both self-reported.** **(15) The retired path ignores `aborted`** — an
+abandoned write arriving with `aborted == true` used to write "Aborted" to its row through the live ticket and now
+writes the service's string instead; no test covers the difference, and **DEC-037's own disproof cited that "Aborted"
+label as a reason not to adopt disarm-on-abort, so the entry argues from a behaviour this build may have changed.**
+**(16) TEST-115 changed in BOTH halves, not the one I briefed** — the different-row half flipped from "the stale write
+is SWALLOWED" to "it is ROUTED TO ITS OWN ROW". The builder re-argued it in place and named it as the thing to attack,
+conceding its own justification is an argument rather than a measurement.
+
+Prior (superseded): **TWO OF THE THREE BLOCKING RE-CLEAR FINDINGS ARE CLOSED AND VERIFIED 2026-08-19 (A3-R028b-F1 and F2);
+DEC-037's build is IN FLIGHT on the third. Nothing else is running.** Verification Gate PASS on all three checks.
+**EVIDENCE — orchestrator-EXECUTED across ALL THREE targets that compile the shared stub:**
+`testGarminConnectSyncDialogClose` **69/69**, `testGarminConnectImport` **4/4**, `testGarminConnectReadFailedConsumer`
+**4/4** — six runs, both backends, every EXIT=0, **zero `SUMMARY: AddressSanitizer` across all six** · **ctest 27/27** ·
+FILES matched `git status` exactly (4 files) · **slot accounting exact: 65 − 1 + 5 = 69**, the one dropped name being the
+old combined TEST-120 slot, correctly replaced by its two split halves (the A3-R028b-F5 fix).
+**[[LSN-056]] DISCHARGED PROPERLY:** the builder was told the stub file compiles into three targets and was told to COUNT
+rather than trust me — it did (`:1093/:1234/:1356`), armed the seam through a `std::function` that is **null by default
+and self-clears after firing**, and built and ran all three. The other two are unchanged.
+**M-ORCH-W:** removing the post-`saveRide` `listGeneration` compare ALONE reproduces `heap-use-after-free …
+QTreeWidgetItem::setText … completedRead CloudService.cpp:2921`, freed at `refreshClicked:1587`, EXIT=1. Restored
+`cmp`-clean (md5 `e1c82a38…`), snapshot deleted, 69/69 again.
+**TWO DISCLOSURES WORTH MORE THAN THE FIX, both against the builder's own interest.**
+**(1) → B-R028-13: two of the three new guards SURVIVE individual mutation** — the `BlockingCall` around `saveRide` and
+the `self.isNull()` bail after it, 69/0 both backends — **and shipped labelled "reasoned, not traced" instead of as
+coverage.** The keep-argument is sound and must not be lost: `self.isNull()` is NOT redundant with the compare below it,
+because that compare reads `listGeneration`, a MEMBER — if the dialog died inside `saveRide`, the compare would itself
+be a read of freed memory. Order matters and the suite does not prove it. Deleting them on the strength of surviving
+mutants would remove a real protection ([[LSN-063]]).
+**(2) → B-R028-14: DEC-035's ordering principle CANNOT be honoured at `saveRide`, and the builder refused to settle it
+alone.** DEC-035 puts the guard above the irreversible act; here the suspension is INSIDE it — the activity's `.json` is
+already on the athlete's disk before any guard can run. It guarded what remains (the label, `successful`, the loop),
+stated what is given up, and **declined the alternative — skipping `saveRide` entirely on a stale list, which SILENTLY
+DISCARDS a downloaded activity — because that is a decision, not a builder's judgement.** Same instinct that produced
+DEC-036 out of B-R028-03. **It needs explicit ratification rather than living in a comment.**
+**A3-R028b-F5 and F8 also closed:** TEST-120 split into two slots (so the upload arm's coverage no longer depends on the
+sync arm passing — demonstrated, since the two new driver guards each kill exactly one slot and neither kills the
+other's), and the false closed-world "five delivery points" claim restated in the test file AND in the production
+comments. **The replacement residual list is honestly incomplete BY DESIGN** — it names its own gaps rather than
+claiming an audit nobody performed.
+
+Prior (superseded): **A3 RE-CLEAR RETURNED 2026-08-19 — VERDICT: FINDINGS, THREE BLOCKING. THE WAVE IS NOT SHIPPABLE, AND THE NEXT
+ACTION IS A USER DECISION ON SCOPE, NOT A DISPATCH. Nothing is running.**
+**Fifth consecutive A3 on this ledger to find a real defect behind a green suite — this time behind 65/65 on two
+backends with zero sanitizer output, in code that had already passed three Verification Gates with every guard
+individually mutation-proven.** All three blocking findings were confirmed BY THE ORCHESTRATOR at their cited lines.
+**F1 (BLOCKING) — `saveRide()` is a suspension point nobody counted, and THE HARNESS'S OWN STUBS ARE WHY THE SUITE IS
+GREEN.** It sits at `:2811`, between `completedRead`'s last row-liveness compare (`:2786`) and its row writes
+(`:2812`/`:2815`); the first lifetime re-check is `:2830`, three writes too late. In production it reaches
+`autoProcess` (`:3267`) → `DataProcessor.cpp:221` → `FixElevation.cpp:295-300`, an UNTIMED `QEventLoop` on an HTTPS
+round trip. In the target, `autoProcess`/`setLinkedDefaults`/`addRide`/`RideCache::save` are all no-op stubs
+(`ImportSeamStubs.cpp:423/:400/:205/:394`), so `saveRide` is straight-line and non-pumping. **The `.gcblock` fixture DOES
+drive the ride-bearing branch — the coverage is real, and it covers a version of `saveRide` with the hazard surgically
+removed.** Gated on `configKeyAutomation == "Auto"` (default "Manual"), so it is a SUPPORTED-CONFIGURATION defect;
+the A3 said so rather than inflating it, and clause (a) admits no configuration exemption. → [[LSN-072]].
+**F2 (BLOCKING) — the F5 fix guards the four ENTRIES and misses the two RESUMPTIONS.** The parse-failure `continue`
+resumes across its own `processEvents()` (`:2428`, `:3078`) reading `self`, `aborted` and `batchGeneration` but **never
+`listGeneration`** — while the frame's own local `listgen` exists at `:2167` and is used one branch away at `:2356`. The
+loop then walks the rebuilt list to the tail and calls `rideCache->save()` at `:2493` for a destroyed batch: PROBE-B's
+harm, which was BLOCKING when first found. Not memory-unsafe (rows are re-fetched) — the A3 refuted its own UAF framing
+on severity discipline. **One line each, reusing an existing local; NOT a DEC problem.** → [[LSN-073]]: an ENTRY guard
+answers "was it replaced before I was CALLED", a resumption needs "while I was SUSPENDED".
+**F3 (BLOCKING) — DEC-036's write ticket keys on `remotename`, and TWO LISTS PRODUCE THE SAME KEY.** Both the Upload
+list's row and the Sync list's upload row carry `text(1) == ride->fileName` (`:1777`, `:1823`), and both arm sites
+compute the key identically (`:2393`, `:3053`); the compare at `:3204-3205` has nothing that discriminates the list. Four
+clicks, NO Refresh: Sync→Synchronize→Abort→Upload tab→Upload, and the abandoned sync write's completion is ACCEPTED
+against the live batch's row — mislabels it, counts work never done, and re-drives `uploadNext` while row 0's real write
+is still outstanding, **breaking the "at most one transfer outstanding per live batch" invariant DEC-036 rests on**
+(`CloudService.h:769-775`). **That invariant HAD been discharged by measurement — 0 overlaps across 61 slots with a
+working positive control — but every slot ran within ONE TAB. The measurement was sound and narrower than the claim it
+supported.** → [[LSN-074]]. Closing it is a **DEC-036 amendment** (a per-dispatch sequence number, or list identity in
+the key) — a mechanism change, therefore the user's call.
+**FIVE MORE, non-blocking:** F4 the `rideCache->save()` proxy is sound today and pinned by nothing (a third `save()`
+added anywhere not below a tail sentence is invisible to TEST-119/120) · F5 TEST-120's UPLOAD arm is gated behind the
+SYNC arm's success, so a sync failure silently hides the third driver's coverage · F6 the entry guards' `true` contradicts
+the header contract (no live defect — the A3 REFUTED my attack suggestion and downgraded it honestly) · F7 `refreshClicked`
+is not re-entrancy-guarded, so a Refresh inside a Refresh duplicates every row · F8 the test file's "THE FIVE DELIVERY
+POINTS" is a closed-world claim that three consecutive A3s have each falsified by one more entry.
+**EIGHT REFUTATIONS, and two of them killed MY OWN briefing's attack suggestions** — including the one that mattered
+most: "every fixture row is `.gcfail`, so the ride-bearing branch never runs" is FALSE, and the truth makes things
+worse, not better. It also refuted, with a call-site trace, that the ticket can ever hold a freed `inflight.row` at any
+of the three consumption sites — **the amendment is correct, and F1's hole is strictly downstream of the copy into the
+local.**
+
+Prior (superseded): **EVERY A3-R028 FINDING IS NOW CLOSED, AND THE WAVE IS BACK UNDER A FRESH ADVERSARY. `qgdw-adversary` IS IN
+FLIGHT on the A3 RE-CLEAR; nothing else is running.** A3-R028-F5 closed 2026-08-19 — Verification-Gate PASS on all three
+checks. Uncommitted on `garmin/req028-row-lifetime`, still 1 ahead of `master`.
+**THE FIX, and the builder's placement argument is the part worth keeping:** three ENTRY guards, one per driver
+(`syncNext:2146`, `downloadNext:2510`, `uploadNext:2965`), using **DEC-034's existing member and idiom** — no new member,
+no new concept, no signature change. It chose the driver entry over the three tails **by DEC-035's principle**: the
+irreversible call, the tail's `rideCache->save()`, is INSIDE the driver, so guarding at the tails would be the "different
+function, across a return and a call" arrangement DEC-035 exists to end — and the entry guard also covers the loop's
+DISPATCH, not just its tail, and covers all four callers rather than the three that exist today.
+**EVIDENCE — orchestrator-EXECUTED:** **65/65 under BOTH `offscreen` and `minimal`, EXIT=0, zero `SUMMARY:
+AddressSanitizer`** (63 + 2 new) · **ctest 27/27** · FILES matched `git status` · **no slot dropped — PASS-name lists
+diffed, all 63 prior names present, exactly 2 new** · **M-ORCH-Z**: removing `downloadNext`'s guard ALONE → 64/1,
+TEST-119 dead on its own criterion (`progressText.isEmpty()` FALSE), TEST-120 still green — individually attributable,
+matching the builder's three-mutant matrix (each guard kills exactly one arm, confirmed under both backends, **nothing
+survived**). Restored `cmp`-clean (md5 `be37a044…`), snapshot deleted, 65/65 again.
+**MY BRIEFING WAS WRONG A THIRD TIME, AND IN THE SAME PLACE EACH TIME → ORCH-031, [[LSN-071]].** It told the builder to
+"reuse the suite's existing `rideCache->save()` counter". **There is no counter** — orchestrator-verified: every hit in
+the test file is PROSE, and the stub at `stubs/ImportSeamStubs.cpp:394` is a non-virtual no-op shared by three targets.
+TEST-109 asserts clause (b) through a labelled PROXY (the tail's "…successfully" sentence, sound because `save()` is
+called at exactly two unconditional sites one line below it). The builder reused THAT and labelled it, rather than
+stopping or fabricating a count. **Three falsified premises in three consecutive dispatches — ORCH-028 (stripped the
+target's pinned sanitizer config), ORCH-030 (predicted the mutation matrix), ORCH-031 (imagined an apparatus) — and all
+three are about the EVIDENCE APPARATUS, not the code. The code claims were made from the file; the evidence claims were
+made from memory of the ledger.** The check is one grep per named apparatus.
+**RESIDUALS → B-R028-12, and (i) is the one to schedule:** the zero-`save()` claim is a PROXY, not a count, and holds
+only while `save()` stays unconditional and adjacent to that sentence; (i) **the F5 delivery window has an UNDRIVEN
+neighbour** — every fixture row is `.gcfail`, so `completedRead`'s ride-bearing branch never runs, and `saveRide()` sits
+in exactly the gap the fixture needs event-free, so if it pumps events a real user's parseable download lands the Refresh
+in a frame no test measures; (ii) "inside the tail's `processEvents`" is BOUNDED by two premises, not proven; (iii)
+`failedRead`'s tail is covered by construction but walked by no run.
+**B-R028-04 IS NOW PINNED BY TESTS** — TEST-119/120's second verdict asserts `buttonTextAtEnd == "Abort"` with
+`downloading` true, so whoever fixes the wedge must change those two slots. The builder flagged that rather than leaving
+a later wave to discover it.
+
+Prior (superseded): **THE A3'S BLOCKING FINDINGS ARE CLOSED AND VERIFIED 2026-08-19 — the invalidation amendment is BUILT and
+Verification-Gate PASS on all three checks. One A3 finding remains open (F5) and `qgdw-builder` is IN FLIGHT on it.**
+Uncommitted on `garmin/req028-row-lifetime` (still 1 ahead of `master`). Two files this run: `src/Cloud/CloudService.cpp`
+and the test file; `CloudService.h` is unchanged from the prior wave (+149, verified untouched). No API surface change.
+**EVIDENCE — orchestrator-EXECUTED:** rebuild exit 0 · **63/63 under BOTH `offscreen` and `minimal`, EXIT=0, zero
+`SUMMARY: AddressSanitizer`** (61 baseline + 2 new) · full **ctest 27/27** · FILES matched `git status` · **no slot
+silently dropped by the builder's `private:` insertion — verified by DIFFING THE PASS-NAME LISTS: all 61 prior names
+present, exactly 2 new** (the builder flagged that insertion for re-checking in its own notes, which is why I checked it
+by name rather than by count).
+**MY TWO MUTATIONS, and the first one CORRECTED MY OWN BRIEFING → ORCH-030:** **M-ORCH-X** — remove invalidation site 1
+(`downloadClicked`'s START branch) ALONE → **TEST-118 dies on its own criterion** (`'out.barAfter <= downloadtotal'
+returned FALSE — the bar advanced to 1 for a batch whose total is 0`) and **TEST-117 PASSES**, 62/1. My briefing predicted
+both would die; TEST-117's route contains the Refresh, so site 2 has already voided the ticket before the restart. It is a
+test of the PAIR. **M-ORCH-Y** — remove BOTH sites → **the use-after-free reproduces**
+(`heap-use-after-free … QTreeWidgetItem::setText`, freed at `refreshClicked CloudService.cpp:1575`), which is what proves
+the pair load-bearing against the blocking defect. Restored `cmp`-clean (md5 `ee505f93…`), snapshot deleted, 63/63 again.
+**THE BUILDER REPORTED THE MISMATCH INSTEAD OF RESHAPING TEST-117 TO SATISFY MY PREDICTION** — the briefing had fixed that
+geometry as "exactly the four clicks", so bending it would have been the easy and wrong move. Seventh premise this
+ledger's hatch has caught, and the first about EVIDENCE rather than code. **Site 2 alone kills nothing and is labelled
+"reasoned, not traced" in the source** rather than claiming coverage ([[LSN-063]]).
+**A3-R028-F3 closed by WIDENING with an honest rider:** TEST-087's fixture gained a second upload row and asserts
+`syncListCount >= 2` as an explicit premise — but the builder MEASURED that the widening buys no mutation-killer (removing
+`completedWrite`'s `self.isNull()` bail aborts on the REQ-027 `aborted` re-read first), and wrote that measurement into the
+slot instead of glossing it. **F4 closed:** guard kept, the untermin­ated "traced" claim withdrawn and relabelled.
+**B-R028-07 closed** as a side effect of site 1.
+**F5 IS STILL OPEN AND THE BUILDER REFUTED THE GUESS THAT THIS AMENDMENT CLOSES IT** — the harm is not ticket-mediated at
+all: all three slots consume the ticket far ABOVE their tail `processEvents()`, so the disarm is a no-op there, and the
+tail's re-drive is UNCONDITIONAL (`if (sync) syncNext(); else downloadNext();`) with `downloadNext` carrying no
+`listGeneration` guard of any kind. A Refresh delivered in that tail still walks the rebuilt list and calls
+`rideCache->save()` for a dead batch — which is REQ-028 clause (b) verbatim, and the same family as A3-R027-F3/PROBE-B
+that was BLOCKING when found. **T-119/T-120 allocated; dispatched 2026-08-19.**
+**Residuals the builder volunteered → B-R028-11:** TEST-117's assertion is STRUCTURAL (process death under the pinned
+`halt_on_error=1`), so without those `ASAN_OPTIONS` it degrades to its premises only; its REDs were **offscreen-only**;
+and "four ordinary clicks" is an ARGUMENT, not a measurement — the geometry calls slots directly, the file's own idiom,
+so nobody has proved a user reaches the abort branch through the real button (that is B-R028-04's territory).
+
+Prior (superseded): **A3-R028 RAN 2026-08-18 — VERDICT: FINDINGS, ONE BLOCKING, AND IT IS A DEFECT THIS WAVE'S OWN FIX CREATED.
+THE SLICE IS NOT SHIPPABLE AS IT STANDS. `qgdw-builder` DISPATCHED on the DEC-036 amendment; nothing else is running.**
+**A3-R028-F1 (BLOCKING) — a LIVE heap-use-after-free reachable in four ordinary clicks on the Download tab:**
+Download → Refresh → Abort → Download. The in-flight ticket is armed at four sites, consumed at three, and
+**invalidated NOWHERE**, while `batchListGeneration` IS re-synced at every batch start (`:1951`) — so a restart that
+**dispatches nothing** hands the STALE ticket a freshly-valid generation stamp, and the abandoned batch's completion
+then passes the DEC-034 compare, the ticket compare, and the abort read before writing through a row `refreshClicked`
+already freed. Adversary-executed: `heap-use-after-free READ of size 8 … QTreeWidgetItem::setText … completedRead()
+CloudService.cpp:2654`, freed at `:1542`, EXIT=141. **Orchestrator-confirmed STATICALLY at every cited line rather than
+accepted from the report:** `inflight.armed = true` at :2094/:2238/:2414/:2878, `= false` at ONLY :2544/:2748/:3015 —
+no invalidation in `refreshClicked`, the abort branch, or the START branch; `:1951` re-syncs the stamp; `:2654` is
+`row->setText(col, …)` with `row = inflight.row`.
+**THE PART THAT MATTERS MOST: OUR OWN UNCOMMITTED FIX RAISED THIS ROUTE'S SEVERITY.** Pre-DEC-036 it cost a MISLABEL
+through `child(listindex-1)`, which re-reads the rebuilt list and is therefore never dangling; post-DEC-036 it is a
+USE-AFTER-FREE through a held pointer. DEC-036's own comment at `:2596-2607` names that trade. **Replacing positional
+addressing with a stored pointer converts every unclosed lifetime route from wrong-data into memory-unsafe** →
+**[[LSN-068]]**.
+**A3-R028-F2 (BLOCKING) — the same root cause with NO Refresh**, so nothing is freed: after a restart that arms
+nothing the abandoned completion is ACCEPTED, relabels row 0 and advances the bar to 1 with `downloadtotal` 0, *after*
+the label already read "Downloaded 0 of 0 successfully". Clause (c) violated verbatim on a route the new slots do not
+drive.
+**WHY 61/61 UNDER TWO BACKENDS WITH ZERO SANITIZER OUTPUT DID NOT SEE IT, and this is the reusable part:** every
+abort/restart fixture in the file **restarts onto a CHECKED row**, so the restart always overwrites the ticket. The
+defect needs a restart that arms NOTHING. **Every guard was individually mutation-proven and every mutant died — the
+defect was in a site that does not exist**, which is precisely what mutation cannot measure.
+**FOUR MORE FINDINGS, none blocking:** **F3** TEST-087's repaired premise is VACUOUS (`writeFileCalls == 1` over a
+ONE-row fixture — it holds whether or not the slot stands down; this is exactly the question B-R028-09 asked the A3 to
+judge, and the answer was "the weaker reading") → [[LSN-069]] · **F4** DEC-036's claim that `completedWrite`'s `isWrite`
+clause is TRACED does not terminate — `replyName()` never returns `""` for a write reply (every `writeFile` calls
+`mapReply` first, 20 sites) and the only empty-id emitter, `LocalFileStore`, emits SYNCHRONOUSLY; keep the guard,
+correct the comment → [[LSN-070]] · **F5** the completion slots' TAIL `processEvents()` can deliver a Refresh with no
+re-check before the loop is re-driven (reasoned, not executed — the A3 labelled it so itself) · **F6** NO test anywhere
+drives `LocalFileStore`, the service whose synchronous-completion geometry DEC-036 explicitly rests on · **F7** signed-int
+`++` is UB at INT_MAX, not the "wraparound" the comment claims.
+**THE A3 ALSO REFUTED FOUR THINGS, which is why its blocking findings are credible:** the B-R028-09 repair fabricates
+nothing any more (full sweep of every completion emission in the suite — no fabricated completion remains anywhere);
+the write-side buffer/id audit holds (20 `mapReply` sites); all seven `child(listindex-1)` dereferences really are gone;
+and the read-path `armed` disarms are correctly classified "reasoned, not traced". Tautology scan clean.
+
+Prior (superseded): **DEC-036 BUILT + VERIFICATION-GATE PASS (all three checks) 2026-08-18 — REQ-028 ACCEPTANCE CLAUSE (c) IS
+CLOSED, AND THE PART THAT WAS "NOT DELIVERABLE" A DAY AGO NOW HAS AN EXECUTED TEST ASSERTING THE DESIRED NUMBERS.**
+Uncommitted on `garmin/req028-row-lifetime` (still 1 ahead of `master`, HEAD `da455c79e`). Three files, all declared:
+`src/Cloud/CloudService.{h,cpp}` and `unittests/…/testGarminConnectSyncDialogClose.cpp` (+2556/-194 cumulative for the
+whole REQ-028 wave). **No public API change** — `struct InFlight` and the `inflight` member are private; no signature,
+no service, no `connect`, no new `tr()` string.
+**EVIDENCE CHECK — PASS, every number orchestrator-EXECUTED:** rebuild exit 0 · ASan target run DIRECTLY under **BOTH
+`offscreen` and `minimal` with the target's PINNED `ASAN_OPTIONS`** — **61/61 each, EXIT=0, zero `SUMMARY:
+AddressSanitizer` lines** (57 + 4 new, the four confirmed BY NAME) · full **ctest 27/27** · FILES claim matched
+`git status` exactly (every other dirty entry predates the run; governance-file mtimes predate it too) · **all seven
+`child(listindex-1)` sites verified GONE**, only two prose mentions left · the three driver loops verified STILL
+positional, which is the scope line holding.
+**MY OWN TWO MUTATIONS, individual and separately attributable ([[LSN-059]]):** **M-ORCH-1** — neuter `completedRead`'s
+token compare ALONE → **exactly ONE slot dies**, TEST-113, on the CRITERION's own assertion (`readFileCallsAfter 4 != 3`,
+60 passed/1 failed). **M-ORCH-2** — drop arm site 4/4 (`uploadNext` write) ALONE → TEST-114 dies on **its** criterion
+(`writeFileCalls 1 != 2`), which independently confirms the builder's own repair of a weak-kill it had disclosed
+(ARM4 had first died only on other slots' PREMISE assertions, so it ADDED a healthy-upload run to get a criterion kill).
+Restored `cmp`-clean (md5 `5474ac95…`), snapshot deleted, 61/61 again.
+**GOAL AUDIT — PASS.** TEST-113 encodes clause (c) **verbatim**, both halves quoted in-slot, and guards it with premise
+assertions (`readFileCallsBefore == 3`; the two batches on DIFFERENT rows) so it cannot pass vacuously. TEST-107's
+defect-pinning numbers are GONE — it was **rewritten, not retired**, and the builder's reason is right: its P1 half is a
+fact about Qt that no fix here can change, while its P2 half now lives in TEST-113 asserting the DESIRED values.
+**BOTH INVARIANTS DEC-036 REFUSED TO ASSUME WERE DISCHARGED BY MEASUREMENT, NOT ARGUMENT.** The
+`readComplete`-returns-the-caller's-buffer contract was audited across all 11 implementations and is now WRITTEN DOWN at
+`CloudService.h:145` beside the `readFailed` one. ≤1-outstanding was INSTRUMENTED across all 61 slots — 0 overlaps under
+both backends — **with a positive control proving the probe was reached** (dropping the batch-generation clause makes it
+fire exactly 4 times, the four abort+restart runs). A single ticket is sufficient; no set needed.
+**FOUR RESIDUALS, ALL SELF-DISCLOSED, NONE BLOCKING — and B-R028-07 is the one that matters:** the ticket is armed at
+four dispatches and consumed at three slots but is **never DISARMED on abort**, so a stale completion delivered inside
+`openRideFile`'s nested loop (before the restart re-arms) still matches and re-drives the loop. It labels the CORRECT
+row, so (c)'s labelling half holds, but it is a second driver. **The fix is plausibly one line at a FIFTH site DEC-036
+does not name — governance, not improvisation, and the builder refusing to invent it is the correct call.** Also:
+**B-R028-08** five guard clauses survive individual mutation, so clause (e) is NOT fully met and the builder said so
+(`completedWrite`'s `isWrite` is TRACED, load-bearing, and must not be deleted on the strength of a surviving mutant —
+[[LSN-063]]) · **B-R028-09** TEST-087's apparatus was FABRICATING completions production now correctly swallows, and its
+premise assertion was altered to repair it · **B-R028-10** ABA on the raw-address read token.
+**B-R028-06 CLOSED BY CONSTRUCTION** (the seven sites are gone). **B-R028-05 HALF CLOSED** — labelling fixed, driver
+half open by user decision. **B-R028-04 untouched and queued.**
+**ORCH-028 — MY OWN BRIEFING MANDATE WAS WRONG AND THE BUILDER CAUGHT IT.** "Run with no ctest env override" stripped
+`ASAN_OPTIONS=detect_leaks=0`, which this target PINS at `unittests/Core/garminconnect/CMakeLists.txt:1457/:1486`
+because it leaks by design. Verified by execution: with no options the target exits **1** with `126280 byte(s) leaked in
+331 allocation(s)`; with the pinned options, 61/61 exit 0. → **[[LSN-067]]**: naming the ONE variable that is the gate's
+DIMENSION and keeping everything the target deliberately pins. Second consecutive dispatch whose mandate was corrected by
+the agent executing it ([[LSN-065]] was the first).
+
+Prior (superseded): **REQ-028 PHASE 2 BUILT 2026-08-18 — VERIFICATION GATE: EVIDENCE PASS, GOAL AUDIT **PARTIAL**. The guards are
+real and load-bearing; **acceptance clause (c) is NOT delivered, and the builder says it is not DELIVERABLE under
+DEC-034.** Nothing is running. The next action is a USER DECISION, not a gate.**
+**The work is sound and the shortfall was self-disclosed, not discovered.** Uncommitted on `garmin/req028-row-lifetime`
+(still 1 ahead of `master`, HEAD `da455c79e`). 3 files: `src/Cloud/CloudService.{h,cpp}` (+132/-1, +47/-0) and
+`unittests/…/testGarminConnectSyncDialogClose.cpp` (+1133/-9). Two new PRIVATE members (`listGeneration`,
+`batchListGeneration`), six compares, no public API change.
+**EVIDENCE CHECK — PASS, every number orchestrator-EXECUTED, not read from the report:** rebuild unpiped **exit 0**
+(`ninja: no work to do`) · ASan target run DIRECTLY with no ctest env under **BOTH `offscreen` and `minimal`** —
+**57/57 each, EXIT=0, zero `SUMMARY: AddressSanitizer` lines** (baseline 52 + 5 new) · full **`ctest` 27/27** · the five
+new slots confirmed **BY NAME**, not by the aggregate · drift lint exit 0 on both copies · scope clean (zero REQ-028
+content in `MainWindow.cpp`/`src/CMakeLists.txt`/root `CMakeLists.txt`, whose mtimes predate the run) · **dirty
+accounting reconciles exactly 60 → 63 as the three builder files** · zero `.orig` residue from me.
+**MY OWN TWO MUTATIONS, individual and separately attributable ([[LSN-059]] honoured):** **M-ORCH-1** — delete the single
+`listGeneration++` at :1526 → `heap-use-after-free READ of size 8 … QTreeWidgetItem::text(int) … syncNext()
+CloudService.cpp:2219`, **exit 1, 1 summary**: PROBE-A's exact signature, so the whole mechanism is load-bearing on one
+line. **M-ORCH-2** — neuter the `completedRead` entry compare alone → **exactly ONE slot dies**, TEST-111, on the
+CRITERION's own assertion (`'out.labelledRows == 0' returned FALSE … labelled 1 row(s) … [Aborted|]`), 56 passed/1
+failed — individually attributable, not an aggregate notice. Both restored `cmp`-clean (md5 `02b06a26…`), snapshot
+deleted.
+**GOAL AUDIT — THE PART THAT IS NOT DONE, verified by execution rather than accepted from the report.**
+**THE PHASE-1 PROBE'S VERDICT IS UNCHANGED BY THE FIX, where the briefing predicted it would flip.** That is the
+finding (per-id verdicts → traceability.md). I re-read TEST-107's assertions
+on disk: it still asserts `readFileCallsAfter == 4` for **3** checked rows, `readNames == [row0, row1, row0, …]`,
+`barAfter == 1` on a batch that completed nothing, `rowsRelabelled == [0]` (the WRONG row) and
+`statusesAfter == [verdict, "Downloading", ""]`. Green therefore means **the P2 abort/restart defect is LIVE AND
+UNCHANGED** — clause (c)'s "the reader is invoked exactly once per checked row" is unmet, by measurement.
+**WHY it is not deliverable under DEC-034, and I find the argument sound:** on the abort+restart route **two transfers
+are outstanding at once**, and the restarted batch's own dispatch **overwrites any shared snapshot before the stale
+completion arrives**, so every scalar — `listGeneration`, `batchGeneration`, or a new one — reads EQUAL at the compare.
+The completion carries no identity (`completedWrite` has no payload; `completedRead`'s `name` is documented at :2466 as
+possibly not what was asked for). Closing it needs **per-transfer identity** (the buffer pointer) or **abort-time
+accounting of outstanding transfers** — a mechanism choice with no governing DEC. The builder declined to invent one and
+said so. → **B-R028-03.**
+**THE BRIEFING'S "TWO GUARDS, NOT ONE" PREMISE DID NOT SURVIVE, and the builder was right to fire the hatch: NO NULL
+CHECKS WERE ADDED.** Confirmed by grepping the diff — zero null guards. Its reasoning: once the generation compare sits
+ABOVE every `child(listindex-1)` site, the refresh route stands down earlier, so a null check can never be individually
+mutation-proven and adding it would violate clause (e) itself. That is [[LSN-063]]'s coverage-vs-reachability
+distinction applied correctly, and it is the sixth briefing premise this ledger's delegation hatch has caught.
+**But it leaves a question the A3 must chase (→ B-R028-06):** on the still-open abort/restart route the generation guard
+does NOT fire, so if the rebuild comes back SHORTER, `child(listindex-1)` can still be null there — and the builder's
+own note 6 records that the empty/shorter-rebuild route is driven by no run.
+**A NEW USER-VISIBLE STATE THE FIX INTRODUCED, disclosed by the builder and untested (→ B-R028-04):** a Refresh
+mid-batch now stands the batch down but leaves `downloading` true and the button reading "Abort", so the dialog is
+wedged until the user clicks Abort. It follows DEC-032's existing stand-down idiom, but it did not exist before.
+**TEST-112 — THE SORT ROUTE, MEASURED, AND THE ANSWER IS SPLIT (→ B-R028-05).** Executed, both backends: the properties
+are open (`isSortingEnabled`/`sectionsClickable`/`isSortIndicatorShown` all true on `rideListSync`) and a sort arriving
+inside the nested loop does real harm — `[10:00, 11:00]` → `[11:00, 10:00]`, **same two item addresses permuted, nothing
+freed**, so it bumps no counter and passes every guard DEC-034 installs; the completion then labelled the WRONG row,
+`writeFile` ran twice for the SAME row, and index 0 was never transferred. **But a synthetic `QTest::mouseClick` on the
+header viewport did NOT reorder under either backend** — the reorder came from the `setSortIndicator` fallback. So
+"a sort inside the loop does this" is EXECUTED; "the user's click causes that sort" remains an API-contract claim. The
+builder recorded the two separately instead of presenting one as the other, and deliberately did not pin the mechanism
+([[LSN-062]]/ORCH-017 — synthetic mouse delivery is the backend-dependent thing). **The lazy-sort sharpening is
+CONFIRMED at Qt's source:** `qtreewidget.h:145-150` bounds-checks against the sort-invariant size, THEN calls
+`executePendingSort()`, then returns — so the re-sort executes INSIDE the `child()` expression and no guard wrapped
+around it can see the pre-sort order.
+**Also disclosed and worth keeping:** clause (b)'s `rideCache->save() == 0` is asserted BY PROXY, not counted
+(`RideCache::save` is a non-virtual no-op stub shared by three targets); `batchListGeneration` is a SECOND member where
+DEC-034 costed "one member + six compares" (the compare count is exactly six); and dozens of pre-existing `file:NNN`
+citations elsewhere in both files are now further stale by these insertions and were deliberately left alone, though the
+12 the edits directly moved were repaired.
+
+Prior (superseded): **REQ-028 PHASE 2 DISPATCHED 2026-08-17 — `qgdw-builder` IN FLIGHT on the production fix, branch
+`garmin/req028-row-lifetime`. Nothing is blocked; the next action is the Verification Gate on its return.**
+Phase 2 implements **DEC-034 Option C** (a `listGeneration` counter bumped by `refreshClicked`, snapshotted by both
+drivers and the three completion slots) **plus a null-safety guard** — TWO guards, because Phase 1 proved the two routes
+need different ones: a **null check** on all seven `child(listindex-1)` sites for the refresh route (P1, a crash), and a
+**generation/identity check** for the abort/restart route (P2, where `child()` is non-null and a null check does nothing).
+**Five slots allocated: TEST-108** (clause (a), row-UAF ASan, must be RED against unmodified production) · **TEST-109**
+(clause (b), phantom completion tail) · **TEST-110** (clause (d), the idle-Refresh positive control, without which every
+other slot is satisfiable by refusing to act) · **TEST-111** (clause (c) WORST HARM — the parse-SUCCEEDS fixture for
+B-R028-01, never measured, where a real ride reaches `saveRide()` and writes an activity into the athlete's folder for a
+batch that no longer exists) · **TEST-112** (the S-R028-01 sort-route reachability TRACE).
+**USER DECISION 2026-08-17 on S-R028-01, reversing the 2026-08-16 "track, not fold in":** trace the route's
+REACHABILITY inside Phase 2 rather than reopening DEC-034 up front. The reasoning: folding S-R028-01 in as a binding
+constraint would falsify Option C by construction — a re-sort frees nothing and bumps no counter, so it passes the
+guard, and only value/key addressing survives a reorder — so it is a DEC REOPEN, not a scope tweak (the
+DEC-031-reopens-DEC-025 pattern). But the route is recorded **"reasoned, not traced"**, so the reopen would rest on an
+inference. TEST-112 settles it by measurement; **if it reorders, DEC-034 reopens with executed evidence; if the click
+cannot be delivered, Option C stands unchallenged.** Orchestrator narrowed the open question while briefing: all three
+lists are built `setSortingEnabled(true)` (`:1116/:1146/:1186`) and **nothing anywhere calls `setSectionsClickable(false)`**,
+and Qt's `setSortingEnabled(true)` makes header sections clickable as part of its contract — so the route looks
+reachable. **That is REASONED FROM THE API CONTRACT, NOT EXECUTED** ([[LSN-063]]), and this ledger has had exactly that
+class of claim falsified by measurement twice (TEST-081, TEST-089). It is TEST-112's job, not a finding.
+**TWO STALE-STATUS DRIFTS FOUND AND CORRECTED DURING THE ORIENT, both of which had already misdirected this session:**
+`WIKI.md` REGISTRIES said DEC-034 was *"not yet researched"* and REQ-028's acceptance was *"TO BE ELABORATED BY
+DEC-034"* — **both false since 2026-08-16.** DEC-034 is ACCEPTED (Option C) at `decisions.md:1160` and prd.md:154 carries
+the elaborated clauses (a)–(e). The stale prose caused the orchestrator to frame the next gate as a `qgdw-scout`
+research dispatch when it is a `qgdw-builder` implementation dispatch, and to put a scoping question to the user built
+on a decision that was already made. Caught by opening `decisions.md` at the DEC's own entry rather than trusting the
+hub. WIKI corrected in place; **ORCH-026 raised** — this is the [[LSN-035]] family (the hub restating a status the SSOT
+owns) and the third time this project has been misled by a registry line that outlived its subject.
+**The briefing was built from FRESHLY RE-DERIVED offsets, not the recorded ones** — the citations in prd.md and
+findings.md have shifted under three consecutive waves. Verified on disk 2026-08-17: `refreshClicked` :1516, deletes
+:1532/:1539/:1544, rebuilds :1617/:1682/:1727/:1774; `downloadClicked` :1908 with `batchGeneration++` :1931; `syncNext`
+:1976, snapshot :1985, capture :1988, **post-suspension read :2098** (recorded as :2096), `openRideFile` :2124, compare
+:2221; `downloadNext` :2259; `completedRead` :2370; `failedRead` :2511; `uploadNext` :2553, snapshot :2566, compare
+:2680; `completedWrite` :2707. **The seven `child(listindex-1)` sites: 2388, 2437, 2444, 2525, 2532, 2717, 2724.**
+`CloudService.h:644` declares `batchGeneration`; `listGeneration` does not exist yet.
+**Explicitly briefed, because the last dispatch did it unasked: DO NOT COMMIT.** Git history on this ledger is the
+user's call. Also mandated: individual (never simultaneous) guard mutation, a call-site trace per guard, `.orig`
+snapshot + `cmp` restore with `git checkout` FORBIDDEN on files carrying uncommitted work, the binary run DIRECTLY under
+BOTH `offscreen` and `minimal` with the exit code and `SUMMARY: AddressSanitizer` grep read instead of the test output,
+and no bare N/N without its backend. Baseline to hold: **ASan 52/52 both backends, exit 0, zero sanitizer summaries;
+full ctest 27/27.** TEST-107 must be **rewritten or retired and the builder must say which** — it pins current behaviour
+(B-R028-02), so a green TEST-107 after the fix would mean the fix did not work.
+
+Prior (superseded): **REQ-028 PHASE 1 DONE + VERIFICATION-GATE PASS 2026-08-16 — THE GATING PROBE ANSWERED BOTH QUESTIONS, AND ONE
+ANSWER RAISES A FINDING'S SEVERITY. Nothing is running; the next action is a user decision on Phase 2's shape.**
+TEST-107 committed as `da455c79e` on `garmin/req028-row-lifetime` (1 ahead of `master`, NOT merged, NOTHING PUSHED),
+one file, +356/-0, **production byte-identical — the STOP GATE held** (`CloudService.cpp` md5 `7e92e51aa…`,
+`.h` `7eefd7ae…`).
+**P1 — `QTreeWidgetItem::child(int)` returns NULL out of range.** Measured four ways by the builder AND confirmed by me
+at Qt's own source (`qtreewidget.h:145-150` is inline: `if (index < 0 || index >= children.size()) return nullptr;`), so
+the "unspecified in the docs" question that gated this decision is settled. **Consequence: A3-R027-F8's refresh route is
+a NULL DEREFERENCE — a crash — not the mislabel the ledger recorded. The severity was understated, and Phase 2 needs a
+null check, not a row-identity check, on that route.**
+**P2 — the abort/restart route IS reachable, and is a SECOND, different defect.** There `child(listindex-1)` is
+NON-null (the restart zeroes `listindex`, the new batch raises it back into range), and the old batch's late completion
+labels **the row the NEW batch is transferring** — measured `["Downloading","Downloading",""]` →
+`["TEST-096 unparseable activity","Downloading",""]`, with the row that actually finished never told. The restarted
+bar advances for a row it never completed, and `completedRead`'s tail re-drives `downloadNext`: **4 `readFile` calls for
+3 checked rows**, rows 0 and 1 each transferred twice, row 2 never reached. So F8's original "second driver" framing is
+CONFIRMED verbatim; only its severity on the other route was wrong.
+**Orchestrator-executed evidence, not read from the report:** rebuilt (unpiped exit 0), ran the binary DIRECTLY under
+BOTH `offscreen` and `minimal` — **52/52 each, EXIT=0, zero `SUMMARY: AddressSanitizer` lines** (baseline 51 + 1);
+commit diffed (one file, +356/-0, zero out-of-scope markers); dirty accounting reconciled 54 → 60 as exactly the six new
+governance files; `master` untouched, nothing pushed.
+**Two residuals the builder disclosed rather than buried.** **B-R028-01 — the WORST harm was not measured:** every row
+is `.gcfail`, so the parse-SUCCEEDS path never runs, and on that path a real ride reaches `saveRide()` and **writes an
+activity into the athlete's folder on behalf of a batch that no longer exists** — persistent, unlike anything TEST-107
+saw. **B-R028-02 — TEST-107 locks in current behaviour** and will go RED when production is fixed; it must be rewritten
+or retired in Phase 2, and its green run is not reassurance. Its CONTROL is what carries the weight, and two of the
+builder's own predictions died against that control before the values were locked.
+**S-R028-01 (the sort route) got HARDER, found while verifying P1:** `child()` calls `executePendingSort()` before
+returning, so Qt's sorting is LAZY and a pending re-sort executes **inside the addressing expression itself** — no
+guard placed around `child(listindex-1)` can observe the pre-sort order. Any Phase-2 design assuming "check the
+container, then address it" has a window it cannot close on that route.
+**One deviation to note: the builder COMMITTED without being asked.** The commit is clean (test-only, one file, zero
+other-owner content, `master` untouched, unpushed) and the message is accurate, so nothing is at risk — but git history
+on this ledger has always been the user's call, and the Phase-2 briefing will say so explicitly.
+
+Prior (superseded): **PHASE 1 DISPATCHED — `qgdw-builder` IN FLIGHT on the gating probe, branch
+`garmin/req028-row-lifetime`.** The scout's draft passed the Verification Gate; the orchestrator confirmed every
+decisive claim at its cited lines before recording anything. **Phase 1 is probe-only and production is under a STOP
+GATE** (`CloudService.cpp` must stay md5 `7e92e51aa7b771948bca62ecfc7841e2`), because the probe's whole point is to
+measure UNMODIFIED production — the TEST-081/TEST-089 pattern, which changed the answer both times this ledger used it.
+**What the probe must settle: `QTreeWidgetItem::child(int)` out-of-range behaviour is UNSPECIFIED in Qt's docs**, so
+A3-R027-F8's harm today is either a null deref (a crash, more severe than recorded) or a silently wrong-row label —
+different guards. TEST-107 (the probe) and TEST-108 (the PROBE-A row-UAF slot, which must be RED against unmodified production)
+allocated; TEST-109/110 held for Phase 2.
+**FIRST DISPATCH STALLED (600s no-progress watchdog) having written nothing — ORCH-025.** No damage, verified not
+assumed: production md5s unchanged (the STOP GATE held), no branch, nothing under `unittests/`, no `.orig` residue.
+**The briefing defect it exposed is the part worth keeping:** it told the builder to build a late-completing store
+"the harness does not have", a claim inherited from the scout's draft and never checked — and it is FALSE.
+`BlockingStore::completeRead` (test file `:707`) already withholds the completion and
+`CloudService::notifyReadComplete` (`CloudService.h:145`) delivers it on demand, so the fixture is a few lines of use.
+The dispatch also said "study the harness" against a 7,850-line file with no range. Re-dispatched narrower: TEST-107
+ONLY (TEST-108 split out), reading fenced to `:420–716` and `:5355–5372`, the false claim corrected.
+**Three verified facts decided C over the stub's own candidate (a)** — all orchestrator-confirmed, not read from the
+report: (i) gating on `downloading` is DEFEATED, because the abort branch sets `downloading=false` at `:1915` while the
+driver is still suspended inside `openRideFile`, and that frame then WRITES `curr->setText(7, …)` at `:2153`; (ii) a
+`refreshButton->setEnabled(false)` fix is INVISIBLE to every test here — the harness calls `dialog->refreshClicked()`
+19 times and references `refreshButton` zero times, so it would sit behind a green suite proving nothing; (iii) it would
+GUT TEST-091, whose fixture drives `refreshClicked()` from inside `readFile`'s loop precisely to nest a counted frame
+inside an uncounted one (B-R031-01's premise). Option C preserves that geometry.
+**S-R028-01 — a THIRD list mutator nobody had recorded: SORTING.** All three lists are built sorting-ENABLED; at batch
+start only `rideListDown` is disabled, `rideListUp` is explicitly RE-enabled (`:1921`), and `rideListSync` is never
+disabled at all. A reorder frees nothing and bumps no counter, so it passes every guard C installs. **User decision:
+TRACK, not fold in.** Reasoned-not-traced — the scout declined to claim the route without confirming the header is
+clickable. Zero production code touched so far this wave. **Briefed from SYMBOLS plus freshly re-derived offsets, not from the
+recorded ones:** every line number in the REQ-028 stub and in the A3-R027-F2/F3/F8 rows (cycle `A3/REQ-027
+(2026-08-14)`) had SHIFTED, because DEC-035's guard blocks landed above them on 2026-08-15 — `uploadNext`'s generation
+snapshot moved :2430 → :2566 and F8's seven completion-slot citations moved :2193…:2464 → :2388…:2724. Briefing from the
+recorded numbers would have pointed the scout into unrelated prose, which is the ORCH-020 failure exactly.
+Two findings raised as byproducts of the orientation, both non-blocking and neither acted on: **ORCH-022** — the
+finding-id namespace COLLIDES (`A3-R027-F2`/`F3` each denote two unrelated findings, from the A3 on DEC-027 and the A3
+on REQ-027); it is the one id family with no allocator, the same shape as [[LSN-044]]. **ORCH-023** — an orphaned
+`git stash` from REQ-002 (2026-05-23) holds 18 files / +651 of the Coach owner's work that is present nowhere in the
+working tree and whose blobs differ from HEAD; untouched and reported, since whether HEAD superseded it needs its owner,
+not an inference.
+
+Prior (the tree state this wave starts from, still true): **THE WAVE IS CLOSED 2026-08-16 — committed AND verified from a clean extract (per-id lifecycle →
+traceability.md).** **LANDED ON `master` AND PUSHED 2026-08-16 (user authorised both).** `master` fast-forwarded
+`2f0de993d` → **`82a0de52a`** (11 commits: the REQ-019, REQ-021 and REQ-027 waves, which had been stacked unmerged),
+then `master` + the feature branch pushed to **`origin` = the user's FORK (FONSECAMVP/GoldenCheetah)**. All four refs —
+local/remote `master`, local/remote `garmin/req027-silent-stall` — now read `82a0de52a`. **`upstream`
+(GoldenCheetah/GoldenCheetah) was NOT touched and no PR was opened; that stays the user's call.**
+The FF was done in place (`git branch -f master HEAD` + checkout), NOT as a merge-from-master, precisely so it touched
+zero working-tree files: the 53 dirty entries survived, and the seven at-risk owner files were md5-verified `OK` after
+the switch as well as after both pre-commit stash cycles. Four commits on
+`garmin/req027-silent-stall`: `3c7fa7385` (feature — REQ-027 +
 DEC-032 + DEC-035), `b1e4c4fad` (ORCH-021, the ORCH-015 drift-lint repair that had been living in the working tree only
-and therefore was NOT what the gate ran), `ac5d5f67d` (docs record — DEC-035, A3-R027c, LSN-063/064). The clean-extract
+and therefore was NOT what the gate ran), `ac5d5f67d` (docs record — DEC-035, A3-R027c, LSN-063/064), `82a0de52a` (this gate's docs record). The clean-extract
 gate PASSED on `ac5d5f67d` — full evidence in NEXT_GATE. Our four files are committed; the 53 dirty entries left in the
 working tree are OTHER OWNERS' pre-session churn (Coach/Gui/CMake/vcpkg/skill), untouched and still theirs to land.
-BLOCKING: none. The next action is a user choice, not a gate.
+BLOCKING: **NONE — ORCH-033 RESOLVED 2026-08-22 by `e48f7d123`, evidence in CURRENT (two backends, both ctest
+registrations, garmin-fast 25/25, one attributable mutation). With the apparatus running to completion again, the fix
+wave's own claim is now supportable: ORACLE-F1 / A3-R028c-F1 / A3-R028c-F2 sit behind a suite that actually finishes.**
+  Open non-blocking, carried forward: A3-R028c-F4..F7 · B-R028-04 (deferred by user decision) · B-R028-14 (ratified,
+  governance question still unanswered) · clause (e)'s reachability half (two guards ship "reasoned, not traced";
+  A3-R028c-F7 re-diagnoses that as a DRIVABLE coverage gap) · the sort route, separately tracked per `prd.md:154`.
+  Superseded verdict (2026-08-22, pre-repair): **ONE — ORCH-033: the ASan target does not run to completion on either
+backend. This blocks the commit gate absolutely — a red suite is not a checkpoint.**
+  Superseded verdict (recorded 2026-08-21/22, falsified 2026-08-22): **none, as of the fix gate recorded in CURRENT — the three that were open (ORACLE-F1, A3-R028c-F1, A3-R028c-F2) are recorded CLOSED by the fix wave: built, Verification-Gate PASS, fresh attack-the-fix with no blockers, incremental CLV PASS 9/9, seeds 32/447 green on both backends. NOT YET COMMITTED — the whole REQ-028 fix wave lives in the working tree on `garmin/req028-row-lifetime` (HEAD is still `da455c79e`, the TEST-107 probe). This line was internally contradictory until 2026-08-22 (it carried both a "none" from the 08-19 amendment and a "THREE" from the 08-21 A3 re-clear); it now states one verdict with its provenance ([[LSN-078]] — a verdict line carries what produced it).**
+  Superseded detail, retained for provenance: A3-R028-F1/F2 CLOSED 2026-08-19 by the invalidation amendment (DEC-036), orchestrator-mutation-proven (both sites removed → the UAF reproduces; site 1 removed alone → TEST-118 dies on its own criterion). The three later blockers were: **ORACLE-F1 (a THIRD use-after-free, found MECHANICALLY by the new fuzzer and by no adversarial cycle: the DEC-034 compare in `completedRead` is correctly placed and defeated anyway, because `row` is a STACK LOCAL copied before the suspension — orchestrator-diagnosed), A3-R028c-F1 (Abort→Refresh→restart re-opens A3-R028b-F3 in full, because `refreshClicked` DROPS the abandoned ticket instead of retiring it) and A3-R028c-F2 (an Abort+restart burst inside a completion tail's own `processEvents()` puts TWO transfers on the wire against ONE ticket). Both orchestrator-confirmed at the code. Both are rooted in the ORCHESTRATOR's decisions, not in builder error.** Open non-blocking: B-R028-13/14/15/16, B-R028-04 (deferred by user decision), A3-R028b-F4/F6/F7, the sort route's driver half. Open non-blocking: A3-R028b-F4..F8, B-R028-04 (needs a DECISION), B-R028-05 driver half, A3-R028-F6/F7, B-R028-08/10/11. Cite any A3 finding by id AND its Cycle value `A3/REQ-028 wave (2026-08-18)` — ORCH-022, the token alone is ambiguous.**
 
 Prior (superseded — the state before the commits): **REQ-027 BUILT + VERIFICATION-GATE PASS 2026-08-14 (uncommitted); A3 RUNNING. DEC-032 accepted (Option A) on `garmin/req027-silent-stall`.** The scout's draft
 passed the Verification Gate and **found three things that changed the picture, all orchestrator-confirmed at their cited
@@ -563,10 +1161,18 @@ RESUME-NOTES (read if you are a NEW SESSION picking this up — written 2026-08-
    then run it with `QT_QPA_PLATFORM=offscreen ASAN_OPTIONS=detect_leaks=0:abort_on_error=0:halt_on_error=1`.
    Baseline to hold, **updated 2026-08-15 after DEC-035**: ASan **51/51** under `offscreen`, ctest **27/27** across BOTH
    registrations, ambient wayland **51/51**, `GoldenCheetah` links. `src/Cloud/CloudService.cpp` md5 at the verified
-   state is now **`4e5a6e5a07f50fa17e32825f4aa48bb2`** — check it before trusting any of the numbers above. (The
-   previously recorded `704601760b…` was the PRE-DEC-035 state and had gone stale the moment the two guards landed;
-   corrected as ORCH-018's byproduct. A resume note whose checksum does not match tells the next session to distrust a
-   tree that is actually fine, which is its own kind of failure.) **Never quote a bare N/N without the backend it was
+   state is now **`7e92e51aa7b771948bca62ecfc7841e2`** — check it before trusting any of the numbers above.
+   **CORRECTED 2026-08-16: the previously recorded `4e5a6e5a07f50fa17e32825f4aa48bb2` was the PRE-COMMIT WORKING-TREE
+   state and no longer exists anywhere.** The file is now committed and clean; its blob has been identical since
+   `3c7fa7385` (`git rev-parse 3c7fa7385:src/Cloud/CloudService.cpp` == HEAD's == `f7e0a25ae…`), so the content did not
+   drift after the commit — the checksum changed AT commit time. The cause is almost certainly the pre-commit
+   clang-format rewrite that fired in three prior waves; that is **REASONED, NOT VERIFIED**, because no `clang-format`
+   binary exists in this environment (the standing [[LSN-012]] residual) and the pre-commit file is gone. All the
+   numbers above still describe this tree. (The value before that, `704601760b…`, was the PRE-DEC-035 state.)
+   **The recurring shape is worth more than the correction: a checksum recorded from the WORKING TREE is invalidated by
+   the commit that lands it, because the pre-commit hooks rewrite the file. Record the checksum AFTER committing, or
+   record the blob hash, which the hooks cannot change.** Same family as [[LSN-064]] — working-tree evidence and
+   committed-artifact evidence are different claims. **Never quote a bare N/N without the backend it was
    collected under — [[LSN-062]] is a MECHANISM on this ledger.**
 5. **Scratchpad contents are GONE on session end** — my `.ORIG_ORCH` snapshots (no longer needed; all restores are
    `cmp`-clean with zero residue) and the adversary's out-of-tree mutation harness. No governance file depends on those
@@ -575,8 +1181,453 @@ RESUME-NOTES (read if you are a NEW SESSION picking this up — written 2026-08-
    output.** A crashing process prints neither `FAIL!` nor `Totals:`, which is how B-R027-06 turned the strongest kill
    in the matrix into a reported "survivor".
 
-NEXT_GATE: **WAVE CLOSED. The clean-extract gate PASSED on the COMMITTED tree 2026-08-16. Nothing is running, nothing is
-blocked, and the next action is the user's: pick the next item from the queue, or land/push the branch.**
+NEXT_GATE: **USER'S CHOICE OF FOUR, none blocked by the other — the harness blocker is gone, so read-only scouting and
+  bookkeeping are unblocked too.** (1) **`qgdw-scout` on the sort route** — settle amendment-vs-own-REQ, three real
+  options, invariants, test plan, migration risk, acceptance criteria; read-only, dispatchable now. (2) **Clause (e)'s
+  reachability half** — A3-R028c-F7 says the two "reasoned, not traced" guards ARE drivable through the seam this wave
+  built, so this is a builder slice, not an accepted residual. (3) **A3-R028c-F4..F7 + B-R028-14's governance question.**
+  (4) **`qgdw-librarian` Job 3** — WIKI REGISTRIES rollup, the one-line DEC index that has never existed, recomputed
+  counts, active/superseded STATE separation; the in-flight files have now stopped changing, so its seam is OPEN. The
+  user-deferred bulk findings/lessons row deletion is NOT in that scope.
+  **Not yet run for this wave and owed before any release commit:** an incremental CLV over the `e48f7d123` changeset
+  (VAL-018) and a clean-worktree configure+build of HEAD. Neither blocks the four above.
+  Prior gate (DONE, `e48f7d123`): **THE ORCH-033 REPAIR GATE — harness only, both lifetime windows, mutation-proven.**
+  **SCOPE CONTRADICTION RESOLVED 2026-08-22, in the PRD's favour:** `prd.md:154` states, in REQ-028's own acceptance
+  cell, *"NOT in scope, tracked separately: S-R028-01 (the sort route) … user decision 2026-08-16 was to track, not fold
+  in."* The prior NEXT_GATE sentence — *"REQ-028 closes only after that separate sorting slice"* — CONTRADICTED the
+  acceptance criterion and is drift; the acceptance cell is the SSOT. **REQ-028 closes on clauses (a)–(e) alone.** The
+  sort route is a SEPARATELY TRACKED requirement, and the open question is not whether it blocks REQ-028 but whether
+  T-112's measurement (harm EXECUTED — items permuted, wrong row labelled, `writeFile` twice — but the synthetic header
+  click never delivered under either backend, so the user-trigger stays an API-contract claim, B-R028-05) warrants its
+  own REQ+DEC or an amendment. That is the scout's question, and it is queued BEHIND this gate, not ahead of it.
+  **Clause (e) status, stated explicitly because the prior summary only tracked (a)–(d):** mutation half MET
+  (each new guard individually mutation-killed, per the recorded orchestrator mutations); reachability half MET ONLY BY
+  RECORDED EXEMPTION — two guards ship labelled *"reasoned, not traced"*, and A3-R028c-F7 now says that is a COVERAGE
+  gap that IS drivable through the seam this wave already built. So clause (e) is **not fully discharged**, and closing
+  REQ-028 requires either those traces or an explicit accepted residual.
+  **THEN, and only after the in-flight files stop changing:** `qgdw-librarian` Job 3 (WIKI REGISTRIES rollup, the
+  one-line DEC index that has never existed, recomputed counts, active/superseded STATE separation). The user-deferred
+  bulk findings/lessons row deletion is NOT in that scope.
+  Prior wording (superseded): **Stable-worklist sort-route decision/build. REQ-028 closes only after that separate sorting slice and final CLV.**
+  **THEN, AT THAT SEAM AND NOT BEFORE: `qgdw-librarian` Job 3 (compaction), scoped to WIKI REGISTRIES rollup + standing
+  up the missing one-line decision index (active/dormant split).** The budget breach is real and measured (BUDGETS,
+  12.7x), but the skill's own rule is "before the NEXT feature wave" — compaction is scheduled work, and the wave
+  currently in flight is still writing the exact files it would rewrite. The user's deferral of bulk findings/lesson
+  row classification stands and is NOT in this scope.
+
+NEXT_GATE-PRIOR-FIX-BRIEFING: **THE FIX GATE — `qgdw-builder` DISPATCHED 2026-08-21 on A3-R028c-F1 + F2 + ORACLE-F1, all three of which
+share one root (a stale thing handed a freshly-valid generation stamp by a restart). IN FLIGHT.** T-128/T-129 allocated
+to it, T-130 allocated CONDITIONALLY for ORACLE-F1. Briefed from the FINDING ROWS and the two written amendments
+([[LSN-061]]), not from a fresh reproduction. **On its return: Verification Gate — re-run both backends myself, diff
+FILES against `git status`, and mutate each new guard INDIVIDUALLY ([[LSN-059]]).**
+**ONE BRIEFING PREMISE PRE-CORRECTED BEFORE DISPATCH → ORCH-032, a [[LSN-073]] SAVE.** The A3-R028c-F2 amendment
+(`decisions.md:1499-1500`) states `batchGeneration` "is read at only `:962`, `:1994`, `:2517`". Grepped at pre-flight
+rather than trusted: it is ALSO read at `:2207`, `:3133` and `:3275`. **The amendment's CLAIM survives** — all three
+extra sites are inside the DRIVERS (`syncNext:2130`, `uploadNext:3112`), none inside the three completion slots — and
+the two driver sites are in fact the IDIOM the fix must copy (snapshot `:2207`/`:3133`, compare `:2517`/`:3275`), so
+the correction made the briefing better rather than blocking it. The builder was handed the correction explicitly and
+told to treat every line number in the briefing as a claim to re-verify at the definition.
+**Prior wording of this gate (pre-dispatch), retained because its acceptance evidence IS the gate's criterion:**
+**Its acceptance evidence is now MECHANICAL and was created before the fix existed: the oracle and fuzzer slots
+(TEST-126/127) must all pass**, which
+means seed 32, the nine other INV-1 seeds, and seed 447 all pass — **and a full sweep of seeds 1..446+ must find
+nothing new.** That is a far stronger criterion than any hand-written slot, and it is why the oracle was built first.
+**Confirm explicitly whether F2's `batchGeneration` snapshot ALSO closes ORACLE-F1** (it plausibly does — the restart
+bumps `batchGeneration` where it merely re-stamps `batchListGeneration`) **or whether the stale stack local needs its own
+guard. If seed 447 goes green from F2's fix alone, say so; if not, it needs its own.**
+**Both fixes remain AMENDMENTS, already written into `decisions.md`** — F1 a row-free tombstone (retire the NAME, drop
+the pointer that must die; naïvely appending `inflight` at `:1559` re-manufactures TEST-125's UAF), F2 DEC-034's
+existing `batchGeneration` guard applied to the three completion slots that never got it, **including the read-path and
+`failedRead` twins, which ARE on the GarminConnect route.** T-128/T-129 allocated.
+**Carry these residuals into the briefing** (the oracle builder disclosed all of them): INV-1's scoping reads
+`downloading` as `cancelButton->isHidden()`, exact today at all five write sites but an invariant of production, not a
+guarantee — **any future show()/hide() silently WEAKENS the oracle** · the oracle attaches lazily at first dispatch, so
+**3 dispatches in `CloudServiceUploadDialog` runs are unattached and NOT covered** · write matching is by name, FIFO, so
+two writes under one remotename are indistinguishable — DEC-037's own point about the wire · **INV-2 has never fired in
+71 slots or 446 seeds and must be treated as UNPROVEN, not as a passing check.**
+**After the fix:** Verification Gate → **a fourth A3, now with the fuzzer available to it** → B-R028-04 (deferred),
+A3-R028c-F3..F7, A3-R028b-F4/F6/F7 → commit gate → clean-extract gate. **Commit only on the user's word.** Nothing is
+committed, `master` is untouched, nothing is pushed.
+
+--- prior gate ---
+NEXT_GATE-PRIOR-ORACLE: **THE ORACLE GATE — `qgdw-builder` DISPATCHED 2026-08-21 to build TEST-126 (the continuous invariant
+oracle) and TEST-127 (the randomized click-sequence fuzzer), IN FLIGHT. It is FORBIDDEN from touching
+`src/Cloud/CloudService.{h,cpp}` — its job is to CATCH the two live blocking defects, not to fix them.**
+**USER DECISION 2026-08-21: fix both blocking findings AND build the oracle** (the third option, stopping to reassess
+the whole wave, was not taken). **Second decision: DEC-037's zero-service coverage is RECORDED as a known gap** rather
+than closed by building a `LocalFileStore`-driven slot — the paragraph is in the entry.
+**ORCHESTRATOR SEQUENCING CALL, made rather than asked: THE ORACLE IS BUILT FIRST, AGAINST THE UNFIXED TREE.** An
+oracle nobody has seen fail is not evidence. **Its acceptance criterion is that it INDEPENDENTLY REDISCOVERS A3-R028c-F1
+and/or F2 without being told the route** — the briefing describes those defects by their HARM only and explicitly
+forbids seeding the sequence or writing a slot that drives them directly. **"It did not find them, here is what it
+covered" is a legitimate reportable outcome and was briefed as such**, because a staged success here would be worse than
+no oracle at all. The fuzzer must be SEEDED with the seed printed on failure — an unreproducible fuzz failure is a
+rumour.
+**EXPECT THE SUITE TO GO RED AND STAY RED.** The defects are still live; the builder was told NOT to disable, skip or
+`QEXPECT_FAIL` anything to get back to green. **Turning it green is the NEXT builder's acceptance evidence.**
+**BOTH FIXES ARE AMENDMENTS, NOT NEW DECISIONS — no scout round needed.** F1 keeps DEC-037's retire-and-match mechanism
+and changes WHAT is retired (a row-free tombstone: retire the NAME, drop the pointer that must die — and naïvely
+appending `inflight` at `:1559` would re-manufacture TEST-125's UAF, which is why the containers cannot merge). F2
+applies DEC-034's EXISTING `batchGeneration` guard to the three completion slots that never got it — **including the
+read-path and `failedRead` twins, which ARE on the GarminConnect route where the write path is not.** Both amendments
+are written into `decisions.md`; T-128/T-129 allocated.
+**Order after the oracle returns:** Verification Gate → dispatch the F1/F2 fix builder (it must turn TEST-126/127 green,
+and that IS its acceptance evidence) → Verification Gate → **a fourth A3** → then B-R028-04 (deferred), A3-R028c-F3..F7,
+A3-R028b-F4/F6/F7 → commit gate → clean-extract gate. **Commit only on the user's word.** Nothing is committed,
+`master` is untouched, nothing is pushed.
+
+--- prior gate ---
+NEXT_GATE-PRIOR-STRATEGY: **AWAITING USER — A STRATEGY DECISION. → RESOLVED 2026-08-21: fix both + build the oracle; record DEC-037's service-coverage gap rather than closing it.** Nothing is running, nothing is blocked on evidence.**
+Six adversarial cycles have now each found real defects behind a green suite, and **the last three each found defects
+created or missed by the FIX for the previous one.** The two new blocking findings both need DEC work (F1: reopen
+DEC-037 for a row-free tombstone — retire the NAME, drop the pointer that must die; F2: reopen DEC-034/DEC-036 for a
+`batchGeneration` snapshot at each completion slot's entry, plus the read-path and `failedRead` twins).
+**But the adversary's own answer to the standing question is the more important item, and I agree with it:** at six
+interacting mechanisms, hand-enumerated click sequences have stopped being the right tool. It recommends a **continuous
+invariant oracle** every existing run evaluates — `outstanding <= 1`, ticket conservation, restart idempotence — plus a
+**randomized click-sequence driver** with the ASan process as a second oracle. **F2 would have been caught mechanically
+in whichever run happened to drive the burst, instead of requiring someone to guess the route.** → [[LSN-077]]; this is
+the LSN-001/008/062 escalation path (advisory → guard → MECHANISM) applied to test oracles instead of process.
+**Also worth the user's attention: DEC-037's entire mechanism ships for TEN Upload-capable services and is exercised
+against ZERO of them** — `GarminConnect.h:76` is `Query | Download`, so the fake `BlockingStore` is its only driver.
+The wire behaviour the disproof rests on is asserted about eleven real services and measured against none.
+**Remaining queue after whatever is chosen:** B-R028-04 (deferred), A3-R028c-F3..F7, A3-R028b-F4/F6/F7, the sort route's
+driver half → commit gate → clean-extract gate. **Commit only on the user's word.** Nothing is committed, `master` is
+untouched, nothing is pushed.
+
+--- prior gate ---
+NEXT_GATE-PRIOR-A3C: **THE THIRD A3 RE-CLEAR — RE-DISPATCHED 2026-08-21 after the first attempt died on an infrastructure error. → RETURNED: FINDINGS, TWO BLOCKING (A3-R028c-F1/F2), five non-blocking, nine refutations.** (The 2026-08-20 dispatch
+DIED ON AN INFRASTRUCTURE ERROR — subscription access disabled mid-run — before doing any work; its only output was an
+opening line. **Tree verified untouched afterwards before re-dispatching:** same four modified files, `CloudService.cpp`
+still md5 `716406f7…`, zero `.orig` residue, HEAD unmoved at `da455c79e`. A read-only role that never got past orienting
+leaves nothing, but it was checked rather than assumed.) Attacking against the full
+SIX-MECHANISM stack (DEC-034 · DEC-036 · its invalidation amendment · the driver-entry and resumption compares · the
+`saveRide` three-part guard · DEC-037's retired-ticket set). The wave has been amended THREE times since the last cycle.
+**Pointed at the five self-disclosed residuals first** (B-R028-15 the retired path ignoring `aborted`, B-R028-16
+TEST-115's flipped expectation, the never-emptied retired ticket and its untested eviction branch, the two untraced
+`saveRide` guards, and the DEC-035 trade) **and then past them** — with an explicit task to enumerate the reachable
+states of `inflight` × `retiredWrites` × `listGeneration` × `aborted` × `downloading` at each of the three completion
+slots and three drivers, because a lifecycle with an unenumerated site is what found the first UAF.
+**Told what NOT to re-report:** everything closed, plus the five items open BY DECISION.
+**AFTER IT RETURNS the remaining queue is all user-facing:** disposition its findings → **B-R028-15** (does the retired
+path preserve the "Aborted" label, or does DEC-037 record that it should not?) → **B-R028-14** (ratify the DEC-035
+deviation at `saveRide` or open a DEC) → **B-R028-04** (the wedged dialog, deferred) → **B-R028-13** (trace or
+permanently accept the two surviving guards) → A3-R028b-F4/F6/F7 → **the commit gate, then the clean-extract gate on a
+clean checkout. Commit only on the user's word.** Nothing is committed, `master` is untouched, nothing is pushed.
+
+--- prior gate ---
+NEXT_GATE-PRIOR-DEC037: **THE DEC-037 BUILD GATE — `qgdw-builder` DISPATCHED 2026-08-19. → RETURNED, VERIFICATION GATE PASS on all three checks.**
+It was queued behind the F1/F2 builder rather than run beside it: both touch `CloudService.cpp`, and builders
+parallelise only on DISJOINT files. On return, run the Verification Gate.
+**DEC-037 ACCEPTED 2026-08-19 (user chose Option A, the retired-ticket set, WRITES ONLY).** Four sites: retire an armed
+write ticket in `downloadClicked`'s START branch (`:2029`), `retiredWrites.clear()` beside the Refresh disarm (`:1559`,
+**MANDATORY — every retired ticket holds a raw row pointer, so omitting it MANUFACTURES an A3-R028-F1-shaped UAF**),
+match retired-first in `completedWrite` (`:3333`) labelling only — no count, no re-drive — and the member plus a REWRITE
+of the "a single ticket is enough" paragraph, which is now exactly the claim that changed.
+**T-124 must run the route TWICE, once per ARRIVAL ORDER — that is what makes the exhaustion argument MEASURED rather
+than reasoned, and it needs a completion-ORDER hook the harness does not have. Build the hook first; if it genuinely
+cannot be built, leave the second order undriven and LABEL the claim, per the TEST-076/[[LSN-022]] precedent.** T-125
+proves the Refresh clear is load-bearing under ASan. **The accepted residual must be ASSERTED, not hidden:** make the two
+results differ and record which string lands on which row in each order.
+**Also briefed:** TEST-115's same-row half must be RE-ARGUED — its exculpation rests on the one-shot `armed` bit being
+the sole separator on the write channel, and after this it is not.
+**After it returns:** Verification Gate → **a third A3 re-clear** (five in a row have found real defects here, and the
+last one found three BLOCKING behind a 65/65 two-backend green suite) → then the queue that needs the user: **B-R028-14**
+(ratify the DEC-035 deviation at `saveRide` or open a DEC), **B-R028-04** (the wedged dialog, deferred by decision),
+B-R028-13 (trace or permanently accept the two surviving guards), A3-R028b-F4/F6/F7 → then the commit gate, then the
+clean-extract gate on a clean checkout. **Commit only on the user's word.** Nothing is committed, `master` is untouched.
+
+--- prior gate ---
+NEXT_GATE-PRIOR-F1F2: **TWO AGENTS IN FLIGHT ON DISJOINT WORK (builder on F1+F2, scout on DEC-037). → BOTH RETURNED: builder Verification-Gate PASS; scout's draft accepted as DEC-037 Option A.**
+**USER DECISION 2026-08-19: all three blocking findings go in THIS wave** (rather than splitting F1 into its own REQ) —
+**and the deciding fact was that all three are DEC-036's own blast radius, not neighbours.** Pre-DEC-036, F1's route
+labelled through `child(listindex-1)`, which re-reads the rebuilt list and is never dangling, so a Refresh during
+`saveRide` cost a MISLABEL; the stored `inflight.row` converted it into a use-after-free. **Third instance of that same
+conversion in this wave** ([[LSN-068]]). **Second user decision: B-R028-04 (the wedged dialog) is DEFERRED to its own
+slice after this wave commits** — it is user-visible but neither memory-unsafe nor data-losing, its fix touches DEC-032's
+idiom across ~16 services, and TEST-119/120 now deliberately pin the current behaviour so the fix must change them too.
+**(1) `qgdw-builder` — A3-R028b-F1 + F2**, the two well-specified blocking fixes. F1: a `BlockingCall` + self-bail +
+`listGeneration` re-compare between `saveRide` (`:2811`) and the row writes (`:2812`/`:2815`), with the builder asked to
+reason explicitly about whether the `BlockingCall` is safe there given DEC-031's reaper. F2: one line each before
+`:2463` and `:3113`, reusing the frame's existing `listgen` local — DEC-034's mechanism, not a new decision.
+**T-121/T-122/T-123 allocated. T-121 requires ARMING the `ImportSeamStubs.cpp:423` `autoProcess` seam, and [[LSN-056]] is
+binding: that stub file is compiled into multiple targets, so the arming must be inert unless enabled and EVERY target
+that compiles it must be built and run — the builder was told to COUNT them rather than trust my number.** T-122/T-123
+are two SLOTS, not two arms in one, per A3-R028b-F5. Hygiene folded in: F5 (split TEST-120's arms) and F8 (restate the
+false closed-world "five delivery points" census in the test file AND in the production comments at
+`CloudService.h:704-720` / `CloudService.cpp:3149`) — F8 because the builder is about to ADD two delivery points.
+**(2) `qgdw-scout` — DEC-037**, the A3-R028b-F3 cross-list key collision. Read-only, so it runs safely alongside the
+builder; the briefing fences it off `completedRead`'s `saveRide` window and the parse-failure branches, which are being
+edited right now.
+**I CORRECTED THE A3'S PROPOSED FIX BEFORE DISPATCHING IT, and this is the substance of the scout's brief:** the A3
+suggested "a per-dispatch monotonic sequence number in the ticket, compared as a third clause" — **compared against
+WHAT?** `writeComplete(QString id, QString message)` carries only those two values, so a sequence stored in the ticket
+describes the LIVE transfer while the stale completion carries nothing to compare. **Any ticket-local field is blind to
+two completions that are identical on the wire** — the same wall the original clause-(c) research hit with shared
+scalars. The scout must answer "how is the ARRIVING completion distinguished?" for every option it proposes, and it is
+pointed at abort-time accounting (known arrival-order weakness), the per-batch relay QObject (DEC-036's rejected
+Option B, rejected on maintainability not correctness — and it closes this by construction), disarming on abort, and
+changing the two lists' keys (probably disqualifying, since the remotename is what goes to the service).
+**Order after both return:** Verification Gate on the builder → present DEC-037's options to the user → build it →
+**another A3 re-clear** (five in a row have found real defects here) → commit gate → clean-extract gate on a clean
+checkout. **Commit only on the user's word.** Nothing is committed, `master` is untouched, nothing is pushed.
+
+--- prior gate ---
+NEXT_GATE-PRIOR-SCOPE: **AWAITING USER — A SCOPE DECISION. → RESOLVED 2026-08-19: all three blocking findings in this wave; B-R028-04 deferred to its own slice.** Nothing is running,
+nothing is blocked on evidence.** Three blocking findings are recorded and confirmed; what is open is how much of them
+belongs to REQ-028.
+**The scope question, stated honestly: REQ-028 began as "a row item held across a suspension must stay valid" and is now
+FOUR layered mechanisms plus an amendment, with a fifth amendment (F3) and a new suspension-point FAMILY (F1) queued
+behind it.** F2 is unambiguously this REQ's business — one line each, reusing an existing local, closing a route the F5
+fix could not see. F3 is a DEC-036 amendment: same mechanism, a key that is too narrow. **F1 is arguably a different
+REQ**: the hazard is in `saveRide`'s data-processor family, which no census in this project has ever classified as
+suspending, its guard sits in a different function family, and its test requires arming a stub shared by three targets
+([[LSN-056]]). Folding it in grows a wave that has already grown four times; splitting it out leaves a known
+use-after-free uncommitted-but-unfixed, which must then be recorded as an open REQ rather than forgotten.
+**Also still open and needing the user: B-R028-04** (the wedged dialog — DEC-032's convention across ~16 services, now
+deliberately PINNED by TEST-119/120's second verdict, so the fix must change those slots too).
+**Whatever is chosen, the order after it is:** build → Verification Gate → **another A3 re-clear** (five in a row have
+found real defects here, and each of the last three falsified the suspension-point census by one more entry) → commit
+gate → clean-extract gate on a clean checkout. **Commit only on the user's word.** Nothing is committed, `master` is
+untouched, nothing is pushed.
+
+--- prior gate ---
+NEXT_GATE-PRIOR-RECLEAR: **THE A3 RE-CLEAR — `qgdw-adversary` DISPATCHED 2026-08-19. → RETURNED: FINDINGS, THREE BLOCKING (A3-R028b-F1/F2/F3), five non-blocking, eight refutations.** against the whole wave as it now
+stands (DEC-034 + DEC-036 + the invalidation amendment + the F5 entry guards, four mechanisms layered in one dialog).
+**This is a fresh attack on changed code, not a re-read** — the wave has been amended TWICE since the last A3, and that
+A3 found a heap-use-after-free in code which had already passed a full Verification Gate with every guard individually
+mutation-proven. The briefing says so, and names the two shapes that have repeatedly paid here: **a slot that passes for
+the wrong reason**, and **a lifetime whose invalidation sites were never enumerated**.
+**Pointed at:** the `rideCache->save()` PROXY (can it be broken without breaking the test?) · whether `saveRide()` pumps
+events, which would move the F5 delivery window for any parseable download · TEST-117's STRUCTURAL assertion and whether
+each premise is reachable-and-failable · **an enumeration of every reachable `inflight` state at each of the three slots
+and three drivers**, since the last headline was exactly an unenumerated lifecycle site · the entry guards returning
+`true`, which all four callers ignore, making "stood down" and "dispatched" the same value.
+**Told what NOT to re-report:** the closed findings, and the four items open BY DECISION (the sort route's driver half,
+B-R028-04, F6, F7).
+**AFTER IT RETURNS, exactly two things stand between this wave and the commit gate:** (1) disposition whatever it finds;
+(2) **B-R028-04, which is a DECISION, not a build** — the wedged dialog is DEC-032's stand-down convention shared across
+~16 services, and the fix now also has to change TEST-119/120, which deliberately pin the current behaviour. Then the
+commit gate, then the clean-extract gate on a clean checkout. **Commit only on the user's word;** nothing is committed,
+`master` is untouched, nothing is pushed.
+
+--- prior gate (the fix this re-clear is attacking) ---
+NEXT_GATE-PRIOR-F5: **THE A3-R028-F5 GATE — `qgdw-builder` DISPATCHED 2026-08-19. → RETURNED, VERIFICATION GATE PASS on all three checks.** The last open finding from this
+wave's A3. On its return run the Verification Gate. **This is an application of DEC-034's existing mechanism, NOT a new
+decision** — the builder chooses between re-comparing `listGeneration` immediately before each tail re-drive, or giving
+`downloadNext` its own snapshot and fixing the siblings' POST-refresh timing, and must justify the choice by DEC-035's
+principle (the guard belongs where the unsafe action happens). **If neither closes it without a new member or a signature
+change, the hatch fires — that would be a DEC, not a build.** T-119 (download route) and T-120 (sync twin) allocated;
+**T-120 to stay UNBUILT with a recorded residual if the route is undrivable**, per the TEST-076/[[LSN-022]] precedent.
+**Briefed differently in one deliberate respect, because of ORCH-030:** the briefing does NOT predict the mutation matrix.
+It asks for what actually dies, including "nothing", and says a surviving guard must be labelled rather than explained
+away. Also mandated: REDs under BOTH backends this time (the last run's were offscreen-only, B-R028-11).
+**Then, in order:** a fresh **A3 re-clear** on the whole wave (four A3s in a row on this ledger have found real defects,
+and this wave has now been amended twice since the last one) → **B-R028-04**, which needs a DECISION because it touches
+DEC-032's stand-down idiom across ~16 services → then the commit gate, then the clean-extract gate on a clean checkout.
+**Still open and NOT scheduled:** the sort route's driver half (user decision, tracked), A3-R028-F6 (no test drives
+`LocalFileStore`, the service DEC-036's geometry rests on), F7, B-R028-08/10/11. **Commit only on the user's word.**
+
+--- prior gate (the remediation this gate verified) ---
+NEXT_GATE-PRIOR-AMEND: **THE A3 REMEDIATION GATE — `qgdw-builder` DISPATCHED 2026-08-18 on the DEC-036 AMENDMENT. → RETURNED, VERIFICATION GATE PASS on all three checks.**
+On its return run the Verification Gate; nothing merges on the report's word. **The amendment is recorded at the end of
+`decisions.md` and is an AMENDMENT, not a reopen** — "ARMED IS ONE-SHOT" stands, the entry simply never enumerated the
+INVALIDATION half. **Two sites:** `inflight.armed = false;` in `downloadClicked`'s START branch beside `:1951` (safe —
+that branch runs only when `downloading == false`; it disarms before the restarted batch's first suspension, closing
+**B-R028-07**, and before any restart that arms nothing, closing **F1** and **F2**), and the same line beside
+`listGeneration++` at `:1526` (a Refresh frees the row the ticket holds, so the ticket is meaningless from that instant —
+this is what makes the dangling `inflight.row` UNREACHABLE rather than merely unread). **T-117/T-118 ALLOCATED, both
+MUST BE RED against the current tree** — T-117 the UAF geometry premised on `isPoisoned(row0)` so it cannot pass by
+never reaching the row ([[LSN-050]]), T-118 the no-Refresh twin on the bar invariant `value() <= downloadtotal`.
+**Also briefed, both small and both A3-found:** widen or re-label TEST-087's vacuous `writeFileCalls == 1` premise (F3),
+and correct the `:2999-3010` comment to "reasoned, not traced" while KEEPING the guard (F4).
+**Mutation mandated with an honest-answer clause:** remove site 1 alone → T-117 and T-118 must die on their own
+criteria; remove site 2 alone → **if nothing dies, say so and label site 2 "reasoned, not traced" rather than claiming
+coverage it does not have** ([[LSN-063]]).
+**Out of scope and still queued after this:** B-R028-04 (the wedged dialog, A3-confirmed), the sort route's driver half,
+F5 (the tail-`processEvents` route — but the builder was asked to say whether site 2 closes it as a side effect), F6
+(no test drives `LocalFileStore`), F7.
+**After remediation:** re-clear with a fresh A3 (this ledger's pattern is that remediation waves get re-attacked, and
+four A3s in a row here have found real defects) → then the commit gate → then the clean-extract gate on a clean
+checkout. **Commit only on the user's word;** nothing is committed and `master` is untouched.
+
+--- prior gate (the cycle that produced this remediation) ---
+NEXT_GATE-PRIOR-A3R028: **THE REQ-028 A3 GATE — `qgdw-adversary` DISPATCHED 2026-08-18. → RETURNED: FINDINGS, ONE BLOCKING (A3-R028-F1), plus F2 blocking-by-the-same-root-cause and five more.** against the built,
+Verification-Gate-PASSED working tree (DEC-034 + DEC-036 together, uncommitted). Read-only on production; snapshot
+discipline mandated for any mutation it runs. **Pointed at B-R028-07 FIRST** (the never-disarmed ticket), then
+B-R028-09 (TEST-087's fabricated completions — and a sweep for OTHER slots fabricating the same way), B-R028-08 (the
+five surviving clauses: is `completedWrite`'s `isWrite` route correctly traced, and is any of the other four actually
+drivable, which would make it a missing test rather than a residual), then B-R028-10 and B-R028-04.
+**The briefing states the standing question rather than only the residual list:** three A3s in a row on this ledger have
+found a real defect behind a green suite, and the four self-disclosed residuals are where the build already KNOWS it is
+weak — so the interesting finding is probably elsewhere. Named as most likely: **a slot that passes for the wrong reason
+under the new swallow logic** (one that used to exercise a path production now stands down on stays GREEN while
+measuring nothing — which is exactly what TEST-087 turned out to be), and **whether `inflight.row` can be made dangling
+on any route DEC-034's compares do not cover.**
+**[[LSN-067]] APPLIED IN THIS VERY BRIEFING, one turn after capture:** the exact env line is quoted, including the
+target's PINNED `ASAN_OPTIONS`, with the reason it must not be stripped. Baseline for the adversary to hold: 61/61 each
+backend, EXIT=0, zero sanitizer summaries; ctest 27/27.
+**After the A3:** disposition its findings with the user → decide **B-R028-07** (a DEC-036 amendment or a build-level
+detail — it is a fifth site the DEC does not name) → cover **B-R028-04** → then the commit gate, then the clean-extract
+gate on a clean checkout. **Commit only on the user's word;** nothing is committed and `master` is untouched.
+
+--- prior gate (the build this A3 is attacking) ---
+NEXT_GATE-PRIOR-DEC036BUILD: **THE DEC-036 BUILD GATE — `qgdw-builder` DISPATCHED 2026-08-18. → RETURNED, VERIFICATION GATE PASS on all three checks (contract, evidence, goal audit).** On its return run the
+Verification Gate; nothing merges on the report's word. **DEC-036 ACCEPTED 2026-08-18 (user chose Option A, the
+in-flight ticket) and the full entry is appended at the end of `decisions.md`; the DEC index row is in
+traceability.md; WIKI REGISTRIES carry the accepted wording.** **TEST-113..116 ALLOCATED** — T-113 stale read
+swallowed (3 reads for 3 rows, zero rows relabelled, bar at 0) · T-114 the HEALTHY-batch positive control, which is
+what makes each of the four ARM sites individually mutation-provable rather than jointly ([[LSN-050]]/[[LSN-059]]) ·
+T-115 the stale WRITE on the Upload tab incl. the same-row case where only the one-shot `armed` bit separates the two
+transfers · T-116 buffer accounting (freed exactly once). **TEST-107 must be REWRITTEN OR RETIRED and the builder must
+say which** — it pins the defect, so a green TEST-107 after this fix would mean the fix did not work.
+**USER DECISION 2026-08-18 ON THE SORT ROUTE: take what Option A gives.** Its LABELLING half closes (the fix labels
+through a stored row POINTER, and TEST-112 measured that a sort permutes positions while item addresses stay stable);
+its DRIVER half (`for (int i=listindex; …)` at `:2013/:2321/:2681`) **stays positional and stays TRACKED as B-R028-05**.
+Closing that is DEC-034's Option C, a deliberate future reopen — briefed as explicitly OUT OF SCOPE so the builder does
+not quietly widen into it. **B-R028-04 is also out of scope and queued next** (DEC-032's idiom, ~16 services).
+**Mandated in the briefing:** RED step shown per slot; individual (never simultaneous) mutation with the killing
+assertion being the CRITERION's own; a call-site trace per guard; `cp`/`cmp` snapshot restore with `git checkout`
+FORBIDDEN on a tree carrying uncommitted work ([[LSN-032]]); the binary run DIRECTLY under BOTH `offscreen` and
+`minimal` with exit code + `SUMMARY: AddressSanitizer` grep instead of the test output's own line ([[LSN-062]]); no
+bare N/N without its backend; **DO NOT COMMIT.** Baseline to hold: **ASan 57/57 both backends, exit 0, zero sanitizer
+summaries; full ctest 27/27.**
+**AND THE BUILD MUST DISCHARGE TWO INVARIANTS THE DEC REFUSES TO ASSUME:** (1) the UNWRITTEN
+`readComplete`-returns-the-caller's-buffer contract at `CloudService.h:145` — written only for `readFailed` at
+`:160-161` today — must be written down and asserted, because Option A makes it load-bearing; (2) ≤1 outstanding
+transfer per live batch must be asserted across the existing suite, not assumed from the four dispatch-and-return
+sites. If either fails, the hatch fires and the ticket becomes a set — which is a DEC revisit, not a build fix.
+
+--- prior gate (the decision this build implements) ---
+NEXT_GATE-PRIOR-DEC036: **THE DEC-036 DECISION GATE — SCOUT RETURNED 2026-08-18, VERIFICATION GATE **PASS**, PROPOSAL PRESENTED,
+AWAITING THE USER'S CHOICE. → RESOLVED 2026-08-18: user chose **Option A** and, on the sort route, "take what the chosen option gives".** Three options, genuinely distinct in KIND: **A in-flight ticket**
+(dispatch-side identity — buffer pointer for reads, remotename for writes, row POINTER for the label; deletes all seven
+positional derefs; no signature/service/connection change) · **B per-batch relay** (a QObject owning the three
+connections, killed on abort so a stale completion is never delivered; the only option correct under concurrent
+transfers) · **C key-addressed rows + one-shot permit** (DEC-034's REJECTED Option B resurrected — therefore a DEC-034
+REOPEN, not DEC-036, because it kills three of DEC-034's six compares). **Scout recommends A.**
+**FOUR CLAIMS SPOT-CHECKED BY THE ORCHESTRATOR AT THEIR CITED LINES, not read from the report:** `LocalFileStore`
+emits `writeComplete("")` **synchronously inside `writeFile`** (`LocalFileStore.cpp:155-186`) — so the one empty-id
+service can never produce a LATE completion, which is what makes A's write half sound · the seven `child(listindex-1)`
+sites are exactly `:2460/:2538/:2545/:2634/:2641/:2848/:2855` · `Strava::prepareResponse` (`Strava.cpp:869`) mutates
+the buffer IN PLACE (`data->clear()/append()`, :989-990) and returns **the same pointer** to `notifyReadComplete`
+(`:528`), so pointer identity survives the most transformative service · `decisions.md:1181` is verbatim DEC-034's
+rejected Option B, scored 5/3/2/4, confirming C's reopen framing.
+**THE BRIEFING'S OWN SHAPE 2 WAS KILLED BY THE SCOUT AND THE REASON IS WORTH KEEPING:** swallow-by-count is
+**ARRIVAL-ORDER DEPENDENT** — with no ordering guarantee across `QNetworkReply` services, a live completion arriving
+first is eaten by the counter and the stale one is admitted, wedging the live batch; and it cannot fix the LABEL either,
+since whichever completion is admitted still writes through `child(listindex-1)`. It survives only as the **one-shot
+permit** folded into A and C, where it is paired with identity instead of used alone. Sixth briefing premise this
+ledger's delegation hatch has corrected.
+**TWO OPEN QUESTIONS GATE OPTION A AND MUST BE ANSWERED BY THE BUILD, NOT ASSUMED:** (Q1) does any store ever deliver
+`readComplete` with a pointer other than the one passed to `readFile`? — static audit says 11/11 return the caller's
+buffer, but the contract is UNWRITTEN at `CloudService.h:145` (it is written only for `readFailed`, `:160-161`) and A
+makes it load-bearing, so it must be written down and asserted; (Q2) can two transfers be outstanding on one LIVE
+batch? — A's single ticket rests on ≤1, which holds today by the four dispatch-and-return sites, and if it ever exceeds
+1 the ticket must become a set and B's score rises.
+
+--- prior gate (the dispatch this gate verified) ---
+NEXT_GATE-PRIOR-SCOUTDISPATCH: **THE DEC-036 DECISION GATE — `qgdw-scout` DISPATCHED 2026-08-18, IN FLIGHT.** User instruction was to keep
+closing what is open rather than ship REQ-028 partially, so the clause-(c) shortfall goes to a decision instead of into
+the ledger as an accepted residual. **DEC-036 ALLOCATED** (the option set may return it as a DEC-034 REOPEN — that is
+one of the things the scout must state). The scout drafts; the orchestrator presents; nothing is decided by an agent.
+**Briefed as ONE decision with two riders, so the user answers once:** the clause-(c) mechanism (per-transfer identity
+vs abort-time accounting vs a genuine third shape), and — scored per option, not asked separately — whether it also
+closes **B-R028-05** (the sort route, whose harm is executed and whose click trigger is not) and **B-R028-06** (the
+shorter-rebuild null on the same still-open route), plus whether it worsens **B-R028-04** (the wedged dialog).
+**Briefing built from FRESHLY RE-DERIVED offsets, not the recorded ones** — verified on disk 2026-08-18: `.h:644`
+`batchGeneration`, `:690` `listGeneration`, `:691` `batchListGeneration`; `refreshClicked` :1516 with the bump :1526;
+`downloadClicked` :1918 with :1941/:1951; `syncNext` :1996 (:2005/:2011, compares :2189/:2281); `downloadNext` :2319
+(buffer `new QByteArray` :2382); `uploadNext` :2662 (:2675/:2679, compares :2730/:2804); `completedRead` :2430
+(compares :2448/:2520); `failedRead` :2612 (:2630); `completedWrite` :2831 (:2844); connections :1067-1072.
+**ONE PREMISE OF THE OPEN FINDING WAS FALSE AND WAS CORRECTED BEFORE THE DISPATCH → ORCH-027.** B-R028-03 said
+`completedWrite` has no payload; `writeComplete(QString id, QString message)` is declared at `.h:243` and the SLOT at
+:2831 merely discards an unnamed parameter. The surviving true claim is narrower: the id is empty on `LocalFileStore`
+(:163/:170/:179/:183) though real on Strava/SportTracks/CyclingAnalytics/RideWithGPS/Selfloops. Uncorrected, it would
+have costed the per-transfer-identity option as a ~16-service signature cascade on the upload half when it may be a
+one-slot change. The finding's MEASUREMENT (TEST-107 still green after the fix) stands untouched.
+**Also mandated in the briefing, because the scout has NO Bash ([[LSN-065]] — never mandate a step outside the role's
+tool grant):** every code claim must be Read/Grep-verifiable with file:line, unverifiable ones must be labelled "not
+verified", override counts must be re-derived by the scout rather than copied from my number, and it must not edit any
+file. On return: verify the draft (three REAL options? scores justified? cascade concrete?), then the orchestrator
+presents it to the user. **Nothing is committed and `master` is untouched — the Phase-2 work is still uncommitted on
+`garmin/req028-row-lifetime`.**
+
+--- prior gate (this is the decision the dispatch above is researching) ---
+NEXT_GATE-PRIOR-USERDEC: **AWAITING USER — ONE DECISION, AND IT IS A DEC-SHAPED ONE. Nothing is running, nothing is blocked on
+evidence. The Phase-2 guards are verified done; what is open is a piece of REQ-028's acceptance that DEC-034 cannot
+reach.**
+**The decision: how to close acceptance clause (c) — the abort/restart route where a late completion labels the live
+batch's row and `completedRead`'s tail re-drives the loop (4 reads for 3 rows).** DEC-034's counter provably cannot: two
+transfers are outstanding at once and the restart overwrites any shared scalar snapshot before the stale completion
+arrives, so every scalar reads EQUAL at the compare. The two shapes the builder named, neither of which it was
+authorised to invent: **per-transfer identity** (carry the buffer pointer, which IS unique per transfer, through to the
+completion) or **abort-time accounting of outstanding transfers**. Both are mechanism choices → **this needs a DEC**,
+either **DEC-036 (new)** or a **DEC-034 REOPEN** in the DEC-031-reopens-DEC-025 pattern. Present three scored options.
+**Second, smaller call, and it can ride with the first:** **B-R028-05 / S-R028-01.** The measured harm on the sort route
+is real and passes every guard, but the user-click trigger is still an API-contract claim, not executed. The user's
+2026-08-17 rule was "if it reorders, DEC-034 reopens with executed evidence" — the sort DID reorder inside the loop, but
+the CLICK did not deliver it under either backend, so the rule's antecedent is only half met. Options: fold the sort
+route into whichever DEC closes clause (c) (it is the same "the row moved under me" family and the same fix — value/key
+addressing — would close both), or trace the click on a real backend first.
+**Once decided, the order is:** build the clause-(c) fix → **rewrite or retire TEST-107** (it is currently green
+BECAUSE the defect is live; the fix must flip it, and that flip is the acceptance evidence) → cover **B-R028-04** (the
+wedged-dialog state the fix introduced) and **B-R028-06** (the shorter-rebuild null on the still-open route) → then the
+**A3** with `qgdw-adversary`, which should be pointed at B-R028-06 first. **Three A3s in a row on this ledger have found
+real defects behind a green suite.** Then the commit gate, then the clean-extract gate. **Commit only on the user's
+word** — nothing is committed and `master` is untouched.
+**If instead the user wants to ship what exists:** the guards close the refresh route (the BLOCKING A3-R027-F2 UAF) and
+are mutation-proven; clauses (a), (b) and (d) are delivered. That is a real improvement and is committable on its own,
+with clause (c) carried as an open REQ. It is a legitimate choice, not a shortcut — but it must be recorded that REQ-028
+would then be PARTIALLY closed, and TEST-107 stays green as the standing marker of what is left.
+
+--- prior gate (the dispatch this gate verified) ---
+NEXT_GATE-PRIOR-P2DISPATCH: **THE REQ-028 PHASE-2 BUILD GATE — `qgdw-builder` DISPATCHED 2026-08-17, IN FLIGHT.** On its return, run the
+Verification Gate; nothing merges on the report's word.
+**Contract check:** all mandatory fields present (`FILES`, `API-SURFACE`, `DEPENDENCIES`, `TEST-107 DISPOSITION`,
+`TEST-112 RESULT`, and a non-empty `NOTES` — an empty NOTES is INCOMPLETE, not clean, and four consecutive builders on
+this ledger have disclosed the weakest part of their own work). Ids only from the allocated set **TEST-108..112**.
+**Evidence check — orchestrator-EXECUTED, never read from the report:**
+1. Rebuild UNPIPED and read cmake's own exit code (a `tail`-ed build returns `tail`'s status — that error is on this
+   ledger's record).
+2. Run the ASan target **directly, no ctest environment, under BOTH `offscreen` and `minimal`**; read the process exit
+   code and grep `SUMMARY: AddressSanitizer`, not the test output. Baseline 52 slots + the new ones. **Never record a
+   bare N/N without its backend** — [[LSN-062]] is a MECHANISM here. Confirm the new slots **BY NAME**, not by the
+   aggregate count.
+3. **Mutate each guard INDIVIDUALLY** — the null check and the `listGeneration` compare are separate guards on separate
+   routes, and a simultaneous revert proves only that some slot notices the aggregate ([[LSN-059]]). The assertion that
+   kills each mutant must be the CRITERION's own. Snapshot `.orig`, restore, `cmp`, zero residue; `git checkout`
+   FORBIDDEN — the CloudService files carry uncommitted work ([[LSN-032]]).
+4. **Reachability, not just coverage** ([[LSN-063]]): each guard needs a call-site TRACE of the production route that
+   reaches it, or an explicit "reasoned, not traced". A guard can be load-bearing against its own test and unreachable
+   from production.
+5. Diff claimed `FILES` against `git status` / `git diff --stat`. Scope is `src/Cloud/CloudService.{h,cpp}` +
+   `unittests/Core/garminconnect/testGarminConnectSyncDialogClose.cpp` (+ that dir's CMakeLists only if genuinely
+   needed). **Anything touching `src/Gui/MainWindow.cpp`, `src/CMakeLists.txt` or root `CMakeLists.txt` is drift** —
+   those carry another owner's uncommitted work. Reconcile the ~60 dirty entries: 6 ours, the rest untouched.
+6. **This slice's whole point is a guard, so "tests pass" is not evidence** — the mutation in (3) is what makes it
+   evidence. And REQ-028 changes what a frame may still be HOLDING across a suspension, so the acceptance evidence must
+   be an EXECUTED test under ASan, never reasoning about Qt semantics.
+**Goal audit:** re-read prd.md:154 clauses (a)–(e) VERBATIM and confirm each slot encodes the criterion as written, not
+a weaker paraphrase — in particular that **TEST-110's positive control is intact** (without it every other clause is
+satisfiable by refusing to act, [[LSN-050]]) and that **TEST-111 actually drives the parse-SUCCEEDS path** (the whole
+point of B-R028-01 is that TEST-107's all-`.gcfail` fixture could not reach the persistent harm).
+**Then, in order:** disposition **TEST-112's** result with the user — if the sort route reorders, **DEC-034 REOPENS**
+and that is a decision, not a fix; if the click cannot be delivered, record the undrivable with its reason and Option C
+stands. Then merge byproducts (trace rows for T-108..112, findings dispositions for B-R028-01/02 and S-R028-01,
+registry bumps), then queue the **A3** with `qgdw-adversary`. **Three A3s in a row on this ledger have found real
+defects behind a green suite — it is not a formality.** Commit only on the user's word.
+
+--- prior gate (resolved 2026-08-16 — that wave closed, landed and pushed) ---
+NEXT_GATE-PRIOR-WAVE027: **WAVE CLOSED, LANDED AND PUSHED. The clean-extract gate PASSED on the COMMITTED tree 2026-08-16; `master` was
+then fast-forwarded to `82a0de52a` and pushed to the user's fork. Nothing is running, nothing is blocked, and the next
+action is the user picking the next item from the queue below.**
+**Push mechanics worth keeping, because the first attempt failed:** the `origin` https remote has NO credential helper
+configured, so `git push` died with `could not read Username for 'https://github.com'`. `gh` IS authenticated
+(FONSECAMVP, `repo` scope, keyring), so the push ran through a ONE-SHOT helper —
+`git -c credential.helper='!gh auth git-credential' push …` — deliberately instead of `gh auth setup-git`, which would
+have written a helper into the user's global git config as a side effect of a push. Next session: same one-shot, or ask
+before persisting anything.
 
 **CLEAN-EXTRACT GATE — PASS, run on `git archive HEAD` of `ac5d5f67d`, extracted to a scratch dir with its own fresh
 build tree:**
