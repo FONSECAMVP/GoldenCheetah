@@ -14,12 +14,18 @@ def make_wiki_fixture():
     d = tempfile.mkdtemp(prefix="qgdw_wiki_")
     os.makedirs(os.path.join(d,"src","core"), exist_ok=True)
     os.makedirs(os.path.join(d,"wiki"), exist_ok=True)
+    # C-series fixtures: a MAPPED subdir with an existing file (clobber-through-cd), and an
+    # UNMAPPED subdir whose name contains a space (quoted cd operand).
+    os.makedirs(os.path.join(d,"docs"), exist_ok=True)
+    open(os.path.join(d,"docs","GUIDE.md"),"w").write("x")
+    os.makedirs(os.path.join(d,"my docs"), exist_ok=True)
+    open(os.path.join(d,"my docs","SPACED.md"),"w").write("x")
     for f in ("prd.md","STATE.md","README.md","CONTRIBUTING.md"): open(os.path.join(d,f),"w").write("x")
     open(os.path.join(d,"prd.md.orig"),"w").write("orig")
     os.makedirs(os.path.join(d,"snap"), exist_ok=True)
     open(os.path.join(d,"snap","README.md.orig"),"w").write("orig")
     open(os.path.join(d,"WIKI.md"),"w").write(
-        "# PROJECT WIKI\nroot: %s\nphase: 2\n\n## MAP\nprd.md req\nsrc/ code\nwiki/ brain\nSTATE.md cursor\nREADME.md ro\nCONTRIBUTING.md cg\n\n## REGISTRIES\nREQ 001-003 next:004\n\n## PAGES\nwiki/conventions.md conv\n" % d)
+        "# PROJECT WIKI\nroot: %s\nphase: 2\n\n## MAP\nprd.md req\nsrc/ code\nwiki/ brain\ndocs/ notes\nSTATE.md cursor\nREADME.md ro\nCONTRIBUTING.md cg\n\n## REGISTRIES\nREQ 001-003 next:004\n\n## PAGES\nwiki/conventions.md conv\n" % d)
     return d
 def make_nowiki_fixture():
     d = tempfile.mkdtemp(prefix="qgdw_nowiki_"); os.makedirs(os.path.join(d,"existing"), exist_ok=True); return d
@@ -102,6 +108,39 @@ CASES = [
  ("P8","Bash",{"command":'''echo "outer $(echo "inner $(mkdir .claude/skills/deep)") tail"'''},W,"deny","CORE","doubly-nested substitution: real mkdir still found"),
  ("P9","Bash",{"command":'''echo "outer $(echo 'inner mkdir .claude/skills/deep') tail"'''},W,"passthrough","CORE","doubly-nested, inner is single-quoted DATA -> passthrough"),
  ("P10","Bash",{"command":'echo "no substitution here: mkdir src"'},W,"passthrough","CORE","plain double-quoted string is DATA (simple-quote behavior preserved)"),
+ # C-series: EFFECTIVE WORKING DIRECTORY. A relative target must resolve against the dir in
+ # force at that point in the command, not the event cwd. Both directions: a target that
+ # only exists after the cd must deny, and a target that leaves the project must pass.
+ ("C01","Bash",{"command":"cd docs && touch GUIDE.md"},W,"deny","CORE","cd + touch: real target docs/GUIDE.md exists -> deny (was downgraded to ask)"),
+ ("C02","Bash",{"command":"cd docs && echo x > GUIDE.md"},W,"deny","CORE","cd + redirect clobber of docs/GUIDE.md -> deny"),
+ ("C03","Bash",{"command":"cd %s && mkdir src" % XROOT},W,"passthrough","CORE","cd OUTSIDE project then mkdir src: real target is outside -> passthrough (was false deny)"),
+ ("C04","Bash",{"command":"cd %s && touch qgdw-new-file" % XROOT},W,"passthrough","CORE","cd outside + touch new file -> passthrough"),
+ ("C05","Bash",{"command":"cd docs; touch GUIDE.md"},W,"deny","CORE","`;` separator carries the cd just like `&&`"),
+ ("C06","Bash",{"command":"cd docs && cd .. && touch docs/GUIDE.md"},W,"deny","CORE","multiple cd ops; `..` returns to root -> same real target -> deny"),
+ ("C07","Bash",{"command":"cd docs && touch ../docs/GUIDE.md"},W,"deny","CORE","`..` inside the target normalises back into docs/ -> deny"),
+ ("C08","Bash",{"command":'echo "$(cd %s && mkdir src)"' % XROOT},W,"passthrough","CORE","cd inside $( ) applies to the substitution's own commands -> outside -> passthrough"),
+ ("C09","Bash",{"command":'cd docs && echo "$(touch GUIDE.md)"'},W,"deny","CORE","substitution INHERITS the surrounding effective dir -> docs/GUIDE.md -> deny"),
+ ("C10","Bash",{"command":'echo "$(cd %s && true)" && mkdir .claude/skills/newthing' % XROOT},W,"deny","CORE","a cd inside $( ) must NOT leak to the outer shell -> vendor deny still fires"),
+ ("C11","Bash",{"command":'cd -- "my docs" && touch SPACED.md'},W,"deny","CORE","`cd --` plus a quoted operand containing a space -> clobber of 'my docs/SPACED.md'"),
+ ("C12","Bash",{"command":'cd "my docs" && touch brandnewspaced.md'},W,"ask","CORE","quoted cd resolves; NEW file in an unmapped dir -> ask-register (not a deny)"),
+ ("C13","Bash",{"command":'cd "$SOMEDIR" && touch prd.md'},W,"ask","CORE","dynamic cd: must NOT deny prd.md against the ORIGINAL cwd -> unresolved ask"),
+ ("C14","Bash",{"command":'cd "$(pick_dir)" && touch prd.md'},W,"ask","CORE","cd from a command substitution is unresolved -> ask, not a guessed deny"),
+ ("C15","Bash",{"command":"cd - && touch prd.md"},W,"ask","CORE","`cd -` (OLDPWD) is unresolved -> ask"),
+ ("C16","Bash",{"command":'cd "$SOMEDIR" && touch %s/prd.md' % W},W,"deny","CORE","unresolved cd does not stop ABSOLUTE targets being evaluated -> clobber deny"),
+ ("C17","Bash",{"command":'cd "$SOMEDIR" && mkdir %s/newdir' % XROOT},W,"passthrough","CORE","absolute target OUTSIDE the project after an unresolved cd -> passthrough"),
+ ("C18","Bash",{"command":"cd docs && mkdir ../src"},W,"deny","CORE","genuine project-root clobber reached through a cd is still denied"),
+ ("C19","Bash",{"command":"cd docs && touch newnote3.txt"},W,"passthrough","CORE","new file under the MAPPED docs/ dir, reached via cd -> passthrough"),
+ ("C20","Bash",{"command":"cd nosuchdir && touch prd.md"},W,"ask","CORE","cd into a non-existent dir would fail: state uncertain -> ask, never a guessed deny"),
+ ("C21","Bash",{"command":"cd docs && cd %s && touch qgdw-x" % XROOT},W,"passthrough","CORE","absolute cd after a relative one replaces the effective dir"),
+ ("C22","Bash",{"command":'echo "cd %s && mkdir src"' % XROOT},W,"passthrough","CORE","a cd inside QUOTED data is not a directory change (and the mkdir stays data)"),
+ ("C23","Bash",{"command":"pushd docs && touch prd.md"},W,"ask","CORE","pushd is not modelled -> unresolved ask rather than a wrong-dir deny"),
+ ("C24","Bash",{"command":"mkdir src"},W,"deny","CORE","no cd at all: plain event-cwd resolution unchanged"),
+ ("C25","Bash",{"command":"(cd %s && mkdir src)" % XROOT},W,"ask","CORE","cd inside an unmodelled ( ) subshell -> unresolved ask, never a wrong-dir deny"),
+ ("C26","Bash",{"command":"{ cd docs; touch prd.md; }"},W,"ask","CORE","cd inside an unmodelled { } group -> unresolved ask"),
+ ("C27","Bash",{"command":"cd docs && ln -sf %s/prd.md GUIDE.md" % W},W,"deny","CORE","ln clobber resolved through the cd -> deny (link kinds honour the effective dir)"),
+ ("C28","Bash",{"command":"cd docs && cp %s/prd.md GUIDE.md" % W},W,"deny","CORE","cp clobber resolved through the cd -> deny"),
+ ("C29","Bash",{"command":"cd docs && echo x >> GUIDE.md"},W,"passthrough","CORE","append through a cd preserves content -> still NOT a clobber"),
+ ("C30","Bash",{"command":"cd src && mkdir -p core"},W,"ask","CORE","mkdir -p no-op detected at the real location src/core -> ask"),
 ]
 rows=[]; core_fail=0; gap_fail=0
 for cid,tool,tin,cwd,exp,klass,note in CASES:

@@ -30,6 +30,14 @@ Design choices (deliberately conservative to avoid false positives):
     via touch/redirect/tee/cp/mv/ln are asked-to-register just like Write.
   * A path resolving OUTSIDE the project root (relpath starts with "..") is left alone — the
     MAP only governs the project.
+  * Relative Bash targets are resolved against the EFFECTIVE working directory at that point
+    in the command, not blindly against the event's `cwd`: a literal `cd` earlier in the
+    chain moves the base (`cd docs && touch X` targets `<cwd>/docs/X`). Command
+    substitutions inherit the surrounding directory, and a `cd` inside `$( )` does not leak
+    back out. When a directory change cannot be resolved deterministically (`cd "$VAR"`,
+    `cd "$(...)"`, `cd -`, `pushd`, or a `cd` whose target is not an existing directory) the
+    effective cwd becomes UNKNOWN: relative targets after it are never denied on a guessed
+    path — they raise an ASK — while absolute targets keep being evaluated normally.
   * If WIKI.md cannot be found or parsed, the MAP-registration *asks* are suppressed, but
     the high-confidence clobber *deny* (creating a path that already exists) still fires —
     re-creating an existing path is a mistake regardless of whether the brain is set up.
@@ -178,9 +186,14 @@ def strip_heredocs(command: str) -> str:
     return "\n".join(out)
 
 
-def _mask_quoted(s: str) -> str:
+def _mask_quoted(s: str) -> tuple[str, list[int]]:
     """Replace the CONTENT of single/double-quoted regions with spaces (same length, so
     match spans map 1:1 back onto the original). Quote chars themselves are kept.
+
+    Returns (masked, depths) where depths[i] is the command-substitution NESTING LEVEL of
+    character i (0 = the outer shell). Callers use it to scope directory state: a chunk at
+    depth d+1 runs in a subshell that INHERITS the enclosing directory but whose own `cd`
+    dies with it.
 
     Command substitutions are handled as their own parsing context. Per POSIX, the text
     inside `$( )` is parsed as a NEW command: its quotes are independent of any enclosing
@@ -196,8 +209,10 @@ def _mask_quoted(s: str) -> str:
     """
     out = list(s)
     n, i, q, stack = len(s), 0, None, []
+    depths = [0] * n
     while i < n:
         ch = s[i]
+        depths[i] = len(stack)
         if q == "'":
             # single quotes are literal: no escapes, no substitution
             if ch == "'":
@@ -208,6 +223,7 @@ def _mask_quoted(s: str) -> str:
         elif q == '"':
             if ch == "\\" and i + 1 < n:
                 out[i] = " "
+                depths[i + 1] = len(stack)
                 if s[i + 1] != "\n":
                     out[i + 1] = " "
                 i += 2
@@ -215,6 +231,7 @@ def _mask_quoted(s: str) -> str:
                 q = None
                 i += 1
             elif ch == "$" and i + 1 < n and s[i + 1] == "(":
+                depths[i + 1] = len(stack)      # the `$(` pair belongs to the OUTER level
                 stack.append(q); q = None
                 out[i] = out[i + 1] = "\n"
                 i += 2
@@ -223,6 +240,7 @@ def _mask_quoted(s: str) -> str:
                 i += 1
         else:
             if ch == "$" and i + 1 < n and s[i + 1] == "(":
+                depths[i + 1] = len(stack)
                 stack.append(q); q = None
                 out[i] = out[i + 1] = "\n"
                 i += 2
@@ -235,7 +253,7 @@ def _mask_quoted(s: str) -> str:
             if ch in ("'", '"'):
                 q = ch
             i += 1
-    return "".join(out)
+    return "".join(out), depths
 
 
 def _tokens(argstr: str):
@@ -253,6 +271,58 @@ def _has_flag(toks, letter):
     return any(re.fullmatch(r"-\w*%s\w*" % letter, t) for t in toks if t.startswith("-"))
 
 
+# A chunk is a directory change only when it STARTS with the verb (matched on masked text,
+# so `echo "cd /tmp"` is data). `pushd`/`popd` are recognised only to mark the state unknown,
+# as is a cd opening a construct we do not model — a `( )` subshell or a `{ }` group — since
+# whether the move survives the construct is exactly what we would have to guess.
+CD_RE = re.compile(r"^(\s*[({]?\s*)(cd|pushd|popd)\b([^\n]*)$")
+
+# Any of these in a cd operand means the literal path is not knowable without executing
+# something: parameter/command substitution, a backquote, a glob, or ~ (HOME-dependent).
+_DYNAMIC_OPERAND = re.compile(r"[$`*?~\[\]]")
+
+_UNSET = object()               # "this chunk performed no directory change"
+
+
+def _resolve_cd(argstr: str, base):
+    """Effective directory after a `cd` whose operand text is `argstr` (sliced from the
+    ORIGINAL command, so quoted literals — including paths with spaces — survive).
+
+    Returns an absolute, normalised directory, or None when the resulting shell state is
+    NOT deterministically knowable. None is returned for: a dynamic operand (`cd "$VAR"`,
+    `cd "$(...)"`, backquotes, globs, `~`), `cd -`, bare `cd` (HOME), the two-operand
+    substitution form, an unknown flag, an operand we cannot tokenise (e.g. the text was
+    cut short by a substitution), an unresolved base, and a target that is not an existing
+    directory (the `cd` would fail, so what runs next — and where — is a guess).
+    """
+    try:
+        toks = shlex.split(argstr)
+    except ValueError:
+        return None
+    operands, end_of_flags = [], False
+    for t in toks:
+        if end_of_flags:
+            operands.append(t)
+        elif t == "--":
+            end_of_flags = True
+        elif t.startswith("-") and t != "-":
+            if not re.fullmatch(r"-[LP@e]+", t):
+                return None                     # unknown flag: do not guess
+        else:
+            operands.append(t)
+    if len(operands) != 1:
+        return None
+    target = operands[0]
+    if target == "-" or _DYNAMIC_OPERAND.search(target):
+        return None
+    if not os.path.isabs(target):
+        if base is None:
+            return None                         # relative move from an unknown place
+        target = os.path.join(base, target)
+    ap = os.path.normpath(target)
+    return ap if os.path.isdir(ap) else None
+
+
 def _is_snapshot_restore(srcs, dest):
     """cp/mv <anywhere>/<name>.orig <path>/<name> is the sanctioned snapshot-restore
     pattern (LSN-032): restoring a file from its own backup copy is NOT a clobber. The
@@ -265,16 +335,23 @@ def _is_snapshot_restore(srcs, dest):
     return any(sb == db + suf for suf in _BACKUP_SUFFIXES)
 
 
-def shell_targets(command: str):
+def shell_targets(command: str, base_cwd=None):
     """
-    Yield (kind, raw_target) tuples for creation/overwrite intents.
+    Yield (kind, raw_target, eff_cwd) tuples for creation/overwrite intents.
     kinds: mkdir, mkdir_p, touch, redirect (truncating >), append (>> — content-preserving,
     never a clobber), tee, tee_append (tee -a), copy_dest, move_dest, link_dest.
     Quote-masked verb detection; original-text argument extraction; heredoc bodies ignored;
     snapshot-restore (cp/mv from a .orig/.bak/.backup of the same path) exempted.
+
+    `eff_cwd` is the directory a RELATIVE target resolves against at that point in the
+    command — `base_cwd` moved by every literal `cd` seen so far — or None when a
+    non-deterministic directory change makes it unknowable. Substitution frames inherit
+    the enclosing directory and are discarded on close, so an inner `cd` never leaks out.
+    A redirection/creation written on the `cd` command itself still resolves against the
+    directory BEFORE the move, which is the shell's own order.
     """
     cmd = strip_heredocs(command)
-    masked = _mask_quoted(cmd)
+    masked, depths = _mask_quoted(cmd)
 
     # chunk on separators found in MASKED text (a ';' inside quotes is data) and slice
     # both strings by the same spans so indices stay aligned.
@@ -283,46 +360,68 @@ def shell_targets(command: str):
         bounds.append((prev, m.start())); prev = m.end()
     bounds.append((prev, len(masked)))
 
+    # cwd_stack[d] = effective directory of substitution depth d (None = unknown)
+    cwd_stack = [base_cwd]
+
     for a, b in bounds:
         mchunk, ochunk = masked[a:b], cmd[a:b]
         if not mchunk.strip():
             continue
+
+        # Align the directory stack with this chunk's substitution depth: opening `$( )`
+        # inherits the surrounding directory, closing it discards the subshell's frame.
+        depth = depths[a] if a < len(depths) else 0
+        while len(cwd_stack) <= depth:
+            cwd_stack.append(cwd_stack[-1])
+        del cwd_stack[depth + 1:]
+        eff = cwd_stack[depth]
+
+        cdm = CD_RE.match(mchunk)
+        moved_to = _UNSET
+        if cdm:
+            plain = cdm.group(1).strip() == "" and cdm.group(2) == "cd"
+            moved_to = (_resolve_cd(ochunk[cdm.start(3):cdm.end(3)], eff)
+                        if plain else None)     # pushd/popd/subshell/group: unknowable
 
         mk = MKDIR_RE.search(mchunk)
         if mk:
             toks = _tokens(ochunk[mk.start(1):mk.end(1)])
             kind = "mkdir_p" if _has_flag(toks, "p") else "mkdir"
             for tok in _positional(toks):
-                yield (kind, tok)
+                yield (kind, tok, eff)
 
         tre = TOUCH_RE.search(mchunk)
         if tre:
             for tok in _positional(_tokens(ochunk[tre.start(1):tre.end(1)])):
-                yield ("touch", tok)
+                yield ("touch", tok, eff)
 
         for rm in REDIRECT_RE.finditer(mchunk):
             target = ochunk[rm.start(2):rm.end(2)].strip("'\"")
-            yield ("append" if rm.group(1) == ">>" else "redirect", target)
+            yield ("append" if rm.group(1) == ">>" else "redirect", target, eff)
 
         te = TEE_RE.search(mchunk)
         if te:
             toks = _tokens(ochunk[te.start(1):te.end(1)])
             kind = "tee_append" if _has_flag(toks, "a") else "tee"
             for tok in _positional(toks):
-                yield (kind, tok)
+                yield (kind, tok, eff)
 
         cm = CP_MV_RE.search(mchunk)
         if cm:
             verb = cm.group(1)
             pos = _positional(_tokens(ochunk[cm.start(2):cm.end(2)]))
             if len(pos) >= 2 and not _is_snapshot_restore(pos[:-1], pos[-1]):
-                yield ("copy_dest" if verb == "cp" else "move_dest", pos[-1])
+                yield ("copy_dest" if verb == "cp" else "move_dest", pos[-1], eff)
 
         lm = LN_RE.search(mchunk)
         if lm:
             pos = _positional(_tokens(ochunk[lm.start(1):lm.end(1)]))
             if len(pos) >= 2:
-                yield ("link_dest", pos[-1])
+                yield ("link_dest", pos[-1], eff)
+
+        # Commit the directory change AFTER this chunk's own targets were resolved.
+        if moved_to is not _UNSET:
+            cwd_stack[depth] = moved_to
 
 
 # ----------------------------- main logic -----------------------------
@@ -454,6 +553,7 @@ def main() -> None:
         command = tin.get("command", "") or ""
         # Evaluate ALL creation targets, then let the strongest decision win (deny > ask).
         pending_ask = None
+        unresolved_ask = None
         # kinds that clobber/recreate an existing path (deny when target exists):
         clobber_kinds = ("mkdir", "touch", "redirect", "tee",
                          "copy_dest", "move_dest", "link_dest")
@@ -462,11 +562,29 @@ def main() -> None:
         newfile_kinds = ("touch", "redirect", "append", "tee", "tee_append",
                          "copy_dest", "move_dest", "link_dest")
 
-        for kind, target in shell_targets(command):
+        for kind, target, eff in shell_targets(command, cwd):
             if not target:
                 continue
-            ap = abspath(target)
-            rel = rel_to_root(target)
+            if os.path.isabs(target):
+                ap = os.path.normpath(target)
+            elif eff is None:
+                # The effective cwd at this point is NOT deterministically knowable, so
+                # this relative name could denote anything. Never deny a guessed path:
+                # ask, and keep evaluating the rest (absolute targets are unaffected).
+                if unresolved_ask is None:
+                    unresolved_ask = (
+                        f"[anti-duplication guard] This command changes directory in a way "
+                        f"the guard cannot resolve deterministically (e.g. `cd \"$VAR\"`, "
+                        f"`cd \"$(...)\"`, `cd -`, `pushd`, or a `cd` into a directory that "
+                        f"does not exist), so the effective working directory where "
+                        f"'{target}' would be created is unknown and the target cannot be "
+                        f"classified safely — it may or may not clobber an existing project "
+                        f"path. Use an absolute path, or run the `cd` as its own step, so "
+                        f"the target can be checked against the tree and the WIKI MAP.")
+                continue
+            else:
+                ap = os.path.normpath(os.path.join(eff, target))
+            rel = rel_to_root(ap)
             # CONTAINMENT FIRST: a path outside the project root is governed by neither
             # this MAP nor the vendor rule — leave it alone.
             if not inside_root(ap, root):
@@ -538,6 +656,10 @@ def main() -> None:
                                f"and add a MAP line as a byproduct (Principle 9).")
                 continue
 
+        # An unknown effective cwd is the more important thing to surface: it means a
+        # target could not be classified at all, not merely that it is unregistered.
+        if unresolved_ask is not None:
+            emit("ask", unresolved_ask)
         if pending_ask is not None:
             emit("ask", pending_ask)
         passthrough()
