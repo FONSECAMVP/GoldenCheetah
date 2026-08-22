@@ -1154,3 +1154,397 @@ strength of a surviving mutant ([[LSN-053]]).
   there and was there from the start. Amending it would have been churn dressed as rigour. Recorded
   because a recommendation that survives into the ledger unchecked is how a criterion silently drifts.
   What IS added is a new clause (f) for the download path this DEC newly guards.
+
+---
+
+## DEC-034 — Who owns a row across a nested event loop: make the REBUILD observable (REQ-028)
+- Status: accepted (C — list generation counter)
+- Reversibility: cheap (one member + six compares in one file; no schema, no interface, no subclass API change; revert is the diff)
+- Decided / last-reviewed: 2026-08-16
+- Serves: REQ-028; raised by A3-R027-F2 (BLOCKING) / F3 / F8, cycle `A3/REQ-027 (2026-08-14)`
+- Constrained by: DEC-032 (whose idiom this reuses), DEC-031 (blockingCallDepth must stay complete — this adds no suspension point), DEC-035 (guard-above-the-irreversible-write ordering), DEC-030/DEC-025 (lifetime machinery — untouched)
+- Dependents: TEST-107, TEST-108, TEST-109, TEST-110; S-R028-01 (tracked, NOT closed by this DEC)
+
+### The question
+Three of this project's decisions — DEC-025, DEC-030, DEC-032 — each enumerated the set of things
+that must survive a suspension, and all three enumerated `this`, `store` and `context`. **None ever
+enumerated the ROW.** `refreshClicked` deletes every `QTreeWidgetItem` in all three lists and rebuilds
+them; both transfer loops capture `curr` before `openRideFile`'s nested loop and use it after. That is
+a live heap-use-after-free on unmodified production (PROBE-A), and REQ-027 widened it from a read to a
+write. So: who owns a row across a suspension, and what must a driver do when its collection has been
+rebuilt underneath it?
+
+### Alternatives
+| Opt | Rel | Scal | Maint | BP |
+|---|---|---|---|---|
+| A refuse at the mutator (`refreshClicked` stands down while a driver is live) | 3 — kills the UAF with the smallest diff, but the row stays an unowned raw pointer and any future list mutator silently reopens it | 4 — O(1), indifferent to list size | 4 — one guard, one function — but the predicate must be `downloading \|\| blockingCallDepth > 0` or it is defeated outright | 3 — answers "who owns the row" with "nobody, and we forbade the one thing that noticed" |
+| B value addressing (driver holds a KEY, tree owns the item) | 5 — changes the failure CLASS: a missing row becomes a defined stand-down instead of a dangling pointer; the only shape robust to a mutator nobody has thought of | 3 — O(N) per suspension and per completion; at 100x scale needs a hash, which reintroduces the coherence problem | 2 — largest diff (~10 sites) in the most comment-dense function family here; adds a second coordinate system beside `listindex`, which stays positional | 4 — "hold a key, not a pointer, across a yield" is the correct consensus answer, but it touches the most shared code |
+| **C list generation counter** | **4 — closes all three briefed axes at their stated roots and fails SAFE (stand down); but validates the CONTAINER, not the element** | **4 — two int compares per suspension, independent of list size** | **5 — DEC-032's existing idiom applied a second time: no new concept, no helper, guards adjacent to the ones already there** | **4 — epoch counters are the standard answer to "the collection changed under my iterator", and this project has already accepted the pattern by decision** |
+
+### Why C
+**It is the only option that closes all three briefed axes while satisfying every binding constraint
+at once**: it adds no suspension point (DEC-031's `blockingCallDepth` completeness untouched), no new
+`tr()` string across ~16 sibling services (the translation cost DEC-032 explicitly refused to reopen),
+no subclass API change, and it places guards above the irreversible writes per DEC-035.
+
+**Two verified facts decided it against A**, both confirmed by the orchestrator at their cited lines
+before this was recorded:
+1. **A's briefed predicate is defeated.** The stub proposed gating on `downloading`. But
+   `downloadClicked`'s abort branch sets `downloading=false` at `:1915` *while the driver frame is
+   still suspended inside `openRideFile`*, and that frame then resumes and WRITES
+   `curr->setText(7, tr("Aborted"))` at `:2153`. The button re-enables inside the exact window
+   DEC-035 widened from a read to a write. Not re-enabling there is worse: `downloading=false`
+   otherwise occurs only at :2240/:2352/:2693, so Refresh would stay dead forever after any abort.
+2. **A is untestable in this repo, and would sit behind a green suite proving nothing.**
+   `refreshClicked` is a directly-callable slot (`CloudService.h:425`); the harness invokes
+   `dialog->refreshClicked()` **19 times** and references `refreshButton` **zero** times. A
+   `setEnabled(false)` fix is invisible to every existing and plausible test here. Testing it would
+   need `QTest::mouseClick` under offscreen/minimal — the delivery-reliability minefield LSN-062 /
+   A3-R027b-F1 / ORCH-017 spent two cycles on.
+3. **A also guts TEST-091.** That fixture drives `refreshClicked()` from inside `readFile`'s loop
+   *specifically* so its readdir nests a COUNTED frame inside an UNCOUNTED one — B-R031-01's whole
+   premise. Refusing the Refresh means the inner readdir never happens and TEST-091 silently becomes
+   a test of the new guard. **C preserves that geometry**: `refreshClicked` still runs, still enters
+   readdir, still nests the frame.
+
+**Why not B, which scores higher on reliability.** B is the better answer on the merits and is the
+only shape that survives S-R028-01 (reordering). Its price is a column-1 uniqueness audit across ~16
+subclasses — the sibling-scan shape REQ-024 records as having cost this project three cycles — plus a
+rewrite (not an amendment) of DEC-032's rationale, since that comment names `child(listindex-1)`
+addressing as the harm and B deletes the harm. For a BLOCKING live UAF, C buys most of B's safety for
+a fraction of the blast radius. **User chose C with S-R028-01 tracked rather than folded in.**
+
+### Stated honestly: what C does NOT do
+- **It validates the CONTAINER, not the ELEMENT.** C is sound only while whole-list rebuild is the
+  only way a row dies — true today (`:1532`/`:1539`/`:1544` are the only tree-item deletes in the
+  file), but that is an invariant, not a guarantee. A future mutator that deletes ONE row defeats it.
+- **It does not close S-R028-01 (the sort route).** A reorder frees nothing and bumps no counter, so
+  it passes every guard C installs. Tracked as an open finding by user decision, not closed here.
+- **F8's harm shape is still unmeasured.** `QTreeWidgetItem::child(int)` out-of-range behaviour is
+  *unspecified* in Qt's documentation, so the current F8 damage is either a null deref or a silently
+  wrong-row label — which need different guards. **The build therefore runs probe-first**, the
+  TEST-081 / TEST-089 pattern that changed the answer both times it was used here.
+
+### Suspension set (LSN-060 — stated explicitly, as the lesson requires)
+`{ this: QPointer (DEC-025) | context: QPointer (DEC-030) | store: StoreReaper (DEC-031) |
+intent: aborted (DEC-032/035) | batch: batchGeneration (DEC-032) | LIST: listGeneration (this DEC) }`.
+The row is validated **indirectly**, by proving the container it came from was not replaced.
+
+---
+
+## DEC-036 — Correlating a completion with the transfer that asked for it: the in-flight ticket (REQ-028 clause (c))
+- Status: accepted and built on formal reopen (C — explicit operation identity on the ambiguous write channel); verified 2026-08-22 by TEST-124/126/127/128/129, full offscreen 78/0, both historical seeds on both backends, and `garmin-fast` 25/0
+- Reversibility: medium-expensive (coordinated shared write-interface migration; no persisted schema or remote artefact changes)
+- Decided / last-reviewed: 2026-08-18 / reopened and re-decided 2026-08-22
+- Serves: REQ-028 acceptance clause (c); closes B-R028-03, closes B-R028-06 as a side effect, narrows B-R028-05 to its driver half
+- Constrained by: DEC-034 (the counter this layers on — NOT reopened), DEC-035 (guards sit at the irreversible call), DEC-032 (stand-down idiom), DEC-031/DEC-024 (reaper + `blockingCallDepth` must be undisturbed), DEC-030/DEC-025 (`QPointer` proves alive, never wanted)
+- Dependents: TEST-107 (must be rewritten or retired — it currently pins the defect), TEST-111, TEST-112, new TEST-113/114/115/116; B-R028-04 (untouched, next in the queue)
+
+### The question
+DEC-034's `listGeneration` closes the *refresh* route. It cannot close the *abort+restart* route, and
+this is provable rather than incidental: **two transfers are outstanding at once**, and the restarted
+batch's own dispatch overwrites any shared member before the abandoned batch's completion arrives, so
+`listGeneration`, `batchGeneration` and any new scalar all read EQUAL at the compare. Measured, not
+argued: TEST-107 is **still green after the Phase-2 fix**, still asserting 4 `readFile` calls for 3
+checked rows, `rowsRelabelled == [0]` (the wrong row) and a bar advanced for a batch that completed
+nothing. Clause (c) — *"the reader is invoked exactly once per checked row"* — is unmet by measurement.
+
+### Alternatives
+| Opt | Rel | Scal | Maint | BP |
+|---|---|---|---|---|
+| **A in-flight ticket** (dispatch-side identity: buffer pointer for reads, remotename for writes, row POINTER for the label) | **4 — order-independent (identity, not arrival); the token cannot suffer address reuse because a buffer is freed only by its own completion, so stale and live buffers are simultaneously alive. Not 5: the write half's `name` collides when the restart re-dispatches the SAME row and is separated only by the one-shot `armed` bit, which rests on the ≤1-outstanding invariant** | **4 — two compares per completion, O(1) in list size. Not 5: a single ticket slot; concurrent transfers would need a set, which is a redesign** | **4 — the same snapshot-and-compare idiom family DEC-032/034 established, and it REMOVES net surface (seven positional derefs deleted). Cost: armed in one function, consumed in another (three pairs to keep in step)** | **4 — "correlate the response with the request" is the consensus answer for async completion, and it honours the no-subclass-API-change / no-new-`tr()` constraint. Tension: a heap address as a correlation id is unorthodox, sound HERE only because of the freed-exactly-once contract** |
+| B per-batch relay (a QObject owns the three connections; abort kills it, so a stale completion is never delivered) | 4 — strongest containment: the slot is never entered, so it cannot mislabel, advance the bar or re-drive. Not 5: it puts object-lifetime management into the file whose last five decisions (DEC-024/025/030/031/035) were all lifetime bugs — the relay can be asked to die with a forwarding frame on its own stack | 5 — per-BATCH, not per-transfer: the only option that stays correct if the dialog ever issues concurrent transfers | 3 — "who handles readComplete" now takes two hops through an object with subtle lifetime rules; the topology is no longer greppable from one `connect` line | 3 — receiver-lifetime cancellation is idiomatic Qt with precedent here (`GarminConnect.cpp:737-743`), but it answers only "was this batch abandoned" and leaves positional addressing — the common root — untouched |
+| C key-addressed rows + one-shot permit (DEC-034's rejected Option B resurrected) | 5 — changes the failure CLASS: "row not found" is a defined stand-down; survives reorder, shorter rebuild, late completion, and the single-row mutator DEC-034 admits defeats it | 3 — O(N) scan per completion; at 100x needs a hash, which reintroduces the coherence problem DEC-034 recorded at `:1181` | 2 — largest diff in the most comment-dense function family here; three different key columns for three list shapes, one of which (sync-upload, `:1800-1802`) has NO id column; a second coordinate system beside `listindex` | 5 — "hold a key, not a pointer or an index, across a yield" is the textbook answer and the only one closing S-R028-01. Tension: the user chose the smaller blast radius once already and asked for the sort route to be tracked, not folded in |
+
+### Why A
+It is the only option that closes clause (c) on **both** halves *and* deletes the seven unguarded
+`child(listindex-1)` derefs (B-R028-06) *and* narrows the sort route, while changing **no** signature,
+**no** service and **no** connection topology — the constraint the user has enforced twice
+(`decisions.md:1186-1188`, `:1214-1215`). It buys most of C's safety at roughly B's diff size.
+
+**Two facts verified at their cited lines decided it, both by the orchestrator rather than read from
+the scout's report:**
+- **The identity is already on the wire, on both halves.** `writeComplete(QString id, QString message)`
+  (`CloudService.h:243`) has always carried an id; `completedWrite` (`:2831`) merely leaves the
+  parameter unnamed and discards it. 10 of the 11 write services pass `replyName(sender())` after a
+  `mapReply(reply, remotename)`, so the id IS the remotename the dialog passed. **The 11th,
+  `LocalFileStore`, emits `""` — but emits it SYNCHRONOUSLY inside `writeFile`
+  (`LocalFileStore.cpp:155-186`), so its completion can never be late and the empty-id gap is
+  unreachable on this route.** (The contrary claim in B-R028-03 was false and was corrected → ORCH-027.)
+- **The read buffer pointer survives even the most transformative service.** `Strava::prepareResponse`
+  (`Strava.cpp:869`) mutates the buffer IN PLACE (`data->clear(); data->append(...)`, `:989-990`) and
+  returns **the same pointer** to `notifyReadComplete` (`:528`). 11/11 read services hand back the
+  caller's pointer.
+
+### What A explicitly does NOT close
+- **The sort route's DRIVER half (B-R028-05 / S-R028-01).** Labelling through the stored row POINTER is
+  address-based, and TEST-112 measured that a sort permutes positions while item addresses are stable —
+  so the correct row is labelled even mid-permutation. But `for (int i=listindex; …)` at `:2013/:2321/:2681`
+  stays positional, so a sort inside the nested loop can still re-visit a transferred row and skip one.
+  **User decision 2026-08-18: take what A gives; the driver half stays tracked as an open finding.**
+  Closing it is C's job, and C is the deliberate end-state when the sort route is scheduled.
+- **B-R028-04** (the Refresh-mid-batch wedge: `downloading` stays true, the button still reads "Abort").
+  That is DEC-032's idiom shared across ~16 services and is next in the queue, not a drive-by edit here.
+
+### The two invariants A makes load-bearing (must be discharged BY THE BUILD, not assumed)
+1. **`readComplete` returns the pointer `readFile` was given.** True at 11/11 today, but the contract is
+   **unwritten** at `CloudService.h:145` — it is written only for `readFailed` (`:160-161`). A makes it
+   load-bearing, so the build must write it down beside the existing one and assert it.
+2. **At most one transfer is outstanding per live batch.** Holds today because each driver dispatches
+   and returns immediately (`:2288/:2224/:2401/:2755`). If it can ever exceed 1, the single ticket must
+   become a set and B's score rises. The build must assert `<= 1` across the existing suite.
+
+### Rejected without a slot, and the reason is worth keeping
+**Abort-time accounting alone** ("count what is in flight, swallow that many") is **arrival-order
+dependent**: with no ordering guarantee across `QNetworkReply`-based services, a live completion
+arriving first is eaten by the counter while the stale one is admitted — wedging the live batch. It
+also cannot fix the LABEL, since whichever completion is admitted still writes through
+`child(listindex-1)`. Its order-independent refinement — a **one-shot permit** — survives, folded into
+A as the `armed` bit, where it is paired with identity instead of used alone.
+
+### Suspension set (LSN-060)
+`{ this: QPointer (DEC-025) | context: QPointer (DEC-030) | store: StoreReaper (DEC-031) |
+intent: aborted (DEC-032/035) | batch: batchGeneration (DEC-032) | list: listGeneration (DEC-034) |
+TRANSFER: inflight ticket (this DEC) | ROW: inflight.row, validated indirectly by DEC-034 }`.
+This DEC is the first entry that identifies the **transfer** itself; every prior entry identifies a
+container or an intent. Note the direction of dependence: **A makes DEC-034 MORE load-bearing, not
+less** — the compares at `:2448/:2630/:2844` are what prove `inflight.row` is not dangling, since a
+whole-list rebuild (`:1532/:1539/:1544`) is the only way a row dies.
+
+### AMENDMENT 2026-08-18 — the invalidation half (A3-R028-F1 BLOCKING, F2, B-R028-07)
+**The entry above specified an ARM/CONSUME protocol and never enumerated INVALIDATION, and that omission is a
+live heap-use-after-free.** The ticket is armed at four sites, consumed at three, and invalidated nowhere, while
+`batchListGeneration` IS re-synced at every batch start (`:1951`) — so **a batch start that dispatches nothing hands a
+stale ticket a freshly-valid generation stamp**, and the abandoned batch's completion then passes every guard in the
+file and writes through a row `refreshClicked` already freed (`:1542` → `:2654`). Four ordinary clicks reach it:
+Download → Refresh → Abort → Download.
+
+**This is a severity RAISE that Option A itself caused, and the trade was visible in the entry's own text.** Replacing
+`child(listindex-1)` with a held `inflight.row` moved this route from a MISLABEL (positional addressing re-reads the
+rebuilt list, so it is never dangling) to a USE-AFTER-FREE. The DEC closed the row's lifetime on the routes it
+enumerated; the route it did not enumerate is the one where the row dies and the ticket outlives it.
+
+**Amendment (not a reopen — "ARMED IS ONE-SHOT" stands, it was simply incomplete):** the ticket is invalidated at
+**two** further sites.
+1. `inflight.armed = false;` in `downloadClicked`'s START branch, beside `batchListGeneration = listGeneration;`
+   (`:1951`). Safe because that branch runs only when `downloading == false`, i.e. no live transfer belongs to this
+   dialog. It disarms **before the restarted batch's first suspension**, which closes B-R028-07's `openRideFile`
+   window, and **before any restart that arms nothing**, which closes A3-R028-F1 and F2.
+2. `inflight.armed = false;` beside `listGeneration++` in `refreshClicked` (`:1526`). Independently correct — a Refresh
+   frees the row the ticket holds, so the ticket is meaningless from that instant — and it makes the dangling
+   `inflight.row` **unreachable** rather than merely unread. Site 1 alone closes the known routes; site 2 is what makes
+   the invariant hold by construction instead of by enumeration, which is the whole lesson of this amendment.
+
+**The lifecycle rule this DEC should have carried from the start, and which now generalises past it:** any state ARMED
+at N sites and CONSUMED at M sites must have its INVALIDATION sites enumerated in the same entry. "Armed at four,
+consumed at three, never disarmed" is an incomplete lifecycle, and the gap is invisible to mutation testing — every
+guard mutated individually, every mutant died, and the defect was in the site that does not exist.
+
+**Also corrected here (A3-R028-F4):** the entry's claim that `completedWrite`'s `isWrite == false` clause is TRACED
+does not survive. `replyName()` never returns `""` for a write reply — every `writeFile` in `src/Cloud/` calls
+`mapReply(reply, remotename)` first, at 20 call sites — and the only real empty-id emitter, `LocalFileStore`, emits
+SYNCHRONOUSLY from inside `writeFile`, so its completion can never be late. The clause STAYS as defence-in-depth but is
+re-labelled **"reasoned, not traced"** alongside its four siblings. The comment at `CloudService.cpp:2999-3010` must be
+corrected rather than left asserting a route that does not exist.
+
+### FORMAL REOPEN DECISION 2026-08-22 — Option C, explicit write-operation identity
+**Trigger:** A3-R028c-F2 and seed 32 measured two transfers outstanding for one live batch, firing this
+entry's own reopen condition. The prior single-slot premise is false; the completion-slot
+`batchGeneration` amendment is a necessary resumption guard, not a replacement correlation
+architecture.
+
+**Common requirement under every option:** snapshot `batchGeneration` when each completion is admitted,
+then re-check it after every suspension and before using a saved row, changing counters or re-driving a
+driver. This closes the duplicate-tail route and the stale completion-local row route measured by seed
+447. It does not identify two same-named writes and does not preserve correlation through Refresh.
+
+| Opt | Rel | Scal | Maint | BP |
+|---|---|---|---|---|
+| A multi-ticket ledger + write-name exclusion | 4 — exact only while colliding write names cannot overlap | 4 — concurrent reads/non-colliding writes | 3 — dialog-local but lifecycle-heavy | 4 — sound backpressure over inferred identity |
+| B drain before restart | 4 — quiescence removes ambiguity, but a missing completion wedges restart | 2 — serializes the user behind the slowest transfer | 3 — adds a draining UI/state machine | 3 — legitimate but poor recovery UX |
+| **C explicit write-operation identity** | **5 — same-name writes and reversed delivery remain distinguishable** | **5 — immediate restart and future concurrency** | **2 — broad coordinated migration, simple steady-state model** | **5 — request/response identity is carried explicitly** |
+
+**User decision 2026-08-22: C.** Allocate an opaque operation id at every write dispatch, carry it
+through `writeFile` and return it with `writeComplete`, and key the dialog's write records by that id.
+The read channel keeps its existing buffer-pointer identity; it does not need an API migration.
+Refresh makes an outstanding record row-free but preserves its id until completion, so a late result is
+consumed without touching a destroyed row. No correctness-degrading eviction cap is permitted; records
+live until completion or dialog destruction.
+
+**Verified migration surface:** 11 write-service override declarations and definitions; 24 write
+completion emission sites; the shared `writeFile`/`notifyWriteComplete`/`writeComplete` API; three
+`writeFile` callers; and the Upload-dialog and Sync-dialog consumers. The operation id is local metadata:
+it does not alter a remote filename or stored user data.
+
+**Cascade:** supersede DEC-037's receiver-side name matching, cap and accepted result swap; make
+TEST-124 require exact result-to-producing-row association in both arrival orders; expose operation
+record conservation to the oracle; add the Refresh row-free-record route; run every target compiling the
+shared fake and both registered QPA backends. The separately known sort-route driver defect remains a
+following stable-worklist slice. That sequencing accepts no residual: REQ-028 clause (c) remains
+explicitly partial until the sort slice also lands.
+
+---
+
+## DEC-037 — Separating an abandoned write from the live one when the wire carries no identity (REQ-028 (c), A3-R028b-F3)
+- Status: superseded by DEC-036's built and verified 2026-08-22 Option C; the retired-name/capped-ticket implementation is no longer production behavior
+- Reversibility: cheap (one member + ~4 edits in one file; no service, no signature, no wire format touched — revert is the diff)
+- Decided / last-reviewed: 2026-08-19
+- Serves: REQ-028 clause (c) partially met; the accepted same-name result-swap residual contradicts the clause as written, so the former "re-closed" claim is withdrawn; A3-R028b-F3 remains the historical trigger
+- Constrained by: DEC-036 (whose ticket SHAPE this supersedes while leaving its arm/consume/invalidate protocol intact), DEC-035, DEC-034, DEC-032, DEC-031, DEC-024
+- Dependents: TEST-124, TEST-125; TEST-115's same-row half must be RE-ARGUED
+
+### The question
+`CloudServiceSyncDialog::completedWrite` cannot tell an abandoned transfer's completion from the live
+one when both carry the same `remotename` — and they do: the Upload list's row and the Sync list's
+upload row for one activity both carry `text(1) == ride->fileName` (`CloudService.cpp:1777`, `:1823`),
+and both arm sites compute the key identically (`:2393`, `:3053`).
+
+### THE DISPROOF THAT DECIDED IT — no receiver-side scheme can work, and this is why the entry exists
+**The emitter is ONE SHARED `store`** — all three connections are made on it (`CloudService.cpp:1067-1072`,
+orchestrator-verified) — **and the payload is identical.** `QObject::sender()` inside the slot is the
+store, not the reply. Therefore:
+- **A per-batch relay QObject does NOT close this**, and DEC-036's research was wrong to describe its
+  Option B as closing that family "by construction". Qt severs a connection when a participant is
+  destroyed; it does not filter emissions per batch. `downloadClicked`'s START branch creates the new
+  batch's relay BEFORE `uploadNext` dispatches, so the abandoned write's `writeComplete` is delivered to
+  the LIVE relay and forwarded — identical outcome to today. The `GarminConnect.cpp:737-743` precedent is
+  sound for what it does (cancelling a post whose CONTEXT died) and does not transfer, because there the
+  emitter is per-object and here it is shared.
+- **A per-dispatch sequence number in the ticket does NOT close this** (the A3's suggestion, and the
+  orchestrator's first instinct): `writeComplete(QString id, QString message)` (`CloudService.h:271`)
+  carries only those two values, so any field stored in the ticket describes the LIVE transfer while the
+  stale completion carries nothing to compare against.
+- **Folding list identity into `remotename` is DISQUALIFYING:** it is the remote artefact name on the
+  wire — `LocalFileStore.cpp:174` writes `path+"/"+remotename` to disk and `Dropbox.cpp:281` puts it in
+  the `Dropbox-API-Arg` path — so it is a user-visible behaviour change to all 11 write services.
+- **Disarming on abort does NOT close it either**, and the reason the abort branch was left alone is now
+  re-derived rather than assumed: `uploadNext` RE-ARMS with the same name, so the stale completion still
+  matches; and it would silently delete the "Aborted" label an abandoned write currently writes to its
+  own row via the still-armed ticket (`:3212-3213`).
+**Only three families survive: retain the abandoned state, forbid the overlap, or guess from arrival
+order.**
+
+### Alternatives
+| Opt | Rel | Scal | Maint | BP |
+|---|---|---|---|---|
+| **A retired-ticket set** (quarantine the abandoned write ticket at restart; match it FIRST) | **4 — order-INDEPENDENT on everything that breaks the invariant: exactly one re-drive, one increment, no swallowed completion, in BOTH arrival orders. Not 5: two same-name rows can exchange result strings under one order, and the retired list holds raw row pointers that the Refresh clear must keep valid** | **4 — O(k), k = writes abandoned since the last Refresh, ≤1 on every route driven in this wave, capped. Not 5: a future concurrent-dispatch design needs the LIVE side to become a set too** | **4 — no new concept; it is the escape hatch DEC-036's own comment names (`CloudService.h:773-775`, "would need a SET here, not a slot"). Cost: that entry's load-bearing paragraph must be REWRITTEN, and invalidation now covers two containers** | **5 — "retain an abandoned request's correlation state until its response lands" is the consensus answer for a shared-emitter channel with no per-request identity, and it violates none of the standing constraints: 0 of 11 services, 0 of 24 emit sites, 0 signatures, 0 new `tr()`, 0 new suspension points, empty ids still accepted** |
+| B drain before restart (abort latches `draining`; START refuses until the outstanding write lands) | 4 — zero ambiguity while the drain holds, the strongest correctness story; not 5 because the deadline that prevents a permanent wedge hands the ambiguity straight back when it fires | 3 — serialises the USER: every abort costs a wait bounded by the slowest outstanding upload, and abort-during-a-large-batch is exactly when users abort | 3 — a three-state machine plus a timer in the function family whose last five decisions were all lifetime/re-entrancy bugs; timer-driven tests under `offscreen` AND `minimal` are the flakiest surface in this harness | 3 — "quiesce before restart" is legitimate, but it needs a new user-visible label, i.e. a new `tr()` string across the shared dialog's translations — the exact cost DEC-032 refused — and it DEEPENS B-R028-04 by adding a second state where the button lies |
+| C abort-time outstanding counter | 2 — distinguishes by ARRIVAL POSITION, which is an assumption, not an identity: two writes really are outstanding here, as separate replies with no ordering guarantee, and if the LIVE one lands first the counter eats it — the live batch wedges mid-row and the stale one mislabels. **Strictly worse than the current defect, which at least keeps moving** | 5 — one int, O(1) | 5 — smallest possible diff, two sites, trivially reverted | 2 — the shape DEC-036 already rejected on the record (`decisions.md:1297-1303`) for exactly this reason; A3-R028b-F3 is not new evidence for it, and it cannot label the abandoned row at all |
+
+### Why A
+The choice was forced by the disproof, not by preference. **C is the option the record already rejected
+and this finding does not rehabilitate it.** B is the only option with zero residual, but it buys that
+with a new user-visible dialog state, a new `tr()` string across the shared dialog's translations, and
+timer-driven tests — three costs the user has refused twice in this feature (`decisions.md:1186-1188`,
+`:1214-1215`) — and it makes B-R028-04, the next queued item, harder. **A closes the BLOCKING harm in
+both arrival orders by EXHAUSTION rather than by assumption**, and honours every standing constraint
+exactly.
+
+### The mechanism (four sites, two files, zero services)
+1. `CloudService.h` — `QList<InFlight> retiredWrites;` beside `inflight` (`:786-793`), with a small cap.
+   **The paragraph at `:769-775` must be REWRITTEN, not extended:** "a single ticket is enough" is still
+   true per LIVE batch, and that is now exactly the point — a transfer can OUTLIVE its batch.
+2. `CloudService.cpp:2029` — the START branch retires an armed WRITE ticket before disarming. Safe for
+   the same recorded reason that line is already safe: the branch runs only with `downloading == false`.
+3. `CloudService.cpp:1559` — `retiredWrites.clear()` beside the existing disarm, above `refreshClicked`'s
+   deletes. **MANDATORY, not optional:** every retired ticket holds a raw `QTreeWidgetItem*`, so without
+   this line the fix MANUFACTURES a new use-after-free of exactly the A3-R028-F1 shape.
+4. `CloudService.cpp:3204` — scan `retiredWrites` oldest-first BEFORE the live compare, with the same
+   empty-id allowance the live compare has. On a hit: label that ticket's row, erase the entry, RETURN —
+   no counter, no `successful`, no re-drive.
+
+### Exhaustion argument (this is the acceptance evidence, and it must be TESTED in both orders)
+`[stale, live]` → stale consumes the retired ticket, labels `R_sync`, does not drive; live consumes the
+live ticket, labels `R_up`, counts once, drives once. `[live, stale]` → live consumes the retired ticket
+(labelling `R_sync`), stale consumes the live ticket (labels `R_up`, counts once, drives once). **In both
+orders `uploadNext` is re-driven exactly once and row 0's completion is never swallowed**, so DEC-036's
+invariant at `CloudService.h:769-775` holds.
+
+### Accepted residual, stated rather than hidden
+In the `[live, stale]` order **the two result strings land on the opposite rows.** Both rows are the same
+activity to the same service, so the strings are usually identical; when they differ the user sees two
+labelled rows with swapped verdicts. **This is the honest price of the fact that the wire carries no
+identity**, and it is cosmetic and bounded. **User decision 2026-08-19: accepted.**
+
+### Scope: WRITES ONLY (user decision 2026-08-19)
+The read channel already has a genuinely unique per-transfer token — the buffer pointer
+(`CloudService.h:789`), returned by 11/11 services — so it has no ambiguity to resolve; and the dialog
+OWNS the buffer (freed at `:2693`/`:2720`), so a scheme that stops delivering `readComplete` would leak
+one buffer per abort. The asymmetry is deliberate and is recorded here so it is not "fixed" later.
+
+### Phase-1 dependency, and the single biggest cost
+**The harness cannot currently deliver two write completions in a caller-specified order.** TEST-124 must
+run the F3 route TWICE, once per arrival order; that needs a new ordering hook on the fake store. Without
+it, A's order-independence is *reasoned* rather than *measured* and must be labelled so under clause (e).
+
+### Cite corrections carried from this research
+`writeComplete` is declared at `CloudService.h:271`; the DEC-036 entry cites `:243`, which was correct
+when written and drifted when this wave added ~149 lines to that header ([[LSN-034]], recur:9). The
+`InFlight` struct is at `:786-793`; `:724-785` is its comment block.
+
+### AMENDMENT 2026-08-21 (A3-R028c-F1, BLOCKING) — the Refresh clear was costed for safety and never for what it DESTROYS
+`refreshClicked` disarms (`:1559`) and clears `retiredWrites` (`:1579`) but **never retires**; the only
+retire site is `downloadClicked`'s START branch (`:2081-2084`). So on **Abort → Refresh → restart** the
+abandoned write's ticket is discarded before anything can retire it, the scan at `:3447` finds nothing,
+and the stale completion falls through to the live compare and is ACCEPTED — **re-opening A3-R028b-F3 in
+full**, on a five-click SINGLE-TAB route that needs no cross-list name coincidence at all.
+**The clear itself is right and stays** — TEST-125 proves it, and the A3 refuted any suggestion of
+removing it. What this entry got wrong is that `decisions.md:1413-1415` justified it as "MANDATORY" on
+**memory-safety grounds only**. Nobody asked what it costs. **The row must die; the NAME must not.**
+**Amendment: a ROW-FREE TOMBSTONE.** `refreshClicked` retires the armed write's *identity* while dropping
+the pointer that must die — either `row = nullptr` in the retired copy, or a separate `QStringList`. A
+tombstone match **swallows** the completion (no label, no count, no re-drive) rather than accepting it.
+**Naïvely appending `inflight` at `:1559` would re-manufacture TEST-125's use-after-free**, which is why
+the two containers cannot simply be merged.
+**Generalised (→ [[LSN-075]]): an invalidation site reasoned purely on memory safety is always CORRECT
+and can still be the defect** — the review question "is this safe?" returns yes and stops. Sibling of
+[[LSN-068]]: that is a lifetime with no invalidation site; this is an invalidation site with no cost
+analysis. Two failure modes of the same enumeration.
+
+### CORRECTION 2026-08-21 (A3-R028c-F4) — this entry's disproof argues from a behaviour it changed
+The disproof above rejects disarm-on-abort partly because it "would silently delete the 'Aborted' label
+an abandoned write currently writes to its own row". **On the abort-then-restart route — the only route
+this entry is about — `:3453` now writes `result`, not "Aborted".** The rejection stands on its other
+grounds (`uploadNext` re-arms with the same name, so the stale completion still matches); the *reasoning*
+does not. The cite `:3212-3213` has drifted to `:3465-3466`.
+**And the code is MORE compliant than this entry assumed.** The A3 refuted B-R028-15: clause (c) asks
+that a cell name "the outcome of a transfer that actually happened to that row" — the retired write DID
+happen to that row and DID produce `result`, whereas `tr("Aborted")` would name the user's action on a
+*different, already-dead* batch. → [[LSN-076]].
+
+### KNOWN GAP, recorded by user decision 2026-08-21 (A3-R028c standing probe)
+**This mechanism ships for TEN Upload-capable services and is exercised against ZERO of them.**
+`GarminConnect.h:76` is `Query | Download`, so GarminConnect cannot upload and the fake `BlockingStore`
+is the only driver any test uses. The wire behaviour this decision's disproof rests on — that
+`writeComplete(QString id, QString message)` carries nothing else, and that one shared `store` emits for
+every batch — is a **static audit over eleven services, measured against none.** Stated here so the next
+cycle attacks a documented gap instead of rediscovering it, and so nobody mistakes the harness's green
+for service-level evidence. Driving a real service needs a fixture layer that does not exist;
+`LocalFileStore` is the cheapest candidate if that changes (no network, and the only empty-id emitter).
+
+---
+
+## DEC-034 / DEC-036 AMENDMENT 2026-08-21 (A3-R028c-F2, BLOCKING) — the completion slots never got the guard the drivers have
+`CloudService.h:783-789` states the invariant the single-slot ticket rests on: *"At most one transfer is
+outstanding per LIVE batch: each of the four dispatch sites returns immediately after its store call, and
+the only thing that re-drives a loop is a completion slot's tail, which has consumed the ticket first.
+**Measured, not assumed.**"* **The second clause is false.** The tail consumes the ticket and *then*
+suspends in `QApplication::processEvents()` (`:3474` write, `:2986` read, `:3103` failedRead). A
+`downloadClicked` delivered into that suspension re-drives the loop itself and arms a fresh ticket — then
+the tail re-drives again. `aborted` cannot catch it (the restart just reset it), and **the three
+completion slots hold no `batchGeneration` snapshot**. Current-source grep finds seven references in
+`CloudService.cpp`: construction, batch start, and the driver snapshots/compares/comment. None is in
+`completedRead`, `failedRead` or `completedWrite` (ORCH-032). Measured: two rows reading "Uploading"
+simultaneously, three writes for a two-row batch.
+**The measurement that "discharged" this invariant was real and its SCOPE was narrower than the claim** —
+61 slots, none of which drove a burst into a completion tail. [[LSN-074]]'s corollary was captured in this
+same wave and is precisely what failed.
+**Amendment: DEC-034's existing mechanism, applied to the three sites that never got it** — a
+`batchGeneration` snapshot taken at each completion slot's ENTRY and compared before the tail's re-drive.
+**The drivers were given exactly this guard for exactly this two-click burst** (`:2512-2517`, *"Continuing
+here would put a second driver on the same list"*); the slots were not. Not a new decision.
+**In scope: all three slots.** The shape is line-identical on the READ path (`:2986-3016`) and in
+`failedRead` (`:3103`), **and those ARE on the GarminConnect route** — the write path is not.
+**Also folded in:** there is no `aborted`/`batchGeneration` re-read between `saveRide` (`:2966`) and
+`successful++` (`:2978`), so an abort+restart delivered inside `autoProcess` increments the NEW batch's
+counter on the old batch's behalf. Same mechanism, same fix.
