@@ -48,7 +48,7 @@ class RideWithGPS : public CloudService {
         bool close();
 
         // write a file
-        bool writeFile(QByteArray &data, QString remotename, RideFile *ride);
+        bool writeFile(QByteArray &data, QString remotename, RideFile *ride, quint64 operationId);
 
     public slots:
 

@@ -347,7 +347,7 @@ SixCycle::readFile(QByteArray *data, QString remotename, QString remoteid)
 }
 
 bool
-SixCycle::writeFile(QByteArray &data, QString remotename, RideFile *ride)
+SixCycle::writeFile(QByteArray &data, QString remotename, RideFile *ride, quint64 operationId)
 {
     Q_UNUSED(ride);
 
@@ -432,7 +432,7 @@ SixCycle::writeFile(QByteArray &data, QString remotename, RideFile *ride)
     connect(reply, SIGNAL(finished()), this, SLOT(writeFileCompleted()));
 
     // remember
-    mapReply(reply,remotename);
+    mapReply(reply,remotename,operationId);
 
     return true;
 }
@@ -442,17 +442,25 @@ SixCycle::writeFileCompleted()
 {
     printd("Sixcycle::writeFileCompleted()\n");
 
-    QString writestatus =  reply->readAll();
+    // More than one upload may be outstanding. The member `reply` names only
+    // the most recently created request, whereas sender() names the request
+    // whose finished signal admitted this completion.
+    QNetworkReply *const completedReply = qobject_cast<QNetworkReply*>(sender());
+    if (completedReply == nullptr) return;
+
+    QString writestatus = completedReply->readAll();
 
     printd("reply begins: %s ...\n", writestatus.toStdString().substr(0,80).c_str());
 
-    if (reply->error() == QNetworkReply::NoError) {
+    if (completedReply->error() == QNetworkReply::NoError) {
         notifyWriteComplete(
-            replyName(static_cast<QNetworkReply*>(QObject::sender())),
+            replyWriteOperationId(completedReply),
+            replyName(completedReply),
             tr("Completed."));
     } else {
         notifyWriteComplete(
-            replyName(static_cast<QNetworkReply*>(QObject::sender())),
+            replyWriteOperationId(completedReply),
+            replyName(completedReply),
             tr("Network Error - Upload failed."));
     }
 }

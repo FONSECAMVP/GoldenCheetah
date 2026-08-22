@@ -257,7 +257,7 @@ Dropbox::readFile(QByteArray *data, QString remotename, QString)
 }
 
 bool 
-Dropbox::writeFile(QByteArray &data, QString remotename, RideFile *ride)
+Dropbox::writeFile(QByteArray &data, QString remotename, RideFile *ride, quint64 operationId)
 {
     Q_UNUSED(ride);
 
@@ -288,7 +288,7 @@ Dropbox::writeFile(QByteArray &data, QString remotename, RideFile *ride)
     connect(reply, SIGNAL(finished()), this, SLOT(writeFileCompleted()));
 
     // remember
-    mapReply(reply,remotename);
+    mapReply(reply,remotename,operationId);
     return true;
 }
 
@@ -298,10 +298,12 @@ Dropbox::writeFileCompleted()
     QNetworkReply *reply = static_cast<QNetworkReply*>(QObject::sender());
     if (reply->error() == QNetworkReply::NoError) {
         notifyWriteComplete(
+            replyWriteOperationId(reply),
             replyName(static_cast<QNetworkReply*>(QObject::sender())),
             tr("Completed."));
     } else {
         notifyWriteComplete(
+            replyWriteOperationId(reply),
             replyName(static_cast<QNetworkReply*>(QObject::sender())),
             tr("Network Error - Upload failed."));
     }

@@ -153,21 +153,21 @@ LocalFileStore::readFile(QByteArray *data, QString remotename, QString)
 }
 
 bool 
-LocalFileStore::writeFile(QByteArray &data, QString remotename, RideFile *ride)
+LocalFileStore::writeFile(QByteArray &data, QString remotename, RideFile *ride, quint64 operationId)
 {
     Q_UNUSED(ride);
 
     // is the path set ?
     QString path = getSetting(GC_NETWORKFILESTORE_FOLDER, "").toString();
     if (path == "") {
-        emit writeComplete("", tr("You must define a network folder first"));  // required for single upload to get to an end
+        emit writeComplete(operationId, "", tr("You must define a network folder first"));  // required for single upload to get to an end
         return false;
     };
 
     // open the path
     QDir current_path = QDir(path);
     if (!current_path.exists()) {
-        emit writeComplete("", tr("Write to folder %1 failed").arg(path));  // required for single upload to get to an end
+        emit writeComplete(operationId, "", tr("Write to folder %1 failed").arg(path));  // required for single upload to get to an end
         return false;
     };
 
@@ -176,11 +176,11 @@ LocalFileStore::writeFile(QByteArray &data, QString remotename, RideFile *ride)
         file.write(data);
         file.close();
     } else {
-        emit writeComplete("", tr("Write to folder %1 failed").arg(path));  // required for single upload to get to an end
+        emit writeComplete(operationId, "", tr("Write to folder %1 failed").arg(path));  // required for single upload to get to an end
         return false;
     };
 
-    emit writeComplete("", tr("Completed."));
+    emit writeComplete(operationId, "", tr("Completed."));
 
     return true;
 }

@@ -98,7 +98,7 @@ SportsPlusHealth::close()
 }
 
 bool
-SportsPlusHealth::writeFile(QByteArray &data, QString remotename, RideFile *ride)
+SportsPlusHealth::writeFile(QByteArray &data, QString remotename, RideFile *ride, quint64 operationId)
 {
     Q_UNUSED(ride);
 
@@ -143,7 +143,7 @@ SportsPlusHealth::writeFile(QByteArray &data, QString remotename, RideFile *ride
     connect(reply, SIGNAL(finished()), this, SLOT(writeFileCompleted()));
 
     // remember
-    mapReply(reply,remotename);
+    mapReply(reply,remotename,operationId);
     return true;
 }
 
@@ -169,10 +169,12 @@ SportsPlusHealth::writeFileCompleted()
 
     if (success) {
         notifyWriteComplete(
+            replyWriteOperationId(reply),
             replyName(static_cast<QNetworkReply*>(QObject::sender())),
             tr("Completed."));
     } else {
         notifyWriteComplete(
+            replyWriteOperationId(reply),
             replyName(static_cast<QNetworkReply*>(QObject::sender())),
             QString(tr("Upload failed. (%1)")).arg(errorcode));
     }

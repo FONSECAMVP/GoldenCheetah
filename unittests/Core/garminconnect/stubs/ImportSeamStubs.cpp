@@ -57,6 +57,8 @@
 #include <QDir>
 #include <QtGlobal>
 
+#include <functional>
+
 // A QObject-derived class whose Q_OBJECT is not moc'd here still needs its three
 // virtuals + staticMetaObject or its vtable will not link. None of these objects
 // ever emits, receives or is qobject_cast in this test, so borrowing QObject's
@@ -106,6 +108,33 @@ volatile quintptr contextMemberTouch = 0;
 volatile quintptr rideItemMemberTouch = 0;
 volatile quintptr saveSilentThisTouch = 0;
 volatile quintptr saveSilentArgTouch = 0;
+
+// --- TEST-121 (A3-R028b-F1) — THE SUSPENSION saveRide REALLY HAS ------------
+//
+// CloudServiceSyncDialog::saveRide (CloudService.cpp:3267) calls
+// DataProcessorFactory::autoProcess(ride, "Auto", "Import"), which runs every
+// processor whose configKeyAutomation is set to "Auto"
+// (DataProcessor.cpp:220-221). Two of the shipped processors SUSPEND from
+// inside postProcess: FixElevation builds a QNetworkAccessManager, posts to
+// api.open-elevation.com and waits in a local QEventLoop with NO TIMEOUT
+// (FixElevation.cpp:288-300), and FixPyDataProcessor goes through FixPyRunner
+// (FixPyDataProcessor.cpp:39 -> FixPyRunner.cpp:40-48). So `saveRide` is a
+// suspension point in production, and completedRead calls it while holding a
+// raw QTreeWidgetItem* that a Refresh delivered into that loop has FREED.
+//
+// The stand-in below cannot import a real processor - the whole point of this
+// file is that the processors are not linked - so it exposes the SEAM instead:
+// a test may arm one action, which the stand-in calls SYNCHRONOUSLY from
+// inside autoProcess, exactly where postProcess would have run. The action
+// supplies its own nested QEventLoop.
+//
+// LSN-056 - THIS FILE IS COMPILED INTO THREE TARGETS
+// (testGarminConnectImport, testGarminConnectReadFailedConsumer,
+// testGarminConnectSyncDialogClose). The seam is therefore INERT by
+// construction: an empty std::function is never called, and no target that
+// does not arm it can behave differently. The counter is write-only.
+std::function<void()> autoProcessAction; // null unless a test arms it
+int autoProcessCalls = 0;                // was the seam reached at all?
 } // namespace gcstub
 
 namespace {
@@ -425,6 +454,18 @@ bool DataProcessorFactory::autoProcess(RideFile* ride, QString mode, QString op)
     Q_UNUSED(ride);
     Q_UNUSED(mode);
     Q_UNUSED(op);
+
+    // TEST-121 (A3-R028b-F1) — the armed action stands in for a processor that
+    // suspends. See the gcstub block comment above. Fires ONCE and disarms
+    // itself first, so a re-entrant autoProcess (saveRide makes a second call
+    // with mode "Save") cannot run it twice.
+    ++gcstub::autoProcessCalls;
+    if (gcstub::autoProcessAction) {
+        std::function<void()> action = gcstub::autoProcessAction;
+        gcstub::autoProcessAction = nullptr;
+        action();
+    }
+
     return false;
 }
 

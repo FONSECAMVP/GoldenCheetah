@@ -184,7 +184,7 @@ TrainingsTageBuch::close()
 }
 
 bool
-TrainingsTageBuch::writeFile(QByteArray &data, QString remotename, RideFile *ride)
+TrainingsTageBuch::writeFile(QByteArray &data, QString remotename, RideFile *ride, quint64 operationId)
 {
     Q_UNUSED(ride);
 
@@ -232,7 +232,7 @@ TrainingsTageBuch::writeFile(QByteArray &data, QString remotename, RideFile *rid
     connect(reply, SIGNAL(finished()), this, SLOT(writeFileCompleted()));
 
     // remember
-    mapReply(reply,remotename);
+    mapReply(reply,remotename,operationId);
     return true;
 }
 
@@ -265,9 +265,9 @@ TrainingsTageBuch::writeFileCompleted()
     }
 
     if (success && reply->error() == QNetworkReply::NoError) {
-        notifyWriteComplete(replyName(static_cast<QNetworkReply*>(QObject::sender())), tr("Completed."));
+        notifyWriteComplete(replyWriteOperationId(reply), replyName(reply), tr("Completed."));
     } else {
-        notifyWriteComplete( replyName(static_cast<QNetworkReply*>(QObject::sender())), tr("Error - Upload failed."));
+        notifyWriteComplete(replyWriteOperationId(reply), replyName(reply), tr("Error - Upload failed."));
     }
 }
 

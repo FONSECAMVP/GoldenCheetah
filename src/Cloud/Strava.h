@@ -48,7 +48,7 @@ class Strava : public CloudService {
         QString authiconpath() const { return QString(":images/services/strava_connect.png"); }
 
         // write a file
-        bool writeFile(QByteArray &data, QString remotename, RideFile *ride);
+        bool writeFile(QByteArray &data, QString remotename, RideFile *ride, quint64 operationId);
 
         // read a file
         bool readFile(QByteArray *data, QString remotename, QString remoteid);

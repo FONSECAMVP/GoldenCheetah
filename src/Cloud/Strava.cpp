@@ -293,7 +293,7 @@ Strava::readFile(QByteArray *data, QString remotename, QString remoteid)
 }
 
 bool
-Strava::writeFile(QByteArray &data, QString remotename, RideFile *ride)
+Strava::writeFile(QByteArray &data, QString remotename, RideFile *ride, quint64 operationId)
 {
     // Manual activity upload or File upload according to available data
     bool manual = ride->dataPoints().isEmpty();
@@ -442,7 +442,7 @@ Strava::writeFile(QByteArray &data, QString remotename, RideFile *ride)
     connect(reply, SIGNAL(finished()), this, SLOT(writeFileCompleted()));
 
     // remember
-    mapReply(reply,remotename);
+    mapReply(reply,remotename,operationId);
     return true;
 }
 
@@ -503,9 +503,9 @@ Strava::writeFileCompleted()
 
     // return response
     if (uploadSuccessful && reply->error() == QNetworkReply::NoError) {
-        notifyWriteComplete(replyName(static_cast<QNetworkReply*>(QObject::sender())), tr("Completed."));
+        notifyWriteComplete(replyWriteOperationId(reply), replyName(reply), tr("Completed."));
     } else {
-        notifyWriteComplete(replyName(static_cast<QNetworkReply*>(QObject::sender())), uploadError);
+        notifyWriteComplete(replyWriteOperationId(reply), replyName(reply), uploadError);
     }
 }
 

@@ -586,7 +586,9 @@ CloudServiceUploadDialog::start()
 
         // ok, so now we can kickoff the upload. LOCAL first: `status = ...` here
         // would BE the use-after-free if writeFile blocked and the window closed.
-        bool wrote = store->writeFile(data, QFileInfo(item->fileName).baseName() + store->uploadExtension(), rideFile);
+        operationId = store->newWriteOperationId();
+        connect(store, SIGNAL(writeComplete(quint64,QString,QString)), this, SLOT(completed(quint64,QString,QString)));
+        bool wrote = store->writeFile(data, QFileInfo(item->fileName).baseName() + store->uploadExtension(), rideFile, operationId);
         // `self`-only: everything below this line touches `this` and `store`,
         // never `context` or `item` (A3-R021-F5).
         if (self.isNull()) return false;
@@ -623,9 +625,6 @@ CloudServiceUploadDialog::start()
         return false;
     }
 
-    // get notification when done
-    connect(store, SIGNAL(writeComplete(QString,QString)), this, SLOT(completed(QString,QString)));
-
     return true;
 }
 
@@ -640,8 +639,9 @@ CloudServiceUploadDialog::exec()
 }
 
 void
-CloudServiceUploadDialog::completed(QString file, QString message)
+CloudServiceUploadDialog::completed(quint64 completedOperationId, QString file, QString message)
 {
+    if (completedOperationId != operationId) return;
     info->setText(file + "\n" + message);
     progress->setMaximum(1);
     progress->setValue(1);
@@ -959,7 +959,7 @@ CloudServiceSyncDialog::CloudServiceSyncDialog(Context *context, CloudService *s
     : QDialog(cloudDialogParent(context), Qt::Dialog), context(context), store(store),
       downloading(false), sync(false), aborted(false),
       blockingCallDepth(0), closeDeferred(false), reaper(NULL),
-      listindex(0), batchGeneration(0),
+      listindex(0), batchGeneration(0), listGeneration(0), batchListGeneration(0),
       tabs(nullptr), athleteCombo(nullptr), refreshButton(nullptr),
       cancelButton(nullptr), downloadButton(nullptr), from(nullptr), to(nullptr),
       selectAll(nullptr), rideListDown(nullptr), selectAllUp(nullptr),
@@ -1064,7 +1064,7 @@ CloudServiceSyncDialog::start()
     QVBoxLayout *syncLayout = new QVBoxLayout(sync);
 
     // notification when upload/download completes
-    connect (store, SIGNAL(writeComplete(QString,QString)), this, SLOT(completedWrite(QString,QString)));
+    connect (store, SIGNAL(writeComplete(quint64,QString,QString)), this, SLOT(completedWrite(quint64,QString,QString)));
     connect (store, SIGNAL(readComplete(QByteArray*,QString,QString)), this, SLOT(completedRead(QByteArray*,QString,QString)));
     // DEC-garmin-023 - the explicit failure channel. A service that emits it
     // instead of readComplete is reporting a read that did not happen; without
@@ -1515,6 +1515,19 @@ CloudServiceSyncDialog::cancelClicked()
 void
 CloudServiceSyncDialog::refreshClicked()
 {
+    // DEC-garmin-034 (REQ-028) - A NEW GENERATION OF THE LISTS STARTS HERE, and
+    // this is the one place any row in this dialog dies (the three `delete curr`
+    // blocks below are the only tree-item deletes in the file). Bumped BEFORE the
+    // deletes, not after the rebuild, because a frame suspended in one of this
+    // dialog's nested loops can resume at any point after them - including the
+    // early return at :1596, which leaves the lists EMPTY - and every one of those
+    // points must already read as stale. See the member's comment in
+    // CloudService.h and TEST-108/TEST-109.
+    listGeneration++;
+
+    for (auto i = readOperations.begin(); i != readOperations.end(); ++i) i.value().row = nullptr;
+    for (auto i = writeOperations.begin(); i != writeOperations.end(); ++i) i.value().row = nullptr;
+
     double distanceFactor = GlobalContext().useMetricUnits ? 1.0 : MILES_PER_KM;
     QString distanceUnits = GlobalContext().useMetricUnits ? tr("km") : tr("mi");
 
@@ -1930,6 +1943,93 @@ CloudServiceSyncDialog::downloadClicked()
         // down. See the member's comment in CloudService.h and TEST-100.
         batchGeneration++;
 
+        // DEC-garmin-034 (REQ-028) - ...AND WHICH GENERATION OF THE LISTS IT IS
+        // RUNNING ON. The two drivers can snapshot listGeneration into a local at
+        // loop entry; the three completion slots cannot, because they have no
+        // "before" - they are the resumption. This is their snapshot, taken where
+        // the batch begins, so any Refresh between here and a completion of this
+        // batch stands that completion down rather than letting it address a
+        // rebuilt list by an index that was never about it. See the member's
+        // comment in CloudService.h and TEST-109.
+        batchListGeneration = listGeneration;
+
+        // DEC-garmin-036 AS AMENDED (A3-R028-F1/F2) - ...AND THE PREVIOUS
+        // BATCH'S TICKET IS VOID FROM HERE.
+        //
+        // THE DEFECT THIS CLOSES, and it is created by the line immediately
+        // above. The ticket is armed at four dispatch sites and consumed at
+        // three; before this line nothing INVALIDATED it. A batch that starts
+        // and DISPATCHES overwrites it and needs nothing more - which is why
+        // TEST-113/115 were green without this. A batch that starts and
+        // dispatches NOTHING (every row unchecked: after a Refresh, or after the
+        // user simply clears Select All) overwrites nothing, and the assignment
+        // above has just handed the ABANDONED batch's still-armed ticket a
+        // freshly VALID generation stamp. Its completion then passes the DEC-034
+        // compare, passes the ticket compare - it really is the transfer the
+        // ticket describes - and labels through `inflight.row`. After a Refresh
+        // that row has been FREED: a heap-use-after-free at completedRead's
+        // no-ride `row->setText` (:2730 as this was written), reached by four
+        // ordinary clicks (A3-R028-F1). Without a Refresh nothing is freed
+        // and the cost is the second driver REQ-028 (c) forbids: a row relabelled
+        // by a transfer this batch never made and the bar advanced past a total
+        // of zero (A3-R028-F2). See TEST-117/TEST-118.
+        //
+        // SAFE HERE because this branch runs only with `downloading == false`,
+        // so no transfer of a LIVE batch can be outstanding on it - the only
+        // ticket it can void belongs to a batch already abandoned. And it runs
+        // BEFORE the restarted batch's first dispatch, so the ticket that
+        // dispatch arms is not the one being cleared.
+        //
+        // WHY TWO SITES AND NOT ONE (the twin is beside `listGeneration++` in
+        // refreshClicked): this one closes the routes we know about, by
+        // enumerating them - it is exactly as good as that enumeration. The
+        // twin makes the invariant "no ticket outlives the row it names" hold by
+        // CONSTRUCTION, because the one place a row dies is the one place the
+        // ticket is dropped. A future route into a stale ticket that nobody has
+        // thought of is still memory-safe with the twin in place; with only this
+        // line it is another use-after-free waiting for its own finding.
+        //
+        // WHICH SLOT KILLS THIS LINE, measured rather than assumed (LSN-059):
+        // removing it alone takes TEST-118 red ("the bar advanced to 1 for a
+        // batch whose total is 0") and leaves TEST-117 GREEN - because TEST-117's
+        // route contains a Refresh, and the twin below has already voided the
+        // ticket by the time the restart runs. TEST-117 is a run on the PAIR: it
+        // goes red only when both lines are gone, which is the state the finding
+        // was raised against.
+        //
+        // DEC-garmin-037 (A3-R028b-F3) - ...BUT AN ABANDONED WRITE IS NOT VOID,
+        // IT IS RETIRED. Voiding the ticket is the right answer for a READ: its
+        // buffer pointer is a unique per-transfer token, so the abandoned read's
+        // completion fails the live compare on its own and is swallowed. It is the
+        // WRONG answer for a write, because the write channel's only discriminator
+        // is the remotename and the restarted batch can arm THE SAME ONE - the
+        // Sync list's Upload row and the Upload list's row for one activity both
+        // hold `text(1) == ride->fileName` (:1777/:1823) and both write arm sites
+        // (:2393/:3159 as this was written) derive the key from it identically. So
+        // the abandoned write's completion passed every clause below and was taken
+        // for the live one: it labelled the live batch's row with another
+        // transfer's verdict, counted a success the batch had not earned and
+        // re-drove uploadNext, which dispatched row 1 while row 0's genuine write
+        // was still outstanding - and row 0's real completion then hit row 1's
+        // ticket and was swallowed. See DEC-037 for why no receiver-side scheme
+        // can tell the two apart on the completion itself, and TEST-124.
+        //
+        // ORDER MATTERS: the append is ABOVE the disarm, and the disarm stays.
+        //
+        // SAFE HERE for this line's own recorded reason, which covers the append
+        // as well: the branch runs only with `downloading == false`, so the only
+        // ticket it can find armed belongs to a batch already abandoned. The cap
+        // and the drop policy are on the member in CloudService.h; the clear that
+        // keeps these raw row pointers from outliving their rows is in
+        // refreshClicked, and TEST-125 is the run that needs it.
+        //
+        // MEASURED (LSN-059): removing this append alone takes TEST-124, TEST-125
+        // and TEST-115 red - 68 passed / 3 failed under QPA offscreen. The CAP and
+        // its drop policy are NOT separately measured: proving them needs a route
+        // with nine aborts in a row and no run in this suite drives one. That is
+        // said here rather than covered over.
+        // Outstanding identities survive restart until their completions arrive.
+
         downloadButton->setText(tr("Abort"));
         cancelButton->hide();
     }
@@ -1979,10 +2079,94 @@ CloudServiceSyncDialog::syncNext()
     // if in sync mode the completedRead / completedWrite functions
     // just call completedSync to get the next Sync done
 
+    // DEC-garmin-034 (REQ-028 (b)), A3-R028-F5 - IS THE LIST THIS DRIVER IS ABOUT
+    // TO RUN ON STILL THE ONE ITS BATCH STARTED ON?
+    //
+    // THE WINDOW THIS CLOSES, and it is a SIXTH one, not a respelling of the five
+    // DEC-034 already covers. All three completion slots end with the same tail:
+    //
+    //     progressBar->setValue(++downloadcounter);
+    //     QApplication::processEvents();     <-- a Refresh can be DELIVERED HERE
+    //     if (self.isNull()) return;
+    //     if (aborted == true) return;
+    //     if (sync) syncNext(); else downloadNext();
+    //
+    // Every guard those slots carry is UPSTREAM of that processEvents(): their
+    // DEC-034 compares are at entry (and, in completedRead, after uncompressRide),
+    // and the DEC-036 ticket has already been CONSUMED - `inflight.armed = false`
+    // - above them, so the amendment's invalidation is a no-op by the time the tail
+    // runs and the harm is not ticket-mediated at all. Nothing re-read
+    // listGeneration between the delivery and the re-drive, so the loop was
+    // re-driven over the REBUILT list: every row unchecked, nothing to do, straight
+    // through to the completion tail, which announces "Processed 0 of N
+    // successfully" and calls context->athlete->rideCache->save() for a batch that
+    // no longer exists. That is A3-R027-F3 / PROBE-B's harm, reached by a route the
+    // wave had not driven. See TEST-119/TEST-120.
+    //
+    // WHY HERE AND NOT AT THE THREE TAILS, which was the other available shape.
+    // The irreversible call is in THIS function - the tail's rideCache->save() a
+    // hundred lines below - and DEC-035's principle is that the guard belongs at
+    // the irreversible call, not in a different function across a return and a
+    // call. That arrangement is exactly what DEC-035 was raised to end, and putting
+    // this compare in the completion slots would have rebuilt it. Here it also
+    // covers the loop's DISPATCH and not only its tail: a re-driven loop walks the
+    // rebuilt list, and "the rebuilt rows are all unchecked" is a property of
+    // refreshClicked's rebuild, not something this function can be given. And it
+    // covers all FOUR callers - downloadClicked plus the three tails - so a fifth
+    // caller written without a re-check does not reintroduce the defect silently,
+    // which is the same reasoning DEC-035 used at the transfer itself (LSN-063).
+    //
+    // AGAINST batchListGeneration, DEC-034's existing member, not a new one and not
+    // the local snapshot below: downloadClicked assigns batchListGeneration =
+    // listGeneration when a batch starts (:1984), so a batch the user just asked
+    // for always compares EQUAL and TEST-110's idle-Refresh-then-run stays green.
+    // A LOCAL snapshot cannot answer this question at all - on this route the
+    // function is ENTERED after the Refresh, so anything it snapshots at entry
+    // already reads the new generation, which is precisely why the `listgen` below
+    // did not catch it.
+    //
+    // WHAT THIS DOES NOT DO: `downloading` stays true and the button keeps reading
+    // "Abort", exactly as DEC-032's stale-frame guards leave it. Standing down is
+    // the whole of what it claims (B-R028-04 is the open finding about that state).
+    //
+    // WHICH RUN KILLS WHICH COPY OF THIS LINE, MEASURED rather than predicted
+    // (LSN-059). Each of the three copies removed ALONE, rebuilt, whole suite run:
+    // syncNext's takes TEST-120's SYNC arm red and nothing else; downloadNext's
+    // takes TEST-119 red and nothing else; uploadNext's takes TEST-120's UPLOAD arm
+    // red and nothing else. 64 passed / 1 failed each time, under QPA offscreen and
+    // minimal both. Three guards, three runs, one kill each - none of them
+    // "reasoned, not traced".
+    //
+    // THE ROUTE EACH ONE IS TRACED TO: this copy is reached from completedRead's
+    // tail with `sync` true (TEST-120's sync arm); downloadNext's from
+    // completedRead's tail with `sync` false (TEST-119); uploadNext's from
+    // completedWrite's tail with `sync` false (TEST-120's upload arm). The FOURTH
+    // caller of each is downloadClicked, which compares equal by construction. The
+    // failedRead tail reaches this copy and downloadNext's by the same shape and is
+    // NOT separately driven - it is the same guard, not another one, and its own
+    // window is already TEST-111's subject.
+    if (listGeneration != batchListGeneration) return true;
+
     // DEC-garmin-032 (REQ-027) - WHOSE BATCH THIS FRAME IS RUNNING. Snapshotted
     // before the loop and compared before the one branch below that suspends and
     // then keeps iterating; see the member's comment in CloudService.h.
     const int generation = batchGeneration;
+
+    // DEC-garmin-034 (REQ-028) - ...AND WHOSE ROWS. `curr` below is a raw pointer
+    // into a collection this dialog's own Refresh deletes wholesale, and this
+    // function holds it across a nested event loop. See the member's comment in
+    // CloudService.h and TEST-108.
+    //
+    // AMENDED 2026-08-19 (A3-R028-F5): this local answers the question it was
+    // written for - "was the list replaced while THIS FRAME was suspended?" - and
+    // only that one. It is taken at loop ENTRY, so it could never have caught a
+    // frame ENTERED after a Refresh: the snapshot would read the new generation
+    // and every compare below it would be equal. The entry compare above makes
+    // that route unreachable rather than merely harmless, and past that line
+    // `listgen == batchListGeneration` by construction. It is deliberately not
+    // retimed: retiming a snapshot to answer a question about the CALLER is the
+    // shape DEC-035 rejects.
+    const int listgen = listGeneration;
 
     for (int i=listindex; i<rideListSync->invisibleRootItem()->childCount(); i++) {
         QTreeWidgetItem *curr = rideListSync->invisibleRootItem()->child(i);
@@ -2061,6 +2245,12 @@ CloudServiceSyncDialog::syncNext()
                 }
 
                 QByteArray *data = new QByteArray;
+
+                // DEC-garmin-036 (REQ-028 (c)) - ARM THE TICKET, as downloadNext
+                // does. The sync list's status column is 7, not 5. See
+                // CloudService.h and TEST-113/114.
+                readOperations.insert(data, TransferOperation{curr, 7, batchGeneration, listGeneration});
+
                 // DEC-garmin-025 - `this` can be DESTROYED inside the call below
                 // (parent teardown, which no close gate can intercept), so
                 // everything after it is a member access on a dead object.
@@ -2131,6 +2321,50 @@ CloudServiceSyncDialog::syncNext()
                         return true;
                     }
 
+                    // DEC-garmin-034 (REQ-028) - AND THE ROW, WHICH THAT SAME LOOP
+                    // CAN HAVE DELETED.
+                    //
+                    // `curr` was captured at :2014, before openRideFile. A Refresh
+                    // delivered by the nested QEventLoop one line up runs
+                    // refreshClicked (:1516), which deletes EVERY item in all three
+                    // lists and rebuilds them - so `curr` is a dangling pointer the
+                    // instant that returns, and every use of it below is a
+                    // use-after-free: the "Aborted" label at :2213 (a WRITE, which
+                    // is what REQ-027 widened this from), the two
+                    // QFileInfo(curr->text(1)) reads that name the upload at
+                    // :2219/:2221, and the "Parse failure" label at :2227. PROBE-A
+                    // reported the first of those reads.
+                    //
+                    // PLACED HERE, above the abort check rather than below it,
+                    // because the abort branch is itself one of the uses: ordering
+                    // it the other way would guard the write with a read of the
+                    // same freed object. The QPointer bail one line up cannot cover
+                    // this - it establishes that this DIALOG is alive, not that the
+                    // ROW still exists - and neither can the batch generation:
+                    // refreshClicked starts no batch and bumps nothing REQ-027
+                    // watches (A3-R027-F3). The ride is ours, as it is on every
+                    // other bail in this block, so it goes with us.
+                    //
+                    // The batch is left standing DOWN, not tidied up: `downloading`
+                    // stays true and the button keeps reading "Abort", exactly as
+                    // DEC-032's stale-frame guards leave it, so the user's next
+                    // click is the abort that resets it. Standing down is the whole
+                    // of what this guard claims. See TEST-108 and TEST-109.
+                    if (listGeneration != listgen) {
+                        delete ride;
+                        return true;
+                    }
+
+                    // openRideFile pumps a nested event loop. An Abort followed
+                    // immediately by a restart changes the batch without
+                    // replacing the list, so the row guard above still compares
+                    // equal. Only the frame admitted for this generation may
+                    // compress or dispatch the parsed ride.
+                    if (batchGeneration != generation) {
+                        delete ride;
+                        return true;
+                    }
+
                     if (ride) {
 
                         // REQ-027 (S-R027-01) - AND THE ABORT, RE-READ. The
@@ -2158,7 +2392,15 @@ CloudServiceSyncDialog::syncNext()
                         QByteArray data;
                         store->compressRide(ride, data, QFileInfo(curr->text(1)).baseName() + ".json");
 
-                        store->writeFile(data, QFileInfo(curr->text(1)).baseName() + store->uploadExtension(), ride);
+                        // DEC-garmin-036 (REQ-028 (c)) - ARM THE TICKET. A write
+                        // completion carries no buffer, only an id, so the token
+                        // is the exact remotename passed below - named into a
+                        // local so that the string ARMED and the string PASSED
+                        // cannot drift apart. See CloudService.h and TEST-115.
+                        const QString remotename = QFileInfo(curr->text(1)).baseName() + store->uploadExtension();
+                        const quint64 operationId = store->newWriteOperationId();
+                        writeOperations.insert(operationId, TransferOperation{curr, 7, batchGeneration, listGeneration});
+                        store->writeFile(data, remotename, ride, operationId);
                         QApplication::processEvents();
                         delete ride; // clean up!
                         return true;
@@ -2220,6 +2462,40 @@ CloudServiceSyncDialog::syncNext()
                         // second driver on the same list. See TEST-100.
                         if (batchGeneration != generation) return true;
 
+                        // DEC-garmin-034 (REQ-028 (b)), A3-R028b-F2 - ...AND
+                        // WHETHER THE LIST IS STILL THE ONE WE ARE ITERATING.
+                        //
+                        // THE QUESTION THE THREE LINES ABOVE DO NOT ASK. This is
+                        // the ONE branch of this function that suspends and then
+                        // KEEPS ITERATING, and the processEvents() at the head of
+                        // it can deliver a Refresh (:1516), which deletes every
+                        // item in all three lists and rebuilds them. The bail
+                        // above establishes that this dialog is alive, the abort
+                        // re-read that the user still wants the work, the
+                        // generation compare that this is still the live BATCH -
+                        // and none of them that this is still the live LIST.
+                        // refreshClicked starts no batch and bumps nothing
+                        // batchGeneration watches (A3-R027-F3).
+                        //
+                        // NOT A MEMORY-SAFETY DEFECT, and it must not be sold as
+                        // one: `curr` is re-fetched from child(i) at the loop head,
+                        // so every pointer the resumed loop touches is live. What
+                        // is wrong is the VERDICT. The rebuilt rows are all
+                        // UNCHECKED, so the resumed loop finds nothing to do and
+                        // falls straight through to the completion tail below,
+                        // which announces "Processed 0 of N successfully" and calls
+                        // context->athlete->rideCache->save() (:2527) for a batch
+                        // that no longer exists - A3-R027-F3 / PROBE-B's harm,
+                        // reached from a resumption rather than from a completion.
+                        //
+                        // The frame's own snapshot is reused rather than a new
+                        // question invented: `listgen` (:2167) is what this loop
+                        // was entered on, and it is compared one branch away at
+                        // :2356 for the same reason. Row `i` keeps its verdict - it
+                        // really did fail to parse - and what stands down is the
+                        // LOOP. See TEST-122.
+                        if (listGeneration != listgen) return true;
+
                         continue;
                     }
                 }
@@ -2258,6 +2534,17 @@ CloudServiceSyncDialog::syncNext()
 bool
 CloudServiceSyncDialog::downloadNext()
 {
+    // DEC-garmin-034 (REQ-028 (b)), A3-R028-F5 - syncNext's twin, and THIS is the
+    // function the finding was written about: before this line it contained no
+    // read of listGeneration ANYWHERE, in any form - no snapshot, no compare - so a
+    // Refresh delivered by completedRead's or failedRead's tail processEvents()
+    // re-drove it over the rebuilt list and it ran to the completion tail below,
+    // writing "Downloaded x of y successfully" and calling rideCache->save()
+    // (:2540 as this was written) for a batch whose rows had been freed. See the
+    // full comment in syncNext for why the guard is here rather than at the three
+    // tails, and TEST-119, which is the run that kills this line.
+    if (listGeneration != batchListGeneration) return true;
+
     for (int i=listindex; i<rideListDown->invisibleRootItem()->childCount(); i++) {
         QTreeWidgetItem *curr = rideListDown->invisibleRootItem()->child(i);
         QCheckBox *check = (QCheckBox*)rideListDown->itemWidget(curr, 0);
@@ -2320,6 +2607,15 @@ CloudServiceSyncDialog::downloadNext()
             }
 
             QByteArray *data = new QByteArray; // gets deleted when read completes
+
+            // DEC-garmin-036 (REQ-028 (c)) - ARM THE TICKET FOR THIS TRANSFER.
+            // Immediately before the call, because LocalFileStore::readFile emits
+            // readComplete from INSIDE it (a synchronous completion), so anything
+            // after the call is already too late. `curr` is the row in hand and 5
+            // is the download list's status column. See CloudService.h and
+            // TEST-113/114.
+            readOperations.insert(data, TransferOperation{curr, 5, batchGeneration, listGeneration});
+
             // DEC-garmin-025 - as in syncNext: the call below can destroy `this`
             // outright when the owning window is torn down.
             QPointer<CloudServiceSyncDialog> self(this);
@@ -2375,8 +2671,83 @@ CloudServiceSyncDialog::completedRead(QByteArray *data, QString name, QString /*
     // and the processEvents() below is an event-delivery frame.
     QPointer<CloudServiceSyncDialog> self(this);
 
-    QTreeWidget *which = sync ? rideListSync : rideListDown;
-    int col = sync ? 7 : 5;
+    // DEC-garmin-034 (REQ-028) - WAS THE LIST REBUILT WHILE THIS READ WAS IN
+    // FLIGHT? Above everything, because everything below it labels a row: abort,
+    // then Refresh - the obvious pair of clicks, in the obvious order - would
+    // otherwise write "Aborted" through a row this dialog no longer owns. The
+    // buffer is freed first, per A3-R017-F3: it was allocated before readFile and
+    // nobody else will release it. See TEST-111.
+    //
+    // AMENDED 2026-08-18 (DEC-garmin-036): the rows below used to be addressed
+    // POSITIONALLY as `child(listindex-1)`, and this guard's original job was to
+    // stop that index being read against a rebuilt list. They are now addressed
+    // through the in-flight ticket's stored POINTER instead, which changes what
+    // this guard is for without making it any less necessary - it is now the
+    // thing that proves that pointer is not DANGLING, and it is the reason the
+    // ticket may only be consumed BELOW it.
+    const auto operationIt = readOperations.constFind(data);
+    if (operationIt == readOperations.constEnd()) return;
+    const TransferOperation operation = operationIt.value();
+    readOperations.remove(data);
+    const int completionGeneration = batchGeneration;
+    const int completionListGeneration = listGeneration;
+
+    // DEC-garmin-036 (REQ-028 (c)) - AND IS THIS COMPLETION THE ONE THIS BATCH IS
+    // WAITING FOR?
+    //
+    // BELOW the compare above, never above it, and that ordering is the whole
+    // reason the compare stays: `inflight.row` is a raw QTreeWidgetItem* and a
+    // Refresh frees every row in the list, so the guard that proves the pointer
+    // is still alive has to run first. This one then answers the different
+    // question - whether the transfer that produced this completion is the one
+    // the ticket describes.
+    //
+    // A read whose buffer is not the ticket's token belongs to a batch that was
+    // abandoned (abort, then restart: the restarted batch's own dispatch
+    // overwrote the ticket, and the generation counters cannot see it because
+    // neither the batch nor the list changed under the LIVE transfer). An
+    // `armed == false` arrival is the second completion of a transfer already
+    // consumed. Either way the answer is the same: free the buffer - this dialog
+    // is its only owner, and returning without freeing leaks it once per
+    // abandoned transfer (A3-R017-F3, TEST-116) - and do nothing else. No label,
+    // no bar, no re-drive.
+    //
+    // MUTATION-SURVIVING, AND SAID SO RATHER THAN IMPLIED (LSN-059, and the same
+    // honesty the `self.isNull()` guards in this file are annotated with):
+    // `inflight.isWrite == true` is NOT load-bearing here under the present
+    // suite. Removing it alone leaves all 61 slots green - measured - because a
+    // write is armed with a NULL token and a read completion carries a real
+    // buffer, so the token compare already rejects it. It is kept because that
+    // reasoning depends on a service never emitting readComplete with a null
+    // buffer, which is a contract nobody states, and because the symmetric clause
+    // in completedWrite IS covering a real route. Do not delete it on the
+    // strength of a mutation run: mutation measures coverage, not necessity.
+    if (operation.row == nullptr || operation.listGeneration != completionListGeneration) {
+        delete data;
+        return;
+    }
+
+    // CONSUME IT: disarm first, then take a copy. Everything below runs across
+    // uncompressRide's nested event loop, which can dispatch a whole further
+    // batch and re-arm the ticket, so the ticket is read ONCE, here, and never
+    // again in this invocation.
+    //
+    // THE DISARM IS ALSO MUTATION-SURVIVING on this path, and for a reason worth
+    // writing down: DEC-023's contract is one readComplete OR one readFailed per
+    // readFile call, so within the contract no SECOND completion can arrive
+    // carrying this token - and the buffer is freed a few lines below, so a
+    // contract-breaking second delivery would already be a use-after-free at the
+    // service. The disarm is therefore defence-in-depth against a service that
+    // breaks that contract, kept for symmetry with completedWrite's, where the
+    // same line IS load-bearing (TEST-115's same-row half) because the write
+    // channel has no token to fall back on.
+    QTreeWidgetItem *const row = operation.row;
+    const int col = operation.col;
+    if (operation.generation != completionGeneration) {
+        row->setText(col, tr("Aborted"));
+        delete data;
+        return;
+    }
 
     // was abort pressed?
     if (aborted == true) {
@@ -2385,8 +2756,7 @@ CloudServiceSyncDialog::completedRead(QByteArray *data, QString name, QString /*
         // abort. failedRead frees it on every path; so does this now.
         delete data;
 
-        QTreeWidgetItem *curr = which->invisibleRootItem()->child(listindex-1);
-        curr->setText(col, tr("Aborted"));
+        row->setText(col, tr("Aborted"));
         return;
     }
 
@@ -2421,6 +2791,40 @@ CloudServiceSyncDialog::completedRead(QByteArray *data, QString name, QString /*
         return;
     }
 
+    // DEC-garmin-034 (REQ-028) - AND WHETHER THE LIST BELOW THIS SLOT IS STILL THE
+    // ONE THIS TRANSFER WAS ABOUT.
+    //
+    // Everything from here down labels `row`, and `row` is the raw
+    // QTreeWidgetItem* the ticket captured at the dispatch - in a list that
+    // refreshClicked (:1516) deletes and rebuilds WHOLESALE. Two ways in, both
+    // live: the Refresh can arrive while the read is in flight (the batch is
+    // parked, nothing is on the stack to notice), or from INSIDE the
+    // uncompressRide above, which reaches openRideFile (:363) and its nested
+    // QEventLoop on this same download path.
+    //
+    // AMENDED 2026-08-18 (DEC-garmin-036), and the amendment RAISES the stakes
+    // rather than lowering them. This slot used to address rows positionally, as
+    // `child(listindex-1)`; a Refresh then cost a MISLABEL (child() re-reads the
+    // rebuilt list) or a null dereference when the rebuild came back shorter
+    // (QTreeWidgetItem::child bounds-checks and returns nullptr - measured,
+    // TEST-107). It now holds a POINTER to an item the Refresh has FREED, so the
+    // same Refresh costs a use-after-free instead. Nothing else about this guard
+    // changes; it simply must not be removed, and the ticket is deliberately
+    // consumed below it rather than above it for exactly this reason.
+    //
+    // And then its tail re-drives the loop over the rebuilt list, whose rows are
+    // all UNCHECKED, so the driver falls straight through to the completion tail
+    // and reports "Processed 0 of N successfully" and SAVES THE RIDE CACHE for a
+    // batch that no longer exists (A3-R027-F3, PROBE-B).
+    //
+    // Compared AFTER uncompressRide rather than at entry so that one check covers
+    // both routes, and above saveRide (:2627), which is the irreversible one
+    // (DEC-035 ordering). The ride is ours. See TEST-109.
+    if (batchGeneration != completionGeneration || listGeneration != completionListGeneration) {
+        delete ride;
+        return;
+    }
+
     // REQ-026 (A3-R021b-F3) - RE-READ THE ABORT. The check at the top of this
     // slot was made BEFORE the suspension above: uncompressRide runs a nested
     // QEventLoop on the read path (:363 -> FitRideFile.cpp:172-184), so the user
@@ -2434,26 +2838,96 @@ CloudServiceSyncDialog::completedRead(QByteArray *data, QString name, QString /*
     if (aborted == true) {
         delete ride;
 
-        QTreeWidgetItem *curr = which->invisibleRootItem()->child(listindex-1);
-        curr->setText(col, tr("Aborted"));
+        row->setText(col, tr("Aborted"));
         return;
     }
 
     progressBar->setValue(++downloadcounter);
 
-    QTreeWidgetItem *curr = which->invisibleRootItem()->child(listindex-1);
     if (ride) {
-        if (saveRide(ride, errors) == true) {
-            curr->setText(col, tr("Saved"));
-            successful++;
-        } else {
-            curr->setText(col, errors.join(" "));
+
+        // DEC-garmin-034 (REQ-028 (a)), A3-R028b-F1 - saveRide IS A SUSPENSION
+        // POINT, and until this block it was an unenumerated one.
+        //
+        // WHAT SUSPENDS. saveRide (:3370) calls
+        // DataProcessorFactory::autoProcess(ride, "Auto", "Import") at :3396,
+        // which runs every processor whose configKeyAutomation is set to "Auto"
+        // (DataProcessor.cpp:220-221). FixElevation's postProcess then posts to
+        // api.open-elevation.com and waits in a local QEventLoop with NO TIMEOUT
+        // (FixElevation.cpp:288-300); FixPyDataProcessor takes a second route
+        // into a nested loop through FixPyRunner (FixPyDataProcessor.cpp:39 ->
+        // FixPyRunner.cpp:40-48). "Manual" is the default, so this is a
+        // SUPPORTED CONFIGURATION rather than the out-of-the-box one - and
+        // criterion (a), "no row is touched after it is freed", admits no
+        // configuration exemption.
+        //
+        // WHAT IT COST. The last proof that `row` is live is the compare at
+        // :2820, ABOVE this call; the first lifetime re-check used to be the
+        // self.isNull() below the processEvents(), THREE WRITES too late. Since
+        // DEC-036 `row` is a stored POINTER rather than child(listindex-1), so a
+        // Refresh delivered into that loop turned what would have been a
+        // MISLABEL into a use-after-free WRITE at the setText below. See
+        // TEST-121.
+        //
+        // THE SHAPE IS THE ONE ALREADY USED AROUND uncompressRide
+        // (:2776/:2786/:2820), in the same order and for the same three
+        // questions:
+        //
+        //   BlockingCall  - saveRide is not a store call, but it suspends, and
+        //                   while it is suspended the user can Close/Cancel this
+        //                   dialog. Without the depth this frame raises,
+        //                   deferCloseIfBusy() (:1471) returns false, QDialog's
+        //                   WA_DeleteOnClose path destroys the dialog and with it
+        //                   `row` and `progressBar`, and the writes below are into
+        //                   freed memory with no guard that can see it. It also
+        //                   matters to DEC-031: completedRead is entered from the
+        //                   service's own notify, so the store is on the stack
+        //                   here, and a parent teardown that lands inside saveRide
+        //                   must hand the store to the reaper (:1368-1373) instead
+        //                   of closing and deleting it under that frame. Raising
+        //                   the depth across a call that does NOT touch the store
+        //                   is safe in the other direction too: the record is
+        //                   created and released by this frame alone, release()
+        //                   with nothing adopted is a no-op (CloudService.h:311),
+        //                   and the only other effect - a Close arriving here being
+        //                   deferred and replayed from ~BlockingCall - is exactly
+        //                   what every other suspension in this file already does.
+        //   self.isNull() - the routes the deferral cannot intercept: Qt destroys
+        //                   child widgets directly from ~QObject on athlete-tab
+        //                   teardown (DEC-garmin-025), and ~BlockingCall itself
+        //                   may have replayed a deferred close.
+        //   listGeneration- and the Refresh, which frees `row` without touching
+        //                   this dialog at all.
+        //
+        // ORDERING, AND WHAT IS DELIBERATELY GIVEN UP. DEC-035 puts the compare
+        // above the irreversible act; here the suspension is INSIDE the
+        // irreversible act, so that is not available. By the time we can ask the
+        // question the activity is already in the athlete's folder - and that is
+        // the right trade: the file is on disk and re-importable, whereas writing
+        // through a freed pointer is not recoverable at all. What stands down is
+        // the LABEL and the loop; `successful` is not counted, because this batch
+        // is no longer reporting anything.
+        bool saved = false;
+        {
+            BlockingCall blocking(this);
+            saved = saveRide(ride, errors);
         }
 
-        // delete once saved
+        // delete once saved - and before any bail below, because the ride is ours
+        // on every one of them (A3-R017-F3's leak, in this block).
         delete ride;
+
+        if (self.isNull()) return;
+        if (batchGeneration != completionGeneration || listGeneration != completionListGeneration) return;
+
+        if (saved == true) {
+            row->setText(col, tr("Saved"));
+            successful++;
+        } else {
+            row->setText(col, errors.join(" "));
+        }
     } else {
-        curr->setText(col, errors.join(" "));
+        row->setText(col, errors.join(" "));
     }
 
     QApplication::processEvents();
@@ -2463,6 +2937,7 @@ CloudServiceSyncDialog::completedRead(QByteArray *data, QString name, QString /*
     // this object. Nothing here needs replaying: the sync is over with its
     // dialog. Proven by mutation (TEST-087).
     if (self.isNull()) return;
+    if (batchGeneration != completionGeneration || listGeneration != completionListGeneration) return;
 
     // REQ-027 (A3-R027-F4) - AND THE ABORT, WHICH THAT CALL CAN HAVE DELIVERED.
     // The entry check (:2299) and the REQ-026 re-read (:2318) are both UPSTREAM
@@ -2514,27 +2989,65 @@ CloudServiceSyncDialog::failedRead(QByteArray *data, QString, QString reason)
     // athlete teardown that destroys this dialog.
     QPointer<CloudServiceSyncDialog> self(this);
 
-    QTreeWidget *which = sync ? rideListSync : rideListDown;
-    int col = sync ? 7 : 5;
+    // DEC-garmin-034 (REQ-028) - completedRead's entry guard, for the identical
+    // reason: the row this slot labels was captured at the dispatch, and a
+    // Refresh delivered while the read was in flight has FREED it. ONE check
+    // covers this whole slot because nothing in it suspends - it runs no nested
+    // loop of its own, which is the difference from its sibling. See TEST-111.
+    //
+    // AMENDED 2026-08-18 (DEC-garmin-036): the buffer is now freed on this path
+    // rather than above it. The delete used to sit at the top of the slot, which
+    // was fine while nothing here needed the pointer; the ticket compare below
+    // does need it, and comparing a pointer that has already been passed to
+    // `delete` is a question about an indeterminate value. So the free moved
+    // below the compares and every early return carries its own, exactly as
+    // completedRead's do. Same number of frees on every path: one.
+    const auto operationIt = readOperations.constFind(data);
+    if (operationIt == readOperations.constEnd()) return;
+    const TransferOperation operation = operationIt.value();
+    readOperations.remove(data);
+    const int completionGeneration = batchGeneration;
+    const int completionListGeneration = listGeneration;
+
+    // DEC-garmin-036 (REQ-028 (c)) - completedRead's ticket check, unchanged in
+    // meaning: this slot is the OTHER completion of the same readFile call
+    // (DEC-023's explicit failure channel), so it is the same transfer identity,
+    // told by the same token, and a stale one is swallowed the same way. The
+    // token compare and the free are both load-bearing here and are measured on
+    // THIS channel rather than inferred from the sibling's - see CloudService.h
+    // and TEST-113/116, whose late delivery is repeated on readFailed for exactly
+    // that reason. `isWrite` and the disarm carry completedRead's annotation
+    // unchanged: both survive mutation, and both are kept for the reasons given
+    // there.
+    if (operation.row == nullptr || operation.listGeneration != completionListGeneration) {
+        delete data;
+        return;
+    }
+
+    QTreeWidgetItem *const row = operation.row;
+    const int col = operation.col;
 
     // was allocated before calling readFile, and nothing was staged into it
     delete data;
+    if (operation.generation != completionGeneration) {
+        row->setText(col, reason);
+        return;
+    }
 
     // was abort pressed?
     if (aborted == true) {
-        QTreeWidgetItem *curr = which->invisibleRootItem()->child(listindex-1);
-        curr->setText(col, tr("Aborted"));
+        row->setText(col, tr("Aborted"));
         return;
     }
 
     progressBar->setValue(++downloadcounter);
 
-    QTreeWidgetItem *curr = which->invisibleRootItem()->child(listindex-1);
-    curr->setText(col, reason);
+    row->setText(col, reason);
 
     QApplication::processEvents();
     // A3-R021-F1 - `sync` below is a member read on a possibly destroyed `this`.
     if (self.isNull()) return;
+    if (batchGeneration != completionGeneration || listGeneration != completionListGeneration) return;
 
     // REQ-027 (A3-R027-F4) - the abort, as in completedRead. This slot has only
     // an ENTRY check (:2395), so the window here is wider than its sibling's:
@@ -2559,11 +3072,24 @@ CloudServiceSyncDialog::uploadNext()
     // is the use-after-free.
     QPointer<CloudServiceSyncDialog> self(this);
 
+    // DEC-garmin-034 (REQ-028 (b)), A3-R028-F5 - syncNext's twin, reached from
+    // completedWrite's tail processEvents() instead of completedRead's. Its own
+    // completion tail calls no rideCache->save(), but it writes "Uploaded x of y
+    // successfully" for a batch whose rows are gone and it would re-drive this
+    // loop over a list it never owned. See the full comment in syncNext and
+    // TEST-120's upload arm.
+    if (listGeneration != batchListGeneration) return true;
+
     // DEC-garmin-032 (REQ-027) - as in syncNext: whose batch this frame is
     // running. The parse-failure branch below has kept iterating since REQ-026,
     // so this loop has carried the stale-frame hazard for longer than syncNext
     // has. See the member's comment in CloudService.h and TEST-100.
     const int generation = batchGeneration;
+
+    // DEC-garmin-034 (REQ-028) - as in syncNext: whose ROWS this frame is
+    // running, and, as in syncNext, only about THIS frame's own suspension - see
+    // the amendment on the twin (A3-R028-F5). See TEST-108.
+    const int listgen = listGeneration;
 
     for (int i=listindex; i<rideListUp->invisibleRootItem()->childCount(); i++) {
         QTreeWidgetItem *curr = rideListUp->invisibleRootItem()->child(i);
@@ -2608,6 +3134,25 @@ CloudServiceSyncDialog::uploadNext()
                     return true;
                 }
 
+                // DEC-garmin-034 (REQ-028) - syncNext's row guard, for the
+                // identical window: `curr` was captured at :2682, before the
+                // openRideFile above, and a Refresh delivered by that nested loop
+                // deletes it. Same placement (above the abort branch, which is
+                // itself a WRITE through the freed pointer), same reason, same
+                // ownership of the ride. See TEST-108.
+                if (listGeneration != listgen) {
+                    delete ride;
+                    return true;
+                }
+
+                // The parse can admit an Abort -> restart burst without a list
+                // rebuild. Stand the old driver down before it can dispatch the
+                // same row alongside the restarted generation.
+                if (batchGeneration != generation) {
+                    delete ride;
+                    return true;
+                }
+
                 if (ride) {
 
                     // REQ-027 (S-R027-01) - syncNext's re-read (:2056), for the
@@ -2625,7 +3170,14 @@ CloudServiceSyncDialog::uploadNext()
                     // get a compressed version
                     QByteArray data;
                     store->compressRide(ride, data, QFileInfo(curr->text(1)).baseName() + ".json");
-                    store->writeFile(data, QFileInfo(curr->text(1)).baseName() + store->uploadExtension(), ride);
+
+                    // DEC-garmin-036 (REQ-028 (c)) - ARM THE TICKET, as syncNext's
+                    // upload branch does and for the same reason. The upload
+                    // list's status column is 7. See CloudService.h and TEST-115.
+                    const QString remotename = QFileInfo(curr->text(1)).baseName() + store->uploadExtension();
+                    const quint64 operationId = store->newWriteOperationId();
+                    writeOperations.insert(operationId, TransferOperation{curr, 7, batchGeneration, listGeneration});
+                    store->writeFile(data, remotename, ride, operationId);
                     QApplication::processEvents();
                     delete ride; // clean up!
                     return true;
@@ -2678,6 +3230,22 @@ CloudServiceSyncDialog::uploadNext()
                     // relabelling by a `listindex` that is no longer ours. See
                     // TEST-100.
                     if (batchGeneration != generation) return true;
+
+                    // DEC-garmin-034 (REQ-028 (b)), A3-R028b-F2 - syncNext's
+                    // twin, for the same reason and reusing this frame's own
+                    // `listgen` (:3082): the processEvents() a few lines up can
+                    // deliver a Refresh, which rebuilds every list, and the three
+                    // guards above answer whether this dialog is alive, whether
+                    // the user still wants the work and whether this is still the
+                    // live batch - none of them whether it is still the live LIST.
+                    //
+                    // NOT a memory-safety defect here either - `curr` is
+                    // re-fetched at the loop head - but this branch does not even
+                    // `continue`: it falls THROUGH to the completion tail below,
+                    // which announces "Uploaded 0 of N successfully" for a batch
+                    // that no longer exists. Row `i` keeps its verdict; the LOOP
+                    // stands down. See TEST-123.
+                    if (listGeneration != listgen) return true;
                 }
             }
         }
@@ -2704,29 +3272,87 @@ CloudServiceSyncDialog::uploadNext()
 }
 
 void
-CloudServiceSyncDialog::completedWrite(QString, QString result)
+CloudServiceSyncDialog::completedWrite(quint64 operationId, QString, QString result)
 {
     // A3-R021-F1 - as in completedRead: the processEvents() below can deliver the
     // athlete teardown that destroys this dialog.
     QPointer<CloudServiceSyncDialog> self(this);
 
-    QTreeWidget *which = sync ? rideListSync : rideListUp;
+    // DEC-garmin-034 (REQ-028) - the third completion slot's copy, same shape and
+    // same reason as failedRead's: a Refresh delivered while the WRITE was in
+    // flight (writeFile suspends on its own account - it is one of the four
+    // DEC-029 ENUMERATED) has FREED the row this slot is about to label.
+    //
+    // A3-R028b-F8 - "one of DEC-029's four suspension points" is what this used to
+    // say, and the phrasing was read as a closed world. DEC-029 enumerated the
+    // four STORE calls that suspend; it never claimed those were the only
+    // suspensions in this dialog, and they are not - saveRide is one (:2910,
+    // A3-R028b-F1), openRideFile is another (:2317/:3117, DEC-024), and the
+    // drivers' own parse-failure processEvents() are two more (:2428/:3184,
+    // A3-R028b-F2). Nothing in this file holds a complete list. See TEST-111.
+    const auto operationIt = writeOperations.constFind(operationId);
+    if (operationIt == writeOperations.constEnd()) return;
+    const TransferOperation operation = operationIt.value();
+    writeOperations.remove(operationId);
+    const int completionGeneration = batchGeneration;
+    const int completionListGeneration = listGeneration;
+
+    // The historical name-ticket discussion below is superseded by DEC-garmin-036
+    // Option C. `operationId` now selects the exact record; `id` is not used for
+    // correlation, empty names need no allowance, and there is no retired cap.
+    // DEC-garmin-036 (REQ-028 (c)) - AND IS THIS THE WRITE THIS BATCH IS WAITING
+    // FOR? Below the compare above, for that compare's reason.
+    //
+    // The write channel has no buffer to identify itself with, so the ticket
+    // compares the exact `remotename` uploadNext/syncNext passed to writeFile
+    // against the id the service reports. An id that does NOT match belongs to a
+    // batch that was abandoned and restarted, and labelling on it puts one row's
+    // verdict on another row and re-drives the live batch's loop a second time.
+    //
+    // AN EMPTY id IS ACCEPTED, deliberately: writeComplete's id is whatever the
+    // service chooses to send and there is no contract making it the remotename,
+    // so an empty one is "I did not say", not "I say it was a different row" -
+    // and rejecting it would silently stall every service that sends none. What
+    // covers that case is `armed`, which is one-shot: the first completion after
+    // a dispatch is consumed and the ticket disarmed, so a second one for the
+    // same row under the same name is swallowed. That is also the ONLY thing
+    // separating the two transfers when a restart re-dispatches the identical row
+    // - see the same-row half of TEST-115.
+    //
+    // The id this slot is handed used to be discarded (the parameter was
+    // unnamed); naming it is not a signature change.
+    //
+    // `inflight.isWrite == false` IS THE CLAUSE THAT COVERS THE EMPTY-ID CASE,
+    // and it survives mutation - said plainly, per LSN-059, rather than left to
+    // be discovered. Removing it alone leaves every slot in the suite green
+    // because no run here delivers an empty-id write completion while a READ is
+    // armed.
+    //
+    // The operation id selects exactly the record armed at dispatch. If that
+    // operation belongs to an earlier batch, its result may label its own live
+    // row but must not mutate the current counters or re-enter its driver.
+    if (operation.row == nullptr || operation.listGeneration != completionListGeneration) return;
+    QTreeWidgetItem *const row = operation.row;
+    const int col = operation.col;
+    if (operation.generation != completionGeneration) {
+        row->setText(col, result);
+        return;
+    }
 
     // was abort pressed?
     if (aborted == true) {
-        QTreeWidgetItem *curr = which->invisibleRootItem()->child(listindex-1);
-        curr->setText(7, tr("Aborted"));
+        row->setText(col, tr("Aborted"));
         return;
     }
 
     progressBar->setValue(++downloadcounter);
 
-    QTreeWidgetItem *curr = which->invisibleRootItem()->child(listindex-1);
-    curr->setText(7, result);
+    row->setText(col, result);
     if (result == tr("Completed.")) successful++;
     QApplication::processEvents();
     // A3-R021-F1 - `sync` below is a member read on a possibly destroyed `this`.
     if (self.isNull()) return;
+    if (batchGeneration != completionGeneration || listGeneration != completionListGeneration) return;
 
     // REQ-027 (A3-R027-F4) - the abort, as in completedRead/failedRead. What this
     // one uniquely prevents is NOT the next write: S-R027-01 (:2088/:2497) already

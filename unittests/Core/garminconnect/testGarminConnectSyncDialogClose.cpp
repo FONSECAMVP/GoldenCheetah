@@ -123,11 +123,15 @@
 #endif
 
 #include <sanitizer/asan_interface.h>
+// TEST-126 — __sanitizer_print_stack_trace(), used only under GC_ORACLE_TRACE to
+// name the frame that made a dispatch the oracle rejected.
+#include <sanitizer/common_interface_defs.h>
 
 #include <cstring>
 #include <functional>
 #include <memory>
 #include <new>
+#include <random>
 
 // TEST-082 — the member-touch observation channel defined in
 // stubs/ImportSeamStubs.cpp. See the block comment there: the stand-ins for
@@ -141,6 +145,16 @@ extern volatile quintptr contextMemberTouch;
 extern volatile quintptr rideItemMemberTouch;
 extern volatile quintptr saveSilentThisTouch;
 extern volatile quintptr saveSilentArgTouch;
+
+// TEST-121 (A3-R028b-F1) — the autoProcess seam. saveRide's own suspension
+// point: DataProcessorFactory::autoProcess runs the "Auto" processors, two of
+// which enter a nested QEventLoop (FixElevation.cpp:288-300, no timeout;
+// FixPyDataProcessor.cpp:39). The stand-in calls whatever is armed here from
+// inside autoProcess, i.e. where postProcess would have suspended. Null unless
+// a slot arms it, so the two other targets that compile ImportSeamStubs.cpp are
+// unaffected (LSN-056).
+extern std::function<void()> autoProcessAction;
+extern int autoProcessCalls;
 } // namespace gcstub
 
 // ---------------------------------------------------------------------------
@@ -255,6 +269,12 @@ QByteArray* lastBuffer = nullptr; // the buffer syncNext preallocated
 // production loop actually asked for, rather than guess it from a row index.
 QString lastReadName;
 
+// TEST-114 (REQ-028 (c)) — EVERY row read, in order, for the same reason
+// writeNames below exists on the write side: a count alone cannot tell "three
+// rows, one read each" from "one row, read three times", and the positive
+// control's whole claim is the former.
+QStringList readNames;
+
 // TEST-090 (DEC-garmin-031) — the reaper's bar for every single-store run. See
 // the ReapLog comment above for what it records and why the two bools above
 // stopped being enough.
@@ -281,6 +301,11 @@ const void* lastUploadBuffer = nullptr; // the dialog MEMBER QByteArray it was h
 // wrote row[0]. syncNext passes QFileInfo(curr->text(1)).baseName() +
 // store->uploadExtension() (CloudService.cpp:2062), so this names the row.
 QString lastWriteName;
+
+// TEST-112 (S-R028-01) — EVERY row written, in order. A count and a "last" cannot
+// tell "two rows, one each" from "one row, twice", and telling those apart is the
+// whole of what the sort trace measures.
+QStringList writeNames;
 bool teardownSawModal = false;   // the teardown landed while a modal box was up
 bool teardownFired = false;      // ...and it fired at all
 bool startReturned = false;      // has start() handed control back yet?
@@ -296,12 +321,14 @@ void reset()
     storeReap = ReapLog();
     lastBuffer = nullptr;
     lastReadName.clear();
+    readNames.clear();
     openCalls = 0;
     openResumed = false;
     writeFileCalls = 0;
     writeResumed = false;
     lastUploadBuffer = nullptr;
     lastWriteName.clear();
+    writeNames.clear();
     teardownSawModal = false;
     teardownFired = false;
     startReturned = false;
@@ -309,6 +336,449 @@ void reset()
 }
 
 } // namespace obs
+
+// ---------------------------------------------------------------------------
+// TEST-126 — THE CONTINUOUS INVARIANT ORACLE.
+//
+// WHY THIS EXISTS. Six adversarial cycles on this dialog have each found a real
+// defect behind a fully green suite, and the last three each found a defect
+// created or missed by the fix for the previous one. There are now six
+// interacting guard mechanisms in one dialog (listGeneration, the in-flight
+// ticket, its invalidation sites, the driver-entry compares, the resumption
+// compares, saveRide's three-part guard and the retired-write set). Each new
+// mechanism MULTIPLIES the reachable state space rather than adding to it, and
+// hand-enumerated click sequences - one slot per route somebody thought of -
+// have stopped being able to keep up. So this is the other half: a small number
+// of properties that must hold in EVERY run of this file, asserted from
+// `cleanup()` after every test function, whatever that function was driving.
+//
+// WHAT IT CAN SEE. Dispatch/completion events come from the fake store and the
+// dialog exposes the const diagnostic outstandingTransferCount(), so TEST-126
+// compares its independent operation ledger directly with production's after
+// dispatch, completion admission, completion removal and batch transitions.
+// The remaining batch-scoping observations come from:
+//
+//   * the store calls this harness already intercepts (BlockingStore::readFile /
+//     ::writeFile are the dispatches; CloudService's own readComplete /
+//     readFailed / writeComplete signals are the completions), and
+//   * the dialog's WIDGETS.
+//
+// One widget does more work here than the rest and the mechanism turns on it:
+// `cancelButton` is shown and hidden at EXACTLY the four statements that write
+// the private `downloading` flag - CloudService.cpp:1978/:1980 (abort),
+// :2086/:2087 (start), :2570/:2573, :2707/:2709, :3304/:3306 (the three loop
+// tails) - and nothing else in that file touches its visibility. So
+// `cancelButton->isHidden()` IS `downloading`, exactly, and a QEvent::Show /
+// QEvent::Hide filter on that button is a SYNCHRONOUS notification of every
+// transition of a private member. That is what makes the invariant below
+// scopeable to the LIVE batch without guessing.
+//
+// THE INVARIANTS, and the reason each is or is not asserted:
+//
+//   INV-1  LIVE OUTSTANDING <= 1.  Dispatches this dialog made for its CURRENT
+//          batch, minus the completions delivered against them. DEC-036's own
+//          comment states the property ("At most one transfer is outstanding per
+//          LIVE batch: each of the four dispatch sites returns immediately after
+//          its store call, and the only thing that re-drives a loop is a
+//          completion slot's tail, which has consumed the ticket first") and
+//          DEC-037's amendment states the exception ("per LIVE batch is a
+//          statement about DISPATCH, not about the NETWORK"): a transfer the
+//          dialog has ABANDONED is still on the wire and is not this dialog's
+//          any more. So an abandonment - `downloading` going false, which is the
+//          only way a batch loses a transfer - RETIRES whatever is outstanding
+//          into a second bucket that is never counted again. Without that
+//          scoping this invariant would fire on TEST-115/124/125, which park an
+//          abandoned write across a restart ON PURPOSE.
+//
+//   INV-2  DISPATCHES IN ONE BATCH <= THAT BATCH'S OWN TOTAL.  downloadClicked
+//          counts the checked rows into `downloadtotal` and publishes it as the
+//          progress bar's maximum (CloudService.cpp:2098-2102), and a row is
+//          transferred at most once, so a batch cannot legitimately issue more
+//          store calls than it declared rows. This is the invariant "three writes
+//          are issued for a two-row batch" violates.
+//
+//   INV-3  OPERATION CONSERVATION. Dispatches equal matched completions plus
+//          outstanding operations. The latter is directly observed through
+//          outstandingTransferCount(), including a synchronous resample after
+//          the dialog's completion slot has removed the admitted record. This
+//          catches both premature loss and failure to remove the final record.
+//
+//   NOT AN OBSERVER INVARIANT - RESTART IDEMPOTENCE.  "downloadClicked() twice
+//          with nothing outstanding" is an ACTION, not an observation: asserting
+//          it in every existing run would mean clicking in every existing run,
+//          which changes what those runs drive. It is therefore checked by
+//          TEST-127, which is already clicking, and only there. Its subject is
+//          also only half-visible: `downloadcounter` is the progress bar's value
+//          and `successful` reaches the progress label, but `listindex` is
+//          private and has no widget - so the check is written against the two
+//          that can be read and says so.
+//
+// WHAT IT DELIBERATELY DOES NOT ASSERT. A completion that matches NO dispatch is
+// COUNTED but not failed: several slots in this file deliver one completion
+// TWICE on purpose (that a second completion for the same row is swallowed is
+// the property they measure), so a "no unmatched delivery" rule would be
+// asserting the opposite of an existing criterion. The count is reported instead.
+// ---------------------------------------------------------------------------
+namespace oracle {
+
+// One store call this harness watched the dialog make.
+struct Dispatch
+{
+    bool isWrite = false;
+    // The READ's identity: the buffer syncNext/downloadNext preallocated.
+    // readComplete/readFailed hand back that same pointer (the contract DEC-036
+    // states on notifyReadComplete), so it is a per-transfer token. COMPARED,
+    // NEVER DEREFERENCED - by the time a completion arrives the dialog may
+    // already have freed it.
+    QByteArray* token = nullptr;
+    // The WRITE's identity: the opaque operation id carried by writeComplete.
+    // The name remains diagnostic metadata and is never used to match writes.
+    quint64 operationId = 0;
+    QString name;
+    int serial = 0;
+};
+
+// --- the aggregate. Reset by init(), read by cleanup(), after EVERY test. ---
+QStringList violations;      // one line per breach, in the order they happened
+int dispatches = 0;          // readFile + writeFile calls the oracle scoped
+int deliveries = 0;          // completion signals seen
+int matchedLive = 0;         // ...that answered a LIVE batch's dispatch
+int matchedAbandoned = 0;    // ...that answered an abandoned one
+int unmatchedDeliveries = 0; // ...that answered nothing at all (counted only)
+int maxLiveOutstanding = 0;
+int maxDispatchesInOneBatch = 0;
+int unattachedDispatches = 0;     // no sync dialog to scope them against
+int abandonments = 0;             // `downloading` observed going false with work out
+int batchStarts = 0;              // ...and going true
+int conservationSamples = 0;      // direct outstandingTransferCount observations
+int completionRemovalSamples = 0; // observations after production slots return
+int operationOutstanding = 0;     // live plus abandoned, never capped or evicted
+// ORCH-033 — deliveries during which the OBSERVER ITSELF was destroyed. The
+// oracle lives inside the store; a completion slot that tears the dialog down
+// deletes that store re-entrantly, so control returns into a freed object and
+// the post-removal resample is not merely skipped, it is IMPOSSIBLE - there is
+// no observer left to take it. This counter is namespace-scope precisely so it
+// can be written when `this` is already gone, and it exists so the
+// completionRemovalSamples meta-invariant can distinguish "the oracle stopped
+// looking" (a real defect, still caught) from "the oracle was destroyed by the
+// thing it was watching" (the run under test). It is NOT a general exemption:
+// it only excuses a run where EVERY matched completion was terminal.
+int observerDestroyedInDelivery = 0;
+
+void reset()
+{
+    violations.clear();
+    dispatches = 0;
+    deliveries = 0;
+    matchedLive = 0;
+    matchedAbandoned = 0;
+    unmatchedDeliveries = 0;
+    maxLiveOutstanding = 0;
+    maxDispatchesInOneBatch = 0;
+    unattachedDispatches = 0;
+    abandonments = 0;
+    batchStarts = 0;
+    conservationSamples = 0;
+    completionRemovalSamples = 0;
+    operationOutstanding = 0;
+    observerDestroyedInDelivery = 0;
+}
+
+// Every event this oracle sees, in order, on demand (GC_ORACLE_TRACE=1). Off by
+// default and silent: it exists so that a violation can be AUDITED - "was there
+// really no abort between those two dispatches?" is the first question anyone
+// will ask of an INV-1 report, and the answer has to be readable rather than
+// re-derived.
+bool tracing()
+{
+    static const bool on = qEnvironmentVariableIsSet("GC_ORACLE_TRACE");
+    return on;
+}
+
+void trace(const QString& what)
+{
+    if (tracing())
+        qInfo("  oracle| %s", qPrintable(what));
+}
+
+void note(const QString& what)
+{
+    const char* fn = QTest::currentTestFunction();
+    violations << (QStringLiteral("[") + QString::fromLatin1(fn != nullptr ? fn : "?") + QStringLiteral("] ") + what);
+}
+
+QString summary()
+{
+    return QStringLiteral("dispatches=%1 deliveries=%2 (live %3 / abandoned %4 / unmatched %5) "
+                          "maxLiveOutstanding=%6 maxDispatchesInOneBatch=%7 batchStarts=%8 abandonments=%9 "
+                          "unattached=%10 conservationSamples=%11 postRemovalSamples=%12 "
+                          "observerDestroyedInDelivery=%13")
+        .arg(dispatches)
+        .arg(deliveries)
+        .arg(matchedLive)
+        .arg(matchedAbandoned)
+        .arg(unmatchedDeliveries)
+        .arg(maxLiveOutstanding)
+        .arg(maxDispatchesInOneBatch)
+        .arg(batchStarts)
+        .arg(abandonments)
+        .arg(unattachedDispatches)
+        .arg(conservationSamples)
+        .arg(completionRemovalSamples)
+        .arg(observerDestroyedInDelivery);
+}
+
+// The ONE sync dialog on screen, or null when there is none or more than one.
+// Only ever consulted when a store was handed no `dialog` of its own; a run with
+// two sync dialogs up (TEST-090's) always sets that member, so this returning
+// null there costs nothing.
+CloudServiceSyncDialog* soleSyncDialog()
+{
+    CloudServiceSyncDialog* found = nullptr;
+    const QWidgetList all = QApplication::allWidgets();
+    for (QWidget* w : all) {
+        CloudServiceSyncDialog* d = qobject_cast<CloudServiceSyncDialog*>(w);
+        if (d == nullptr)
+            continue;
+        if (found != nullptr)
+            return nullptr; // ambiguous: say so rather than guess
+        found = d;
+    }
+    return found;
+}
+
+QPushButton* buttonWithText(QWidget* dialog, const QString& text)
+{
+    const QList<QPushButton*> buttons = dialog->findChildren<QPushButton*>();
+    for (QPushButton* b : buttons)
+        if (b->text() == text)
+            return b;
+    return nullptr;
+}
+
+// ONE DIALOG'S worth of accounting. Per STORE rather than global because two
+// sync dialogs can be alive at once (TEST-090) and one shared counter would let
+// either dialog's transfers be charged to the other.
+class TransferOracle
+{
+  public:
+    // Called at the first dispatch this store makes. `candidate` is the store's
+    // own `dialog` member when the fixture set one.
+    void attach(QWidget* candidate, QObject* filter)
+    {
+        if (attached_)
+            return;
+        CloudServiceSyncDialog* d = qobject_cast<CloudServiceSyncDialog*>(candidate);
+        if (d == nullptr)
+            d = soleSyncDialog();
+        if (d == nullptr)
+            return; // an upload dialog, or none: left unscoped, and counted
+        dialog_ = d;
+        cancel_ = buttonWithText(d, QStringLiteral("Close"));
+        bar_ = d->findChild<QProgressBar*>();
+        if (cancel_ == nullptr)
+            return; // the one widget the scoping depends on is missing
+        cancel_->installEventFilter(filter);
+        // Attaching happens AT the first dispatch, so the batch that dispatch
+        // belongs to began a moment ago and has issued nothing yet.
+        downloading_ = cancel_->isHidden();
+        dispatchesThisBatch_ = 0;
+        attached_ = true;
+    }
+
+    bool attached() const { return attached_; }
+    int liveOutstanding() const { return int(live_.count()); }
+
+    // `downloading` may have changed. Called from the QEvent::Show/Hide filter on
+    // cancelButton - i.e. synchronously, inside the very statement that wrote the
+    // flag - and again at each dispatch as a belt-and-braces re-read.
+    void sample()
+    {
+        if (!attached_ || cancel_.isNull())
+            return;
+        const bool now = cancel_->isHidden();
+        if (now == downloading_)
+            return;
+        downloading_ = now;
+        trace(now ? QStringLiteral("downloading -> TRUE (a batch started)")
+                  : QStringLiteral("downloading -> FALSE (abort, or a loop reached its tail)"));
+        if (now) {
+            batchStarts++;
+            dispatchesThisBatch_ = 0;
+        } else {
+            // THE BATCH LET GO OF WHATEVER IT HAD OUT. An abort does not cancel
+            // the transfer (DEC-037); it stops being this batch's.
+            if (!live_.isEmpty()) {
+                abandonments++;
+                trace(QStringLiteral("  ...retiring %1 outstanding transfer(s) as ABANDONED").arg(live_.count()));
+                abandoned_ += live_;
+                live_.clear();
+            }
+        }
+    }
+
+    void noteDispatch(QWidget* candidate, QObject* filter, bool isWrite, QByteArray* token, quint64 operationId,
+                      const QString& name)
+    {
+        attach(candidate, filter);
+        if (!attached_) {
+            unattachedDispatches++;
+            return;
+        }
+        sample();
+
+        Dispatch d;
+        d.isWrite = isWrite;
+        d.token = token;
+        d.operationId = operationId;
+        d.name = name;
+        d.serial = ++serial_;
+        live_ << d;
+        dispatches++;
+        operationOutstanding++;
+        dispatchesThisBatch_++;
+
+        trace(QStringLiteral("DISPATCH %1#%2 (%3) -> live=%4 thisBatch=%5 barMax=%6")
+                  .arg(isWrite ? QStringLiteral("write") : QStringLiteral("read"))
+                  .arg(d.serial)
+                  .arg(name)
+                  .arg(live_.count())
+                  .arg(dispatchesThisBatch_)
+                  .arg(bar_.isNull() ? -1 : bar_->maximum()));
+
+        if (live_.count() > maxLiveOutstanding)
+            maxLiveOutstanding = int(live_.count());
+        if (dispatchesThisBatch_ > maxDispatchesInOneBatch)
+            maxDispatchesInOneBatch = dispatchesThisBatch_;
+
+        checkConservation("dispatch");
+
+        // ---- INV-1
+        if (live_.count() > 1) {
+            QStringList who;
+            for (const Dispatch& o : live_)
+                who << (o.isWrite ? QStringLiteral("write") : QStringLiteral("read")) + QStringLiteral("#") +
+                           QString::number(o.serial) + QStringLiteral("(") + o.name + QStringLiteral(")");
+            note(QStringLiteral("INV-1 outstanding<=1 violated: %1 transfers outstanding for the LIVE batch at once "
+                                "[%2]")
+                     .arg(live_.count())
+                     .arg(who.join(QStringLiteral(", "))));
+            // WHO ISSUED IT. The first question anyone asks of an INV-1 report is
+            // which frame made the second dispatch, and under this target's
+            // sanitizer that is answerable exactly rather than inferred from the
+            // click trace. Only under GC_ORACLE_TRACE: it is diagnosis, not
+            // verdict.
+            if (tracing())
+                __sanitizer_print_stack_trace();
+        }
+
+        // ---- INV-2. The bar's maximum is only meaningful once a batch with rows
+        //      has set it (downloadClicked leaves it alone for an empty batch), so
+        //      a maximum of zero is read as "not stated" rather than as "zero
+        //      rows".
+        const int total = bar_.isNull() ? 0 : bar_->maximum();
+        if (total > 0 && dispatchesThisBatch_ > total) {
+            note(QStringLiteral("INV-2 dispatches<=batch total violated: %1 store calls issued by a batch of %2 rows "
+                                "(last: %3 %4)")
+                     .arg(dispatchesThisBatch_)
+                     .arg(total)
+                     .arg(isWrite ? QStringLiteral("write") : QStringLiteral("read"))
+                     .arg(name));
+        }
+    }
+
+    // A completion signal left the store. Match its exact buffer/write identity
+    // to the live batch first, then to an abandoned batch, then to nothing.
+    void noteDelivery(bool isWrite, QByteArray* token, quint64 operationId, const QString& name)
+    {
+        if (!attached_)
+            return;
+        sample();
+        // The oracle's emitter connection runs before the dialog's completion
+        // slot, so both sides still include this operation at this point.
+        checkConservation("completion admission");
+        deliveries++;
+        if (take(live_, isWrite, token, operationId)) {
+            matchedLive++;
+            operationOutstanding--;
+            trace(QStringLiteral("DELIVERY %1 (%2) -> answered a LIVE dispatch, live=%3")
+                      .arg(isWrite ? QStringLiteral("write") : QStringLiteral("read"))
+                      .arg(name)
+                      .arg(live_.count()));
+            return;
+        }
+        if (take(abandoned_, isWrite, token, operationId)) {
+            matchedAbandoned++;
+            operationOutstanding--;
+            trace(QStringLiteral("DELIVERY %1 (%2) -> answered an ABANDONED dispatch")
+                      .arg(isWrite ? QStringLiteral("write") : QStringLiteral("read"))
+                      .arg(name));
+            return;
+        }
+        unmatchedDeliveries++;
+        trace(QStringLiteral("DELIVERY %1 (%2) -> answered NOTHING this oracle had outstanding")
+                  .arg(isWrite ? QStringLiteral("write") : QStringLiteral("read"))
+                  .arg(name));
+    }
+
+    void checkConservation(const char* point)
+    {
+        if (!attached_ || dialog_.isNull())
+            return;
+        CloudServiceSyncDialog* const dialog = qobject_cast<CloudServiceSyncDialog*>(dialog_.data());
+        if (dialog == nullptr)
+            return;
+        const int expected = int(live_.count() + abandoned_.count());
+        const int actual = dialog->outstandingTransferCount();
+        ++conservationSamples;
+        if (dispatches != matchedLive + matchedAbandoned + operationOutstanding)
+            note(QStringLiteral("operation conservation equation violated at %1: dispatches=%2 completions=%3 "
+                                "outstanding=%4")
+                     .arg(QString::fromLatin1(point))
+                     .arg(dispatches)
+                     .arg(matchedLive + matchedAbandoned)
+                     .arg(operationOutstanding));
+        if (actual != expected)
+            note(QStringLiteral("operation conservation violated at %1: dialog=%2 oracle=%3")
+                     .arg(QString::fromLatin1(point))
+                     .arg(actual)
+                     .arg(expected));
+    }
+
+    void checkCompletionRemoval()
+    {
+        checkConservation("completion removal");
+        if (attached_ && !dialog_.isNull())
+            ++completionRemovalSamples;
+    }
+
+  private:
+    static bool take(QList<Dispatch>& from, bool isWrite, QByteArray* token, quint64 operationId)
+    {
+        for (int i = 0; i < from.count(); i++) {
+            const Dispatch& d = from.at(i);
+            if (d.isWrite != isWrite)
+                continue;
+            if (isWrite ? (d.operationId == operationId) : (d.token == token)) {
+                from.removeAt(i);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    QPointer<QWidget> dialog_;
+    QPointer<QPushButton> cancel_;
+    QPointer<QProgressBar> bar_;
+    bool attached_ = false;
+    bool downloading_ = false;
+    int dispatchesThisBatch_ = 0;
+    int serial_ = 0;
+    QList<Dispatch> live_;
+    QList<Dispatch> abandoned_;
+};
+
+} // namespace oracle
 
 // ---------------------------------------------------------------------------
 // insideframe — PUTTING THE USER'S ACTION INSIDE THE FRAME THAT IS UNDER TEST.
@@ -431,7 +901,41 @@ class BlockingStore : public CloudService
     Q_OBJECT
 
   public:
-    explicit BlockingStore(Context* context) : CloudService(context) {}
+    explicit BlockingStore(Context* context) : CloudService(context)
+    {
+        // TEST-126 — THE COMPLETION SIDE OF THE ORACLE, taken at the EMITTER.
+        //
+        // Connected here, in the store's own constructor, so these run BEFORE the
+        // dialog's slots: CloudServiceSyncDialog connects to the same three
+        // signals in ITS constructor, which cannot run until this one has
+        // returned, and direct connections fire in connection order. So the
+        // outstanding count is already decremented when the dialog's slot
+        // re-drives its loop and dispatches the next row - which is the whole
+        // point, since a healthy batch would otherwise read as two outstanding.
+        //
+        // At the SIGNAL rather than at notifyReadComplete/notifyWriteComplete
+        // because several runs in this file deliver a completion BY HAND
+        // (store->notifyWriteComplete(...) from the fixture) and a hook on this
+        // class's own emit sites would not see those.
+        connect(
+            this, &CloudService::readComplete, this,
+            [this](QByteArray* data, QString name, QString) { oracle_.noteDelivery(false, data, 0, name); },
+            Qt::DirectConnection);
+        connect(
+            this, &CloudService::readFailed, this,
+            [this](QByteArray* data, QString name, QString) { oracle_.noteDelivery(false, data, 0, name); },
+            Qt::DirectConnection);
+        connect(
+            this, &CloudService::writeComplete, this,
+            [this](quint64 operationId, QString name, QString) {
+                oracle_.noteDelivery(true, nullptr, operationId, name);
+            },
+            Qt::DirectConnection);
+        // There is no writeFailed signal on CloudService (CloudService.h:270-276):
+        // the write channel reports only writeComplete, which is the same
+        // asymmetry DEC-037 records as the reason the write side needed a set and
+        // the read side did not.
+    }
     ~BlockingStore() override
     {
         obs::storeDestroyed = true;
@@ -575,6 +1079,11 @@ class BlockingStore : public CloudService
         ++obs::readFileCalls;
         obs::lastBuffer = data;
         obs::lastReadName = remotename; // TEST-107 — which row this buffer is for
+        obs::readNames << remotename;   // TEST-114 — ...and every one of them, in order
+
+        // TEST-126 — a DISPATCH, counted before anything else can happen.
+        oracle_.noteDispatch(dialog, this, false, data, 0, remotename);
+        parked << Parked{false, data, remotename, 0, false};
 
         // ---- the user's click, then blockingDownload().
         fireActionThenBlock();
@@ -670,12 +1179,17 @@ class BlockingStore : public CloudService
     // its upload-failure branch, so this override also gives the happy path a
     // writeFile that SUCCEEDS and (optionally) notifies completion afterwards —
     // that notification is what the dialog's exec() sits waiting for.
-    bool writeFile(QByteArray& data, QString remotename, RideFile* ride) override
+    bool writeFile(QByteArray& data, QString remotename, RideFile* ride, quint64 operationId) override
     {
         Q_UNUSED(ride);
         ++obs::writeFileCalls;
         obs::lastUploadBuffer = &data;
         obs::lastWriteName = remotename;
+        obs::writeNames << remotename;
+
+        // TEST-126 — a DISPATCH, counted before anything else can happen.
+        oracle_.noteDispatch(dialog, this, true, nullptr, operationId, remotename);
+        parked << Parked{true, nullptr, remotename, operationId, false};
 
         if (blockInWrite) {
             fireActionThenBlock();
@@ -695,12 +1209,136 @@ class BlockingStore : public CloudService
 
         if (completeWrite) {
             QMetaObject::invokeMethod(
-                this, [this, remotename]() { notifyWriteComplete(remotename, tr("Completed.")); },
+                this,
+                [this, operationId, remotename]() { notifyWriteComplete(operationId, remotename, tr("Completed.")); },
                 Qt::QueuedConnection);
             armCompletionAction(); // TEST-102: the completedWrite site (:2610/:2615)
         }
         return true;
     }
+
+    // The base notify helpers emit direct signals. When they return, the
+    // dialog's completion slot has finished removing the admitted record, so
+    // this second observation catches a record retained past terminal delivery.
+    // ORCH-033 — THE SELF-GUARD, AND WHY IT IS NOT PARANOIA.
+    //
+    // Each base notification below invokes the dialog's completion slot
+    // DIRECTLY (a direct-connected signal, same stack). That slot runs
+    // processEvents(), and a teardown delivered inside it destroys the dialog,
+    // whose destructor deletes THIS STORE via closeAndDeleteStore
+    // (CloudService.h:325, called from ~CloudServiceSyncDialog at
+    // CloudService.cpp:1376). Control then returns HERE - into a member
+    // function of an object that no longer exists - and the next statement
+    // touches `oracle_`, a MEMBER, which died with us. That was the
+    // heap-use-after-free at :712.
+    //
+    // The oracle already holds its SUBJECT as a QPointer and survives the
+    // dialog's death; that is precisely what made this look guarded. The
+    // missing guard was on the OBSERVER's own lifetime. QPointer is cleared by
+    // ~QObject, so a null self-guard after the base call is not a heuristic -
+    // it is the record that our own destructor ran while we were on the stack.
+    //
+    // Nothing may be touched through `this` once the guard is null: not
+    // `oracle_`, not a member flag, not a trace call.
+    void notifyReadComplete(QByteArray* data, const QString& name, const QString& message)
+    {
+        QPointer<CloudService> self(this);
+        CloudService::notifyReadComplete(data, name, message);
+        if (self.isNull()) {
+            // We were deleted inside the base call. Nothing may be touched
+            // through `this`; this counter is namespace-scope for exactly that.
+            oracle::observerDestroyedInDelivery++;
+            return;
+        }
+        oracle_.checkCompletionRemoval();
+    }
+
+    void notifyReadFailed(QByteArray* data, const QString& name, const QString& reason)
+    {
+        QPointer<CloudService> self(this);
+        CloudService::notifyReadFailed(data, name, reason);
+        if (self.isNull()) {
+            // We were deleted inside the base call. Nothing may be touched
+            // through `this`; this counter is namespace-scope for exactly that.
+            oracle::observerDestroyedInDelivery++;
+            return;
+        }
+        oracle_.checkCompletionRemoval();
+    }
+
+    void notifyWriteComplete(quint64 operationId, const QString& name, const QString& message)
+    {
+        QPointer<CloudService> self(this);
+        CloudService::notifyWriteComplete(operationId, name, message);
+        if (self.isNull()) {
+            // We were deleted inside the base call. Nothing may be touched
+            // through `this`; this counter is namespace-scope for exactly that.
+            oracle::observerDestroyedInDelivery++;
+            return;
+        }
+        oracle_.checkCompletionRemoval();
+    }
+
+    // TEST-126 — `downloading` CHANGED, observed at the statement that changed it.
+    //
+    // The filter is installed on the dialog's cancelButton (see the oracle's
+    // block comment for why that button is `downloading` exactly). QEvent::Show
+    // and QEvent::Hide are SENT, not posted - QWidgetPrivate::show_helper /
+    // hide_helper call QCoreApplication::sendEvent - so this runs inside
+    // downloadClicked's own frame rather than one event loop later, and the
+    // abort-then-restart that happens entirely inside one processEvents() burst
+    // is still seen as two transitions.
+    //
+    // The event is a TRIGGER, not the answer: what is read is isHidden(), so a
+    // Show cascaded from the dialog itself being shown cannot be mistaken for an
+    // abort (a button that is explicitly hidden stays hidden through its parent's
+    // show, and isHidden() says so).
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        if (event != nullptr && (event->type() == QEvent::Show || event->type() == QEvent::Hide)) {
+            oracle_.sample();
+            oracle_.checkConservation("batch transition");
+        }
+        return CloudService::eventFilter(watched, event);
+    }
+
+    // TEST-127 — a completion this store has been asked to HOLD, so that the
+    // fuzzer can choose when (and whether) it is delivered. Recorded at every
+    // dispatch; only the fuzzer ever reads it. The buffer pointer is carried for
+    // identity alone and is never dereferenced here.
+    struct Parked
+    {
+        bool isWrite;
+        QByteArray* token;
+        QString name;
+        quint64 operationId;
+        bool delivered;
+    };
+    QList<Parked> parked;
+
+    bool deliverParkedWrite(int index, const QString& result)
+    {
+        if (index < 0 || index >= parked.count() || !parked.at(index).isWrite)
+            return false;
+        const Parked p = parked.takeAt(index);
+        notifyWriteComplete(p.operationId, p.name, result);
+        return true;
+    }
+
+    // Compatibility spelling for older behavior fixtures. It now resolves the
+    // oldest undelivered write record and emits its explicit operation id.
+    void notifyWriteComplete(const QString& name, const QString& result)
+    {
+        for (Parked& p : parked) {
+            if (!p.isWrite || p.delivered || p.name != name)
+                continue;
+            p.delivered = true;
+            notifyWriteComplete(p.operationId, name, result);
+            return;
+        }
+    }
+
+    oracle::TransferOracle oracle_;
 
     QStringList entryNames;
     QDialog* dialog = nullptr;                   // where the close is sent
@@ -971,6 +1609,11 @@ class FakeAthleteWindow : public QWidget
         RideCache* rideCache = nullptr; // owned by the ATHLETE, as in production
         RideItem* item = nullptr;
         RideFile* rideFile = nullptr;
+        // A3-R028-F3 — a SECOND activity, present only for the runs that ask for
+        // one (addSecondRide, below). Null everywhere else, and the teardown
+        // skips it when it is.
+        RideItem* item2 = nullptr;
+        RideFile* rideFile2 = nullptr;
 
         // The same addresses, kept as raw storage AFTER the objects are freed, so
         // a test can ask ASan whether they are poisoned without dereferencing
@@ -1042,6 +1685,27 @@ class FakeAthleteWindow : public QWidget
         return slot;
     }
 
+    // A SECOND activity in the same athlete's cache, on demand.
+    //
+    // A3-R028-F3: a fixture with exactly ONE activity makes "the batch did not
+    // carry on" unfalsifiable - there was nothing to carry on TO - so a slot
+    // that asserts a transfer count on it is asserting the fixture's shape and
+    // not the production behaviour. Any run that needs the count to be capable
+    // of failing asks for this; every other run is left exactly as it was, which
+    // is why this is a call and not part of addAthleteTab().
+    //
+    // Owned on the same terms as the first: created here, freed by
+    // closeAthleteTab in the same order (item, then its RideFile).
+    RideItem* addSecondRide(AthleteSlot* slot)
+    {
+        slot->rideFile2 = new RideFile();
+        slot->rideFile2->context = slot->context;
+        slot->item2 = new RideItem(slot->rideFile2, slot->context);
+        slot->item2->fileName = QStringLiteral("2026_08_09_10_00_00.json");
+        slot->rideCache->rides().push_back(slot->item2);
+        return slot->item2;
+    }
+
     QWidget* hostFor(DialogHost host, int index)
     {
         return host == HostedByWindow ? static_cast<QWidget*>(this) : tabs_.at(index)->tabWidget;
@@ -1062,6 +1726,9 @@ class FakeAthleteWindow : public QWidget
         // when the Athlete does — after the tab, before the Context.
         delete slot->item;
         delete slot->rideFile;
+        // ...and the second one, for the runs that asked for it (A3-R028-F3).
+        delete slot->item2;
+        delete slot->rideFile2;
         delete slot->rideCache;
         delete slot->athlete;
         delete slot->context;
@@ -1073,6 +1740,8 @@ class FakeAthleteWindow : public QWidget
         slot->rideCache = nullptr;
         slot->item = nullptr;
         slot->rideFile = nullptr;
+        slot->item2 = nullptr;
+        slot->rideFile2 = nullptr;
         closedTabs_.append(slot);
     }
 
@@ -1701,6 +2370,46 @@ class TestGarminConnectSyncDialogClose : public QObject
         // REFUSES. Same real factory singleton, same production dispatch.
         RideFileFactory::instance().registerReader(QStringLiteral("gcfail"), QStringLiteral("TEST-096 failing reader"),
                                                    new FailingRideFileReader);
+    }
+
+    // TEST-126 — THE ORACLE IS EVALUATED IN EVERY RUN OF THIS FILE.
+    //
+    // init()/cleanup() are QTest's per-function hooks: they bracket EVERY private
+    // slot in this class, including the seventy that were written before this
+    // oracle existed and know nothing about it. That is deliberate and is the
+    // whole mechanism - an invariant that is only checked by the run written to
+    // check it is a scenario, not an invariant.
+    void init() { oracle::reset(); }
+
+    void cleanup()
+    {
+        if (oracle::dispatches != oracle::matchedLive + oracle::matchedAbandoned + oracle::operationOutstanding)
+            oracle::note(QStringLiteral("operation conservation at cleanup: dispatches=%1 completions=%2 "
+                                        "outstanding=%3")
+                             .arg(oracle::dispatches)
+                             .arg(oracle::matchedLive + oracle::matchedAbandoned)
+                             .arg(oracle::operationOutstanding));
+        if (oracle::dispatches > 0 && oracle::conservationSamples == 0)
+            oracle::note(QStringLiteral("operation conservation was not sampled for this oracle-scoped run"));
+        // ORCH-033 — the `observerDestroyedInDelivery` term is a NARROW
+        // exemption, not a softening. A run where the oracle simply stopped
+        // resampling is still caught: the exemption applies only when the
+        // observer was destroyed by the very delivery it was observing, which
+        // is a state the store records on its way out and cannot fake. If any
+        // matched completion left an observer alive, that one owed a resample
+        // and its absence still fails here.
+        if (oracle::matchedLive + oracle::matchedAbandoned > 0 && oracle::completionRemovalSamples == 0 &&
+            oracle::observerDestroyedInDelivery == 0)
+            oracle::note(QStringLiteral("operation conservation was not resampled after terminal removal"));
+        if (qEnvironmentVariableIsSet("GC_ORACLE_TRACE"))
+            qInfo("ORACLE %s: %s", QTest::currentTestFunction(), qPrintable(oracle::summary()));
+        if (oracle::violations.isEmpty())
+            return;
+        // Every breach, in the order they happened, plus the run's own numbers -
+        // an oracle that says only "something was wrong" is not usable evidence.
+        const QString detail = oracle::violations.join(QStringLiteral("\n  ")) + QStringLiteral("\n  (") +
+                               oracle::summary() + QStringLiteral(")");
+        QFAIL(qPrintable(QStringLiteral("TEST-126 invariant violated during this run:\n  ") + detail));
     }
 
     void cleanupTestCase()
@@ -4299,10 +5008,11 @@ class TestGarminConnectSyncDialogClose : public QObject
         bool teardownInsideSlot = false; // ...and landed while the slot was running
         bool dialogGoneAtEnd = false;    // the tab teardown really did destroy it
         bool timedOut = false;
-        int upListCount = 0;   // (UploadNextParsePE premise: there was a row to fail on)
-        int readFileCalls = 0; // did the sync carry on behind a destroyed dialog?
-        int syncListCount = 0; // (SyncNextParsePE premise: there was a row to fail on)
-        int failOpens = 0;     // ...and the parse-failure branch really was reached
+        int upListCount = 0;    // (UploadNextParsePE premise: there was a row to fail on)
+        int readFileCalls = 0;  // did the sync carry on behind a destroyed dialog?
+        int syncListCount = 0;  // (SyncNextParsePE premise: there was a row to fail on)
+        int failOpens = 0;      // ...and the parse-failure branch really was reached
+        int writeFileCalls = 0; // DEC-036: the WRITE frame's counterpart of readFileCalls
     };
 
     // The three tree widgets are private members reparented into their tab pages,
@@ -4372,18 +5082,54 @@ class TestGarminConnectSyncDialogClose : public QObject
                 // cloud entries and be marked as already uploaded.
                 slot->item->dateTime = QDateTime::currentDateTime().addDays(-1);
 
-                if (frame == SyncNextParsePE) {
+                if (frame == SyncNextParsePE || frame == CompletedWritePE) {
                     // TEST-101 — the athlete's one activity becomes the SYNC
-                    // list's one UPLOAD row (CloudService.cpp:1774), and its
-                    // suffix is the one FailingRideFileReader is registered for,
-                    // so RideFileFactory hands syncNext a null ride and the
-                    // parse-failure branch executes for real. `planned` is not
-                    // initialised by this target's RideItem stand-in and the
+                    // list's one UPLOAD row (CloudService.cpp:1774). `planned` is
+                    // not initialised by this target's RideItem stand-in and the
                     // upload walk skips planned rides (:1723).
+                    //
+                    // THE SUFFIX IS THE DIFFERENCE BETWEEN THE TWO FRAMES:
+                    //   .gcfail   FailingRideFileReader's, so RideFileFactory
+                    //             hands syncNext a null ride and the parse-failure
+                    //             branch executes for real (SyncNextParsePE).
+                    //   .gcblock  BlockingRideFileReader's, so the ride OPENS and
+                    //             syncNext goes on to store->writeFile - which is
+                    //             what arms the write this run then completes
+                    //             (CompletedWritePE, see the note on the delivery
+                    //             below). That reader reads a real file, so one is
+                    //             put on disk for it.
+                    const bool parseable = (frame == CompletedWritePE);
                     slot->item->fileName = slot->item->dateTime.toString(QStringLiteral("yyyy_MM_dd_HH_mm_ss")) +
-                                           QStringLiteral(".gcfail");
+                                           (parseable ? QStringLiteral(".gcblock") : QStringLiteral(".gcfail"));
                     slot->item->path = slot->context->athlete->home->activities().absolutePath();
                     slot->item->planned = false;
+
+                    if (parseable) {
+                        QDir().mkpath(slot->item->path);
+                        QFile f(slot->item->path + "/" + slot->item->fileName);
+                        f.open(QIODevice::WriteOnly);
+                        f.write("gcblock");
+                        f.close();
+
+                        // A3-R028-F3 — A SECOND UPLOAD ROW, and it is what makes
+                        // this frame's transfer count mean anything. With one row
+                        // in the list, "the batch did not carry on uploading
+                        // behind a destroyed dialog" holds whether the slot stands
+                        // down or not: there is no second row to carry on TO, so
+                        // writeFileCalls is 1 either way and the assertion is
+                        // measuring the fixture. With two, the count is capable of
+                        // reading 2, and the slot's claim becomes falsifiable.
+                        RideItem* second = win->addSecondRide(slot);
+                        second->dateTime = QDateTime::currentDateTime().addDays(-2);
+                        second->fileName = second->dateTime.toString(QStringLiteral("yyyy_MM_dd_HH_mm_ss")) +
+                                           QStringLiteral(".gcblock");
+                        second->path = slot->item->path;
+                        second->planned = false;
+                        QFile f2(second->path + "/" + second->fileName);
+                        f2.open(QIODevice::WriteOnly);
+                        f2.write("gcblock");
+                        f2.close();
+                    }
                 }
 
                 BlockingStore* store = new BlockingStore(slot->context);
@@ -4391,7 +5137,12 @@ class TestGarminConnectSyncDialogClose : public QObject
                 // entry would put DOWNLOAD rows in the sync list AHEAD of the
                 // upload row (:1682), and syncNext would take its readFile branch
                 // and return long before reaching the parse-failure branch.
-                store->entryNames = (frame == SyncNextParsePE) ? QStringList() : threeActivities();
+                // Nothing remote for the two frames whose subject is the SYNC
+                // list's upload row: a remote entry would put DOWNLOAD rows ahead
+                // of it (:1682) and syncNext would take its readFile branch and
+                // never reach the write.
+                store->entryNames =
+                    (frame == SyncNextParsePE || frame == CompletedWritePE) ? QStringList() : threeActivities();
                 store->blockingMs = 5;       // nothing suspends in THIS scenario
                 store->completeRead = false; // ...and no completion arrives by itself
                 store->closeActionContext = qApp;
@@ -4459,25 +5210,63 @@ class TestGarminConnectSyncDialogClose : public QObject
                     inSlot = false;
                 } else {
                     dialog->selectAllSyncChanged(Qt::Checked);
-                    // -> syncNext(): listindex=1 and one store->readFile, which
-                    // (completeRead off) reports nothing back.
+                    // A3-R028-F3 — how many rows the batch HAD, so the transfer
+                    // count asserted of it is read against the work that was
+                    // available rather than against nothing.
+                    if (QTreeWidget* s = rideListWithHeader(dialog, QStringLiteral("Source")))
+                        out.syncListCount = s->invisibleRootItem()->childCount();
+                    // -> syncNext(): listindex=1 and ONE outstanding transfer,
+                    // which reports nothing back of its own accord (completeRead
+                    // off for the two read frames, completeWrite off for the write
+                    // one). For CompletedReadPE/FailedReadPE that transfer is
+                    // store->readFile on the sync list's first DOWNLOAD row; for
+                    // CompletedWritePE the list holds one UPLOAD row instead and
+                    // the transfer is store->writeFile.
                     dialog->downloadClicked();
 
+                    // AMENDED 2026-08-18 (DEC-garmin-036). These three deliveries
+                    // used to be FABRICATED: a freshly `new`ed QByteArray and a
+                    // remotename copied out of the fixture, neither of them the
+                    // transfer the dialog had actually issued. Production now
+                    // carries a per-transfer ticket, so a completion that does not
+                    // match the outstanding transfer is swallowed - correctly -
+                    // and a fabricated one never reaches the frame this run exists
+                    // to suspend in. So each delivery is now the LIVE one:
+                    // `obs::lastBuffer` is the exact buffer the driver preallocated
+                    // and passed to readFile, and `obs::lastWriteName` is the exact
+                    // remotename it passed to writeFile.
+                    //
+                    // This STRENGTHENS the run rather than weakening it: the frame
+                    // under test is now reached the way production reaches it. The
+                    // buffer is the dialog's to free on both read paths, which is
+                    // also one fewer leak than the fabricated version had.
+                    // ORCH-033, the SECOND lifetime window. This delivery is
+                    // QUEUED, so it runs one event-loop turn later - and a
+                    // teardown from an EARLIER frame in this same run can have
+                    // destroyed the dialog (and with it the store) before it
+                    // fires. Raw captures would then call into freed memory
+                    // before the base notification is even reached, which the
+                    // self-guard above cannot help with because it is never
+                    // entered. Guarded handles make a late callback a no-op.
+                    QPointer<CloudServiceSyncDialog> dialogHandle(dialog);
+                    QPointer<BlockingStore> storeHandle(store);
                     QMetaObject::invokeMethod(
                         qApp,
-                        [&, dialog, frame]() {
+                        [&, dialogHandle, storeHandle, frame]() {
+                            if (dialogHandle.isNull() || storeHandle.isNull())
+                                return;
                             inSlot = true;
                             switch (frame) {
                             case CompletedReadPE:
-                                dialog->completedRead(new QByteArray, threeActivities().at(0),
-                                                      QStringLiteral("Completed."));
+                                dialogHandle->completedRead(obs::lastBuffer, obs::lastReadName,
+                                                            QStringLiteral("Completed."));
                                 break;
                             case FailedReadPE:
-                                dialog->failedRead(new QByteArray, threeActivities().at(0),
-                                                   QStringLiteral("service refused"));
+                                dialogHandle->failedRead(obs::lastBuffer, obs::lastReadName,
+                                                         QStringLiteral("service refused"));
                                 break;
                             case CompletedWritePE:
-                                dialog->completedWrite(threeActivities().at(0), QStringLiteral("Completed."));
+                                storeHandle->deliverParkedWrite(0, QStringLiteral("Completed."));
                                 break;
                             case UploadNextParsePE:
                             case SyncNextParsePE:
@@ -4487,12 +5276,13 @@ class TestGarminConnectSyncDialogClose : public QObject
                         },
                         Qt::QueuedConnection);
                     // The three completion slots all count the row they just
-                    // finished (CloudService.cpp:2337 / :2418 / :2610) and then
-                    // suspend (:2354 / :2423 / :2615), and that suspension is the
-                    // frame under test. Arming here rather than one line into the
-                    // slot is safe because nothing between this statement and the
-                    // slot counts a row: syncNext's download branch (:1987-2027)
-                    // has no progressBar->setValue at all.
+                    // finished and then suspend, and that suspension is the frame
+                    // under test. Arming here rather than one line into the slot
+                    // is safe because nothing between this statement and the slot
+                    // counts a row: syncNext's download branch has no
+                    // progressBar->setValue at all, and neither does the success
+                    // path of its upload branch (only the parse-failure branch
+                    // counts, and CompletedWritePE's row parses).
                     insideframe::atTheNextCountedRow(dialog, teardown);
                 }
 
@@ -4509,6 +5299,7 @@ class TestGarminConnectSyncDialogClose : public QObject
         out.teardownFired = obs::teardownFired;
         out.dialogGoneAtEnd = dialogGuard.isNull();
         out.readFileCalls = obs::readFileCalls;
+        out.writeFileCalls = obs::writeFileCalls;
         out.failOpens = ridefail::opens;
         return out;
     }
@@ -4707,7 +5498,40 @@ class TestGarminConnectSyncDialogClose : public QObject
         assertCompletionSlotStoodDown("completedWrite processEvents (:2143)", wrote);
         if (QTest::currentTestFailed())
             return;
-        QCOMPARE(wrote.readFileCalls, 1);
+        // AMENDED 2026-08-18 (DEC-garmin-036): this frame's run is now a WRITE
+        // from end to end - upload rows in the sync list, nothing remote - so
+        // the standing-down it proves is counted in writeFileCalls. It used to
+        // assert one READ, which was true only because this frame borrowed the
+        // read frames' fixture and then fabricated a write completion the dialog
+        // had never issued. Same claim, now measured on the channel under test:
+        // the batch did not carry on uploading behind a destroyed dialog.
+        //
+        // WIDENED 2026-08-18 (A3-R028-F3), because the count above was VACUOUS as
+        // it stood. The fixture had exactly one upload row, so writeFileCalls was
+        // 1 whether or not the slot stood down - there was nothing to carry on to
+        // - and the sentence above claimed a discrimination the run could not
+        // make. It now has TWO, asserted as a premise first: with two rows the
+        // count is capable of reading 2, so "exactly one write" is a statement
+        // about production and not about the fixture.
+        //
+        // WHAT IT STILL IS NOT, measured rather than glossed: removing the
+        // completedWrite self-bail this frame exists to test does NOT make this
+        // count read 2. The mutant aborts first - "SUMMARY: AddressSanitizer:
+        // heap-use-after-free ... CloudService.cpp:3132 in
+        // CloudServiceSyncDialog::completedWrite", which is the REQ-027 `aborted`
+        // re-read sitting between the removed bail and the re-drive, not the
+        // `sync` read the slot header names - so the KILLING OBSERVATION is the
+        // abort, exactly as this slot's header says. The widening buys a real
+        // PREMISE (there WAS a second upload for the batch to carry on to, and it
+        // did not) and a count that could fail in a build without ASan; it does
+        // not buy a second mutation-killer, and saying otherwise would repeat the
+        // mistake the finding caught.
+        QVERIFY2(wrote.syncListCount >= 2,
+                 qPrintable(QStringLiteral("the sync list held %1 row(s) - with fewer than two there is no second "
+                                           "upload for the batch to carry on to, and the count below cannot fail")
+                                .arg(wrote.syncListCount)));
+        QCOMPARE(wrote.readFileCalls, 0);
+        QCOMPARE(wrote.writeFileCalls, 1);
 
         const CompletionOutcome upload = runCompletionSlotTeardown(UploadNextParsePE);
         assertCompletionSlotStoodDown("uploadNext parse-failure processEvents (:2101)", upload);
@@ -6651,7 +7475,7 @@ class TestGarminConnectSyncDialogClose : public QObject
                             dialog->downloadClicked();
                             // The abort branch relabels that same button
                             // "Download" (:1914), so this is the observable proof
-                            // that :1910-1918 ran and `aborted` is now true.
+                            // that :1920-1928 ran and `aborted` is now true.
                             out.abortTookTheAbortBranch =
                                 (abortButton != nullptr && abortButton->text() == QStringLiteral("Download"));
                         },
@@ -6881,7 +7705,7 @@ class TestGarminConnectSyncDialogClose : public QObject
                  "the download button was not labelled \"Abort\" while the batch ran, so downloadClicked() could "
                  "not have been the abort control - this run proves nothing");
         QVERIFY2(out.abortTookTheAbortBranch,
-                 "downloadClicked() did not take its abort branch (CloudService.cpp:1910-1918), so `aborted` was "
+                 "downloadClicked() did not take its abort branch (CloudService.cpp:1920-1928), so `aborted` was "
                  "never set - this run proves nothing");
         QCOMPARE(out.statuses.value(0), QStringLiteral("Parse failure"));
 
@@ -6950,7 +7774,7 @@ class TestGarminConnectSyncDialogClose : public QObject
     // TWO CLICKS IN ONE processEvents() BURST.
     //
     // The batch is suspended in its parse-failure branch. That call delivers click
-    // one, which downloadClicked (:1910-1918) turns into an ABORT; and then click
+    // one, which downloadClicked (:1920-1928) turns into an ABORT; and then click
     // two, which the same slot (:1919-1926) turns into a fresh START - aborted
     // back to false, listindex back to 0, the counters zeroed and the loop
     // RE-DRIVEN, all from inside the first batch's own frame. When that returns,
@@ -6999,6 +7823,50 @@ class TestGarminConnectSyncDialogClose : public QObject
             return;
 
         assertAbortBehindCompletionStops(AfterCompletedWrite, "completedWrite");
+    }
+
+    // -- TEST-129 (REQ-028, A3-R028c-F2 / ORACLE-F1) --------------------
+    // A completion admits one generation, then its processEvents() delivers an
+    // abort and an immediate restart. The restarted batch dispatches row[0].
+    // When the old completion frame resumes it must not re-drive row[1] as a
+    // second driver. Run independently through all three completion channels.
+    void aRestartInsideEveryCompletionTailMustStandTheOldFrameDown_data()
+    {
+        QTest::addColumn<int>("siteValue");
+        QTest::addColumn<QString>("channel");
+        QTest::newRow("completedRead") << int(AfterCompletedRead) << QStringLiteral("completedRead");
+        QTest::newRow("failedRead") << int(AfterFailedRead) << QStringLiteral("failedRead");
+        QTest::newRow("completedWrite") << int(AfterCompletedWrite) << QStringLiteral("completedWrite");
+    }
+
+    void aRestartInsideEveryCompletionTailMustStandTheOldFrameDown()
+    {
+        QFETCH(int, siteValue);
+        QFETCH(QString, channel);
+        const AbortAfterSite site = AbortAfterSite(siteValue);
+        const AbortAfterOutcome out = runAbortBehindCompletion(site, true, true);
+        const QString where = channel + QStringLiteral(": ");
+        QVERIFY2(!out.timedOut, qPrintable(where + QStringLiteral("the run never came back")));
+        QCOMPARE(out.listCount, 2);
+        QCOMPARE(out.checkedRows, 2);
+        QVERIFY2(out.abortDelivered && out.abortTookTheAbortBranch,
+                 qPrintable(where + QStringLiteral("the completion tail did not deliver its abort")));
+        QVERIFY2(out.restartDelivered, qPrintable(where + QStringLiteral("the abort was not immediately restarted")));
+
+        if (site == AfterCompletedWrite) {
+            QVERIFY2(out.writeFileCalls == 2,
+                     qPrintable(where + QStringLiteral("the old completion frame became a second driver: %1 "
+                                                       "writes, expected the original plus restarted row[0]")
+                                            .arg(out.writeFileCalls)));
+            QCOMPARE(out.rideOpens, 2);
+        } else {
+            QVERIFY2(out.readFileCalls == 2,
+                     qPrintable(where + QStringLiteral("the old completion frame became a second driver: %1 "
+                                                       "reads, expected the original plus restarted row[0]")
+                                            .arg(out.readFileCalls)));
+        }
+        QVERIFY2(out.row1Status != QStringLiteral("Downloading") && out.row1Status != QStringLiteral("Uploading"),
+                 qPrintable(where + QStringLiteral("the stale tail started row[1]: '%1'").arg(out.row1Status)));
     }
 
     // -- TEST-105 (REQ-027 (f), DEC-garmin-035) --------------------------
@@ -7132,7 +8000,7 @@ class TestGarminConnectSyncDialogClose : public QObject
                                                    "control")));
         QVERIFY2(out.abortTookTheAbortBranch,
                  qPrintable(where + QStringLiteral("downloadClicked() did not take its abort branch "
-                                                   "(CloudService.cpp:1910-1918), so `aborted` was never set")));
+                                                   "(CloudService.cpp:1920-1928), so `aborted` was never set")));
 
         // ---- THE POINT.
         QVERIFY2(out.writeFileCalls == 0,
@@ -7228,6 +8096,8 @@ class TestGarminConnectSyncDialogClose : public QObject
         bool abortDelivered = false;
         bool sawAbortLabel = false;
         bool abortTookTheAbortBranch = false;
+        bool restartDelivered = false;
+        bool restartTookTheStartBranch = false;
         bool slotRan = false; // the completion slot really did execute
 
         // -- the verdict
@@ -7263,7 +8133,8 @@ class TestGarminConnectSyncDialogClose : public QObject
     // One run. `deliverTheAbort` false is the CONTROL: identical in every other
     // respect, so a green run proves this apparatus can see the SECOND row being
     // started when nothing stops it.
-    AbortAfterOutcome runAbortBehindCompletion(AbortAfterSite site, bool deliverTheAbort)
+    AbortAfterOutcome runAbortBehindCompletion(AbortAfterSite site, bool deliverTheAbort,
+                                               bool restartImmediately = false)
     {
         obs::reset();
         rideopen::reset();
@@ -7368,6 +8239,16 @@ class TestGarminConnectSyncDialogClose : public QObject
                         dialog->downloadClicked();
                         out.abortTookTheAbortBranch =
                             (watched != nullptr && watched->text() == QStringLiteral("Download"));
+                        if (restartImmediately) {
+                            out.restartDelivered = true;
+                            if (site == AfterCompletedWrite)
+                                store->completeWrite = false;
+                            else
+                                store->completeRead = false;
+                            dialog->downloadClicked();
+                            out.restartTookTheStartBranch =
+                                (pushButtonWithText(dialog, QStringLiteral("Abort")) != nullptr);
+                        }
                     };
                 }
 
@@ -7444,7 +8325,7 @@ class TestGarminConnectSyncDialogClose : public QObject
                                                    "control")));
         QVERIFY2(out.abortTookTheAbortBranch,
                  qPrintable(where + QStringLiteral("downloadClicked() did not take its abort branch "
-                                                   "(CloudService.cpp:1910-1918), so `aborted` was never set")));
+                                                   "(CloudService.cpp:1920-1928), so `aborted` was never set")));
 
         if (isWrite) {
             // THE KILLING ASSERTION FOR THIS SITE. The WRITE is already stopped
@@ -7760,7 +8641,7 @@ class TestGarminConnectSyncDialogClose : public QObject
                             dialog->downloadClicked();
                             // The abort branch relabels that same button
                             // "Download" (:1914), so this is the observable proof
-                            // that :1910-1918 ran and `aborted` is now true.
+                            // that :1920-1928 ran and `aborted` is now true.
                             out.abortTookTheAbortBranch =
                                 (watched != nullptr && watched->text() == QStringLiteral("Download"));
                         },
@@ -7836,7 +8717,7 @@ class TestGarminConnectSyncDialogClose : public QObject
                                                    "control")));
         QVERIFY2(out.abortTookTheAbortBranch,
                  qPrintable(where + QStringLiteral("downloadClicked() did not take its abort branch "
-                                                   "(CloudService.cpp:1910-1918), so `aborted` was never set")));
+                                                   "(CloudService.cpp:1920-1928), so `aborted` was never set")));
 
         // ---- THE POINT, and THE KILLING ASSERTION. The criterion's own number:
         //      with abort set, store->readFile is called 0 further times from
@@ -7906,6 +8787,38 @@ class TestGarminConnectSyncDialogClose : public QObject
     // events and re-order anything this run depends on. It also means `ride` is
     // always NULL, so `successful` (:2448) is never reached - this run measures
     // `downloadcounter` (:2442), and says nothing about `successful`.
+    //
+    // DISPOSITION AFTER REQ-028 (c) / DEC-garmin-036 (2026-08-18) - REWRITTEN,
+    // AND ITS P2 HALF HANDED TO TEST-113.
+    //
+    // This slot was written expecting to go RED when its subject was fixed, and
+    // its own header said so ("whoever fixes A3-R027-F8 must change the two
+    // blocks marked MEASURED, NOT DESIRED"). DEC-036's in-flight ticket is that
+    // fix, so the change is made here rather than argued about:
+    //
+    //   P1 STAYS, UNCHANGED. It is a fact about Qt - what
+    //   QTreeWidgetItem::child(int) returns out of range - not a fact about this
+    //   dialog, and no fix to this dialog can alter it. It is still what decides
+    //   what a positional dereference COSTS, and it is still the reason DEC-034's
+    //   guards had to be the kind of guard they are. Note that after DEC-036 the
+    //   three completion slots no longer index positionally at all: they label
+    //   through the ticket's stored row pointer. So P1 now records why that
+    //   change was worth making rather than what a live defect costs.
+    //
+    //   P2 IS GONE FROM HERE. Its geometry (abort, restart, late completion) and
+    //   its apparatus (runLateCompletion, below - still shared) now belong to
+    //   TEST-113, which asserts the DESIRED numbers instead of the measured ones:
+    //   3 reads for 3 checked rows, no row relabelled, the bar unmoved. Keeping a
+    //   second copy of those numbers here in their "MEASURED, NOT DESIRED" form
+    //   would mean this file asserted BOTH that production still mislabels and
+    //   that it no longer does, and the first of those is now false. A green
+    //   TEST-107 after DEC-036 must not be readable as "the defect is still
+    //   there", which is exactly what leaving the block in would have made it.
+    //
+    // The line numbers in the prose above were re-derived 2026-08-17 and are
+    // stale AGAIN wherever DEC-036 moved code; the seven `child(listindex-1)`
+    // sites they name no longer exist at all. Prefer the SYMBOL over the number
+    // (ORCH-020, LSN-034).
     void probeWhichRowALateCompletionLabelsAfterARestart()
     {
         // ---- P1. Out-of-range indexing on a QTreeWidget's invisible root,
@@ -7944,14 +8857,67 @@ class TestGarminConnectSyncDialogClose : public QObject
         QVERIFY2(emptiedChild0IsNull, "child(0) on a tree emptied by takeChildren()+delete was not null");
         QVERIFY2(emptiedChildFarIsNull, "child(7) on an emptied tree was not null");
 
+        // ---- P2 LIVES IN TEST-113 NOW. The abort+restart geometry and the
+        //      apparatus that drives it (runLateCompletion, below) moved there
+        //      with DEC-garmin-036, which fixed what they used to measure. See
+        //      the DISPOSITION paragraph in this slot's header.
+    }
+
+    // =====================================================================
+    // TEST-113 (REQ-028 (c), DEC-garmin-036) — THE STALE READ RESOLVES ONLY TO
+    // ITS OWN STILL-LIVE ROW.
+    // =====================================================================
+    //
+    // THE CRITERION, VERBATIM (REQ-028 (c)):
+    //
+    //   "(c) NO ROW IS LABELLED THAT THE FRAME DID NOT TRANSFER, AND NO ROW IS
+    //   TRANSFERRED TWICE. Across a batch that is aborted and immediately
+    //   restarted with the aborted batch's completion arriving LATE, every
+    //   non-empty status cell names the outcome of a transfer that actually
+    //   happened to that row, and the reader is invoked exactly once per checked
+    //   row - an over-count catches a second driver, an under-count catches a
+    //   stale one."
+    //
+    // THE GEOMETRY is TEST-107's, unchanged, and deliberately so: the numbers
+    // this slot asserts are the SAME measurement that slot used to record as
+    // "MEASURED, NOT DESIRED", read now as a rule. Batch one is parked on row 1
+    // when the user aborts and immediately restarts; the restarted batch is
+    // parked on row 0; and THEN row 1's completion - batch one's - arrives.
+    //
+    // WHAT DEC-036 PUTS IN ITS WAY. Each dispatch records the buffer, row, column
+    // and admitted generation independently. Restart does not overwrite the old
+    // operation. Its late completion therefore resolves to its own still-live
+    // row, labels that old-generation transfer Aborted, and returns without
+    // advancing the live batch's bar or re-driving it.
+    //
+    // THE THREE NUMBERS, and what each one catches:
+    //
+    //   readFileCallsAfter == 3   for 3 checked rows. This is the criterion's own
+    //                             count. It was 4 before DEC-036 (row 0 and row 1
+    //                             each transferred twice, row 2 never reached),
+    //                             and the fourth read is the SECOND DRIVER the
+    //                             criterion says an over-count catches.
+    //   rowsRelabelled == {1}     only the old operation's own row changes. Row 0,
+    //                             which the restarted batch is transferring, is
+    //                             never given row 1's outcome.
+    //   barAfter == 0             the restarted batch's progress bar does not
+    //                             count a row that batch never issued.
+    //
+    // THE CONTROL IS PART OF THIS SLOT, not a neighbour's (LSN-050). The same
+    // apparatus, the same hand-delivered completion, the same row - with no abort
+    // and no restart in between - must still label row 1, still advance the bar
+    // and still re-drive onto row 2. Without it, all three numbers above are
+    // equally satisfied by a completedRead that does nothing at all.
+    void aLateCompletionOfAnAbandonedBatchMustNotLabelTheLiveBatchesRow()
+    {
         // The status cell a completed-but-unparseable row ends up with. NOT the
         // literal "Parse failure" the sync/upload loops write: completedRead's
-        // no-ride branch puts `errors.join(" ")` in the cell (:2456), so the
-        // string is FailingRideFileReader's own (:875). Named once here so the
-        // four comparisons below cannot drift apart from the fixture.
+        // no-ride branch puts `errors.join(" ")` in the cell, so the string is
+        // FailingRideFileReader's own (:875). Named once here so the comparisons
+        // below cannot drift apart from the fixture.
         const QString verdict = QStringLiteral("TEST-096 unparseable activity");
 
-        // ---- P2, THE CONTROL. Same delivery, no restart in between.
+        // ---- THE CONTROL. Same delivery, no restart in between.
         const LateCompletionOutcome base = runLateCompletion(false);
         QVERIFY2(base.timedOut == false, "control: the run never came back");
         QCOMPARE(base.listCount, 3);
@@ -7959,20 +8925,24 @@ class TestGarminConnectSyncDialogClose : public QObject
         QVERIFY2(base.firstCompletionDelivered, "control: row 0's read was never issued, so nothing could complete");
         QVERIFY2(base.lateCompletionDelivered, "control: row 1's read was never issued");
         QCOMPARE(base.readFileCallsBefore, 2);
+
         // The batch is parked on row 1 and row 1 is what completes: the verdict
         // lands on ROW 1. This is the apparatus proving it can tell rows apart.
         //
-        // Row 2 changes too, and that is not the completion: completedRead's
-        // tail calls downloadNext (:2489), which dispatches the next row and
-        // labels it "Downloading" (:2276) inside this same delivery. The two are
-        // told apart by the WORD, which is why the full lists are compared.
+        // Row 2 changes too, and that is not the completion: completedRead's tail
+        // calls downloadNext, which dispatches the next row and labels it
+        // "Downloading" inside this same delivery. The two are told apart by the
+        // WORD, which is why the full lists are compared.
         QCOMPARE(base.statusesBefore, QStringList() << verdict << "Downloading" << "");
         QCOMPARE(base.statusesAfter, QStringList() << verdict << verdict << "Downloading");
         QCOMPARE(base.rowsRelabelled, QList<int>() << 1 << 2);
         QCOMPARE(base.barBefore, 1);
         QCOMPARE(base.barAfter, 2);
+        // ...and the loop really did drive on, which is the half of the control
+        // that stops "swallow everything" from passing this slot.
+        QCOMPARE(base.readFileCallsAfter, 3);
 
-        // ---- P2, THE RUN. Abort, restart, and THEN the old batch's completion.
+        // ---- THE RUN. Abort, restart, and THEN the old batch's completion.
         const LateCompletionOutcome out = runLateCompletion(true);
         QVERIFY2(out.timedOut == false, "the run never came back");
 
@@ -7984,51 +8954,712 @@ class TestGarminConnectSyncDialogClose : public QObject
         QVERIFY2(out.lateCompletionDelivered, "row 1's read was never issued, so there was nothing to deliver late");
         QVERIFY2(out.sawAbortLabel, "the button was not labelled \"Abort\" while the batch ran, so downloadClicked() "
                                     "could not have been the abort control");
-        QVERIFY2(out.abortTookTheAbortBranch,
-                 "downloadClicked() did not take its abort branch (CloudService.cpp:1910-1918)");
-        QVERIFY2(out.restartTookTheStartBranch,
-                 "the second click did not take downloadClicked's START branch (CloudService.cpp:1919-1935)");
+        QVERIFY2(out.abortTookTheAbortBranch, "downloadClicked() did not take its abort branch");
+        QVERIFY2(out.restartTookTheStartBranch, "the second click did not take downloadClicked's START branch");
         // The old batch was suspended on row 1; the restarted batch is on row 0.
         // If these were the same row the run would prove nothing.
         QCOMPARE(out.oldBatchRowName, out.rowNames.value(1));
         QCOMPARE(out.newBatchRowName, out.rowNames.value(0));
+        // The restarted batch really is mid-transfer when the stale completion
+        // lands: three reads have been issued (batch one's two, batch two's one)
+        // and batch two's is still outstanding.
+        QCOMPARE(out.readFileCallsBefore, 3);
 
-        // ---- P2, MEASURED, NOT DESIRED.
+        // ---- THE CRITERION.
         //
-        // (i)  child(listindex-1) is NON-NULL on this path: the restart put
-        //      listindex back to 0 and the new batch's own dispatch raised it to
-        //      1, so the index is in range and nothing crashes.
-        // (ii) ...and the row it names is the row the NEW batch is transferring
-        //      (row 0), not the row the completion belongs to (row 1). So the
-        //      harm here is a SILENTLY WRONG ROW, not a crash: row 0 is given a
-        //      verdict for a download that is still in flight for it, and row 1 -
-        //      the row that actually completed - is never told. Row 1 still reads
-        //      "Downloading" afterwards, which is true again only by coincidence:
-        //      the same delivery's tail (see (iv)) re-dispatches it.
-        QCOMPARE(out.rowsRelabelled, QList<int>() << 0);
-        QCOMPARE(out.statusesBefore, QStringList() << "Downloading" << "Downloading" << "");
-        QCOMPARE(out.statusesAfter, QStringList() << verdict << "Downloading" << "");
+        // "the reader is invoked exactly once per checked row" - three checked
+        // rows, three reads, and NOT the fourth that the stale completion's
+        // re-drive used to issue.
+        QCOMPARE(out.readFileCallsAfter, 3);
+        QCOMPARE(out.readNames, QStringList()
+                                    << out.rowNames.value(0) << out.rowNames.value(1) << out.rowNames.value(0));
 
-        // (iii) downloadcounter advances on the restarted batch's progress bar
-        //       for a completion that batch never issued: the restart zeroed it
-        //       (:1938) and no row of the new batch has completed, yet the bar
-        //       reads 1 of 3.
+        // "every non-empty status cell names the outcome of a transfer that
+        // actually happened to that row": the late completion labels its own
+        // row 1 Aborted, never the restarted batch's row 0.
+        QCOMPARE(out.rowsRelabelled, QList<int>() << 1);
+        QCOMPARE(out.statusesBefore, QStringList() << "Downloading" << "Downloading" << "");
+        QCOMPARE(out.statusesAfter, QStringList() << "Downloading" << "Aborted" << "");
+
+        // ...and the abandoned batch does not move the live batch's bar.
         QCOMPARE(out.barBefore, 0);
-        QCOMPARE(out.barAfter, 1);
+        QCOMPARE(out.barAfter, 0);
         QCOMPARE(out.barMax, 3);
 
-        // (iv) THE SECOND DRIVER. completedRead's tail calls downloadNext()
-        //      (:2489), so the stale completion does not merely mislabel - it
-        //      hands the restarted batch's list to a second loop. readFile has
-        //      now been called four times for three checked rows, with row 0 and
-        //      row 1 each transferred twice and row 2 never reached.
-        QCOMPARE(out.readFileCallsBefore, 3);
-        QCOMPARE(out.readFileCallsAfter, 4);
-        QCOMPARE(out.readNames, QStringList() << out.rowNames.value(0) << out.rowNames.value(1) << out.rowNames.value(0)
-                                              << out.rowNames.value(1));
+        // ---- THE SAME RUN ON THE OTHER READ CHANNEL. failedRead is a second
+        //      completion slot for the same readFile call (DEC-023), with its own
+        //      copy of the ticket check, so the criterion has to be asserted of it
+        //      too rather than inferred from its sibling. Same abandoned transfer,
+        //      same three numbers.
+        const LateCompletionOutcome fail = runLateCompletion(true, true);
+        QVERIFY2(fail.timedOut == false, "failure channel: the run never came back");
+        QVERIFY2(fail.lateCompletionDelivered, "failure channel: nothing was delivered late");
+        QCOMPARE(fail.readFileCallsBefore, 3);
+        QCOMPARE(fail.readFileCallsAfter, 3);
+        QCOMPARE(fail.rowsRelabelled, QList<int>() << 1);
+        QCOMPARE(fail.statusesAfter, QStringList() << "Downloading" << "service refused" << "");
+        QCOMPARE(fail.barBefore, 0);
+        QCOMPARE(fail.barAfter, 0);
+    }
+
+    // =====================================================================
+    // TEST-116 (REQ-028 (c), DEC-garmin-036) — THE SWALLOWED BUFFER IS FREED
+    // EXACTLY ONCE.
+    // =====================================================================
+    //
+    // A guard that returns early from a completion slot is a LEAK unless it frees
+    // first: the buffer was `new`ed before readFile and this dialog is its only
+    // owner (A3-R017-F3, and the contract now written at CloudService.h on
+    // notifyReadComplete). DEC-036 adds a fourth early return to completedRead
+    // and a third to failedRead, so this asks the allocator directly whether the
+    // swallowed buffer went back.
+    //
+    // "EXACTLY ONCE" is TWO measurements, not one:
+    //   - freed at least once: ASan poisons a block on free and holds it in
+    //     quarantine, so a poisoned region is a freed one.
+    //   - freed at most once: a DOUBLE free aborts the process under ASan, so
+    //     reaching this assertion at all is the other half.
+    // And the discrimination that stops "poisoned" from being vacuous: the LIVE
+    // batch's own in-flight buffer, allocated by the restarted batch and still
+    // outstanding, must NOT be poisoned. If the slot freed indiscriminately, or
+    // if the two runs shared one address, that assertion fails.
+    void theSwallowedBuffersAreReleasedRatherThanLeaked()
+    {
+        const LateCompletionOutcome out = runLateCompletion(true);
+        QVERIFY2(out.timedOut == false, "the run never came back");
+        QVERIFY2(out.lateCompletionDelivered, "no stale completion was delivered, so nothing could be swallowed");
+        QVERIFY2(out.staleAndLiveBuffersDiffer,
+                 "the abandoned batch's buffer and the restarted batch's buffer are the SAME address, so neither "
+                 "assertion below can tell them apart");
+
+        QVERIFY2(out.staleBufferFreed, "the swallowed read buffer was not released - the guard leaks it once per "
+                                       "abandoned transfer");
+        QVERIFY2(out.liveBufferStillHeld, "the LIVE batch's outstanding buffer was released by the stale completion's "
+                                          "delivery, which is a free of a buffer still in flight");
+
+        // ...and the same of failedRead's copy of the guard, which owns the buffer
+        // on exactly the same terms (DEC-023: one channel or the other per
+        // readFile call, and the consumer frees whichever arrives).
+        const LateCompletionOutcome fail = runLateCompletion(true, true);
+        QVERIFY2(fail.timedOut == false, "failure channel: the run never came back");
+        QVERIFY2(fail.lateCompletionDelivered, "failure channel: nothing was delivered late");
+        QVERIFY2(fail.staleAndLiveBuffersDiffer, "failure channel: the two buffers are the same address");
+        QVERIFY2(fail.staleBufferFreed, "failedRead's swallow did not release the buffer - it leaks it once per "
+                                        "abandoned transfer");
+        QVERIFY2(fail.liveBufferStillHeld, "failedRead's swallow released the LIVE batch's outstanding buffer");
+    }
+
+    // =====================================================================
+    // TEST-114 (REQ-028 (c), DEC-garmin-036) — THE POSITIVE CONTROL: A HEALTHY
+    // BATCH STILL DRIVES ITSELF TO ITS TAIL.
+    // =====================================================================
+    //
+    // WHY THIS SLOT EXISTS (LSN-050). Every other criterion in this wave is about
+    // something NOT happening - no label, no bar, no re-drive - and every one of
+    // them is satisfied by a completedRead that swallows everything. This is the
+    // slot that refuses that: an ordinary three-row download, no abort, no
+    // restart, no Refresh, must issue three reads and reach its completion tail.
+    //
+    // AND IT IS WHAT MAKES EACH ARM SITE LOAD-BEARING INDIVIDUALLY. The ticket is
+    // armed at four dispatch sites. Mutation of a swallow guard proves the guard
+    // is load-bearing; nothing proves an ARM is, because a ticket that is never
+    // armed simply swallows more. Drop the arming at ONE dispatch site and the
+    // live completion that follows it arrives to `armed == false`, is swallowed,
+    // and the batch stalls where it stood - which is this slot's assertions, and
+    // only this slot's.
+    //
+    // THE TAIL IS OBSERVED AS ITS LAST SENTENCE, not its first. downloadNext's
+    // completion tail sets progressLabel to "Downloads complete" and then, eleven
+    // lines later in the same straight-line block, overwrites it with
+    // "Downloaded %1 of %2 successfully". Nothing pumps events in between, so the
+    // first string is never observable from outside; the second is the observable
+    // proof that the same block ran. The rows are .gcfail (TEST-102's reason:
+    // FailingRideFileReader runs no nested loop of its own), so `successful` is 0
+    // and the sentence reads "Downloaded 0 of 3 successfully" - which still says
+    // all three rows were attempted and the tail was reached.
+    void aHealthyBatchStillDrivesItselfToTheCompletionTail()
+    {
+        obs::reset();
+        rideopen::reset();
+        ridefail::reset();
+        rideopen::blockingMs = 5;
+
+        bool timedOut = false;
+        int listCount = 0, checkedRows = 0, readFileCalls = 0;
+        int barValue = -1, barMax = -1;
+        QString progressText;
+        QStringList statuses, readNames;
+
+        QEventLoop appLoop;
+        QMetaObject::invokeMethod(
+            this,
+            [&]() {
+                QWidget* owner = new QWidget;
+
+                BlockingStore* store = new BlockingStore(context);
+                store->entryNames = threeUnparseableRemoteActivities();
+                store->blockingMs = 5;
+                store->closeActionContext = qApp;
+                store->downloadCompression = CloudService::none;
+                // The DIFFERENCE from TEST-113's apparatus: completions arrive by
+                // themselves, exactly as a service delivers them. Nothing in this
+                // run is hand-delivered and nothing is abandoned.
+                store->completeRead = true;
+
+                CloudServiceSyncDialog* dialog = new CloudServiceSyncDialog(context, store);
+                dialog->setParent(owner, Qt::Dialog);
+                dialog->start();
+                dialog->open();
+                store->dialog = dialog;
+                store->dialogGuard = dialog;
+
+                if (QTabWidget* tabs = dialog->findChild<QTabWidget*>())
+                    tabs->setCurrentIndex(0);
+                dialog->selectAllChanged(Qt::Checked);
+                QTreeWidget* list = rideListWithHeader(dialog, QStringLiteral("Workout Name"));
+                if (list != nullptr) {
+                    QTreeWidgetItem* root = list->invisibleRootItem();
+                    listCount = root->childCount();
+                    for (int i = 0; i < listCount; i++) {
+                        QCheckBox* check = qobject_cast<QCheckBox*>(list->itemWidget(root->child(i), 0));
+                        if (check != nullptr && check->isChecked())
+                            checkedRows++;
+                    }
+                }
+
+                dialog->downloadClicked();
+
+                // The batch drives itself through queued completions; let every
+                // one of them land, and stop as soon as the tail has spoken.
+                for (int i = 0; i < 200 && progressText.isEmpty(); ++i) {
+                    QApplication::processEvents(QEventLoop::AllEvents, 5);
+                    progressText = progressLabelText(dialog);
+                }
+
+                readFileCalls = obs::readFileCalls;
+                readNames = obs::readNames;
+                if (list != nullptr)
+                    for (int i = 0; i < list->invisibleRootItem()->childCount(); i++)
+                        statuses << list->invisibleRootItem()->child(i)->text(5);
+                if (QProgressBar* bar = dialog->findChild<QProgressBar*>()) {
+                    barValue = bar->value();
+                    barMax = bar->maximum();
+                }
+
+                QTimer::singleShot(100, qApp, [owner]() { delete owner; });
+                QTimer::singleShot(200, &appLoop, &QEventLoop::quit);
+                QTimer::singleShot(10000, &appLoop, [&timedOut]() {
+                    timedOut = true;
+                    QCoreApplication::exit(1);
+                });
+            },
+            Qt::QueuedConnection);
+
+        appLoop.exec();
+        for (int i = 0; i < 50; ++i)
+            QApplication::processEvents(QEventLoop::AllEvents, 5);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+        QVERIFY2(timedOut == false, "the run never came back");
+        QCOMPARE(listCount, 3);
+        QCOMPARE(checkedRows, 3);
+
+        // THE CRITERION FOR THIS SLOT. Three checked rows, three reads, one per
+        // row and in row order - and the completion tail reached.
+        QCOMPARE(readFileCalls, 3);
+        QCOMPARE(readNames.count(), 3);
+        QCOMPARE(progressText, QStringLiteral("Downloaded 0 of 3 successfully"));
+
+        // Every row was told what happened to IT. The verdict is
+        // FailingRideFileReader's own, as in TEST-113.
+        const QString verdict = QStringLiteral("TEST-096 unparseable activity");
+        QCOMPARE(statuses, QStringList() << verdict << verdict << verdict);
+
+        // ...and the bar counted every one of them exactly once.
+        QCOMPARE(barValue, 3);
+        QCOMPARE(barMax, 3);
+
+        // ---- AND THE SAME CLAIM ON THE WRITE SIDE, because the download batch
+        //      above reaches exactly ONE of the four arm sites (downloadNext's
+        //      read). Two local rides, the Upload tab, completions arriving by
+        //      themselves: uploadNext must dispatch both rows, label both, and
+        //      reach its own tail. Drop the arming at uploadNext and the first
+        //      completion is swallowed, the loop is never re-driven, and the
+        //      second row is never uploaded - which is these three numbers.
+        const HealthyUploadOutcome up = runHealthyUpload();
+        QVERIFY2(up.timedOut == false, "healthy upload: the run never came back");
+        QCOMPARE(up.upListCount, 2);
+        QCOMPARE(up.checkedRows, 2);
+        QCOMPARE(up.writeFileCalls, 2);
+        QVERIFY2(up.writeNames.count() == 2 && up.writeNames.value(0) != up.writeNames.value(1),
+                 qPrintable(QStringLiteral("healthy upload: the two writes were not one per row: [%1]")
+                                .arg(up.writeNames.join(QStringLiteral("|")))));
+        QCOMPARE(up.statuses, QStringList() << "Completed." << "Completed.");
+        QCOMPARE(up.progressText, QStringLiteral("Uploaded 2 of 2 successfully"));
+    }
+
+    // =====================================================================
+    // TEST-115 (REQ-028 (c), DEC-garmin-036, RE-ARGUED FOR DEC-garmin-037) — A
+    // STALE WRITE NEVER REACHES THE LIVE BATCH, INCLUDING WHEN THE RESTART
+    // RE-DISPATCHES THE SAME ROW.
+    // =====================================================================
+    //
+    // THE WRITE HALF of criterion (c). REQ-027 widened this defect from a read to
+    // a WRITE, and completedWrite has the same two harms as its sibling - it
+    // labels a row and it re-drives the loop - so the ticket has to cover it too.
+    // What it CANNOT use is completedRead's discriminator: writeComplete carries
+    // no buffer, only an id, so the ticket compares the exact `remotename` string
+    // uploadNext/syncNext passed to writeFile. Services that pass an EMPTY id are
+    // not rejected by that compare (nothing to compare), which is why the second
+    // half of this slot matters.
+    //
+    // RE-ARGUED 2026-08-19 FOR DEC-garmin-037, AND BOTH HALVES CHANGED - said
+    // here rather than left for a reader to notice that the numbers moved. This
+    // slot used to claim "the stale write is SWALLOWED", and its exculpation of
+    // the same-row half rested on the one-shot `armed` bit being the SOLE
+    // separator on the write channel. Neither is true any more, because DEC-037
+    // put a second separator in front of it: downloadClicked's START branch
+    // RETIRES an abandoned write's ticket instead of merely voiding it, and
+    // completedWrite answers a retired ticket from the row it names.
+    //
+    //   WHAT DID NOT CHANGE, and it is the whole of what this slot exists to
+    //   protect: a stale write still never touches the LIVE batch. It does not
+    //   label the live row, does not advance the bar, does not count a success and
+    //   does not re-drive the loop. Every assertion below that says so is
+    //   unchanged.
+    //
+    //   WHAT CHANGED is where the stale completion GOES. It used to go nowhere;
+    //   now it goes to the row it was actually issued for, and that row's cell
+    //   then names the outcome of a transfer that really happened to it - which is
+    //   what criterion (c) asks of every non-empty cell, and is strictly more than
+    //   silence delivered. So "swallowed" was never the criterion; it was one way
+    //   of satisfying it, and DEC-037 replaced it with a better one on the routes
+    //   where a name compare alone cannot decide.
+    //
+    // TWO RUNS, and they now exercise DIFFERENT separators, which is why they stay
+    // in one slot:
+    //
+    //   DIFFERENT ROW - THE NAME COMPARE. Batch one parks on row 1; abort;
+    //   restart; batch two parks on row 0; and THEN row 1's write completes. Its
+    //   name is not row 0's, so the LIVE compare rejects it exactly as it did
+    //   before DEC-037. What now catches it first is its own retired ticket, so it
+    //   labels ROW 1 - its own row - and returns. Row 0, the live batch's row,
+    //   keeps "Uploading", the bar stays at 0 and no third write is issued: the
+    //   before-DEC-036 harm (the completion labelled row 0 and re-drove the loop)
+    //   is still what this run is watching for.
+    //
+    //   SAME ROW - AND THIS IS THE HALF WHOSE ARGUMENT IS NEW. One row only. Batch
+    //   one parks on it; abort; restart; batch two dispatches THE IDENTICAL ROW
+    //   with the IDENTICAL name; and then BOTH completions arrive. Before DEC-037
+    //   the two were separated by ONE mechanism - the one-shot `armed` bit, which
+    //   consumed the first and swallowed the second. They are now separated by
+    //   TWO, in order: the FIRST arrival is taken by the RETIRED ticket (it labels
+    //   the row and returns, driving nothing), and the SECOND by the live ticket
+    //   (it labels, counts once and drives once). `armed` is still one-shot and
+    //   still load-bearing - it is what stops a THIRD completion - but it is no
+    //   longer the sole separator, and the observable difference is exactly that
+    //   the FIRST arrival no longer re-drives the loop: progressTextAfter is empty
+    //   where it used to carry the completion tail's sentence, and that sentence
+    //   now appears only after the SECOND. The killer assertion is unchanged and
+    //   is still the tail's own sentence: "Uploaded 1 of 1 successfully" against
+    //   "Uploaded 2 of 1 successfully", because a QProgressBar clamps setValue()
+    //   to its maximum and would hide the double count.
+    void aLateWriteCompletionOfAnAbandonedBatchMustNotLabelTheLiveBatchesRow()
+    {
+        // ---- RUN ONE: the restarted batch is on a DIFFERENT row.
+        const StaleWriteOutcome out = runStaleWrite(false);
+        QVERIFY2(out.timedOut == false, "different-row: the run never came back");
+        QCOMPARE(out.upListCount, 2);
+        QCOMPARE(out.checkedRows, 2);
+        QVERIFY2(out.sawAbortLabel, "different-row: the button was never labelled \"Abort\", so downloadClicked() "
+                                    "could not have been the abort control");
+        QVERIFY2(out.abortTookTheAbortBranch, "different-row: downloadClicked() did not take its abort branch");
+        QVERIFY2(out.restartTookTheStartBranch, "different-row: the second click did not take the START branch");
+        // The premise the whole run rests on: the abandoned transfer and the live
+        // one are for DIFFERENT rows.
+        QVERIFY2(out.staleName != out.liveName,
+                 "different-row: the abandoned write and the live one carry the same name");
+        QCOMPARE(out.staleName, out.writeNames.value(1));
+        QCOMPARE(out.liveName, out.writeNames.value(2));
+        QCOMPARE(out.writeCallsBefore, 3);
+
+        // THE CRITERION. The late completion never reaches the LIVE batch: row 0
+        // is the row batch two is uploading and it keeps "Uploading", the bar does
+        // not move and no third write is issued.
+        QCOMPARE(out.statusesBefore, QStringList() << "Uploading" << "Uploading");
+        QCOMPARE(out.statusesAfter.value(0), QStringLiteral("Uploading"));
+        QCOMPARE(out.writeCallsAfter, 3);
+        QCOMPARE(out.barBefore, 0);
+        QCOMPARE(out.barAfter, 0);
+
+        // ...AND IT GOES TO ITS OWN ROW (DEC-037). Row 1 is the row batch one
+        // really was writing when the user aborted, so its cell now names the
+        // outcome of a transfer that really happened to it. Before DEC-037 this
+        // read `rowsRelabelled == {}` - the completion went nowhere - and the
+        // change is deliberate: see the RE-ARGUED paragraph above.
+        QCOMPARE(out.rowsRelabelled, QList<int>() << 1);
+        QCOMPARE(out.statusesAfter.value(1), QStringLiteral("Completed."));
+
+        // ---- RUN TWO: the restart re-dispatches the SAME row, so the name
+        //      compare cannot separate the two transfers at all - the retired
+        //      ticket takes the first and the one-shot `armed` bit the second.
+        const StaleWriteOutcome same = runStaleWrite(true);
+        QVERIFY2(same.timedOut == false, "same-row: the run never came back");
+        QCOMPARE(same.upListCount, 1);
+        QCOMPARE(same.checkedRows, 1);
+        QVERIFY2(same.abortTookTheAbortBranch, "same-row: downloadClicked() did not take its abort branch");
+        QVERIFY2(same.restartTookTheStartBranch, "same-row: the second click did not take the START branch");
+        // The premise: the two outstanding transfers are for the same row and
+        // carry the same name, so a name compare cannot tell them apart.
+        QCOMPARE(same.staleName, same.liveName);
+        QCOMPARE(same.writeCallsBefore, 2);
+
+        // The FIRST of the two completions is taken by the RETIRED ticket - it is
+        // indistinguishable from the live one, and the cell it writes is true of
+        // that row either way. It DRIVES NOTHING, and the empty label is the
+        // observable proof of that: progressLabelText reports only a completion
+        // TAIL's own sentence, and before DEC-037 this read "Uploaded 1 of 1
+        // successfully" because the first arrival was consumed by the LIVE ticket
+        // and re-drove the loop into its tail. That is the one behavioural change
+        // in this half, and it is the right one: the batch that issued the first
+        // completion no longer exists and has nothing to drive.
+        QCOMPARE(same.rowsRelabelled, QList<int>() << 0);
+        QCOMPARE(same.statusesAfter, QStringList() << "Completed.");
+        QCOMPARE(same.progressTextAfter, QString());
+
+        // ...AND THE SECOND IS THE LIVE BATCH'S OWN, counted exactly once. The
+        // `armed` bit is still one-shot and still load-bearing here - it is what
+        // would stop a THIRD completion - and the tail's sentence is still the
+        // killer: "Uploaded 2 of 1 successfully" is what a double count reads,
+        // because a QProgressBar clamps setValue() to its maximum and would hide
+        // it.
+        QCOMPARE(same.statusesFinal, same.statusesAfter);
+        QCOMPARE(same.writeCallsFinal, 2);
+        QCOMPARE(same.progressTextFinal, QStringLiteral("Uploaded 1 of 1 successfully"));
     }
 
   private:
+    // TEST-114 (REQ-028 (c)) — what one HEALTHY upload batch leaves behind.
+    // NOT a slot. The write-side twin of the download run in that slot's body,
+    // and the run that makes uploadNext's arm site individually load-bearing.
+    struct HealthyUploadOutcome
+    {
+        bool timedOut = false;
+        int upListCount = 0;
+        int checkedRows = 0;
+        int writeFileCalls = 0;
+        QStringList writeNames;
+        QStringList statuses;
+        QString progressText;
+    };
+
+    HealthyUploadOutcome runHealthyUpload()
+    {
+        obs::reset();
+        rideopen::reset();
+        ridefail::reset();
+        rideopen::blockingMs = 5;
+
+        HealthyUploadOutcome out;
+
+        const QDir activities = context->athlete->home->activities();
+        QDir().mkpath(activities.absolutePath());
+
+        QList<RideItem*> items;
+        for (int i = 0; i < 2; i++) {
+            const QString name = rebuildLocalActivity(i);
+            QFile f(activities.absolutePath() + "/" + name);
+            f.open(QIODevice::WriteOnly);
+            f.write("gcblock");
+            f.close();
+
+            RideItem* item = new RideItem(nullptr, context);
+            item->fileName = name;
+            item->path = activities.absolutePath();
+            item->dateTime = QDateTime(QDate::currentDate(), QTime(10 + i, 0, 0));
+            item->planned = false;
+            items << item;
+        }
+        for (RideItem* item : items)
+            rideCache->rides().push_back(item);
+
+        QEventLoop appLoop;
+        QMetaObject::invokeMethod(
+            this,
+            [&]() {
+                QWidget* owner = new QWidget;
+
+                BlockingStore* store = new BlockingStore(context);
+                store->entryNames = QStringList(); // nothing remote: no "File exists" skip
+                store->blockingMs = 5;
+                store->closeActionContext = qApp;
+                store->writeSucceeds = true;
+                // THE DIFFERENCE from runStaleWrite: completions arrive by
+                // themselves, exactly as a service delivers them.
+                store->completeWrite = true;
+
+                CloudServiceSyncDialog* dialog = new CloudServiceSyncDialog(context, store);
+                dialog->setParent(owner, Qt::Dialog);
+                dialog->start();
+                dialog->open();
+                store->dialog = dialog;
+                store->dialogGuard = dialog;
+
+                if (QTabWidget* tabs = dialog->findChild<QTabWidget*>())
+                    tabs->setCurrentIndex(1);
+                dialog->selectAllUpChanged(Qt::Checked);
+                QTreeWidget* list = rideListWithHeader(dialog, QStringLiteral("File"));
+                if (list != nullptr) {
+                    QTreeWidgetItem* root = list->invisibleRootItem();
+                    out.upListCount = root->childCount();
+                    for (int i = 0; i < out.upListCount; i++) {
+                        QCheckBox* check = qobject_cast<QCheckBox*>(list->itemWidget(root->child(i), 0));
+                        if (check != nullptr && check->isChecked())
+                            out.checkedRows++;
+                    }
+                }
+
+                dialog->downloadClicked();
+
+                for (int i = 0; i < 200 && out.progressText.isEmpty(); ++i) {
+                    QApplication::processEvents(QEventLoop::AllEvents, 5);
+                    out.progressText = progressLabelText(dialog);
+                }
+
+                out.writeFileCalls = obs::writeFileCalls;
+                out.writeNames = obs::writeNames;
+                if (list != nullptr)
+                    for (int i = 0; i < list->invisibleRootItem()->childCount(); i++)
+                        out.statuses << list->invisibleRootItem()->child(i)->text(7);
+
+                QTimer::singleShot(100, qApp, [owner]() { delete owner; });
+                QTimer::singleShot(200, &appLoop, &QEventLoop::quit);
+
+                bool* timedOutp = &out.timedOut;
+                QTimer::singleShot(10000, &appLoop, [timedOutp]() {
+                    *timedOutp = true;
+                    QCoreApplication::exit(1);
+                });
+            },
+            Qt::QueuedConnection);
+
+        appLoop.exec();
+        for (int i = 0; i < 50; ++i)
+            QApplication::processEvents(QEventLoop::AllEvents, 5);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+        for (RideItem* item : items) {
+            rideCache->rides().removeAll(item);
+            delete item->ride(false);
+            delete item;
+        }
+
+        return out;
+    }
+
+    // =====================================================================
+    // TEST-115 (REQ-028 (c), DEC-garmin-036) — the WRITE apparatus.
+    // =====================================================================
+    // Everything one stale-write run leaves behind. NOT a slot.
+    struct StaleWriteOutcome
+    {
+        bool timedOut = false;
+        int upListCount = 0;
+        int checkedRows = 0;
+        QStringList rowNames; // column 1 of every upload row, in row order
+
+        bool sawAbortLabel = false;
+        bool abortTookTheAbortBranch = false;
+        bool restartTookTheStartBranch = false;
+
+        QString staleName; // the abandoned batch's outstanding write
+        QString liveName;  // ...and the restarted batch's
+        QStringList writeNames;
+
+        // Read either side of the late delivery, so "which row changed" is an
+        // observation rather than an inference. `Final` is read after the SECOND
+        // delivery of the same-row run, and is a copy of `After` otherwise.
+        QStringList statusesBefore;
+        QStringList statusesAfter;
+        QStringList statusesFinal;
+        QList<int> rowsRelabelled;
+
+        int writeCallsBefore = 0;
+        int writeCallsAfter = 0;
+        int writeCallsFinal = 0;
+        int barBefore = 0;
+        int barAfter = 0;
+        int barMax = 0;
+        QString progressTextAfter;
+        QString progressTextFinal;
+    };
+
+    // One run of the stale-write geometry. `sameRow` puts a SINGLE row in the
+    // upload list, so that the restarted batch re-dispatches the very row the
+    // abandoned batch is still waiting on - and then delivers BOTH completions.
+    StaleWriteOutcome runStaleWrite(bool sameRow)
+    {
+        obs::reset();
+        rideopen::reset();
+        ridefail::reset();
+        rideopen::blockingMs = 5;
+
+        StaleWriteOutcome out;
+        const int rows = sameRow ? 1 : 2;
+
+        // The upload list is built from context->athlete->rideCache->rides(), and
+        // the rows must exist on disk because uploadNext opens each one.
+        const QDir activities = context->athlete->home->activities();
+        QDir().mkpath(activities.absolutePath());
+
+        QList<RideItem*> items;
+        for (int i = 0; i < rows; i++) {
+            const QString name = rebuildLocalActivity(i);
+            QFile f(activities.absolutePath() + "/" + name);
+            f.open(QIODevice::WriteOnly);
+            f.write("gcblock");
+            f.close();
+
+            RideItem* item = new RideItem(nullptr, context);
+            item->fileName = name;
+            item->path = activities.absolutePath();
+            item->dateTime = QDateTime(QDate::currentDate(), QTime(10 + i, 0, 0));
+            item->planned = false; // the upload list skips planned rides
+            items << item;
+        }
+        for (RideItem* item : items)
+            rideCache->rides().push_back(item);
+
+        QEventLoop appLoop;
+        QMetaObject::invokeMethod(
+            this,
+            [&]() {
+                QWidget* owner = new QWidget;
+
+                BlockingStore* store = new BlockingStore(context);
+                // NOTHING remote, so no row is marked as already existing and the
+                // "File exists" skip cannot swallow one.
+                store->entryNames = QStringList();
+                store->blockingMs = 5;
+                store->closeActionContext = qApp;
+                store->writeSucceeds = true;
+                // THE WHOLE MECHANISM, and the twin of runLateCompletion's
+                // completeRead=false: writeFile reports the upload started and
+                // notifies nobody, so the batch parks exactly as a real one waits
+                // on the network and this run owns the timing of every completion.
+                store->completeWrite = false;
+
+                CloudServiceSyncDialog* dialog = new CloudServiceSyncDialog(context, store);
+                dialog->setParent(owner, Qt::Dialog);
+                dialog->start();
+                dialog->open();
+                store->dialog = dialog;
+                store->dialogGuard = dialog;
+
+                // The UPLOAD tab: its column-1 header is "File" and its status
+                // column is 7.
+                if (QTabWidget* tabs = dialog->findChild<QTabWidget*>())
+                    tabs->setCurrentIndex(1);
+                dialog->selectAllUpChanged(Qt::Checked);
+                QTreeWidget* list = rideListWithHeader(dialog, QStringLiteral("File"));
+
+                if (list != nullptr) {
+                    QTreeWidgetItem* root = list->invisibleRootItem();
+                    out.upListCount = root->childCount();
+                    for (int i = 0; i < out.upListCount; i++) {
+                        out.rowNames << root->child(i)->text(1);
+                        QCheckBox* check = qobject_cast<QCheckBox*>(list->itemWidget(root->child(i), 0));
+                        if (check != nullptr && check->isChecked())
+                            out.checkedRows++;
+                    }
+                }
+
+                QPushButton* watched = pushButtonWithText(dialog, QStringLiteral("Upload"));
+                QProgressBar* bar = dialog->findChild<QProgressBar*>();
+
+                // ---- BATCH ONE. uploadNext writes row 0 and returns.
+                dialog->downloadClicked();
+                QString parked = obs::lastWriteName;
+
+                if (!sameRow) {
+                    // Row 0 completes normally. completedWrite's tail re-drives
+                    // uploadNext, so the batch moves onto row 1 and parks there.
+                    store->notifyWriteComplete(parked, QStringLiteral("Completed."));
+                    parked = obs::lastWriteName;
+                }
+                out.staleName = parked;
+
+                // ---- THE ABORT, AND THE RESTART BEHIND IT.
+                out.sawAbortLabel = (pushButtonWithText(dialog, QStringLiteral("Abort")) != nullptr);
+                dialog->downloadClicked(); // the abort branch
+                // The abort branch relabels that same button "Download", which is
+                // the observable proof it ran and `aborted` is now true.
+                out.abortTookTheAbortBranch = (watched != nullptr && watched->text() == QStringLiteral("Download"));
+
+                dialog->downloadClicked(); // a NEW batch, from row 0
+                out.restartTookTheStartBranch = (watched != nullptr && watched->text() == QStringLiteral("Abort"));
+                out.liveName = obs::lastWriteName;
+
+                if (list != nullptr)
+                    for (int i = 0; i < list->invisibleRootItem()->childCount(); i++)
+                        out.statusesBefore << list->invisibleRootItem()->child(i)->text(7);
+                out.writeCallsBefore = obs::writeFileCalls;
+                if (bar != nullptr) {
+                    out.barBefore = bar->value();
+                    out.barMax = bar->maximum();
+                }
+
+                // ---- THE LATE COMPLETION: batch one's write, arriving now.
+                store->notifyWriteComplete(out.staleName, QStringLiteral("Completed."));
+
+                if (list != nullptr)
+                    for (int i = 0; i < list->invisibleRootItem()->childCount(); i++)
+                        out.statusesAfter << list->invisibleRootItem()->child(i)->text(7);
+                for (int i = 0; i < out.statusesAfter.count() && i < out.statusesBefore.count(); i++)
+                    if (out.statusesAfter.at(i) != out.statusesBefore.at(i))
+                        out.rowsRelabelled << i;
+                out.writeCallsAfter = obs::writeFileCalls;
+                if (bar != nullptr)
+                    out.barAfter = bar->value();
+                out.progressTextAfter = progressLabelText(dialog);
+
+                // ---- ...AND THE LIVE ONE, for the SAME row under the SAME name.
+                //      Only the ticket's one-shot `armed` bit is left to tell it
+                //      from the completion just consumed.
+                if (sameRow)
+                    store->notifyWriteComplete(out.liveName, QStringLiteral("Completed."));
+
+                if (list != nullptr)
+                    for (int i = 0; i < list->invisibleRootItem()->childCount(); i++)
+                        out.statusesFinal << list->invisibleRootItem()->child(i)->text(7);
+                out.writeCallsFinal = obs::writeFileCalls;
+                out.progressTextFinal = progressLabelText(dialog);
+                out.writeNames = obs::writeNames;
+
+                QTimer::singleShot(100, qApp, [owner]() { delete owner; });
+                QTimer::singleShot(200, &appLoop, &QEventLoop::quit);
+
+                bool* timedOutp = &out.timedOut;
+                QTimer::singleShot(10000, &appLoop, [timedOutp]() {
+                    *timedOutp = true;
+                    QCoreApplication::exit(1);
+                });
+            },
+            Qt::QueuedConnection);
+
+        appLoop.exec();
+        for (int i = 0; i < 50; ++i)
+            QApplication::processEvents(QEventLoop::AllEvents, 5);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+        for (RideItem* item : items) {
+            rideCache->rides().removeAll(item);
+            delete item->ride(false);
+            delete item;
+        }
+
+        return out;
+    }
     // Everything one run of the probe leaves behind. NOT a slot.
     struct LateCompletionOutcome
     {
@@ -8057,6 +9688,13 @@ class TestGarminConnectSyncDialogClose : public QObject
         int barAfter = 0;
         int barMax = 0;
         QStringList readNames; // every row readFile was called for, in order
+
+        // TEST-116 — buffer accounting, asked of the ALLOCATOR either side of the
+        // late delivery. `staleAndLiveBuffersDiffer` is the premise that makes the
+        // two below discriminating at all.
+        bool staleAndLiveBuffersDiffer = false;
+        bool staleBufferFreed = false;    // the swallowed one went back
+        bool liveBufferStillHeld = false; // ...and the one still in flight did not
     };
 
     // Three remote activities the Download tab lists and cannot parse. Today's
@@ -8070,7 +9708,15 @@ class TestGarminConnectSyncDialogClose : public QObject
     }
 
     // One run of the probe. `restartBetween` false is the CONTROL.
-    LateCompletionOutcome runLateCompletion(bool restartBetween)
+    //
+    // `lateOnFailureChannel` delivers the LATE completion on DEC-023's explicit
+    // failure channel (readFailed) instead of readComplete. It is the same
+    // transfer, the same buffer and the same abandoned batch - only the slot that
+    // consumes it differs - and it exists because failedRead carries its own copy
+    // of the DEC-036 ticket check and its own free, and a guard no run reaches is
+    // a guard nothing can measure (LSN-059). The FIRST completion stays a success
+    // whichever channel is chosen, because it is what walks the batch onto row 1.
+    LateCompletionOutcome runLateCompletion(bool restartBetween, bool lateOnFailureChannel = false)
     {
         obs::reset();
         rideopen::reset();
@@ -8146,7 +9792,7 @@ class TestGarminConnectSyncDialogClose : public QObject
                 // ---- THE ABORT, AND THE RESTART BEHIND IT.
                 if (restartBetween) {
                     out.sawAbortLabel = (pushButtonWithText(dialog, QStringLiteral("Abort")) != nullptr);
-                    dialog->downloadClicked(); // :1910-1918, aborted = true
+                    dialog->downloadClicked(); // :1920-1928, aborted = true
                     out.abortTookTheAbortBranch = (watched != nullptr && watched->text() == QStringLiteral("Download"));
 
                     dialog->downloadClicked(); // :1919-1935, a NEW batch from row 0
@@ -8154,6 +9800,12 @@ class TestGarminConnectSyncDialogClose : public QObject
                     out.newBatchRowName = obs::lastReadName;
                     out.readNames << obs::lastReadName;
                 }
+
+                // TEST-116 — the restarted batch's OWN buffer, the one that is
+                // still outstanding when the stale completion lands.
+                QByteArray* liveBuffer = obs::lastBuffer;
+                out.staleAndLiveBuffersDiffer = (row1Buffer != nullptr && liveBuffer != nullptr &&
+                                                 (restartBetween == false || row1Buffer != liveBuffer));
 
                 if (list != nullptr)
                     for (int i = 0; i < list->invisibleRootItem()->childCount(); i++)
@@ -8164,10 +9816,14 @@ class TestGarminConnectSyncDialogClose : public QObject
                     out.barMax = bar->maximum();
                 }
 
-                // ---- THE LATE COMPLETION: batch one's row-1 read, arriving now.
+                // ---- THE LATE COMPLETION: batch one's row-1 read, arriving now,
+                //      on whichever of DEC-023's two channels this run chose.
                 if (row1Buffer != nullptr) {
                     out.lateCompletionDelivered = true;
-                    store->notifyReadComplete(row1Buffer, row1Name, QStringLiteral("Completed."));
+                    if (lateOnFailureChannel)
+                        store->notifyReadFailed(row1Buffer, row1Name, QStringLiteral("service refused"));
+                    else
+                        store->notifyReadComplete(row1Buffer, row1Name, QStringLiteral("Completed."));
                 }
 
                 if (list != nullptr)
@@ -8181,6 +9837,11 @@ class TestGarminConnectSyncDialogClose : public QObject
                     out.readNames << obs::lastReadName;
                 if (bar != nullptr)
                     out.barAfter = bar->value();
+
+                // TEST-116 — ...and what the allocator says about the two buffers.
+                // Read HERE, before anything else can free either of them.
+                out.staleBufferFreed = isPoisoned(row1Buffer, sizeof(QByteArray));
+                out.liveBufferStillHeld = (liveBuffer != nullptr && !isPoisoned(liveBuffer, sizeof(QByteArray)));
 
                 QTimer::singleShot(100, qApp, [owner]() { delete owner; });
                 QTimer::singleShot(200, &appLoop, &QEventLoop::quit);
@@ -8199,6 +9860,3846 @@ class TestGarminConnectSyncDialogClose : public QObject
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 
         return out;
+    }
+
+    // =====================================================================
+    // TEST-117 / TEST-118 (A3-R028-F1 / A3-R028-F2, REQ-028 (c),
+    // DEC-garmin-036 AS AMENDED) — A RESTART THAT ARMS NOTHING.
+    // =====================================================================
+    //
+    // THE CRITERION, VERBATIM (REQ-028 (c)):
+    //
+    //   "(c) NO ROW IS LABELLED THAT THE FRAME DID NOT TRANSFER, AND NO ROW IS
+    //   TRANSFERRED TWICE. Across a batch that is aborted and immediately
+    //   restarted with the aborted batch's completion arriving LATE, every
+    //   non-empty status cell names the outcome of a transfer that actually
+    //   happened to that row, and the reader is invoked exactly once per checked
+    //   row - an over-count catches a second driver, an under-count catches a
+    //   stale one."
+    //
+    // WHAT DEC-036 LEFT OPEN, AND THE AMENDMENT CLOSES. The ticket is ARMED at
+    // four dispatch sites and CONSUMED at three completion sites; before the
+    // amendment nothing INVALIDATED it. TEST-113/115 only ever exercised a
+    // restart that DISPATCHES - and a dispatch overwrites the ticket, which is
+    // what made the stale completion's token compare fail there. A restart that
+    // dispatches NOTHING overwrites nothing, so the abandoned batch's ticket
+    // survives the restart intact - and `batchListGeneration = listGeneration`
+    // (CloudService.cpp:1951) hands that stale ticket a freshly VALID generation
+    // stamp on the way past. Every guard then agrees the completion is welcome.
+    //
+    // TWO SHAPES OF "ARMS NOTHING", and they cost different things:
+    //
+    //   TEST-117 (F1)  the restart arms nothing because a REFRESH emptied the
+    //                  checkboxes - and the same Refresh FREED the row the ticket
+    //                  is holding. The completion labels through a dangling
+    //                  QTreeWidgetItem*: a heap-use-after-free, not a mislabel.
+    //   TEST-118 (F2)  the restart arms nothing because the user simply cleared
+    //                  Select All. Nothing is freed, so this is not a memory
+    //                  defect - it is the second-driver harm the criterion names:
+    //                  a row relabelled by a transfer the live batch never made,
+    //                  and a progress bar advanced past a total of zero.
+    //
+    // BOTH RUN THE SAME FOUR ORDINARY CLICKS in the same apparatus, and the
+    // CONTROL is shared and load-bearing (LSN-050): the identical delivery with
+    // no abort and no restart in between MUST still label row 0, still advance
+    // the bar and still re-drive onto row 1. Without it every assertion below is
+    // equally satisfied by a completedRead that swallows everything.
+    enum RestartShape {
+        NoRestartControl,      // the control: batch one's own completion, on time
+        RestartAfterRefresh,   // F1 - the rows are FREED before the restart
+        RestartAfterUnchecking // F2 - nothing is freed; the batch is just empty
+    };
+
+    struct RestartArmsNothingOutcome
+    {
+        bool timedOut = false;
+
+        // -- premises about the fixture
+        int listCount = 0;
+        int checkedRows = 0;
+        QStringList rowNames;
+
+        // -- premises about batch one
+        bool firstDispatchIssued = false; // row 0's read was really issued...
+        QString dispatchedRowName;        // ...and it was THIS row
+        int readFileCallsAfterDispatch = 0;
+
+        // -- premises about the abort and the restart
+        bool sawAbortLabel = false;
+        bool abortTookTheAbortBranch = false;
+        int checkedRowsAtRestart = -1;
+        QString progressTextAfterRestart; // only downloadNext's TAIL writes this
+        int readFileCallsAfterRestart = 0;
+
+        // -- F1's premise: the row the ticket holds is really dead. Asked of the
+        //    ALLOCATOR, never by dereferencing it.
+        bool rowFreedByRefresh = false;
+
+        // -- the delivery, and what it did
+        bool lateCompletionDelivered = false;
+        QStringList statusesBefore;
+        QStringList statusesAfter;
+        QList<int> rowsRelabelled;
+        int barBefore = 0;
+        int barAfter = 0;
+        int barMax = 0;
+        int readFileCallsAfterLate = 0;
+        QString progressTextAfterLate;
+
+        // Set on the last line of the run: under ASan with halt_on_error=1 a
+        // use-after-free ends the PROCESS, so a run that gets this far is a run
+        // that committed none.
+        bool survivedTheLateCompletion = false;
+    };
+
+    // One run of the geometry. NOT a slot (it takes an argument).
+    //
+    // HOW THE LATE COMPLETION IS MADE is runLateCompletion's mechanism exactly:
+    // `store->completeRead = false` means readFile parks without notifying, and
+    // the run delivers the completion by hand through notifyReadComplete - the
+    // same `emit readComplete(...)` on the same direct connection, so completedRead
+    // runs in the frame shape it always does. What changes is only WHEN.
+    RestartArmsNothingOutcome runRestartThatArmsNothing(RestartShape shape)
+    {
+        obs::reset();
+        rideopen::reset();
+        ridefail::reset();
+        rideopen::blockingMs = 5;
+
+        RestartArmsNothingOutcome out;
+        QEventLoop appLoop;
+
+        QMetaObject::invokeMethod(
+            this,
+            [&]() {
+                QWidget* owner = new QWidget;
+
+                BlockingStore* store = new BlockingStore(context);
+                store->entryNames = threeUnparseableRemoteActivities();
+                store->blockingMs = 5;
+                store->closeActionContext = qApp;
+                store->downloadCompression = CloudService::none;
+                store->completeRead = false; // this run owns the timing
+
+                CloudServiceSyncDialog* dialog = new CloudServiceSyncDialog(context, store);
+                dialog->setParent(owner, Qt::Dialog);
+                dialog->start();
+                dialog->open();
+                store->dialog = dialog;
+                store->dialogGuard = dialog;
+
+                if (QTabWidget* tabs = dialog->findChild<QTabWidget*>())
+                    tabs->setCurrentIndex(0);
+                dialog->selectAllChanged(Qt::Checked);
+                QTreeWidget* list = rideListWithHeader(dialog, QStringLiteral("Workout Name"));
+
+                auto countChecked = [&]() {
+                    int n = 0;
+                    if (list == nullptr)
+                        return n;
+                    QTreeWidgetItem* root = list->invisibleRootItem();
+                    for (int i = 0; i < root->childCount(); i++) {
+                        QCheckBox* check = qobject_cast<QCheckBox*>(list->itemWidget(root->child(i), 0));
+                        if (check != nullptr && check->isChecked())
+                            n++;
+                    }
+                    return n;
+                };
+                auto statuses = [&]() {
+                    QStringList s;
+                    if (list != nullptr)
+                        for (int i = 0; i < list->invisibleRootItem()->childCount(); i++)
+                            s << list->invisibleRootItem()->child(i)->text(5);
+                    return s;
+                };
+
+                if (list != nullptr) {
+                    QTreeWidgetItem* root = list->invisibleRootItem();
+                    out.listCount = root->childCount();
+                    for (int i = 0; i < out.listCount; i++)
+                        out.rowNames << root->child(i)->text(1);
+                }
+                out.checkedRows = countChecked();
+
+                QPushButton* watched = pushButtonWithText(dialog, QStringLiteral("Download"));
+                QProgressBar* bar = dialog->findChild<QProgressBar*>();
+
+                // ---- CLICK 1. Select all, Download. downloadNext arms the ticket
+                //      for row 0 and parks on it.
+                dialog->downloadClicked();
+                QByteArray* row0Buffer = obs::lastBuffer;
+                const QString row0Name = obs::lastReadName;
+                out.firstDispatchIssued = (row0Buffer != nullptr);
+                out.dispatchedRowName = row0Name;
+                out.readFileCallsAfterDispatch = obs::readFileCalls;
+
+                // The ADDRESS of the row the ticket is holding, kept as raw
+                // storage. Never cast back, never dereferenced - asking ASan
+                // whether it is poisoned is the only way to ask "is it dead?"
+                // without committing the use-after-free under investigation.
+                const void* row0Addr = (list != nullptr && list->invisibleRootItem()->childCount() > 0)
+                                           ? static_cast<const void*>(list->invisibleRootItem()->child(0))
+                                           : nullptr;
+
+                if (shape != NoRestartControl) {
+                    out.sawAbortLabel = (pushButtonWithText(dialog, QStringLiteral("Abort")) != nullptr);
+
+                    // ---- CLICK 2 (F1 only). Refresh. This is the ONE place a row
+                    //      in this dialog dies, and the row it kills is the one the
+                    //      ticket is holding.
+                    if (shape == RestartAfterRefresh) {
+                        dialog->refreshClicked();
+                        out.rowFreedByRefresh = isPoisoned(row0Addr, sizeof(QTreeWidgetItem));
+                    }
+
+                    // ---- CLICK 3. The button reads "Abort", so this click takes
+                    //      downloadClicked's abort branch: downloading=false,
+                    //      aborted=true, and the ticket is left ARMED.
+                    dialog->downloadClicked();
+                    out.abortTookTheAbortBranch = (watched != nullptr && watched->text() == QStringLiteral("Download"));
+
+                    // F2's way of emptying the batch: the user clears Select All.
+                    // Nothing is freed - which is what makes F2 the same root
+                    // cause without the memory unsafety.
+                    if (shape == RestartAfterUnchecking)
+                        dialog->selectAllChanged(Qt::Unchecked);
+
+                    out.checkedRowsAtRestart = countChecked();
+
+                    // ---- CLICK 4. The button reads "Download" again, so this
+                    //      takes the START branch: aborted=false and
+                    //      batchListGeneration = listGeneration. Nothing is
+                    //      checked, so downloadNext dispatches NOTHING and falls
+                    //      straight to its completion tail.
+                    dialog->downloadClicked();
+                    out.readFileCallsAfterRestart = obs::readFileCalls;
+                    // Only downloadNext's TAIL writes this sentence
+                    // (CloudService.cpp:2535) - the abort branch returns long
+                    // before it - so this one string is the observable proof that
+                    // the START branch ran AND that its batch was empty. It is
+                    // also where `downloadtotal` is observable at all: it is a
+                    // private member, and this is production's own report of it.
+                    out.progressTextAfterRestart = progressLabelText(dialog);
+                }
+
+                out.statusesBefore = statuses();
+                if (bar != nullptr) {
+                    out.barBefore = bar->value();
+                    out.barMax = bar->maximum();
+                }
+
+                // ---- THE LATE COMPLETION: batch one's row-0 read, arriving now.
+                if (row0Buffer != nullptr) {
+                    out.lateCompletionDelivered = true;
+                    store->notifyReadComplete(row0Buffer, row0Name, QStringLiteral("Completed."));
+                }
+
+                out.statusesAfter = statuses();
+                for (int i = 0; i < out.statusesAfter.count() && i < out.statusesBefore.count(); i++)
+                    if (out.statusesAfter.at(i) != out.statusesBefore.at(i))
+                        out.rowsRelabelled << i;
+                out.readFileCallsAfterLate = obs::readFileCalls;
+                if (bar != nullptr)
+                    out.barAfter = bar->value();
+                out.progressTextAfterLate = progressLabelText(dialog);
+                out.survivedTheLateCompletion = true;
+
+                QTimer::singleShot(100, qApp, [owner]() { delete owner; });
+                QTimer::singleShot(200, &appLoop, &QEventLoop::quit);
+
+                bool* timedOutp = &out.timedOut;
+                QTimer::singleShot(10000, &appLoop, [timedOutp]() {
+                    *timedOutp = true;
+                    QCoreApplication::exit(1);
+                });
+            },
+            Qt::QueuedConnection);
+
+        appLoop.exec();
+        for (int i = 0; i < 50; ++i)
+            QApplication::processEvents(QEventLoop::AllEvents, 5);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+        return out;
+    }
+
+    // The premises shared by TEST-117 and TEST-118, and the CONTROL that stops
+    // either of them passing on a completedRead that does nothing at all. NOT a
+    // slot.
+    void assertRestartArmsNothingControl(const RestartArmsNothingOutcome& base, const QString& verdict)
+    {
+        QVERIFY2(base.timedOut == false, "control: the run never came back");
+        QCOMPARE(base.listCount, 3);
+        QCOMPARE(base.checkedRows, 3);
+        QVERIFY2(base.firstDispatchIssued, "control: row 0's read was never issued");
+        QVERIFY2(base.lateCompletionDelivered, "control: nothing was delivered");
+        QCOMPARE(base.readFileCallsAfterDispatch, 1);
+
+        // The apparatus CAN see a label, CAN see the bar move and CAN see the
+        // loop drive on - so the run's "none of these happened" means something.
+        QCOMPARE(base.statusesBefore, QStringList() << "Downloading" << "" << "");
+        QCOMPARE(base.statusesAfter, QStringList() << verdict << "Downloading" << "");
+        QCOMPARE(base.rowsRelabelled, QList<int>() << 0 << 1);
+        QCOMPARE(base.barBefore, 0);
+        QCOMPARE(base.barAfter, 1);
+        QCOMPARE(base.readFileCallsAfterLate, 2);
+    }
+
+  private slots:
+
+    // -- TEST-117 (A3-R028-F1) -------------------------------------------
+    //
+    // FOUR ORDINARY CLICKS ON THE DOWNLOAD TAB REACH A USE-AFTER-FREE. Select
+    // all + Download (the ticket is armed for row 0); Refresh (row 0 is FREED,
+    // and the rebuilt list is entirely unchecked); Abort; Download (the START
+    // branch re-stamps batchListGeneration but dispatches nothing, so the stale
+    // ticket survives with a valid stamp). Row 0's completion then passes the
+    // DEC-034 compare, passes the ticket compare - it really IS the transfer the
+    // ticket describes - passes the abort read, and labels through the freed row.
+    //
+    // THE KILLING OBSERVATION IS THE ASan ABORT, not a QVERIFY. This target runs
+    // with halt_on_error=1, so a use-after-free ends the process and this slot
+    // never returns; reaching its final assertion at all is the assertion. What
+    // the QVERIFYs below do is stop that from being VACUOUS (LSN-050): without
+    // the poison premise a slot like this passes just as happily when production
+    // never reaches the row at all, and without the readFileCalls premise it
+    // passes when the restart quietly dispatched something and overwrote the
+    // ticket the ordinary way.
+    //
+    // RED, against the tree before the DEC-036 amendment (measured, offscreen;
+    // the offsets are that tree's, and the amendment's own comments have moved
+    // them since - prefer the symbols, ORCH-020/LSN-034):
+    //   AddressSanitizer: heap-use-after-free READ of size 8
+    //     #0 QTreeWidgetItem::setText ... in CloudServiceSyncDialog::completedRead
+    //        CloudService.cpp:2654   [completedRead's no-ride row->setText]
+    //     freed by refreshClicked() CloudService.cpp:1542
+    //                               [the download list's `delete curr`]
+    //
+    // WHAT THIS SLOT KILLS, MEASURED, so nobody reads more coverage into it than
+    // it has (LSN-059/LSN-063). The amendment has TWO invalidation sites and this
+    // slot is a run on the PAIR: with only the downloadClicked one removed it
+    // stays GREEN, because the Refresh in its own route has already voided the
+    // ticket through the refreshClicked one. It goes red only with both gone -
+    // which is the state the finding was raised against, and is the geometry
+    // production shipped. TEST-118, whose route contains no Refresh, is the slot
+    // that kills the downloadClicked site on its own.
+    void aRestartThatArmsNothingMustNotLetAStaleCompletionLabelAFreedRow()
+    {
+        const QString verdict = QStringLiteral("TEST-096 unparseable activity");
+
+        // ---- THE CONTROL, in this slot rather than a neighbour's (LSN-050).
+        assertRestartArmsNothingControl(runRestartThatArmsNothing(NoRestartControl), verdict);
+        if (QTest::currentTestFailed())
+            return;
+
+        const RestartArmsNothingOutcome out = runRestartThatArmsNothing(RestartAfterRefresh);
+        QVERIFY2(out.timedOut == false, "the run never came back");
+
+        // ---- THE PREMISES.
+        QCOMPARE(out.listCount, 3);
+        QCOMPARE(out.checkedRows, 3);
+        QVERIFY2(out.firstDispatchIssued, "row 0's read was never issued, so no ticket was ever armed");
+        QCOMPARE(out.dispatchedRowName, out.rowNames.value(0));
+        QCOMPARE(out.readFileCallsAfterDispatch, 1);
+        QVERIFY2(out.sawAbortLabel, "the button was not labelled \"Abort\" while the batch ran, so downloadClicked() "
+                                    "could not have been the abort control");
+        QVERIFY2(out.abortTookTheAbortBranch, "downloadClicked() did not take its abort branch");
+
+        // THE PREMISE THIS SLOT RESTS ON. The row the ticket is holding is dead:
+        // the Refresh really did free it, so a completion that labels through the
+        // ticket's pointer really is a use-after-free and not a mislabel.
+        QVERIFY2(out.rowFreedByRefresh,
+                 "the Refresh did NOT free row 0 - the ticket's pointer is still live, so this run cannot "
+                 "distinguish a guard from a production path that simply never reaches the row");
+
+        // ...AND THE RESTART REALLY ARMED NOTHING, which is the whole of what
+        // separates this route from TEST-113's. A restart that dispatched would
+        // have overwritten the ticket and closed the route by accident.
+        QCOMPARE(out.checkedRowsAtRestart, 0);
+        QCOMPARE(out.readFileCallsAfterRestart, out.readFileCallsAfterDispatch);
+        QCOMPARE(out.progressTextAfterRestart, QStringLiteral("Downloaded 0 of 0 successfully"));
+        QVERIFY2(out.lateCompletionDelivered, "row 0's completion was never delivered, so nothing could go stale");
+
+        // ---- THE CRITERION. Reaching here is the ASan verdict; the rebuilt
+        //      list's cells are the second half - a completion belonging to a
+        //      list that no longer exists labels nothing in the one that replaced
+        //      it either.
+        QVERIFY2(out.survivedTheLateCompletion, "the run did not reach the end of the delivery");
+        QCOMPARE(out.statusesBefore, QStringList() << "" << "" << "");
+        QCOMPARE(out.statusesAfter, out.statusesBefore);
+        QCOMPARE(out.rowsRelabelled, QList<int>());
+        QCOMPARE(out.readFileCallsAfterLate, out.readFileCallsAfterRestart);
+    }
+
+    // -- TEST-118 (A3-R028-F2) -------------------------------------------
+    //
+    // THE SAME ROOT CAUSE WITH NO REFRESH IN THE ROUTE, so nothing is freed and
+    // nothing is unsafe: this is the SECOND-DRIVER harm the criterion names.
+    // Select all + Download; Abort; clear Select All; Download - the START branch
+    // dispatches nothing and its tail reports "Downloaded 0 of 0 successfully".
+    // The abandoned batch's completion still owns row 0, so it may label that
+    // transferred row Aborted. It must not advance the empty live batch's bar or
+    // re-drive it.
+    //
+    // THE BAR INVARIANT, and why it is spelled this way: `downloadtotal` is a
+    // private member, so the total is read from production's OWN report of it -
+    // the completion tail's "Downloaded %1 of %2 successfully" - and the bar's
+    // value is compared against that. A QProgressBar clamps to its maximum, and
+    // the maximum here is still 3 from batch one (the empty batch never resets
+    // it), so nothing but this comparison would notice.
+    //
+    // RED, against the tree before the DEC-036 amendment (measured, offscreen):
+    //   FAIL!  : ...the bar advanced to 1 for a batch whose total is 0
+    void aRestartThatArmsNothingMustNotLetAStaleCompletionDriveTheEmptyBatch()
+    {
+        const QString verdict = QStringLiteral("TEST-096 unparseable activity");
+
+        assertRestartArmsNothingControl(runRestartThatArmsNothing(NoRestartControl), verdict);
+        if (QTest::currentTestFailed())
+            return;
+
+        const RestartArmsNothingOutcome out = runRestartThatArmsNothing(RestartAfterUnchecking);
+        QVERIFY2(out.timedOut == false, "the run never came back");
+
+        // ---- THE PREMISES.
+        QCOMPARE(out.listCount, 3);
+        QCOMPARE(out.checkedRows, 3);
+        QVERIFY2(out.firstDispatchIssued, "row 0's read was never issued, so no ticket was ever armed");
+        QCOMPARE(out.readFileCallsAfterDispatch, 1);
+        QVERIFY2(out.sawAbortLabel, "the button was not labelled \"Abort\" while the batch ran");
+        QVERIFY2(out.abortTookTheAbortBranch, "downloadClicked() did not take its abort branch");
+        // Nothing was freed on this route - said explicitly, because it is the
+        // difference between this slot and TEST-117.
+        QVERIFY2(out.rowFreedByRefresh == false, "a row was freed on a route with no Refresh in it");
+        QCOMPARE(out.checkedRowsAtRestart, 0);
+        QCOMPARE(out.readFileCallsAfterRestart, out.readFileCallsAfterDispatch);
+        QVERIFY2(out.lateCompletionDelivered, "row 0's completion was never delivered, so nothing could go stale");
+
+        // The empty batch reached its tail and reported a total of ZERO. This is
+        // both the proof that the START branch ran and the value the invariant
+        // below is measured against.
+        QCOMPARE(out.progressTextAfterRestart, QStringLiteral("Downloaded 0 of 0 successfully"));
+        const int downloadtotal = 0;
+
+        // ---- THE CRITERION, half one: the bar invariant.
+        QCOMPARE(out.barBefore, 0);
+        QVERIFY2(out.barAfter <= downloadtotal,
+                 qPrintable(QStringLiteral("the bar advanced to %1 for a batch whose total is %2 - the abandoned "
+                                           "batch's completion counted work the live batch never did")
+                                .arg(out.barAfter)
+                                .arg(downloadtotal)));
+
+        // ---- half two: no row is labelled that the frame did not transfer. The
+        //      preserved operation labels its own row 0 Aborted; the empty live
+        //      batch transferred and labels nothing.
+        QCOMPARE(out.statusesBefore, QStringList() << "Downloading" << "" << "");
+        QCOMPARE(out.statusesAfter, QStringList() << "Aborted" << "" << "");
+        QCOMPARE(out.rowsRelabelled, QList<int>() << 0);
+
+        // ...and no second driver: the swallowed completion does not re-drive the
+        // loop over the empty batch.
+        QCOMPARE(out.readFileCallsAfterLate, out.readFileCallsAfterRestart);
+    }
+
+  private:
+    // =====================================================================
+    // REQ-028 / DEC-garmin-034 — WHO OWNS A ROW ACROSS A SUSPENSION.
+    // =====================================================================
+    //
+    // THE DEFECT. refreshClicked (CloudService.cpp:1516) deletes EVERY
+    // QTreeWidgetItem in all three lists (:1542/:1549/:1554 — takeChildren() then
+    // delete) and rebuilds them. Every frame that is suspended at that moment is
+    // holding either a raw `QTreeWidgetItem *curr` captured before the suspension
+    // (syncNext:2014, uploadNext:2682) or an INDEX into the list it no longer owns
+    // (`child(listindex-1)` in completedRead/failedRead/completedWrite). The
+    // Refresh button is never disabled — four references in the whole file, not
+    // one of them a setEnabled — and the code's own comment at :2126-2134 already says
+    // a Refresh is deliverable from inside openRideFile's nested loop.
+    //
+    // THE DELIVERY POINTS BELOW ARE THE ONES THIS FIXTURE DRIVES, one per guard,
+    // so that each guard has a run that dies when it is removed. They are NOT
+    // several spellings of one scenario: each names a different production frame,
+    // reached by a different route.
+    //
+    // WHAT THIS LIST IS NOT (A3-R028b-F8). It is NOT the closed set of places a
+    // Refresh can be delivered into, and it never was - it was written as one and
+    // that claim was false when it was written. A Refresh is deliverable from any
+    // nested event loop and from any QApplication::processEvents() in a frame that
+    // then carries on, and this file knows of these OTHER ones:
+    //
+    //   * the three completion slots' own TAIL processEvents(), below every guard
+    //     they have, which re-drives the loop - driven by TEST-119/TEST-120 in a
+    //     separate fixture (runRefreshInCompletionTail) because the delivery is
+    //     synchronous rather than inside a nested loop;
+    //   * the two DRIVER parse-failure branches' processEvents()
+    //     (CloudService.cpp:2428, :3184), which `continue` past it onto the
+    //     rebuilt list - TEST-122 and TEST-123, same reason, same other fixture;
+    //   * saveRide's own autoProcess (CloudService.cpp:3396 -> FixElevation's
+    //     untimed QEventLoop), reached from completedRead's ride-bearing branch -
+    //     InSaveRideAutoProcess below, which IS in this fixture;
+    //   * RESIDUAL, not driven anywhere in this suite: every other
+    //     QApplication::processEvents() in the file that is not followed by a
+    //     return (they are enumerated nowhere and nobody has counted them), and
+    //     Athlete::addRide / rideCache->save (CloudService.cpp:3407/:2527), which
+    //     this target stubs flat and whose production bodies have not been walked
+    //     for suspensions. A future wave that finds one must add it here.
+    //
+    // WHAT MAKES THE ROWS REALLY DIE. Nothing is faked: the run calls the
+    // dialog's own refreshClicked() slot from inside the nested loop, exactly as
+    // the button's connect (:1225) would. `rowsWereFreed` records the row-0 item
+    // POINTER either side of that call as an integer and never dereferences it,
+    // so "the items were replaced" is an observation rather than an assumption.
+    enum RefreshWhere {
+        InSyncNextOpen,       // syncNext's openRideFile (:2150), an UPLOAD sync row
+        InUploadNextOpen,     // uploadNext's openRideFile (:2714), the upload tab's twin
+        InUncompressOpen,     // completedRead's uncompressRide -> openRideFile (:363)
+        InReadFileLoop,       // store->readFile's own nested loop, ahead of failedRead
+        InWriteFileLoop,      // store->writeFile's own nested loop, ahead of completedWrite
+        InSaveRideAutoProcess // completedRead's saveRide -> autoProcess (:3267), TEST-121
+    };
+
+    struct RebuildSpec
+    {
+        RefreshWhere where = InSyncNextOpen;
+        bool abortFirst = false;              // the burst sets `aborted` BEFORE the Refresh
+        bool failTheRead = false;             // ...and does the read REFUSE, so failedRead is the slot?
+        bool restartInsteadOfRefresh = false; // abort + immediate restart inside a driver's parse
+    };
+
+    struct RebuildOutcome
+    {
+        bool timedOut = false;
+
+        // -- premises: did this run reach the situation it claims to test?
+        int listCount = 0;
+        int checkedRows = 0;
+        QString row0Action; // sync list column 6: "Upload" or "Download"
+        bool refreshDelivered = false;
+        bool sawAbortLabel = false;
+        bool abortTookTheAbortBranch = false;
+        bool restartDelivered = false;
+        int rowsBeforeRefresh = -1;
+        int rowsAfterRefresh = -1;
+        bool rowsWereFreed = false;
+
+        // -- the verdict
+        int writeFileCalls = 0;
+        int readFileCalls = 0;
+        int rideOpens = 0;
+        QStringList statuses;
+        int labelledRows = 0; // rows of the REBUILT list carrying any status text
+        QString progressText; // the completion tail's "...successfully" sentence
+        QString buttonTextAtEnd;
+        int progressValue = -1;
+        int stillCheckedAtEnd = -1;
+
+        // TEST-121 only: was saveRide's autoProcess seam actually reached?
+        int autoProcessCalls = 0;
+    };
+
+    // Two local activities, both PARSEABLE (.gcblock), so that row[0]'s own
+    // openRideFile is the delivery point criterion (a) names. Distinct times so
+    // the row order is well defined.
+    static QString rebuildLocalActivity(int i)
+    {
+        return QDate::currentDate().toString(QStringLiteral("yyyy_MM_dd")) +
+               QStringLiteral("_1%1_00_00.gcblock").arg(i);
+    }
+
+    // Two REMOTE activities, for the runs that need sync-list DOWNLOAD rows
+    // (:1691-1722). Parseable too: completedRead's uncompressRide hands the bytes
+    // to the same RideFileFactory dispatch on the suffix.
+    static QString rebuildRemoteActivity(int i)
+    {
+        return QDate::currentDate().toString(QStringLiteral("yyyy_MM_dd")) +
+               QStringLiteral("_2%1_00_00.gcblock").arg(i);
+    }
+
+    // One run:
+    //
+    //   QEventLoop (stands in for QApplication::exec())
+    //     -> queued call [event delivery]
+    //          -> owner QWidget                    [stands in for the tab]
+    //          -> CloudServiceSyncDialog, a child of it
+    //          -> Sync|Upload tab / Select all / Synchronize
+    //               -> syncNext|uploadNext -> ... -> A NESTED EVENT LOOP
+    //                    -> refreshClicked()   [the rows are deleted and rebuilt]
+    //                    -> the suspended frame RESUMES onto them
+    //
+    // Nothing here destroys the dialog or the store: every `self.isNull()` bail in
+    // the file stays false throughout, so no lifetime guard can be what produces
+    // any of these verdicts.
+    RebuildOutcome runListRebuild(const RebuildSpec& spec)
+    {
+        obs::reset();
+        rideopen::reset();
+        ridefail::reset();
+        rideopen::blockingMs = 5;
+        gcstub::autoProcessAction = nullptr;
+        gcstub::autoProcessCalls = 0;
+
+        // Which side of the sync list the batch runs on. The completion slots are
+        // reached through a DOWNLOAD row (readFile -> completedRead/failedRead);
+        // the two drivers through an UPLOAD row (openRideFile -> writeFile).
+        const bool remoteRows =
+            (spec.where == InUncompressOpen || spec.where == InReadFileLoop || spec.where == InSaveRideAutoProcess);
+
+        RebuildOutcome out;
+        QEventLoop appLoop;
+
+        const QDir activities = context->athlete->home->activities();
+        QDir().mkpath(activities.absolutePath());
+
+        QList<RideItem*> items;
+        QStringList paths;
+        if (!remoteRows) {
+            for (int i = 0; i < 2; i++) {
+                const QString name = rebuildLocalActivity(i);
+                QFile f(activities.absolutePath() + "/" + name);
+                f.open(QIODevice::WriteOnly);
+                f.write("gcblock");
+                f.close();
+                paths << f.fileName();
+
+                RideItem* item = new RideItem(nullptr, context);
+                item->fileName = name;
+                item->path = activities.absolutePath();
+                item->dateTime = QDateTime(QDate::currentDate(), QTime(10 + i, 0, 0));
+                item->planned = false; // the upload list skips planned rides (:1723)
+                items << item;
+            }
+        }
+        for (RideItem* item : items)
+            rideCache->rides().push_back(item);
+
+        QMetaObject::invokeMethod(
+            this,
+            [&]() {
+                QWidget* owner = new QWidget;
+
+                BlockingStore* store = new BlockingStore(context);
+                store->entryNames = remoteRows ? (QStringList() << rebuildRemoteActivity(0) << rebuildRemoteActivity(1))
+                                               : QStringList();
+                store->blockingMs = 5;
+                store->closeActionContext = qApp;
+                // GarminConnect's own setting (GarminConnect.cpp:102):
+                // uncompressRide's first guard rejects outright on the default.
+                store->downloadCompression = CloudService::none;
+                store->failRead = spec.failTheRead;
+                store->blockInWrite = (spec.where == InWriteFileLoop);
+                // A restart-inside-open run must leave the restarted row parked:
+                // its subject is whether the suspended OLD driver dispatches the
+                // same row as well, not the completion tail walking row[1].
+                store->completeWrite = !spec.restartInsteadOfRefresh;
+
+                CloudServiceSyncDialog* dialog = new CloudServiceSyncDialog(context, store);
+                dialog->setParent(owner, Qt::Dialog);
+                dialog->start();
+                dialog->open();
+                store->dialog = dialog;
+                store->dialogGuard = dialog;
+
+                QTreeWidget* list = nullptr;
+                if (QTabWidget* tabs = dialog->findChild<QTabWidget*>())
+                    tabs->setCurrentIndex(spec.where == InUploadNextOpen ? 1 : 2);
+                if (spec.where == InUploadNextOpen) {
+                    dialog->selectAllUpChanged(Qt::Checked);
+                    list = rideListWithHeader(dialog, QStringLiteral("File"));
+                } else {
+                    dialog->selectAllSyncChanged(Qt::Checked);
+                    list = rideListWithHeader(dialog, QStringLiteral("Source"));
+                }
+
+                if (list != nullptr) {
+                    QTreeWidgetItem* root = list->invisibleRootItem();
+                    out.listCount = root->childCount();
+                    for (int i = 0; i < out.listCount; i++) {
+                        QCheckBox* check = qobject_cast<QCheckBox*>(list->itemWidget(root->child(i), 0));
+                        if (check != nullptr && check->isChecked())
+                            out.checkedRows++;
+                    }
+                    if (out.listCount > 0)
+                        out.row0Action = root->child(0)->text(6);
+                }
+
+                QPushButton* button = pushButtonWithText(dialog, QStringLiteral("Synchronize"));
+                if (button == nullptr)
+                    button = pushButtonWithText(dialog, QStringLiteral("Upload"));
+
+                // THE USER'S REFRESH, delivered from inside whichever nested loop
+                // this run is about. `abortFirst` puts the Abort click in the same
+                // burst, ahead of it: that is the window REQ-027 widened from a
+                // read of the row to a WRITE (`curr->setText(7, "Aborted")`).
+                const auto refresh = [&, dialog, list]() {
+                    if (spec.restartInsteadOfRefresh) {
+                        out.sawAbortLabel = (pushButtonWithText(dialog, QStringLiteral("Abort")) != nullptr);
+                        dialog->downloadClicked(); // abort the suspended frame
+                        out.abortTookTheAbortBranch = (button != nullptr && button->text() != QStringLiteral("Abort"));
+                        dialog->downloadClicked(); // immediately start a new generation
+                        out.restartDelivered = (button != nullptr && button->text() == QStringLiteral("Abort"));
+                        return;
+                    }
+                    out.refreshDelivered = true;
+                    quintptr row0Before = 0;
+                    if (list != nullptr) {
+                        out.rowsBeforeRefresh = list->invisibleRootItem()->childCount();
+                        if (out.rowsBeforeRefresh > 0)
+                            row0Before = reinterpret_cast<quintptr>(list->invisibleRootItem()->child(0));
+                    }
+                    if (spec.abortFirst) {
+                        out.sawAbortLabel = (pushButtonWithText(dialog, QStringLiteral("Abort")) != nullptr);
+                        dialog->downloadClicked(); // :1920-1928, aborted = true
+                        out.abortTookTheAbortBranch = (button != nullptr && button->text() != QStringLiteral("Abort"));
+                    }
+
+                    dialog->refreshClicked(); // :1516 — every row deleted, then rebuilt
+
+                    if (list != nullptr) {
+                        out.rowsAfterRefresh = list->invisibleRootItem()->childCount();
+                        if (out.rowsAfterRefresh > 0)
+                            out.rowsWereFreed =
+                                (reinterpret_cast<quintptr>(list->invisibleRootItem()->child(0)) != row0Before);
+                    }
+                };
+
+                switch (spec.where) {
+                case InSyncNextOpen:
+                case InUploadNextOpen:
+                case InUncompressOpen:
+                    // BlockingRideFileReader queues the action and then runs its
+                    // nested loop, so it lands while the frame is suspended
+                    // between openRideFile and everything that uses the row.
+                    rideopen::blockingMs = 300;
+                    rideopen::action = refresh;
+                    break;
+                case InReadFileLoop:
+                case InWriteFileLoop:
+                    // BlockingStore::fireActionThenBlock does the same for the
+                    // store's own blockingDownload/blockingUpload loop.
+                    store->blockingMs = 300;
+                    store->closeAction = refresh;
+                    break;
+                case InSaveRideAutoProcess:
+                    // TEST-121 (A3-R028b-F1) — INSIDE saveRide, which the fixture
+                    // reaches through completedRead's RIDE-BEARING branch: the row
+                    // is remote and .gcblock, so uncompressRide really does yield a
+                    // RideFile and CloudService.cpp:2811 really does call saveRide.
+                    //
+                    // The suspension is supplied where production has one, at
+                    // DataProcessorFactory::autoProcess (:3396): FixElevation runs
+                    // an UNTIMED QEventLoop on an HTTPS round trip from inside
+                    // postProcess (FixElevation.cpp:288-300), gated on that
+                    // processor's configKeyAutomation being "Auto". The loop below
+                    // is that loop's SHAPE - queue the click, then exec() - and the
+                    // click is delivered BY the loop, exactly as in
+                    // BlockingRideFileReader, so nothing here relies on a
+                    // processEvents() noticing something.
+                    //
+                    // The reader must NOT block for this run: the delivery has to
+                    // land inside saveRide, not inside the uncompressRide above it.
+                    rideopen::blockingMs = 5;
+                    gcstub::autoProcessAction = [refresh]() {
+                        QMetaObject::invokeMethod(qApp, refresh, Qt::QueuedConnection);
+                        QEventLoop loop;
+                        QTimer timer;
+                        timer.setSingleShot(true);
+                        QObject::connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
+                        timer.start(300);
+                        loop.exec(QEventLoop::WaitForMoreEvents);
+                    };
+
+                    // saveRide REFUSES before it ever reaches autoProcess when the
+                    // target .json already exists and this box is clear
+                    // (CloudService.cpp:3386-3390) - and it does exist, because
+                    // TEST-110 runs the same branch earlier in this process and
+                    // CountingRideFile has no start time, so every run of it names
+                    // the same file. Ticked through the real widget, by its label,
+                    // so the run reaches the seam it is about. The premise below
+                    // MEASURES that rather than trusting it.
+                    for (QCheckBox* box : dialog->findChildren<QCheckBox*>())
+                        if (box->text().contains(QStringLiteral("Overwrite")))
+                            box->setChecked(true);
+                    break;
+                }
+
+                dialog->downloadClicked(); // -> syncNext() / uploadNext()
+
+                out.writeFileCalls = obs::writeFileCalls;
+                out.readFileCalls = obs::readFileCalls;
+                out.rideOpens = rideopen::opens;
+                if (list != nullptr) {
+                    QTreeWidgetItem* root = list->invisibleRootItem();
+                    out.stillCheckedAtEnd = 0;
+                    for (int i = 0; i < root->childCount(); i++) {
+                        const QString status = root->child(i)->text(7);
+                        out.statuses << status;
+                        if (!status.isEmpty())
+                            out.labelledRows++;
+                        QCheckBox* check = qobject_cast<QCheckBox*>(list->itemWidget(root->child(i), 0));
+                        if (check != nullptr && check->isChecked())
+                            out.stillCheckedAtEnd++;
+                    }
+                }
+                if (QProgressBar* bar = dialog->findChild<QProgressBar*>())
+                    out.progressValue = bar->value();
+                out.progressText = progressLabelText(dialog);
+                if (button != nullptr)
+                    out.buttonTextAtEnd = button->text();
+                out.autoProcessCalls = gcstub::autoProcessCalls;
+
+                QTimer::singleShot(100, qApp, [owner]() { delete owner; });
+                QTimer::singleShot(200, &appLoop, &QEventLoop::quit);
+
+                bool* timedOutp = &out.timedOut;
+                QTimer::singleShot(20000, &appLoop, [timedOutp]() {
+                    *timedOutp = true;
+                    QCoreApplication::exit(1);
+                });
+            },
+            Qt::QueuedConnection);
+
+        appLoop.exec();
+        for (int i = 0; i < 50; ++i)
+            QApplication::processEvents(QEventLoop::AllEvents, 5);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+        gcstub::autoProcessAction = nullptr;
+
+        for (RideItem* item : items) {
+            rideCache->rides().removeAll(item);
+            delete item->ride(false);
+            delete item;
+        }
+        for (const QString& p : paths)
+            QFile::remove(p);
+
+        return out;
+    }
+
+    // The shared premises for every run of the fixture above. A run that never
+    // reached the situation must fail LOUDLY rather than pass on nothing
+    // (LSN-047, LSN-050).
+    void assertRebuildPremises(const QString& where, const RebuildOutcome& out)
+    {
+        QVERIFY2(out.timedOut == false,
+                 qPrintable(where + QStringLiteral("the run never came back - a guard wedged it")));
+        QVERIFY2(out.listCount == 2,
+                 qPrintable(where + QStringLiteral("the list held %1 rows, not 2").arg(out.listCount)));
+        QVERIFY2(out.checkedRows == 2,
+                 qPrintable(where + QStringLiteral("%1 rows were checked, not 2").arg(out.checkedRows)));
+        QVERIFY2(out.refreshDelivered,
+                 qPrintable(where + QStringLiteral("the Refresh was never delivered into the nested loop - this run "
+                                                   "proves nothing")));
+        QVERIFY2(out.rowsBeforeRefresh == 2,
+                 qPrintable(where + QStringLiteral("the list held %1 rows when the Refresh arrived, not 2")
+                                        .arg(out.rowsBeforeRefresh)));
+        QVERIFY2(out.rowsAfterRefresh == 2,
+                 qPrintable(where + QStringLiteral("the Refresh rebuilt %1 rows, not 2 - the run would then be about "
+                                                   "an empty list rather than a REPLACED one")
+                                        .arg(out.rowsAfterRefresh)));
+        QVERIFY2(out.rowsWereFreed,
+                 qPrintable(where + QStringLiteral("row 0 is the SAME QTreeWidgetItem after the Refresh as before it, "
+                                                   "so nothing was freed and this run proves nothing")));
+    }
+
+  private slots:
+    // -- TEST-108 (REQ-028 (a), DEC-garmin-034) --------------------------
+    // NO ROW IS TOUCHED AFTER IT IS FREED.
+    //
+    // A Sync batch of two checked rows with a Refresh delivered from inside
+    // row[0]'s openRideFile nested loop - TEST-091's own delivery point - must
+    // complete with ZERO AddressSanitizer reports, and the same must hold when the
+    // burst ALSO sets `aborted` first.
+    //
+    // WHAT ASSERTS THE CRITERION. Not a QVERIFY: this target is built with
+    // -fsanitize=address and runs with halt_on_error=1, so the criterion's own
+    // measurement is the PROCESS - a report here aborts the binary and no later
+    // slot runs at all. The QVERIFYs below establish that the run reached the
+    // window (premises) and record what the guard did instead (verdict).
+    //
+    // RED, before the fix (PROBE-A's signature, re-measured by this slot):
+    //   ==NNNN==ERROR: AddressSanitizer: heap-use-after-free READ of size 8
+    //     #0 QTreeWidgetItem::text(int) const
+    //     #1 CloudServiceSyncDialog::syncNext() CloudService.cpp:2159
+    //    freed by thread T0 here: ... CloudServiceSyncDialog::refreshClicked()
+    //   ...and with abortFirst, a WRITE of size 8 at :2153 instead - the window
+    //   REQ-027 (DEC-032/035) widened from a read to a write.
+    void aRefreshInsideARowsOpenMustNotLeaveTheLoopHoldingThatRow()
+    {
+        // ---- (a) THE CRITERION'S OWN SCENARIO: syncNext, the sync tab.
+        {
+            RebuildSpec spec;
+            spec.where = InSyncNextOpen;
+            const RebuildOutcome out = runListRebuild(spec);
+            const QString where = QStringLiteral("syncNext: ");
+            assertRebuildPremises(where, out);
+            if (QTest::currentTestFailed())
+                return;
+            QCOMPARE(out.row0Action, QStringLiteral("Upload"));
+            QVERIFY2(out.rideOpens >= 1,
+                     qPrintable(where + QStringLiteral("row[0]'s ride file was never opened, so "
+                                                       "the Refresh had no nested loop to arrive in")));
+
+            // THE VERDICT. The frame stood down instead of resuming onto the row
+            // it no longer owns: it did not compress it, did not upload it, and
+            // did not label it. Reading the freed row's text(1) is what
+            // compressRide/writeFile (:2159/:2161) do, and it is the READ in
+            // PROBE-A's report.
+            QVERIFY2(out.writeFileCalls == 0,
+                     qPrintable(where + QStringLiteral("the loop resumed onto the freed row and uploaded it: "
+                                                       "store->writeFile was called %1 time(s)")
+                                            .arg(out.writeFileCalls)));
+        }
+
+        // ---- (a) THE SAME, WITH `aborted` SET FIRST. Two clicks in one burst:
+        //      Abort, then Refresh. Without the guard the resumed frame takes the
+        //      REQ-027 abort branch and WRITES "Aborted" into the freed row
+        //      (:2153) - so here the ASan report is the whole of the verdict, and
+        //      writeFileCalls would be 0 either way. Said plainly because an
+        //      assertion that cannot fail must not be read as coverage.
+        {
+            RebuildSpec spec;
+            spec.where = InSyncNextOpen;
+            spec.abortFirst = true;
+            const RebuildOutcome out = runListRebuild(spec);
+            const QString where = QStringLiteral("syncNext (abort first): ");
+            assertRebuildPremises(where, out);
+            if (QTest::currentTestFailed())
+                return;
+            QVERIFY2(out.sawAbortLabel,
+                     qPrintable(where + QStringLiteral("the button was not labelled \"Abort\" while the batch ran, so "
+                                                       "downloadClicked() could not have been the abort control")));
+            QVERIFY2(out.abortTookTheAbortBranch,
+                     qPrintable(where + QStringLiteral("downloadClicked() did not take its abort branch "
+                                                       "(CloudService.cpp:1920-1928), so `aborted` was never set")));
+            QVERIFY2(out.writeFileCalls == 0,
+                     qPrintable(where + QStringLiteral("store->writeFile was called %1 time(s) after an abort")
+                                            .arg(out.writeFileCalls)));
+        }
+
+        // ---- (a) THE UPLOAD TAB'S TWIN. uploadNext (:2553) captures `curr`
+        //      before the same openRideFile and uses it after, so it carries the
+        //      identical defect in a second function; without this run the guard
+        //      there is an UNCOVERED change.
+        {
+            RebuildSpec spec;
+            spec.where = InUploadNextOpen;
+            const RebuildOutcome out = runListRebuild(spec);
+            const QString where = QStringLiteral("uploadNext: ");
+            assertRebuildPremises(where, out);
+            if (QTest::currentTestFailed())
+                return;
+            QVERIFY2(out.rideOpens >= 1, qPrintable(where + QStringLiteral("row[0]'s ride file was never opened")));
+            QVERIFY2(out.writeFileCalls == 0,
+                     qPrintable(where + QStringLiteral("the loop resumed onto the freed row and uploaded it: "
+                                                       "store->writeFile was called %1 time(s)")
+                                            .arg(out.writeFileCalls)));
+        }
+    }
+
+    // -- TEST-129 extension (REQ-028, A3-R028c-F2) ----------------------
+    // The driver-side twin of the completion-tail rows: openRideFile admits one
+    // batch generation, then its nested loop aborts and immediately restarts.
+    // The restarted frame owns the one parked write. The old frame must compare
+    // its admitted generation before dispatching, or both frames upload row[0].
+    void aRestartInsideAParseableOpenMustStandTheOldDriverDown_data()
+    {
+        QTest::addColumn<int>("whereValue");
+        QTest::addColumn<QString>("driver");
+        QTest::newRow("syncNext") << int(InSyncNextOpen) << QStringLiteral("syncNext");
+        QTest::newRow("uploadNext") << int(InUploadNextOpen) << QStringLiteral("uploadNext");
+    }
+
+    void aRestartInsideAParseableOpenMustStandTheOldDriverDown()
+    {
+        QFETCH(int, whereValue);
+        QFETCH(QString, driver);
+        RebuildSpec spec;
+        spec.where = RefreshWhere(whereValue);
+        spec.restartInsteadOfRefresh = true;
+        const RebuildOutcome out = runListRebuild(spec);
+        const QString where = driver + QStringLiteral(": ");
+        QVERIFY2(!out.timedOut, qPrintable(where + QStringLiteral("the run never came back")));
+        QCOMPARE(out.listCount, 2);
+        QCOMPARE(out.checkedRows, 2);
+        QVERIFY2(out.rideOpens >= 2,
+                 qPrintable(where + QStringLiteral("the old and restarted frames did not both reach openRideFile")));
+        QVERIFY2(out.sawAbortLabel && out.abortTookTheAbortBranch && out.restartDelivered,
+                 qPrintable(where + QStringLiteral("the nested loop did not deliver Abort -> immediate restart")));
+        QVERIFY2(out.writeFileCalls == 1,
+                 qPrintable(where + QStringLiteral("the stale driver dispatched alongside the restarted one: "
+                                                   "%1 writes for one restarted row")
+                                        .arg(out.writeFileCalls)));
+    }
+
+    // -- TEST-109 (REQ-028 (b), DEC-garmin-034) --------------------------
+    // A DRIVER WHOSE LIST WAS REPLACED DOES NOT REPORT THE BATCH IT WAS RUNNING.
+    //
+    // After the same delivery, no completion tail is produced for the destroyed
+    // batch: progressLabel must not read "Processed 0 of 2 successfully", and
+    // context->athlete->rideCache->save() must be called ZERO times on that
+    // frame's behalf.
+    //
+    // HOW THE SECOND HALF IS ASSERTED, AND WHAT THAT IS WORTH. RideCache::save is
+    // a no-op stub in this target (stubs/ImportSeamStubs.cpp:394) and is NOT
+    // virtual (RideCache.h:161), so it can be neither counted nor overridden from
+    // here; counting it would mean instrumenting a stub file shared by three
+    // targets. It is asserted through its ONLY two call sites instead:
+    // CloudService.cpp calls it at exactly two places, syncNext's completion tail
+    // and downloadNext's, both UNCONDITIONAL and both one line after that tail
+    // writes its "...successfully" sentence (grep-verified: two hits in the file).
+    // So "no tail ran" and "save was not called by this frame" are the same
+    // statement here, and the tail is what is measured. Recorded as a PROXY,
+    // labelled as one (B-R027-05's discipline).
+    //
+    // The second run is not a spelling of the first: it is the OTHER frame that
+    // reports a batch, completedRead's tail (:2588), which re-drives the driver
+    // over the rebuilt list. Every rebuilt row is UNCHECKED, so the driver finds
+    // nothing to do and falls straight through to the completion tail - which is
+    // exactly how a Refresh mid-batch ends up announcing a batch that no longer
+    // exists (A3-R027-F3, PROBE-B).
+    //
+    // RED, before the fix:
+    //   syncNext run: the process aborts first, on TEST-108's use-after-free.
+    //   completedRead run:
+    //     FAIL!  : ... completedRead: the destroyed batch still reported itself:
+    //              progressLabel reads "Processed 1 of 2 successfully"
+    void aDriverWhoseListWasReplacedMustNotReportItsBatch()
+    {
+        struct Run
+        {
+            RefreshWhere where;
+            const char* what;
+        };
+        const Run runs[] = {{InSyncNextOpen, "syncNext"}, {InUncompressOpen, "completedRead"}};
+
+        for (const Run& run : runs) {
+            RebuildSpec spec;
+            spec.where = run.where;
+            const RebuildOutcome out = runListRebuild(spec);
+            const QString where = QStringLiteral("%1: ").arg(run.what);
+            assertRebuildPremises(where, out);
+            if (QTest::currentTestFailed())
+                return;
+
+            // ---- (b) THE CRITERION'S OWN ASSERTION. The tail's sentence is the
+            //      one string only the tail writes, and progressLabelText() reads
+            //      back empty unless it is there. Asserted EMPTY rather than
+            //      merely "not that string": the dead batch's `successful` is not
+            //      always 0 - on the completedRead run the stale slot has already
+            //      counted a save - so pinning only the literal wording would let
+            //      "Processed 1 of 2 successfully" through, which is the same
+            //      defect with a different number in it.
+            QVERIFY2(
+                out.progressText.isEmpty(),
+                qPrintable(where + QStringLiteral("the destroyed batch still reported itself: progressLabel reads "
+                                                  "\"%1\" (the criterion names \"Processed 0 of 2 successfully\"; any "
+                                                  "tail sentence at all is one batch too many, and one line below it "
+                                                  "the tail calls rideCache->save())")
+                                       .arg(out.progressText)));
+
+            // ...and the tail's other side effect, which cannot be produced any
+            // other way while a batch is running: tabChanged (:1825) returns early
+            // while the button reads "Abort", so only the completion tail can have
+            // relabelled it.
+            QVERIFY2(
+                out.buttonTextAtEnd == QStringLiteral("Abort"),
+                qPrintable(where + QStringLiteral("the completion tail ran for the destroyed batch: the button reads "
+                                                  "\"%1\" rather than \"Abort\"")
+                                       .arg(out.buttonTextAtEnd)));
+
+            // ...and no row of the list that REPLACED them was labelled by a
+            // transfer that was never about it.
+            QVERIFY2(
+                out.labelledRows == 0,
+                qPrintable(where + QStringLiteral("%1 row(s) of the REBUILT list carry a status the batch that owned "
+                                                  "them never gave them: [%2]")
+                                       .arg(out.labelledRows)
+                                       .arg(out.statuses.join(QStringLiteral("|")))));
+        }
+    }
+
+    // -- TEST-111 (REQ-028 (c), DEC-garmin-034) --------------------------
+    // NO ROW IS LABELLED THAT THE FRAME DID NOT TRANSFER.
+    //
+    // WHAT THIS SLOT COVERS, AND WHAT IT DOES NOT — stated first, because the
+    // criterion names a scenario this slot does NOT drive.
+    //
+    // Criterion (c) reads: "Across a batch that is aborted and immediately
+    // restarted with the aborted batch's completion arriving LATE, every non-empty
+    // status cell names the outcome of a transfer that actually happened to that
+    // row, and the reader is invoked exactly once per checked row."
+    //
+    // THAT SCENARIO IS NOT DRIVEN HERE - and, AMENDED 2026-08-18, it is no longer
+    // OPEN either. What this paragraph used to say was: DEC-034 cannot close it,
+    // because on the abort+restart route TWO transfers are outstanding at once -
+    // the aborted batch's, still in flight, and the restarted batch's, dispatched
+    // before the first one completes - while the completion carries no identity of
+    // its own (completedWrite carries no payload at all; completedRead's `name` is
+    // documented as possibly not the name that was asked for). A single shared
+    // snapshot, of listGeneration or of batchGeneration, is overwritten by the
+    // restarted batch's own dispatch before the stale completion arrives, so it
+    // reads EQUAL and no counter of that shape can tell the two apart. All of that
+    // was true and remains the reason DEC-034 alone was not enough.
+    //
+    // DEC-garmin-036 supplied what it named as the requirement - per-transfer
+    // identity - as an in-flight ticket armed at each dispatch and consumed at
+    // each completion slot. That half of (c) is now CLOSED and is asserted by
+    // TEST-113 (reads, both channels), TEST-115 (writes, including the same-row
+    // case) and TEST-116 (the swallowed buffer), with TEST-114 as the positive
+    // control. TEST-107 no longer measures it: its P2 half moved into TEST-113
+    // when the numbers stopped being a defect and became a rule.
+    //
+    // WHAT IS DRIVEN HERE is the OTHER way a completion slot labels a row it never
+    // transferred, which is DEC-034's alone to close: the user ABORTS and then hits
+    // REFRESH - the obvious pair of clicks, in the obvious order - while a transfer
+    // is still in flight. The list is rebuilt underneath the slot. Before DEC-036
+    // that cost a MISLABEL through `child(listindex-1)` or a null dereference when
+    // the rebuild came back shorter; since DEC-036 the slot holds a POINTER to an
+    // item the rebuild has FREED, so it would cost a use-after-free instead. The
+    // guard is the same guard and this run is still the only thing that kills it -
+    // what it prevents just got worse. All THREE completion slots carry that entry
+    // branch, so all three are run.
+    //
+    // THE HAZARD THIS FIXTURE BUYS AND THE ONE IT GIVES UP (B-R027-07). The rows
+    // are .gcblock, not .gcfail: the reader runs a nested QEventLoop, which is
+    // what makes a Refresh deliverable from inside a parse at all and what lets
+    // the download half reach saveRide with a real RideFile. The price is that
+    // this fixture cannot claim anything about event ORDERING inside that loop -
+    // a .gcfail row pumps no events and would be the safer choice for a timing
+    // claim, and TEST-107 uses it for exactly that reason. No assertion here rests
+    // on when something was delivered relative to something else; each rests on
+    // the end state of a list.
+    //
+    // RED, before the fix:
+    //   FAIL!  : ... completedRead: a completion labelled 1 row(s) of a list that
+    //            was rebuilt under it: [Aborted|]
+    void noRowIsLabelledByACompletionThatWasNeverAboutIt()
+    {
+        struct Run
+        {
+            RefreshWhere where;
+            bool failTheRead;
+            const char* what;
+        };
+        const Run runs[] = {{InReadFileLoop, false, "completedRead"},
+                            {InReadFileLoop, true, "failedRead"},
+                            {InWriteFileLoop, false, "completedWrite"}};
+
+        for (const Run& run : runs) {
+            RebuildSpec spec;
+            spec.where = run.where;
+            spec.failTheRead = run.failTheRead;
+            spec.abortFirst = true; // abort, THEN refresh, both mid-transfer
+            const RebuildOutcome out = runListRebuild(spec);
+            const QString where = QStringLiteral("%1: ").arg(run.what);
+            assertRebuildPremises(where, out);
+            if (QTest::currentTestFailed())
+                return;
+            QVERIFY2(out.sawAbortLabel,
+                     qPrintable(where + QStringLiteral("the button was not labelled \"Abort\" while the transfer was "
+                                                       "in flight, so downloadClicked() could not have been the abort "
+                                                       "control")));
+            QVERIFY2(out.abortTookTheAbortBranch,
+                     qPrintable(where + QStringLiteral("downloadClicked() did not take its abort branch "
+                                                       "(CloudService.cpp:1920-1928), so the slot below would not "
+                                                       "have taken its `aborted` entry branch at all")));
+
+            // ---- THE POINT. The rebuilt rows belong to nothing: no transfer has
+            //      happened to any of them, so ANY status text on any of them is a
+            //      verdict about a row the frame never transferred.
+            QVERIFY2(
+                out.labelledRows == 0,
+                qPrintable(where + QStringLiteral("a completion labelled %1 row(s) of a list that was rebuilt under "
+                                                  "it: [%2]")
+                                       .arg(out.labelledRows)
+                                       .arg(out.statuses.join(QStringLiteral("|")))));
+        }
+    }
+
+    // -- TEST-121 (A3-R028b-F1, REQ-028 (a), DEC-garmin-034) -------------
+    // NO ROW IS TOUCHED AFTER IT IS FREED — INCLUDING ACROSS saveRide.
+    //
+    // THE WINDOW, AND WHY IT IS NOT ONE OF THE OTHERS. completedRead proves the
+    // row is still live at CloudService.cpp:2820 and then calls saveRide at
+    // :2910 - and saveRide SUSPENDS. Its second statement of substance is
+    // DataProcessorFactory::autoProcess(ride, "Auto", "Import") (:3396), which
+    // runs every processor whose configKeyAutomation is "Auto"
+    // (DataProcessor.cpp:220-221); FixElevation's postProcess then posts to
+    // api.open-elevation.com and waits in a local QEventLoop with NO TIMEOUT
+    // (FixElevation.cpp:288-300), and FixPyDataProcessor takes a second route
+    // into a nested loop through FixPyRunner (FixPyDataProcessor.cpp:39 ->
+    // FixPyRunner.cpp:40-48). A Refresh delivered there FREES `row`, and the very
+    // next thing completedRead did was `row->setText(col, ...)` - THREE WRITES
+    // ABOVE the first lifetime re-check, which used to be the self.isNull()
+    // below the tail's processEvents(). Post-fix those writes are at
+    // :2921/:2924, below the two bails this wave added at :2917/:2918.
+    //
+    // "Auto" is not the default ("Manual" is), so this is a SUPPORTED
+    // CONFIGURATION rather than the out-of-the-box one. Criterion (a) - "no row
+    // is touched after it is freed" - admits no configuration exemption, so the
+    // window counts.
+    //
+    // WHY THE SUITE WAS GREEN WITHOUT THIS SLOT, said plainly. This target stubs
+    // the entire downstream of saveRide flat: autoProcess, setLinkedDefaults,
+    // RideCache::save and Athlete::addRide are all no-ops in
+    // stubs/ImportSeamStubs.cpp. The .gcblock fixture DID drive the ride-bearing
+    // branch, so the coverage was real - it covered a saveRide with the
+    // suspension surgically removed. This slot puts the suspension back, at the
+    // one seam it can be put back at, and nowhere else (LSN-056: that stub file is
+    // compiled into testGarminConnectImport, testGarminConnectReadFailedConsumer
+    // and this target; the seam is an empty std::function unless armed here, and
+    // all three targets are built and run).
+    //
+    // WHAT ASSERTS THE CRITERION. Not a QVERIFY: this target is built with
+    // -fsanitize=address and runs with halt_on_error=1, so the criterion's own
+    // measurement is the PROCESS - a report here aborts the binary and no later
+    // slot runs at all. The QVERIFYs below establish that the run reached the
+    // window and record what the guard did instead.
+    //
+    // RED, before the fix:
+    //   ==NNNN==ERROR: AddressSanitizer: heap-use-after-free WRITE of size 8
+    //     #0 QTreeWidgetItem::setText(int, QString const&)
+    //     #1 CloudServiceSyncDialog::completedRead() CloudService.cpp:2812
+    //     (pre-fix numbering; measured verbatim under BOTH QPA backends)
+    //    freed by thread T0 here: ... CloudServiceSyncDialog::refreshClicked()
+    void aRefreshInsideSaveRideMustNotLeaveTheSlotHoldingThatRow()
+    {
+        RebuildSpec spec;
+        spec.where = InSaveRideAutoProcess;
+        const RebuildOutcome out = runListRebuild(spec);
+        const QString where = QStringLiteral("completedRead/saveRide: ");
+        assertRebuildPremises(where, out);
+        if (QTest::currentTestFailed())
+            return;
+
+        // ---- THE PREMISE THAT MAKES THIS SLOT ABOUT saveRide AT ALL. Without
+        //      this the run could have refreshed from anywhere and proved nothing
+        //      about :2811. The seam is only reached from inside saveRide, and
+        //      saveRide is only reached from completedRead's ride-bearing branch.
+        QVERIFY2(
+            out.autoProcessCalls >= 1,
+            qPrintable(where + QStringLiteral("autoProcess was called %1 time(s) - saveRide never got past its "
+                                              "\"File exists\" refusal (CloudService.cpp:3386-3390) or the "
+                                              "ride-bearing branch at :2839 was never taken, so the Refresh was not "
+                                              "delivered inside saveRide and this run proves nothing")
+                                   .arg(out.autoProcessCalls)));
+        QVERIFY2(out.rideOpens >= 1,
+                 qPrintable(where + QStringLiteral("uncompressRide never parsed a ride, so :2811 was never reached")));
+
+        // ---- THE VERDICT the guard leaves behind. The row the slot was about is
+        //      gone; no row of the list that REPLACED it wears a status, and the
+        //      slot's tail did not re-drive the loop into the completion sentence
+        //      (one line below which, in syncNext's tail, is rideCache->save()).
+        QVERIFY2(
+            out.labelledRows == 0,
+            qPrintable(where + QStringLiteral("%1 row(s) of the REBUILT list carry a status the batch that owned them "
+                                              "never gave them: [%2]")
+                                   .arg(out.labelledRows)
+                                   .arg(out.statuses.join(QStringLiteral("|")))));
+        QVERIFY2(
+            out.progressText.isEmpty(),
+            qPrintable(where + QStringLiteral("the destroyed batch still reported itself: progressLabel reads \"%1\"")
+                                   .arg(out.progressText)));
+        QVERIFY2(out.buttonTextAtEnd == QStringLiteral("Abort"),
+                 qPrintable(where + QStringLiteral("the completion tail ran for the destroyed batch: the button reads "
+                                                   "\"%1\" rather than \"Abort\"")
+                                        .arg(out.buttonTextAtEnd)));
+    }
+
+    // -- TEST-110 (REQ-028 (d), DEC-garmin-034) --------------------------
+    // THE DIALOG REMAINS USABLE — THE POSITIVE CONTROL.
+    //
+    // A Refresh performed while NO batch is running must repopulate all three
+    // lists normally, and a subsequent batch must reach its completion tail.
+    // Without this clause every criterion above is satisfiable by refusing to do
+    // anything at all (LSN-050): a guard that stood every driver down
+    // unconditionally, or a refreshClicked that returned at the top, would leave
+    // TEST-108/109/111 green.
+    //
+    // It is also the ONE run that proves the counter is compared rather than
+    // merely bumped in the right direction: the idle Refresh bumps
+    // listGeneration, downloadClicked snapshots it AFTER that, and the batch then
+    // runs to its tail through all four guarded frames - syncNext, the two
+    // completion slots the sync tab uses, and the tail itself.
+    void anIdleRefreshLeavesTheDialogFullyUsable()
+    {
+        obs::reset();
+        rideopen::reset();
+        ridefail::reset();
+        rideopen::blockingMs = 5;
+
+        bool timedOut = false;
+        int downRows = 0, upRows = 0, syncRows = 0;
+        int checkedRows = 0, writeFileCalls = 0, readFileCalls = 0;
+        QString progressText, buttonTextAtEnd;
+        int progressValue = -1, progressMax = -1, stillCheckedAtEnd = -1;
+        int labelledRows = 0;
+        QStringList statuses;
+
+        const QDir activities = context->athlete->home->activities();
+        QDir().mkpath(activities.absolutePath());
+
+        QList<RideItem*> items;
+        QStringList paths;
+        for (int i = 0; i < 2; i++) {
+            const QString name = rebuildLocalActivity(i);
+            QFile f(activities.absolutePath() + "/" + name);
+            f.open(QIODevice::WriteOnly);
+            f.write("gcblock");
+            f.close();
+            paths << f.fileName();
+
+            RideItem* item = new RideItem(nullptr, context);
+            item->fileName = name;
+            item->path = activities.absolutePath();
+            item->dateTime = QDateTime(QDate::currentDate(), QTime(10 + i, 0, 0));
+            item->planned = false;
+            items << item;
+        }
+        for (RideItem* item : items)
+            rideCache->rides().push_back(item);
+
+        QEventLoop appLoop;
+        QMetaObject::invokeMethod(
+            this,
+            [&]() {
+                QWidget* owner = new QWidget;
+
+                BlockingStore* store = new BlockingStore(context);
+                // Both halves populated: two REMOTE activities (the download list,
+                // and sync "Download" rows) and two LOCAL ones (the upload list,
+                // and sync "Upload" rows), so "all three lists" is a real claim.
+                store->entryNames = QStringList() << rebuildRemoteActivity(0) << rebuildRemoteActivity(1);
+                store->blockingMs = 5;
+                store->closeActionContext = qApp;
+                store->downloadCompression = CloudService::none;
+                store->completeWrite = true;
+
+                CloudServiceSyncDialog* dialog = new CloudServiceSyncDialog(context, store);
+                dialog->setParent(owner, Qt::Dialog);
+                dialog->start();
+                dialog->open();
+                store->dialog = dialog;
+                store->dialogGuard = dialog;
+
+                // ---- THE IDLE REFRESH. No batch is running: `downloading` is
+                //      false and nothing is suspended anywhere.
+                dialog->refreshClicked();
+
+                QTreeWidget* down = rideListWithHeader(dialog, QStringLiteral("Workout Name"));
+                QTreeWidget* up = rideListWithHeader(dialog, QStringLiteral("File"));
+                QTreeWidget* sync = rideListWithHeader(dialog, QStringLiteral("Source"));
+                if (down != nullptr)
+                    downRows = down->invisibleRootItem()->childCount();
+                if (up != nullptr)
+                    upRows = up->invisibleRootItem()->childCount();
+                if (sync != nullptr)
+                    syncRows = sync->invisibleRootItem()->childCount();
+
+                // ---- ...AND A BATCH BEHIND IT, on the rebuilt rows.
+                if (QTabWidget* tabs = dialog->findChild<QTabWidget*>())
+                    tabs->setCurrentIndex(2);
+                dialog->selectAllSyncChanged(Qt::Checked);
+                if (sync != nullptr)
+                    for (int i = 0; i < sync->invisibleRootItem()->childCount(); i++) {
+                        QCheckBox* check =
+                            qobject_cast<QCheckBox*>(sync->itemWidget(sync->invisibleRootItem()->child(i), 0));
+                        if (check != nullptr && check->isChecked())
+                            checkedRows++;
+                    }
+
+                QPushButton* button = pushButtonWithText(dialog, QStringLiteral("Synchronize"));
+
+                dialog->downloadClicked();
+
+                // The batch drives itself to completion through queued
+                // completions, so let them all be delivered.
+                for (int i = 0; i < 200 && (progressText.isEmpty()); ++i) {
+                    QApplication::processEvents(QEventLoop::AllEvents, 5);
+                    progressText = progressLabelText(dialog);
+                }
+
+                writeFileCalls = obs::writeFileCalls;
+                readFileCalls = obs::readFileCalls;
+                if (sync != nullptr) {
+                    QTreeWidgetItem* root = sync->invisibleRootItem();
+                    stillCheckedAtEnd = 0;
+                    for (int i = 0; i < root->childCount(); i++) {
+                        const QString status = root->child(i)->text(7);
+                        statuses << status;
+                        if (!status.isEmpty())
+                            labelledRows++;
+                        QCheckBox* check = qobject_cast<QCheckBox*>(sync->itemWidget(root->child(i), 0));
+                        if (check != nullptr && check->isChecked())
+                            stillCheckedAtEnd++;
+                    }
+                }
+                if (QProgressBar* bar = dialog->findChild<QProgressBar*>()) {
+                    progressValue = bar->value();
+                    progressMax = bar->maximum();
+                }
+                if (button != nullptr)
+                    buttonTextAtEnd = button->text();
+
+                QTimer::singleShot(100, qApp, [owner]() { delete owner; });
+                QTimer::singleShot(200, &appLoop, &QEventLoop::quit);
+                QTimer::singleShot(20000, &appLoop, [&timedOut]() {
+                    timedOut = true;
+                    QCoreApplication::exit(1);
+                });
+            },
+            Qt::QueuedConnection);
+
+        appLoop.exec();
+        for (int i = 0; i < 50; ++i)
+            QApplication::processEvents(QEventLoop::AllEvents, 5);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+        for (RideItem* item : items) {
+            rideCache->rides().removeAll(item);
+            delete item->ride(false);
+            delete item;
+        }
+        for (const QString& p : paths)
+            QFile::remove(p);
+
+        QVERIFY2(timedOut == false, "the run never came back");
+
+        // ---- (d) ALL THREE LISTS REPOPULATED. Two remote, two local, and the
+        //      sync list is the union - the shape refreshClicked builds at
+        //      :1691 (Download rows) and :1783 (Upload rows).
+        QVERIFY2(downRows == 2, qPrintable(QStringLiteral("the download list holds %1 rows after an idle Refresh, "
+                                                          "not 2")
+                                               .arg(downRows)));
+        QVERIFY2(upRows == 2,
+                 qPrintable(QStringLiteral("the upload list holds %1 rows after an idle Refresh, not 2").arg(upRows)));
+        QVERIFY2(syncRows == 4,
+                 qPrintable(QStringLiteral("the sync list holds %1 rows after an idle Refresh, not 4").arg(syncRows)));
+        QCOMPARE(checkedRows, 4);
+
+        // ---- (d) ...AND THE BATCH BEHIND IT REACHES ITS COMPLETION TAIL. Every
+        //      row was transferred (two downloads, two uploads), every row is
+        //      labelled, the bar is at maximum and the tail relabelled the button
+        //      and cleared every checkbox.
+        QCOMPARE(readFileCalls, 2);
+        QCOMPARE(writeFileCalls, 2);
+        QVERIFY2(labelledRows == 4, qPrintable(QStringLiteral("%1 of 4 rows were labelled: [%2]")
+                                                   .arg(labelledRows)
+                                                   .arg(statuses.join(QStringLiteral("|")))));
+        QVERIFY2(progressText == QStringLiteral("Processed 4 of 4 successfully"),
+                 qPrintable(QStringLiteral("the batch after an idle Refresh did not reach its completion tail: "
+                                           "progressLabel reads \"%1\"")
+                                .arg(progressText)));
+        QCOMPARE(buttonTextAtEnd, QStringLiteral("Synchronize"));
+        QCOMPARE(stillCheckedAtEnd, 0);
+        QCOMPARE(progressValue, 4);
+        QCOMPARE(progressMax, 4);
+    }
+
+  private:
+    // =====================================================================
+    // TEST-119 / TEST-120 (A3-R028-F5, REQ-028 (b), DEC-garmin-034) —
+    // THE REFRESH DELIVERED BY THE COMPLETION TAIL'S OWN processEvents().
+    // =====================================================================
+    //
+    // THE WINDOW, AND WHY IT IS NOT ANY OF THE FIVE ABOVE. Each of the three
+    // completion slots ends the same way:
+    //
+    //     progressBar->setValue(++downloadcounter);   // ...the row is labelled
+    //     QApplication::processEvents();              // <-- THE DELIVERY
+    //     if (self.isNull()) return;
+    //     if (aborted == true) return;
+    //     if (sync) syncNext(); else downloadNext();  // <-- THE RE-DRIVE
+    //
+    // Every guard REQ-028 installed sits UPSTREAM of that processEvents(): the
+    // three DEC-034 compares are at the slots' entries (and, in completedRead,
+    // after uncompressRide), and the DEC-036 ticket is CONSUMED - `inflight.armed
+    // = false` - above them too, so the amendment's invalidation is already a
+    // no-op by the time the tail runs. NOTHING re-reads listGeneration between the
+    // delivery and the re-drive. This is therefore a SIXTH delivery point, not a
+    // sixth spelling of the five in runListRebuild: those all land while a frame
+    // is SUSPENDED inside a nested loop it entered; this one lands in the frame's
+    // own last statement, after every guard it has.
+    //
+    // WHAT THE RE-DRIVE THEN DOES. downloadNext carries no listGeneration guard of
+    // any kind; syncNext and uploadNext snapshot `listGeneration` into a local at
+    // LOOP ENTRY, which on this route is AFTER the Refresh, so the snapshot reads
+    // the NEW generation and every compare below it is equal. All three therefore
+    // walk the REBUILT list, whose rows are all unchecked (refreshClicked builds
+    // each row's QCheckBox fresh and never checks it), find nothing to do, and
+    // fall straight through to the completion tail - which writes the
+    // "...successfully" sentence and calls context->athlete->rideCache->save() for
+    // a batch that no longer exists. That is A3-R027-F3 / PROBE-B's harm reached
+    // by a different route.
+    //
+    // HOW THE DELIVERY IS MADE, AND WHY IT IS NOT A TIMING BET. insideframe (see
+    // its block comment) is used exactly as TEST-102 uses it: stage 1 is
+    // production's own `progressBar->setValue(++downloadcounter)`, a direct
+    // connection, which anchors us INSIDE the completion slot and strictly below
+    // its last DEC-034 compare; stage 2 is the dispatcher's awake(), emitted as
+    // the first statement of the very next processEvents() on this thread. Between
+    // those two points production runs a QTreeWidgetItem::setText and (on
+    // completedWrite) a `successful++` and nothing that pumps events, so "the next
+    // processEvents()" is the tail's own. The two premises below MEASURE that
+    // rather than assert it: the bar has already counted row 0 when the Refresh
+    // runs (so we are past the compares) and no second transfer has been issued
+    // yet (so we are above the re-drive).
+    //
+    // HOW rideCache->save() IS ASSERTED - A PROXY, LABELLED AS ONE, and it is
+    // TEST-109's proxy rather than a second apparatus. RideCache::save is a no-op
+    // stub in this target (stubs/ImportSeamStubs.cpp:394) and is NOT virtual, so
+    // it can be neither counted nor overridden from here without instrumenting a
+    // stub file shared by three targets (LSN-056). CloudService.cpp calls it at
+    // exactly two places - syncNext's completion tail and downloadNext's - both
+    // unconditional and both one line after that tail writes its "...successfully"
+    // sentence. So "no tail ran" and "save was not called on this frame's behalf"
+    // are the same statement here, and the sentence is what is measured.
+    // uploadNext's tail calls no save at all, which is why the upload arm's
+    // verdict is the tail SENTENCE and the button, not save.
+    enum TailRoute {
+        TailDownloadTab, // completedRead's tail -> downloadNext()  (no guard at all)
+        TailSyncTab,     // completedRead's tail -> syncNext()      (post-Refresh snapshot)
+        TailUploadTab    // completedWrite's tail -> uploadNext()   (post-Refresh snapshot)
+    };
+
+    struct TailRefreshOutcome
+    {
+        bool timedOut = false;
+
+        // -- premises: did this run reach the window it claims to test?
+        int listCount = 0;
+        int checkedRows = 0;
+        bool refreshDelivered = false;
+        int transfersAtRefresh = -1; // readFile/writeFile calls when the Refresh ran
+        int barValueAtRefresh = -1;  // ...and what the bar had counted by then
+        int rowsBeforeRefresh = -1;
+        int rowsAfterRefresh = -1;
+        bool rowsWereFreed = false;
+
+        // -- the verdict
+        int transfersAtEnd = 0;
+        QString progressText; // the completion tail's "...successfully" sentence
+        QString buttonTextAtEnd;
+        int labelledRows = 0;
+        QStringList statuses;
+    };
+
+    TailRefreshOutcome runRefreshInCompletionTail(TailRoute route)
+    {
+        obs::reset();
+        rideopen::reset();
+        ridefail::reset();
+        rideopen::blockingMs = 5;
+
+        TailRefreshOutcome out;
+        QEventLoop appLoop;
+
+        // The download and sync arms run on REMOTE rows that cannot be parsed
+        // (.gcfail, TEST-102's reason: FailingRideFileReader runs no nested loop of
+        // its own, so nothing between setValue and the tail's processEvents pumps
+        // events). The upload arm runs on LOCAL rides that CAN be parsed, because
+        // uploadNext has to reach writeFile for completedWrite to exist at all.
+        const bool localRides = (route == TailUploadTab);
+
+        const QDir activities = context->athlete->home->activities();
+        QDir().mkpath(activities.absolutePath());
+
+        QList<RideItem*> items;
+        QStringList paths;
+        if (localRides) {
+            for (int i = 0; i < 2; i++) {
+                const QString name = rebuildLocalActivity(i);
+                QFile f(activities.absolutePath() + "/" + name);
+                f.open(QIODevice::WriteOnly);
+                f.write("gcblock");
+                f.close();
+                paths << f.fileName();
+
+                RideItem* item = new RideItem(nullptr, context);
+                item->fileName = name;
+                item->path = activities.absolutePath();
+                item->dateTime = QDateTime(QDate::currentDate(), QTime(10 + i, 0, 0));
+                item->planned = false;
+                items << item;
+            }
+        }
+        for (RideItem* item : items)
+            rideCache->rides().push_back(item);
+
+        QMetaObject::invokeMethod(
+            this,
+            [&]() {
+                QWidget* owner = new QWidget;
+
+                BlockingStore* store = new BlockingStore(context);
+                store->entryNames = localRides ? QStringList() : threeUnparseableRemoteActivities();
+                store->blockingMs = 5;
+                store->closeActionContext = qApp;
+                // GarminConnect's own setting (GarminConnect.cpp:102):
+                // uncompressRide's first guard rejects outright on the default.
+                store->downloadCompression = CloudService::none;
+                store->completeRead = true;
+                store->completeWrite = true;
+
+                CloudServiceSyncDialog* dialog = new CloudServiceSyncDialog(context, store);
+                dialog->setParent(owner, Qt::Dialog);
+                dialog->start();
+                dialog->open();
+                store->dialog = dialog;
+                store->dialogGuard = dialog;
+
+                const int tabIndex = (route == TailDownloadTab) ? 0 : (route == TailUploadTab ? 1 : 2);
+                if (QTabWidget* tabs = dialog->findChild<QTabWidget*>())
+                    tabs->setCurrentIndex(tabIndex);
+
+                QTreeWidget* list = nullptr;
+                int statusColumn = 5;
+                QString buttonLabel;
+                switch (route) {
+                case TailDownloadTab:
+                    dialog->selectAllChanged(Qt::Checked);
+                    list = rideListWithHeader(dialog, QStringLiteral("Workout Name"));
+                    statusColumn = 5; // the download list's Status header (:1104-1106)
+                    buttonLabel = QStringLiteral("Download");
+                    break;
+                case TailUploadTab:
+                    dialog->selectAllUpChanged(Qt::Checked);
+                    list = rideListWithHeader(dialog, QStringLiteral("File"));
+                    statusColumn = 7;
+                    buttonLabel = QStringLiteral("Upload");
+                    break;
+                case TailSyncTab:
+                    dialog->selectAllSyncChanged(Qt::Checked);
+                    list = rideListWithHeader(dialog, QStringLiteral("Source"));
+                    statusColumn = 7; // the sync list's Status header (:1172)
+                    buttonLabel = QStringLiteral("Synchronize");
+                    break;
+                }
+
+                if (list != nullptr) {
+                    QTreeWidgetItem* root = list->invisibleRootItem();
+                    out.listCount = root->childCount();
+                    for (int i = 0; i < out.listCount; i++) {
+                        QCheckBox* check = qobject_cast<QCheckBox*>(list->itemWidget(root->child(i), 0));
+                        if (check != nullptr && check->isChecked())
+                            out.checkedRows++;
+                    }
+                }
+
+                QPushButton* button = pushButtonWithText(dialog, buttonLabel);
+
+                // THE USER'S REFRESH, delivered INSIDE the completion tail's own
+                // QApplication::processEvents(). Nothing is faked: this calls the
+                // dialog's own refreshClicked() slot, exactly as the button's
+                // connect (:1225) would, and records the row-0 item POINTER either
+                // side of it as an integer without ever dereferencing it.
+                const auto refresh = [&, dialog, list, route]() {
+                    out.refreshDelivered = true;
+                    out.transfersAtRefresh = (route == TailUploadTab) ? obs::writeFileCalls : obs::readFileCalls;
+                    if (QProgressBar* bar = dialog->findChild<QProgressBar*>())
+                        out.barValueAtRefresh = bar->value();
+
+                    quintptr row0Before = 0;
+                    if (list != nullptr) {
+                        out.rowsBeforeRefresh = list->invisibleRootItem()->childCount();
+                        if (out.rowsBeforeRefresh > 0)
+                            row0Before = reinterpret_cast<quintptr>(list->invisibleRootItem()->child(0));
+                    }
+
+                    dialog->refreshClicked(); // :1516 — every row deleted, then rebuilt
+
+                    if (list != nullptr) {
+                        out.rowsAfterRefresh = list->invisibleRootItem()->childCount();
+                        if (out.rowsAfterRefresh > 0)
+                            out.rowsWereFreed =
+                                (reinterpret_cast<quintptr>(list->invisibleRootItem()->child(0)) != row0Before);
+                    }
+                };
+
+                // Armed at the FIRST dispatch, fired inside the completion slot
+                // that dispatch produces. See the block comment above.
+                store->afterCompletionAction = refresh;
+
+                dialog->downloadClicked();
+
+                // The batch drives itself through queued completions. Pump until
+                // the Refresh has been delivered, then let whatever the tail does
+                // next run to a standstill.
+                for (int i = 0; i < 300 && !out.refreshDelivered; ++i)
+                    QApplication::processEvents(QEventLoop::AllEvents, 5);
+                for (int i = 0; i < 60; ++i)
+                    QApplication::processEvents(QEventLoop::AllEvents, 5);
+
+                out.transfersAtEnd = (route == TailUploadTab) ? obs::writeFileCalls : obs::readFileCalls;
+                if (list != nullptr) {
+                    QTreeWidgetItem* root = list->invisibleRootItem();
+                    for (int i = 0; i < root->childCount(); i++) {
+                        const QString status = root->child(i)->text(statusColumn);
+                        out.statuses << status;
+                        if (!status.isEmpty())
+                            out.labelledRows++;
+                    }
+                }
+                out.progressText = progressLabelText(dialog);
+                if (button != nullptr)
+                    out.buttonTextAtEnd = button->text();
+
+                QTimer::singleShot(100, qApp, [owner]() { delete owner; });
+                QTimer::singleShot(200, &appLoop, &QEventLoop::quit);
+
+                bool* timedOutp = &out.timedOut;
+                QTimer::singleShot(20000, &appLoop, [timedOutp]() {
+                    *timedOutp = true;
+                    QCoreApplication::exit(1);
+                });
+            },
+            Qt::QueuedConnection);
+
+        appLoop.exec();
+        for (int i = 0; i < 50; ++i)
+            QApplication::processEvents(QEventLoop::AllEvents, 5);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+        for (RideItem* item : items) {
+            rideCache->rides().removeAll(item);
+            delete item->ride(false);
+            delete item;
+        }
+        for (const QString& p : paths)
+            QFile::remove(p);
+
+        return out;
+    }
+
+    // The shared premises for one arm of the two slots below. A run that never
+    // reached the window must fail LOUDLY rather than pass on nothing (LSN-047,
+    // LSN-050) - and, uniquely for this fixture, it must prove WHERE in the
+    // completion slot the Refresh landed.
+    void assertTailRefreshPremises(const QString& where, const TailRefreshOutcome& out, int expectedRows)
+    {
+        QVERIFY2(out.timedOut == false,
+                 qPrintable(where + QStringLiteral("the run never came back - a guard wedged it")));
+        QVERIFY2(
+            out.listCount == expectedRows,
+            qPrintable(where + QStringLiteral("the list held %1 rows, not %2").arg(out.listCount).arg(expectedRows)));
+        QVERIFY2(
+            out.checkedRows == expectedRows,
+            qPrintable(where + QStringLiteral("%1 rows were checked, not %2").arg(out.checkedRows).arg(expectedRows)));
+        QVERIFY2(out.refreshDelivered,
+                 qPrintable(where + QStringLiteral("the Refresh was never delivered into the completion tail - this "
+                                                   "run proves nothing")));
+
+        // WHERE it landed, measured. Below the slot's last DEC-034 compare...
+        QVERIFY2(
+            out.barValueAtRefresh == 1,
+            qPrintable(where + QStringLiteral("the bar read %1 when the Refresh ran, not 1 - the Refresh was not "
+                                              "inside the completion slot that had just counted row 0, so this run is "
+                                              "about some other window")
+                                   .arg(out.barValueAtRefresh)));
+        // ...and above the re-drive, which is the only thing that can issue a
+        // second transfer.
+        QVERIFY2(
+            out.transfersAtRefresh == 1,
+            qPrintable(where + QStringLiteral("%1 transfer(s) had been issued when the Refresh ran, not 1 - the loop "
+                                              "had already been re-driven, so the Refresh was not inside the tail's "
+                                              "processEvents()")
+                                   .arg(out.transfersAtRefresh)));
+
+        QVERIFY2(out.rowsBeforeRefresh == expectedRows,
+                 qPrintable(where + QStringLiteral("the list held %1 rows when the Refresh arrived, not %2")
+                                        .arg(out.rowsBeforeRefresh)
+                                        .arg(expectedRows)));
+        QVERIFY2(out.rowsAfterRefresh == expectedRows,
+                 qPrintable(where + QStringLiteral("the Refresh rebuilt %1 rows, not %2 - the run would then be about "
+                                                   "an empty list rather than a REPLACED one")
+                                        .arg(out.rowsAfterRefresh)
+                                        .arg(expectedRows)));
+        QVERIFY2(out.rowsWereFreed,
+                 qPrintable(where + QStringLiteral("row 0 is the SAME QTreeWidgetItem after the Refresh as before it, "
+                                                   "so nothing was freed and this run proves nothing")));
+    }
+
+    // The shared verdict for TEST-119 and TEST-120. NOT a slot.
+    void assertNoTailForTheDestroyedBatch(const QString& where, const TailRefreshOutcome& out)
+    {
+        // ---- (b) THE CRITERION'S OWN ASSERTION. The tail's sentence is the one
+        //      string only the tail writes, and progressLabelText() reads back
+        //      empty unless it is there. Asserted EMPTY rather than merely "not
+        //      that string" for TEST-109's reason: pinning one wording would let
+        //      the same defect through with a different number in it. One line
+        //      below that sentence, on two of these three routes, is
+        //      context->athlete->rideCache->save().
+        QVERIFY2(
+            out.progressText.isEmpty(),
+            qPrintable(where + QStringLiteral("the destroyed batch still reported itself: progressLabel reads \"%1\" "
+                                              "(the criterion names \"Processed 0 of 2 successfully\"; any tail "
+                                              "sentence at all is one batch too many, and in syncNext's tail and "
+                                              "downloadNext's - the file's only two - the line below that sentence is "
+                                              "rideCache->save())")
+                                   .arg(out.progressText)));
+
+        // ...and the tail's other side effect, which cannot be produced any other
+        // way while a batch is running: tabChanged (:1856) returns early while the
+        // button reads "Abort", so only the completion tail can have relabelled it.
+        QVERIFY2(out.buttonTextAtEnd == QStringLiteral("Abort"),
+                 qPrintable(where + QStringLiteral("the completion tail ran for the destroyed batch: the button reads "
+                                                   "\"%1\" rather than \"Abort\"")
+                                        .arg(out.buttonTextAtEnd)));
+
+        // ...and no row of the list that REPLACED them was labelled, and no
+        // further transfer was issued against it.
+        QVERIFY2(
+            out.labelledRows == 0,
+            qPrintable(where + QStringLiteral("%1 row(s) of the REBUILT list carry a status the batch that owned them "
+                                              "never gave them: [%2]")
+                                   .arg(out.labelledRows)
+                                   .arg(out.statuses.join(QStringLiteral("|")))));
+        QVERIFY2(out.transfersAtEnd == 1,
+                 qPrintable(where + QStringLiteral("%1 transfer(s) were issued in total, not 1 - the re-driven loop "
+                                                   "dispatched against a list its batch never owned")
+                                        .arg(out.transfersAtEnd)));
+    }
+
+  private slots:
+    // -- TEST-119 (A3-R028-F5, REQ-028 (b)) ------------------------------
+    // THE DOWNLOAD TAB: THE RE-DRIVE WITH NO GUARD AT ALL.
+    //
+    // A three-row Download batch. The Refresh is delivered inside completedRead's
+    // tail processEvents() - after every guard that slot has - and the tail then
+    // re-drives downloadNext(), which carries no listGeneration compare anywhere.
+    //
+    // After the same delivery, no completion tail is produced for the destroyed
+    // batch: progressLabel must not read "Processed 0 of 2 successfully", and
+    // context->athlete->rideCache->save() must be called zero times on that
+    // frame's behalf (asserted through the proxy the block comment above names).
+    //
+    // RED, before the fix:
+    //   FAIL!  : ... download tab: the destroyed batch still reported itself:
+    //            progressLabel reads "Downloaded 0 of 3 successfully"
+    void aRefreshInsideACompletionTailMustNotReDriveTheDownloadLoop()
+    {
+        const TailRefreshOutcome out = runRefreshInCompletionTail(TailDownloadTab);
+        const QString where = QStringLiteral("download tab: ");
+        assertTailRefreshPremises(where, out, 3);
+        if (QTest::currentTestFailed())
+            return;
+        assertNoTailForTheDestroyedBatch(where, out);
+    }
+
+    // -- TEST-120 (A3-R028-F5, REQ-028 (b)) ------------------------------
+    // THE SYNC TAB'S TWIN, AND THE UPLOAD TAB'S — ONE SLOT EACH.
+    //
+    // syncNext and uploadNext DO snapshot listGeneration - but at LOOP ENTRY, and
+    // on this route loop entry is AFTER the Refresh, so the snapshot reads the new
+    // generation and every compare below it is equal. The snapshot that exists is
+    // therefore worth exactly as much as downloadNext's, which does not exist:
+    // both walk the rebuilt list to their completion tails.
+    //
+    // Two production frames: completedRead's tail -> syncNext() on the sync tab,
+    // and completedWrite's tail -> uploadNext() on the upload tab. The second is
+    // not a spelling of the first - it is the third completion slot and the third
+    // driver, reached through writeFile rather than readFile.
+    //
+    // TWO SLOTS, NOT TWO ARMS (A3-R028b-F5). These used to be one slot with the
+    // upload arm second, behind `if (QTest::currentTestFailed()) return;`. That
+    // early return is required INSIDE an arm - a premise that failed must not be
+    // followed by verdicts read off a run that never happened - but between arms
+    // it silently WITHDREW the third driver's coverage whenever the sync arm
+    // failed, which is exactly the state a mutation run puts the suite in. A
+    // mutation record taken in that shape cannot distinguish "the upload guard is
+    // covered" from "the upload arm never ran". Split so that each driver's
+    // coverage stands or falls on its own.
+    //
+    // RED, before the fix:
+    //   FAIL!  : ... sync tab: the destroyed batch still reported itself:
+    //            progressLabel reads "Processed 0 of 3 successfully"
+    void aRefreshInsideACompletionTailMustNotReDriveTheSyncLoop()
+    {
+        const TailRefreshOutcome out = runRefreshInCompletionTail(TailSyncTab);
+        const QString where = QStringLiteral("sync tab: ");
+        assertTailRefreshPremises(where, out, 3);
+        if (QTest::currentTestFailed())
+            return;
+        assertNoTailForTheDestroyedBatch(where, out);
+    }
+
+    // -- TEST-120, the upload half — see the block above for the window ---
+    //
+    // RED, before the fix:
+    //   FAIL!  : ... upload tab: the destroyed batch still reported itself:
+    //            progressLabel reads "Uploaded 0 of 2 successfully"
+    void aRefreshInsideACompletionTailMustNotReDriveTheUploadLoop()
+    {
+        const TailRefreshOutcome out = runRefreshInCompletionTail(TailUploadTab);
+        const QString where = QStringLiteral("upload tab: ");
+        assertTailRefreshPremises(where, out, 2);
+        if (QTest::currentTestFailed())
+            return;
+        assertNoTailForTheDestroyedBatch(where, out);
+    }
+
+    // -- TEST-112 (S-R028-01) — A TRACE, NOT A GUARD ---------------------
+    // THE SORT ROUTE: WHAT A COLUMN-HEADER CLICK DOES TO A RUNNING BATCH.
+    //
+    // WHAT THIS SLOT IS. DEC-034 validates the CONTAINER: refreshClicked bumps a
+    // counter, and anything holding a row or an index across a suspension stands
+    // down. A SORT frees nothing and rebuilds nothing - it PERMUTES the same
+    // items - so it bumps no counter and passes every guard REQ-028 installs.
+    // That was reasoned, not executed, and reasoning is what this project has
+    // repeatedly found to be wrong about Qt. So this slot MEASURES it. It asserts
+    // what production DOES, exactly as TEST-107 does, and it must NOT be read as
+    // production being correct: whoever closes S-R028-01 should expect the
+    // "MEASURED, NOT DESIRED" block to change.
+    //
+    // WHY THE ROUTE IS OPEN AT ALL, verified in the file rather than assumed: all
+    // three lists are built setSortingEnabled(true) (:1116/:1146/:1186);
+    // downloadClicked disables sorting on rideListDown only (:1930) and
+    // explicitly RE-ENABLES rideListUp (:1931); rideListSync is never disabled
+    // anywhere (its only other setSortingEnabled is the completion tail's
+    // re-enable at :2297). Nothing in the file calls setSectionsClickable.
+    //
+    // THE DELIVERY IS A REAL CLICK, and the run RECORDS which mechanism moved the
+    // rows - QTest::mouseClick on the header viewport, or the setSortIndicator
+    // call that a click makes internally (QHeaderView::mouseReleaseEvent ->
+    // setSortIndicator -> sortIndicatorChanged -> QTreeView::sortByColumn). If
+    // only the second works under this QPA backend then "the header is clickable"
+    // remains an API-contract claim for the first, and the slot says so rather
+    // than presenting one as the other.
+    void probeWhatAColumnSortDoesToARunningBatch()
+    {
+        obs::reset();
+        rideopen::reset();
+        ridefail::reset();
+        rideopen::blockingMs = 300;
+
+        bool timedOut = false;
+        bool sortingEnabledOnSyncList = false, sectionsClickable = false, sortIndicatorShown = false;
+        bool clickDelivered = false, reorderedByRealClick = false, reorderedBySortIndicator = false;
+        bool sameItemSetAfter = false;
+        QStringList namesBefore, namesAfter, statuses, namesAtFirstCompletion, statusesAtFirstCompletion;
+        int writeFileCalls = 0, rideOpens = 0;
+        QString labelledAtFirstCompletion, transferredRow, writeNameAtFirstCompletion;
+
+        const QDir activities = context->athlete->home->activities();
+        QDir().mkpath(activities.absolutePath());
+
+        QList<RideItem*> items;
+        QStringList paths;
+        for (int i = 0; i < 2; i++) {
+            const QString name = rebuildLocalActivity(i);
+            QFile f(activities.absolutePath() + "/" + name);
+            f.open(QIODevice::WriteOnly);
+            f.write("gcblock");
+            f.close();
+            paths << f.fileName();
+
+            RideItem* item = new RideItem(nullptr, context);
+            item->fileName = name;
+            item->path = activities.absolutePath();
+            item->dateTime = QDateTime(QDate::currentDate(), QTime(10 + i, 0, 0));
+            item->planned = false;
+            items << item;
+        }
+        for (RideItem* item : items)
+            rideCache->rides().push_back(item);
+
+        QEventLoop appLoop;
+        QMetaObject::invokeMethod(
+            this,
+            [&]() {
+                QWidget* owner = new QWidget;
+
+                BlockingStore* store = new BlockingStore(context);
+                store->entryNames = QStringList();
+                store->blockingMs = 5;
+                store->closeActionContext = qApp;
+                store->downloadCompression = CloudService::none;
+                store->completeWrite = true;
+
+                CloudServiceSyncDialog* dialog = new CloudServiceSyncDialog(context, store);
+                dialog->setParent(owner, Qt::Dialog);
+                dialog->start();
+                dialog->open();
+                store->dialog = dialog;
+                store->dialogGuard = dialog;
+
+                if (QTabWidget* tabs = dialog->findChild<QTabWidget*>())
+                    tabs->setCurrentIndex(2);
+                dialog->selectAllSyncChanged(Qt::Checked);
+                QTreeWidget* list = rideListWithHeader(dialog, QStringLiteral("Source"));
+
+                if (list != nullptr) {
+                    sortingEnabledOnSyncList = list->isSortingEnabled();
+                    if (QHeaderView* h = list->header()) {
+                        sectionsClickable = h->sectionsClickable();
+                        sortIndicatorShown = h->isSortIndicatorShown();
+                    }
+                }
+
+                // THE USER'S CLICK ON THE "File" COLUMN HEADER, delivered from
+                // inside row[0]'s openRideFile - the same nested loop TEST-108
+                // delivers its Refresh into, and the same frame is suspended.
+                rideopen::action = [&, list]() {
+                    if (list == nullptr)
+                        return;
+                    QTreeWidgetItem* root = list->invisibleRootItem();
+                    QSet<quintptr> before;
+                    for (int i = 0; i < root->childCount(); i++) {
+                        namesBefore << root->child(i)->text(1);
+                        before.insert(reinterpret_cast<quintptr>(root->child(i)));
+                    }
+
+                    QHeaderView* h = list->header();
+                    if (h != nullptr) {
+                        const int section = 1;
+                        const int x = h->sectionViewportPosition(section) + h->sectionSize(section) / 2;
+                        QTest::mouseClick(h->viewport(), Qt::LeftButton, Qt::NoModifier,
+                                          QPoint(x, h->viewport()->height() / 2));
+                        clickDelivered = true;
+                        QStringList afterClick;
+                        for (int i = 0; i < root->childCount(); i++)
+                            afterClick << root->child(i)->text(1);
+                        reorderedByRealClick = (afterClick != namesBefore);
+
+                        if (!reorderedByRealClick) {
+                            // The call the click makes internally, so that the
+                            // QUESTION (what a reorder does to the batch) is still
+                            // answered even where the synthetic click is not.
+                            h->setSortIndicator(section, Qt::DescendingOrder);
+                        }
+                    }
+
+                    QSet<quintptr> after;
+                    for (int i = 0; i < root->childCount(); i++) {
+                        namesAfter << root->child(i)->text(1);
+                        after.insert(reinterpret_cast<quintptr>(root->child(i)));
+                    }
+                    reorderedBySortIndicator = (!reorderedByRealClick && namesAfter != namesBefore);
+                    sameItemSetAfter = (before == after);
+                };
+
+                // THE LIST, READ INSIDE THE FIRST COMPLETION'S OWN FRAME - after
+                // completedWrite has labelled a row (:2856) and before its tail
+                // re-drives the loop (:2872). Read at the END instead and the
+                // measurement is worthless: the re-driven batch goes on to
+                // transfer and label the other row too, so every row reads
+                // "Completed." whether or not the right one was labelled first.
+                store->afterCompletionAction = [&, list]() {
+                    if (list == nullptr)
+                        return;
+                    writeNameAtFirstCompletion = obs::lastWriteName;
+                    QTreeWidgetItem* root = list->invisibleRootItem();
+                    for (int i = 0; i < root->childCount(); i++) {
+                        namesAtFirstCompletion << root->child(i)->text(1);
+                        statusesAtFirstCompletion << root->child(i)->text(7);
+                        if (root->child(i)->text(7) == QStringLiteral("Completed."))
+                            labelledAtFirstCompletion = root->child(i)->text(1);
+                    }
+                };
+
+                dialog->downloadClicked();
+
+                // Let the write completion (and whatever it re-drives) arrive.
+                for (int i = 0; i < 100; ++i)
+                    QApplication::processEvents(QEventLoop::AllEvents, 5);
+
+                writeFileCalls = obs::writeFileCalls;
+                rideOpens = rideopen::opens;
+                if (list != nullptr) {
+                    QTreeWidgetItem* root = list->invisibleRootItem();
+                    for (int i = 0; i < root->childCount(); i++)
+                        statuses << root->child(i)->text(7);
+                }
+
+                QTimer::singleShot(100, qApp, [owner]() { delete owner; });
+                QTimer::singleShot(200, &appLoop, &QEventLoop::quit);
+                QTimer::singleShot(20000, &appLoop, [&timedOut]() {
+                    timedOut = true;
+                    QCoreApplication::exit(1);
+                });
+            },
+            Qt::QueuedConnection);
+
+        appLoop.exec();
+        for (int i = 0; i < 50; ++i)
+            QApplication::processEvents(QEventLoop::AllEvents, 5);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+        for (RideItem* item : items) {
+            rideCache->rides().removeAll(item);
+            delete item->ride(false);
+            delete item;
+        }
+        for (const QString& p : paths)
+            QFile::remove(p);
+
+        QVERIFY2(timedOut == false, "the run never came back");
+
+        // ---- THE PREMISES: the route is open, and the click landed in the
+        //      suspension.
+        //
+        // "the header is clickable" was, until this run, REASONED from Qt's API
+        // contract: nothing calls setSectionsClickable(false) and
+        // setSortingEnabled(true) is documented to make sections clickable. These
+        // two are that claim, executed.
+        QVERIFY2(sortingEnabledOnSyncList, "the sync list is not sortable, so this whole slot is about nothing");
+        QVERIFY2(sectionsClickable, "the sync list's header sections are not clickable");
+        QVERIFY2(sortIndicatorShown, "the sync list's header shows no sort indicator");
+        QVERIFY2(clickDelivered, "the header click was never delivered into the nested loop");
+        QVERIFY2(rideOpens >= 1, "row[0]'s ride file was never opened, so there was no nested loop to click into");
+        QCOMPARE(namesBefore.count(), 2);
+
+        // WHICH MECHANISM MOVED THE ROWS, and the limit of this trace. MEASURED
+        // 2026-08-17 under BOTH offscreen and minimal: the synthetic
+        // QTest::mouseClick on the header viewport did NOT reorder anything
+        // (reorderedByRealClick == false, both backends), and the reorder came
+        // from the setSortIndicator fallback - the call QHeaderView makes for
+        // itself on a real mouse release. So what is EXECUTED here is "a sort
+        // arriving inside the nested loop does this to the batch", and the step
+        // from "the user's click causes that sort" remains an API-contract claim
+        // resting on the three properties above. Not asserted either way, because
+        // synthetic mouse delivery is exactly the backend-dependent thing
+        // LSN-062 / ORCH-017 spent two cycles on and a pinned `false` here would
+        // fail for the environment rather than for the behaviour.
+        QVERIFY2(reorderedByRealClick || reorderedBySortIndicator,
+                 qPrintable(QStringLiteral("neither a header click nor setSortIndicator reordered the rows: [%1]")
+                                .arg(namesBefore.join(QStringLiteral("|")))));
+
+        // ---- MEASURED, NOT DESIRED.
+        //
+        // (i)  A REORDER FREES NOTHING. The same two QTreeWidgetItem addresses are
+        //      still in the list afterwards, in the other order - so there is no
+        //      use-after-free to find here, no delete for a lifetime guard to
+        //      notice, and (by construction) nothing for DEC-034's counter to be
+        //      bumped by. This is why the sort route passes every guard REQ-028
+        //      installs, stated as a measurement rather than as an argument.
+        QVERIFY2(namesAfter != namesBefore,
+                 qPrintable(QStringLiteral("the header click did not reorder the rows at all: [%1] -> [%2]")
+                                .arg(namesBefore.join(QStringLiteral("|")))
+                                .arg(namesAfter.join(QStringLiteral("|")))));
+        QVERIFY2(sameItemSetAfter, "the rows were REPLACED, not permuted - this slot measures the wrong thing");
+
+        // (ii) THE BATCH KEPT GOING, which is the point: no guard fired. The
+        //      driver resumed onto `curr`, a pointer that is still valid and still
+        //      names the right activity, and uploaded it.
+        QVERIFY2(writeFileCalls >= 1,
+                 qPrintable(QStringLiteral("no transfer happened at all after the sort (writeFile called %1 time(s)), "
+                                           "so this run says nothing about what a sort does to a batch")
+                                .arg(writeFileCalls)));
+
+        // (iii) THE LABELLING HALF, WHICH DEC-garmin-036 CLOSED. AMENDED
+        //       2026-08-18; what this block said before is kept below, because
+        //       what it USED to measure is the whole reason the fix exists.
+        //
+        //       WAS: completedWrite addressed rows POSITIONALLY, as
+        //       child(listindex-1), and the sort moved a different item under that
+        //       index - so the verdict went on whatever the permutation put at
+        //       index 0 while the row that had actually been transferred kept
+        //       reading "Uploading". Worse, QTreeWidgetItem::child(int)
+        //       bounds-checks and THEN calls executePendingSort()
+        //       (qtreewidget.h:145-150, inline and readable on this machine), so a
+        //       pending re-sort executed INSIDE the `child(listindex-1)`
+        //       expression itself: no guard wrapped around that expression could
+        //       have observed the pre-sort order.
+        //
+        //       IS: the completion labels through the in-flight ticket's stored
+        //       row POINTER, which a reorder does not move because a reorder frees
+        //       nothing and permutes nothing but positions - point (i) above. The
+        //       index is gone from the slot, and with it that whole failure mode.
+        //
+        //       THIS DOES NOT CLOSE S-R028-01. Only the LABELLING half is fixed.
+        //       The DRIVERS still walk `for (int i=listindex; ...)` over a list the
+        //       sort reordered under them, and point (iv) below still measures
+        //       exactly what that costs - unchanged, still MEASURED NOT DESIRED,
+        //       and still the open finding. Read (iii) and (iv) together or not at
+        //       all: half of this route is fixed and half is not.
+        transferredRow = namesBefore.value(0);
+        QVERIFY2(!writeNameAtFirstCompletion.isEmpty(),
+                 "the first completion's frame was never sampled, so nothing here is a measurement");
+        QVERIFY2(writeNameAtFirstCompletion.startsWith(QFileInfo(transferredRow).baseName()),
+                 qPrintable(QStringLiteral("the row that was UPLOADED was \"%1\", not row[0] (\"%2\") - the premise "
+                                           "of the comparison below does not hold")
+                                .arg(writeNameAtFirstCompletion)
+                                .arg(transferredRow)));
+        QVERIFY2(!labelledAtFirstCompletion.isEmpty(),
+                 qPrintable(QStringLiteral("no row was labelled \"Completed.\" in the completion's own frame: [%1]")
+                                .arg(statusesAtFirstCompletion.join(QStringLiteral("|")))));
+        // THE CRITERION, now that this half is a rule rather than a measurement
+        // (REQ-028 (c): "every non-empty status cell names the outcome of a
+        // transfer that actually happened TO THAT ROW"). The row that was
+        // uploaded is the row that is labelled, reorder or no reorder.
+        QVERIFY2(labelledAtFirstCompletion == transferredRow,
+                 qPrintable(QStringLiteral("the completion labelled \"%1\", but the row it transferred was \"%2\" - "
+                                           "DEC-036's ticket is not carrying the row through the sort")
+                                .arg(labelledAtFirstCompletion)
+                                .arg(transferredRow)));
+
+        // ...spelled out, so both the fix and what remains are on the record as
+        // VALUES and not only as an inequality. Measured identically under
+        // offscreen and minimal:
+        //
+        //   before                 [10:00, 11:00]      (row[0] is dispatched)
+        //   after the sort         [11:00, 10:00]      (same two items, permuted)
+        //   uploaded               10:00               (curr is a POINTER: right row)
+        //   labelled "Completed."  10:00               (DEC-036: the ticket's row
+        //                                               pointer, so the RIGHT row -
+        //                                               it used to read 11:00)
+        //   and 11:00, never transferred, correctly says NOTHING - it used to be
+        //   the row wearing 10:00's verdict, and 10:00 used to be left reading
+        //   "Uploading" for a transfer that had already finished. The empty cell
+        //   is the criterion's other half: no row is labelled that the frame did
+        //   not transfer.
+        QCOMPARE(namesAfter, QStringList() << namesBefore.value(1) << namesBefore.value(0));
+        QCOMPARE(labelledAtFirstCompletion, namesBefore.value(0));
+        QCOMPARE(statusesAtFirstCompletion, QStringList() << "" << "Completed.");
+
+        // (iv) ...AND THE LOOP THEN TRANSFERS THE SAME ROW TWICE AND THE OTHER
+        //      NEVER. `listindex` is a POSITION: the completion's tail re-drives
+        //      the loop from index 1, which the permutation has made the row that
+        //      was just uploaded, while the row at index 0 - never transferred -
+        //      is behind the bookmark and is never reached. Two writeFile calls
+        //      for two checked rows, both of them the SAME row: the count alone
+        //      would have looked correct, which is why the names are compared.
+        QCOMPARE(writeFileCalls, 2);
+        QCOMPARE(obs::writeNames.count(), 2);
+        QVERIFY2(obs::writeNames.value(0) == obs::writeNames.value(1),
+                 qPrintable(QStringLiteral("MEASURED, NOT DESIRED — the two uploads were of DIFFERENT rows (%1, %2), "
+                                           "so the sort no longer costs a double transfer. Re-read this slot.")
+                                .arg(obs::writeNames.value(0))
+                                .arg(obs::writeNames.value(1))));
+    }
+
+  private:
+    // =====================================================================
+    // TEST-122 / TEST-123 (A3-R028b-F2, REQ-028 (b), DEC-garmin-034) —
+    // THE REFRESH DELIVERED BY A DRIVER'S OWN PARSE-FAILURE processEvents().
+    // =====================================================================
+    //
+    // THE WINDOW. Both drivers have exactly one branch that suspends and then
+    // KEEPS ITERATING - the row whose local file will not parse:
+    //
+    //   syncNext                            uploadNext
+    //   2426  progressBar->setValue(++dc)   3182  progressBar->setValue(++dc)
+    //   2428  QApplication::processEvents() 3184  QApplication::processEvents()
+    //   2429  if (self.isNull())  return    3191  if (self.isNull())  return
+    //   2454  if (aborted)        return    3208  if (aborted)        return
+    //   2461  if (batchGen != gen) return   3219  if (batchGen != gen) return
+    //   2495  if (listGen != listgen) ret.  3235  if (listGen != listgen) ret. <- ADDED
+    //   2497  continue;  -> loop head       3236  }  -> loop head
+    //
+    // Three questions are asked after that processEvents() and the fourth is not:
+    // is this dialog alive, does the user still want this, is this still the live
+    // BATCH - but not IS THIS STILL THE LIVE LIST. The frame's own snapshot of
+    // listGeneration exists (`listgen`, :2167 / :3082) and is compared one branch
+    // away (:2356 / :3133); on this route it is simply never read.
+    //
+    // WHAT THAT COSTS. The rebuilt rows are all UNCHECKED (refreshClicked builds
+    // each row's QCheckBox fresh and never checks it), so the resumed loop finds
+    // nothing to do and falls straight through to the completion tail - which
+    // writes "Processed 0 of N successfully" and, in syncNext, calls
+    // context->athlete->rideCache->save() one line later (:2524/:2527) for a batch
+    // that no longer exists. That is A3-R027-F3 / PROBE-B's harm, which was
+    // BLOCKING when it was first found, reached by a route the entry guards miss.
+    //
+    // THIS IS DELIBERATELY *NOT* A MEMORY-SAFETY DEFECT and must not be reported
+    // as one: `curr` is re-fetched from `child(i)` on every iteration, so every
+    // pointer the resumed loop touches is live. What is wrong is the VERDICT, not
+    // the addressing - which is why the assertions below are the TEST-119/120
+    // verdict shape (no tail sentence, no row of the rebuilt list labelled) and
+    // not an ASan expectation.
+    //
+    // TWO SLOTS, NOT TWO ARMS IN ONE SLOT (A3-R028b-F5). TEST-120 put its upload
+    // arm behind `if (QTest::currentTestFailed()) return;`, so a sync-arm failure
+    // silently withdrew the third driver's coverage. These are separate slots so
+    // that neither driver's coverage can be hidden by the other's failure.
+    //
+    // HOW THE DELIVERY IS MADE, AND WHY IT IS NOT A TIMING BET. insideframe, used
+    // exactly as TEST-102 and TEST-119/120 use it: stage 1 is production's own
+    // `progressBar->setValue(++downloadcounter)` on the line above, a DIRECT
+    // connection, which anchors us inside the parse-failure branch of the right
+    // iteration; stage 2 is the dispatcher's awake(), emitted as the first
+    // statement of the very next processEvents() on this thread. NOTHING runs
+    // between those two production statements. The rows are .gcfail on purpose
+    // (TEST-102's reason): FailingRideFileReader runs no nested loop, so nothing
+    // else on this path pumps events and "the next processEvents()" is the
+    // branch's own. Both premises MEASURE that: the bar has counted exactly row 0
+    // when the Refresh runs, and exactly one row has been offered to the reader.
+    struct DriverRefreshOutcome
+    {
+        bool timedOut = false;
+
+        // -- premises: did this run reach the window it claims to test?
+        int listCount = 0;
+        int checkedRows = 0;
+        QString row0Action; // sync list column 6 — must be "Upload" to reach the branch
+        bool refreshDelivered = false;
+        int barValueAtRefresh = -1;      // production had counted this many rows
+        int parseAttemptsAtRefresh = -1; // ...and offered this many to the reader
+        int rowsBeforeRefresh = -1;
+        int rowsAfterRefresh = -1;
+        bool rowsWereFreed = false;
+
+        // -- the verdict
+        int parseAttemptsAtEnd = 0;
+        int transfersAtEnd = 0;
+        QString progressText; // the completion tail's "...successfully" sentence
+        QString buttonTextAtEnd;
+        int labelledRows = 0;
+        QStringList statuses;
+    };
+
+    // Two LOCAL activities whose suffix FailingRideFileReader is registered for,
+    // so RideFileFactory's dispatch on the suffix (RideFile.cpp:899-900) returns
+    // NULL and the driver takes its parse-failure branch. Distinct times so the
+    // row order is well defined; distinct from every other fixture's names so no
+    // slot can inherit another's files.
+    static QString driverRefreshActivity(int i)
+    {
+        return QDate::currentDate().toString(QStringLiteral("yyyy_MM_dd")) +
+               QStringLiteral("_0%1_30_00.gcfail").arg(i + 3);
+    }
+
+    DriverRefreshOutcome runRefreshInDriverParseFailure(bool uploadTab)
+    {
+        obs::reset();
+        rideopen::reset();
+        ridefail::reset();
+        rideopen::blockingMs = 5;
+
+        DriverRefreshOutcome out;
+        QEventLoop appLoop;
+
+        const QDir activities = context->athlete->home->activities();
+        QDir().mkpath(activities.absolutePath());
+
+        QList<RideItem*> items;
+        QStringList paths;
+        for (int i = 0; i < 2; i++) {
+            const QString name = driverRefreshActivity(i);
+            QFile f(activities.absolutePath() + "/" + name);
+            f.open(QIODevice::WriteOnly);
+            f.write("gcfail");
+            f.close();
+            paths << f.fileName();
+
+            RideItem* item = new RideItem(nullptr, context);
+            item->fileName = name;
+            item->path = activities.absolutePath();
+            item->dateTime = QDateTime(QDate::currentDate(), QTime(3 + i, 30, 0));
+            item->planned = false; // the upload list skips planned rides (:1723)
+            items << item;
+        }
+        for (RideItem* item : items)
+            rideCache->rides().push_back(item);
+
+        QMetaObject::invokeMethod(
+            this,
+            [&]() {
+                QWidget* owner = new QWidget;
+
+                // No remote entries at all: every local ride is therefore an
+                // UPLOAD row on the sync tab and a normal row on the upload tab.
+                BlockingStore* store = new BlockingStore(context);
+                store->entryNames = QStringList();
+                store->blockingMs = 5;
+                store->closeActionContext = qApp;
+                store->downloadCompression = CloudService::none;
+
+                CloudServiceSyncDialog* dialog = new CloudServiceSyncDialog(context, store);
+                dialog->setParent(owner, Qt::Dialog);
+                dialog->start();
+                dialog->open();
+                store->dialog = dialog;
+                store->dialogGuard = dialog;
+
+                if (QTabWidget* tabs = dialog->findChild<QTabWidget*>())
+                    tabs->setCurrentIndex(uploadTab ? 1 : 2);
+
+                QTreeWidget* list = nullptr;
+                if (uploadTab) {
+                    dialog->selectAllUpChanged(Qt::Checked);
+                    list = rideListWithHeader(dialog, QStringLiteral("File"));
+                } else {
+                    dialog->selectAllSyncChanged(Qt::Checked);
+                    list = rideListWithHeader(dialog, QStringLiteral("Source"));
+                }
+
+                if (list != nullptr) {
+                    QTreeWidgetItem* root = list->invisibleRootItem();
+                    out.listCount = root->childCount();
+                    for (int i = 0; i < out.listCount; i++) {
+                        QCheckBox* check = qobject_cast<QCheckBox*>(list->itemWidget(root->child(i), 0));
+                        if (check != nullptr && check->isChecked())
+                            out.checkedRows++;
+                    }
+                    if (out.listCount > 0 && !uploadTab)
+                        out.row0Action = root->child(0)->text(6);
+                }
+
+                QPushButton* button =
+                    pushButtonWithText(dialog, uploadTab ? QStringLiteral("Upload") : QStringLiteral("Synchronize"));
+
+                // THE USER'S REFRESH, delivered inside the parse-failure branch's
+                // own QApplication::processEvents(). Nothing is faked: this calls
+                // the dialog's own refreshClicked() slot, exactly as the button's
+                // connect (:1225) would, and records the row-0 item POINTER either
+                // side of it as an integer without ever dereferencing it.
+                const auto refresh = [&, dialog, list]() {
+                    out.refreshDelivered = true;
+                    out.parseAttemptsAtRefresh = ridefail::opens;
+                    if (QProgressBar* bar = dialog->findChild<QProgressBar*>())
+                        out.barValueAtRefresh = bar->value();
+
+                    quintptr row0Before = 0;
+                    if (list != nullptr) {
+                        out.rowsBeforeRefresh = list->invisibleRootItem()->childCount();
+                        if (out.rowsBeforeRefresh > 0)
+                            row0Before = reinterpret_cast<quintptr>(list->invisibleRootItem()->child(0));
+                    }
+
+                    dialog->refreshClicked(); // :1516 — every row deleted, then rebuilt
+
+                    if (list != nullptr) {
+                        out.rowsAfterRefresh = list->invisibleRootItem()->childCount();
+                        if (out.rowsAfterRefresh > 0)
+                            out.rowsWereFreed =
+                                (reinterpret_cast<quintptr>(list->invisibleRootItem()->child(0)) != row0Before);
+                    }
+                };
+
+                // Armed BEFORE the batch starts; fires in the first parse-failure
+                // branch the driver reaches. See the block comment above.
+                insideframe::atTheNextCountedRow(dialog, refresh);
+
+                dialog->downloadClicked(); // -> syncNext() / uploadNext()
+
+                for (int i = 0; i < 60; ++i)
+                    QApplication::processEvents(QEventLoop::AllEvents, 5);
+
+                out.parseAttemptsAtEnd = ridefail::opens;
+                out.transfersAtEnd = obs::writeFileCalls + obs::readFileCalls;
+                if (list != nullptr) {
+                    QTreeWidgetItem* root = list->invisibleRootItem();
+                    for (int i = 0; i < root->childCount(); i++) {
+                        const QString status = root->child(i)->text(7);
+                        out.statuses << status;
+                        if (!status.isEmpty())
+                            out.labelledRows++;
+                    }
+                }
+                out.progressText = progressLabelText(dialog);
+                if (button != nullptr)
+                    out.buttonTextAtEnd = button->text();
+
+                QTimer::singleShot(100, qApp, [owner]() { delete owner; });
+                QTimer::singleShot(200, &appLoop, &QEventLoop::quit);
+
+                bool* timedOutp = &out.timedOut;
+                QTimer::singleShot(20000, &appLoop, [timedOutp]() {
+                    *timedOutp = true;
+                    QCoreApplication::exit(1);
+                });
+            },
+            Qt::QueuedConnection);
+
+        appLoop.exec();
+        for (int i = 0; i < 50; ++i)
+            QApplication::processEvents(QEventLoop::AllEvents, 5);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+        for (RideItem* item : items) {
+            rideCache->rides().removeAll(item);
+            delete item->ride(false);
+            delete item;
+        }
+        for (const QString& p : paths)
+            QFile::remove(p);
+
+        return out;
+    }
+
+    // A run that never reached the window must fail LOUDLY rather than pass on
+    // nothing (LSN-047, LSN-050) - and, as in TEST-119/120, it must prove WHERE
+    // in the driver the Refresh landed.
+    void assertDriverRefreshPremises(const QString& where, const DriverRefreshOutcome& out)
+    {
+        QVERIFY2(out.timedOut == false,
+                 qPrintable(where + QStringLiteral("the run never came back - a guard wedged it")));
+        QVERIFY2(out.listCount == 2,
+                 qPrintable(where + QStringLiteral("the list held %1 rows, not 2").arg(out.listCount)));
+        QVERIFY2(out.checkedRows == 2,
+                 qPrintable(where + QStringLiteral("%1 rows were checked, not 2").arg(out.checkedRows)));
+        QVERIFY2(out.refreshDelivered,
+                 qPrintable(where + QStringLiteral("the Refresh was never delivered into the parse-failure branch - "
+                                                   "this run proves nothing")));
+
+        // WHERE it landed, measured. Below the branch's own setValue...
+        QVERIFY2(
+            out.barValueAtRefresh == 1,
+            qPrintable(where + QStringLiteral("the bar read %1 when the Refresh ran, not 1 - the Refresh was not "
+                                              "inside the parse-failure branch that had just counted row 0, so this "
+                                              "run is about some other window")
+                                   .arg(out.barValueAtRefresh)));
+        // ...and above the `continue`, which is the only thing that can offer a
+        // second row to the reader.
+        QVERIFY2(
+            out.parseAttemptsAtRefresh == 1,
+            qPrintable(where + QStringLiteral("%1 row(s) had been offered to the reader when the Refresh ran, not 1 - "
+                                              "the loop had already iterated, so the Refresh was not inside the "
+                                              "branch's own processEvents()")
+                                   .arg(out.parseAttemptsAtRefresh)));
+
+        QVERIFY2(out.rowsBeforeRefresh == 2,
+                 qPrintable(where + QStringLiteral("the list held %1 rows when the Refresh arrived, not 2")
+                                        .arg(out.rowsBeforeRefresh)));
+        QVERIFY2(out.rowsAfterRefresh == 2,
+                 qPrintable(where + QStringLiteral("the Refresh rebuilt %1 rows, not 2 - the run would then be about "
+                                                   "an empty list rather than a REPLACED one")
+                                        .arg(out.rowsAfterRefresh)));
+        QVERIFY2(out.rowsWereFreed,
+                 qPrintable(where + QStringLiteral("row 0 is the SAME QTreeWidgetItem after the Refresh as before it, "
+                                                   "so nothing was freed and this run proves nothing")));
+    }
+
+    // The shared verdict for TEST-122 and TEST-123. NOT a slot.
+    //
+    // What is and is NOT load-bearing here, said plainly so that no assertion is
+    // read as coverage it does not provide: `labelledRows` and `transfersAtEnd`
+    // are 0 whether or not the guard exists - the rebuilt rows are unchecked, so
+    // the re-driven loop labels nothing and dispatches nothing. They are the
+    // criterion's own wording and they pin the shape; the two that KILL are the
+    // tail sentence and the button.
+    void assertDriverStoodDown(const QString& where, const DriverRefreshOutcome& out)
+    {
+        QVERIFY2(
+            out.progressText.isEmpty(),
+            qPrintable(where + QStringLiteral("the destroyed batch still reported itself: progressLabel reads \"%1\" "
+                                              "(any tail sentence at all is one batch too many, and in syncNext's "
+                                              "tail the line below it is context->athlete->rideCache->save())")
+                                   .arg(out.progressText)));
+
+        QVERIFY2(out.buttonTextAtEnd == QStringLiteral("Abort"),
+                 qPrintable(where + QStringLiteral("the completion tail ran for the destroyed batch: the button reads "
+                                                   "\"%1\" rather than \"Abort\"")
+                                        .arg(out.buttonTextAtEnd)));
+
+        QVERIFY2(
+            out.labelledRows == 0,
+            qPrintable(where + QStringLiteral("%1 row(s) of the REBUILT list carry a status the batch that owned them "
+                                              "never gave them: [%2]")
+                                   .arg(out.labelledRows)
+                                   .arg(out.statuses.join(QStringLiteral("|")))));
+        QVERIFY2(
+            out.transfersAtEnd == 0,
+            qPrintable(where + QStringLiteral("%1 transfer(s) were issued - the re-driven loop dispatched against a "
+                                              "list its batch never owned")
+                                   .arg(out.transfersAtEnd)));
+        QVERIFY2(out.parseAttemptsAtEnd == 1,
+                 qPrintable(where + QStringLiteral("%1 row(s) were offered to the reader in total, not 1 - the loop "
+                                                   "carried on over a list its batch never owned")
+                                        .arg(out.parseAttemptsAtEnd)));
+    }
+
+  private slots:
+    // -- TEST-122 (A3-R028b-F2, REQ-028 (b)) -----------------------------
+    // THE SYNC TAB'S DRIVER: THE RESUMPTION THE ENTRY GUARD CANNOT SEE.
+    //
+    // A Sync batch of two checked Upload rows, row[0] unparseable. The Refresh is
+    // delivered inside syncNext's parse-failure processEvents() (:2428) - after
+    // the self-bail, the abort re-read and the batch-generation compare, and
+    // before the `continue` at :2497 that walks the rebuilt list. The frame must
+    // stand down instead: no completion tail for the destroyed batch, and no row
+    // of the list that replaced it labelled.
+    //
+    // RED, before the fix:
+    //   FAIL!  : ... sync tab: the destroyed batch still reported itself:
+    //            progressLabel reads "Processed 0 of 2 successfully"
+    void aRefreshInADriverParseFailureMustNotReDriveTheSyncLoop()
+    {
+        const DriverRefreshOutcome out = runRefreshInDriverParseFailure(false);
+        const QString where = QStringLiteral("sync tab: ");
+        assertDriverRefreshPremises(where, out);
+        if (QTest::currentTestFailed())
+            return;
+        QCOMPARE(out.row0Action, QStringLiteral("Upload"));
+        assertDriverStoodDown(where, out);
+    }
+
+    // -- TEST-123 (A3-R028b-F2, REQ-028 (b)) -----------------------------
+    // THE UPLOAD TAB'S TWIN — ITS OWN SLOT, NOT AN ARM OF THE ONE ABOVE.
+    //
+    // uploadNext carries the identical branch at :3182-3219 and falls through to
+    // its own completion tail rather than `continue`-ing, so it is a different
+    // production frame reached by a different route. A3-R028b-F5 found that
+    // TEST-120's upload arm was gated behind the sync arm's success; this is a
+    // separate slot so the third driver's coverage cannot be withdrawn by another
+    // slot failing.
+    //
+    // RED, before the fix:
+    //   FAIL!  : ... upload tab: the destroyed batch still reported itself:
+    //            progressLabel reads "Uploaded 0 of 2 successfully"
+    void aRefreshInADriverParseFailureMustNotReDriveTheUploadLoop()
+    {
+        const DriverRefreshOutcome out = runRefreshInDriverParseFailure(true);
+        const QString where = QStringLiteral("upload tab: ");
+        assertDriverRefreshPremises(where, out);
+        if (QTest::currentTestFailed())
+            return;
+        assertDriverStoodDown(where, out);
+    }
+
+  private:
+    // =====================================================================
+    // TEST-124 / TEST-125 (A3-R028b-F3, REQ-028 (c), DEC-garmin-036) —
+    // AN ABANDONED WRITE'S COMPLETION CARRIES ITS OPERATION IDENTITY.
+    // =====================================================================
+    //
+    // THE CRITERION, VERBATIM (REQ-028 (c)):
+    //
+    //   "(c) NO ROW IS LABELLED THAT THE FRAME DID NOT TRANSFER, AND NO ROW IS
+    //   TRANSFERRED TWICE. Across a batch that is aborted and immediately
+    //   restarted with the aborted batch's completion arriving LATE, every
+    //   non-empty status cell names the outcome of a transfer that actually
+    //   happened to that row, and the reader is invoked exactly once per checked
+    //   row - an over-count catches a second driver, an under-count catches a
+    //   stale one."
+    //
+    // THE AMBIGUITY OPTION C CLOSES. TWO LISTS CAN CARRY THE SAME remote name: the Upload
+    // list's row and the Sync list's Upload row for one activity both hold
+    // `text(1) == ride->fileName` (CloudService.cpp:1777 / :1823), and both arm
+    // sites compute `QFileInfo(text(1)).baseName() + uploadExtension()` from it.
+    // So a Sync batch abandoned mid-upload and an Upload batch restarted behind it
+    // arm different operation ids even though their user-visible names match.
+    //
+    // THE FOUR CLICKS: Sync -> Synchronize -> Abort -> Upload tab, Select all,
+    // Upload. No Refresh anywhere. Then the abandoned SYNC write completes.
+    //
+    // `completeWrite = false` lets the run deliver the two parked operation ids
+    // in either order. The messages deliberately differ so every assertion can
+    // prove that each result lands on the row for the operation that produced it.
+    struct AbandonedWriteOutcome
+    {
+        bool timedOut = false;
+
+        // -- premises about the fixture
+        int syncListCount = 0;
+        int upListCount = 0;
+        int syncChecked = 0;
+        int upChecked = 0;
+
+        // -- premises about the two batches
+        QString staleName; // the SYNC batch's outstanding write...
+        QString liveName;  // ...and the restarted UPLOAD batch's
+        int writeCallsAfterSyncDispatch = 0;
+        bool sawAbortLabel = false;
+        bool abortTookTheAbortBranch = false;
+        bool restartTookTheStartBranch = false;
+        int writeCallsAfterRestart = 0;
+
+        // -- read either side of EACH of the two deliveries, so "which row
+        //    changed, and when" is an observation rather than an inference.
+        QStringList syncStatusesBefore, upStatusesBefore;
+        QStringList syncStatusesMid, upStatusesMid;
+        QStringList syncStatusesAfter, upStatusesAfter;
+        int writeCallsBefore = 0, writeCallsMid = 0, writeCallsAfter = 0;
+        int barBefore = 0, barMid = 0, barAfter = 0, barMax = 0;
+        QString progressTextAfter;
+        QStringList writeNames;
+
+        // Set on the last line of the run: under ASan with halt_on_error=1 a
+        // use-after-free ends the PROCESS, so a run that gets this far committed
+        // none.
+        bool survivedBothCompletions = false;
+    };
+
+    // The live upload's verdict, and the abandoned sync write's. DELIBERATELY
+    // DIFFERENT, and only the first counts as a success (completedWrite compares
+    // against tr("Completed.")), so "which verdict landed where" and "was anything
+    // counted" are both observable.
+    static QString liveWriteResult() { return QStringLiteral("Completed."); }
+    static QString staleWriteResult() { return QStringLiteral("Upload failed."); }
+
+    // One run of the F3 geometry. `staleFirst` chooses the ARRIVAL ORDER. NOT a
+    // slot (it takes an argument).
+    AbandonedWriteOutcome runAbandonedSyncWriteThenUpload(bool staleFirst)
+    {
+        obs::reset();
+        rideopen::reset();
+        ridefail::reset();
+        rideopen::blockingMs = 5;
+
+        AbandonedWriteOutcome out;
+
+        // Two local activities. The rows must exist on disk because both drivers
+        // open each one before writing it.
+        const QDir activities = context->athlete->home->activities();
+        QDir().mkpath(activities.absolutePath());
+
+        QList<RideItem*> items;
+        QStringList paths;
+        for (int i = 0; i < 2; i++) {
+            const QString name = rebuildLocalActivity(i);
+            QFile f(activities.absolutePath() + "/" + name);
+            f.open(QIODevice::WriteOnly);
+            f.write("gcblock");
+            f.close();
+            paths << f.fileName();
+
+            RideItem* item = new RideItem(nullptr, context);
+            item->fileName = name;
+            item->path = activities.absolutePath();
+            item->dateTime = QDateTime(QDate::currentDate(), QTime(10 + i, 0, 0));
+            item->planned = false; // the upload list skips planned rides
+            items << item;
+        }
+        for (RideItem* item : items)
+            rideCache->rides().push_back(item);
+
+        QEventLoop appLoop;
+        QMetaObject::invokeMethod(
+            this,
+            [&]() {
+                QWidget* owner = new QWidget;
+
+                BlockingStore* store = new BlockingStore(context);
+                // NOTHING remote, so every local ride is "not on the service yet"
+                // and gets a sync list UPLOAD row as well as an upload list row -
+                // which is the pair of same-named rows this finding is about.
+                store->entryNames = QStringList();
+                store->blockingMs = 5;
+                store->closeActionContext = qApp;
+                store->writeSucceeds = true;
+                // This run owns the timing AND the order of both completions.
+                store->completeWrite = false;
+
+                CloudServiceSyncDialog* dialog = new CloudServiceSyncDialog(context, store);
+                dialog->setParent(owner, Qt::Dialog);
+                dialog->start();
+                dialog->open();
+                store->dialog = dialog;
+                store->dialogGuard = dialog;
+
+                QTreeWidget* syncList = rideListWithHeader(dialog, QStringLiteral("Source"));
+                QTreeWidget* upList = rideListWithHeader(dialog, QStringLiteral("File"));
+                QTabWidget* tabs = dialog->findChild<QTabWidget*>();
+                QProgressBar* bar = dialog->findChild<QProgressBar*>();
+
+                auto statuses = [](QTreeWidget* w) {
+                    QStringList s;
+                    if (w != nullptr)
+                        for (int i = 0; i < w->invisibleRootItem()->childCount(); i++)
+                            s << w->invisibleRootItem()->child(i)->text(7);
+                    return s;
+                };
+                auto countChecked = [](QTreeWidget* w) {
+                    int n = 0;
+                    if (w == nullptr)
+                        return n;
+                    QTreeWidgetItem* root = w->invisibleRootItem();
+                    for (int i = 0; i < root->childCount(); i++) {
+                        QCheckBox* c = qobject_cast<QCheckBox*>(w->itemWidget(root->child(i), 0));
+                        if (c != nullptr && c->isChecked())
+                            n++;
+                    }
+                    return n;
+                };
+
+                // ---- CLICKS 1+2. The SYNC tab, Select all, Synchronize. syncNext
+                //      takes its UPLOAD branch on sync row 0 and parks there.
+                if (tabs != nullptr)
+                    tabs->setCurrentIndex(2);
+                dialog->selectAllSyncChanged(Qt::Checked);
+                if (syncList != nullptr)
+                    out.syncListCount = syncList->invisibleRootItem()->childCount();
+                out.syncChecked = countChecked(syncList);
+
+                QPushButton* watched = pushButtonWithText(dialog, QStringLiteral("Synchronize"));
+
+                dialog->downloadClicked();
+                out.staleName = obs::lastWriteName;
+                out.writeCallsAfterSyncDispatch = obs::writeFileCalls;
+
+                // ---- CLICK 3. Abort. The abort branch deliberately does NOT
+                //      disarm, so the sync batch's write ticket is still armed.
+                out.sawAbortLabel = (pushButtonWithText(dialog, QStringLiteral("Abort")) != nullptr);
+                dialog->downloadClicked();
+                out.abortTookTheAbortBranch = (watched != nullptr && watched->text() == QStringLiteral("Download"));
+
+                // ---- CLICK 4+5. The UPLOAD tab, Select all, Upload. The START
+                //      branch is where the abandoned ticket must be RETIRED, and
+                //      uploadNext then re-arms the IDENTICAL name for a different
+                //      row of a different list.
+                if (tabs != nullptr)
+                    tabs->setCurrentIndex(1);
+                dialog->selectAllUpChanged(Qt::Checked);
+                if (upList != nullptr)
+                    out.upListCount = upList->invisibleRootItem()->childCount();
+                out.upChecked = countChecked(upList);
+
+                dialog->downloadClicked();
+                out.restartTookTheStartBranch = (watched != nullptr && watched->text() == QStringLiteral("Abort"));
+                out.liveName = obs::lastWriteName;
+                out.writeCallsAfterRestart = obs::writeFileCalls;
+
+                out.syncStatusesBefore = statuses(syncList);
+                out.upStatusesBefore = statuses(upList);
+                out.writeCallsBefore = obs::writeFileCalls;
+                if (bar != nullptr) {
+                    out.barBefore = bar->value();
+                    out.barMax = bar->maximum();
+                }
+
+                // ---- THE TWO COMPLETIONS. Their remote names match but their
+                //      opaque operation ids do not; choose the id order directly.
+                store->deliverParkedWrite(staleFirst ? 0 : 1, staleFirst ? staleWriteResult() : liveWriteResult());
+
+                out.syncStatusesMid = statuses(syncList);
+                out.upStatusesMid = statuses(upList);
+                out.writeCallsMid = obs::writeFileCalls;
+                if (bar != nullptr)
+                    out.barMid = bar->value();
+
+                store->deliverParkedWrite(0, staleFirst ? liveWriteResult() : staleWriteResult());
+
+                out.syncStatusesAfter = statuses(syncList);
+                out.upStatusesAfter = statuses(upList);
+                out.writeCallsAfter = obs::writeFileCalls;
+                if (bar != nullptr)
+                    out.barAfter = bar->value();
+                out.progressTextAfter = progressLabelText(dialog);
+                out.writeNames = obs::writeNames;
+                out.survivedBothCompletions = true;
+
+                QTimer::singleShot(100, qApp, [owner]() { delete owner; });
+                QTimer::singleShot(200, &appLoop, &QEventLoop::quit);
+
+                bool* timedOutp = &out.timedOut;
+                QTimer::singleShot(10000, &appLoop, [timedOutp]() {
+                    *timedOutp = true;
+                    QCoreApplication::exit(1);
+                });
+            },
+            Qt::QueuedConnection);
+
+        appLoop.exec();
+        for (int i = 0; i < 50; ++i)
+            QApplication::processEvents(QEventLoop::AllEvents, 5);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+        for (RideItem* item : items) {
+            rideCache->rides().removeAll(item);
+            delete item->ride(false);
+            delete item;
+        }
+        for (const QString& p : paths)
+            QFile::remove(p);
+
+        return out;
+    }
+
+    // The premises every arrival order shares. Without these the run below is
+    // satisfied by a completedWrite that does nothing at all (LSN-050). NOT a
+    // slot.
+    void assertAbandonedWritePremises(const QString& where, const AbandonedWriteOutcome& out)
+    {
+        QVERIFY2(out.timedOut == false, qPrintable(where + QStringLiteral("the run never came back")));
+        QVERIFY2(out.survivedBothCompletions,
+                 qPrintable(where + QStringLiteral("the run did not reach its last line")));
+        QCOMPARE(out.syncListCount, 2);
+        QCOMPARE(out.syncChecked, 2);
+        QCOMPARE(out.upListCount, 2);
+        QCOMPARE(out.upChecked, 2);
+
+        // The SYNC batch really did dispatch a write, and the abort really was an
+        // abort.
+        QCOMPARE(out.writeCallsAfterSyncDispatch, 1);
+        QVERIFY2(
+            out.sawAbortLabel,
+            qPrintable(where + QStringLiteral("the button was never labelled \"Abort\", so downloadClicked() could "
+                                              "not have been the abort control")));
+        QVERIFY2(out.abortTookTheAbortBranch,
+                 qPrintable(where + QStringLiteral("downloadClicked() did not take its abort branch")));
+
+        // ...and the UPLOAD batch behind it really did start and really did
+        // dispatch its own write.
+        QVERIFY2(out.restartTookTheStartBranch,
+                 qPrintable(where + QStringLiteral("the third click did not take the START branch")));
+        QCOMPARE(out.writeCallsAfterRestart, 2);
+
+        // The collision premise: names match. Correct association therefore has
+        // to come from the operation ids carried by the completion channel.
+        QVERIFY2(out.staleName == out.liveName,
+                 qPrintable(where + QStringLiteral("the abandoned sync write and the live upload carry DIFFERENT names "
+                                                   "(\"%1\" vs \"%2\"), so this run is not the F3 route")
+                                        .arg(out.staleName)
+                                        .arg(out.liveName)));
+        QCOMPARE(out.writeNames.value(0), out.staleName);
+        QCOMPARE(out.writeNames.value(1), out.liveName);
+
+        // Both lists are parked on their row 0 and nothing has been counted yet.
+        QCOMPARE(out.syncStatusesBefore, QStringList() << "Uploading" << "");
+        QCOMPARE(out.upStatusesBefore, QStringList() << "Uploading" << "");
+        QCOMPARE(out.barBefore, 0);
+        QCOMPARE(out.barMax, 2);
+    }
+
+    // What BOTH orders must end at, whichever verdict landed where. This is the
+    // exhaustion argument as a measurement: exactly one re-drive, exactly one
+    // count, and no completion swallowed. NOT a slot.
+    void assertAbandonedWriteEndState(const QString& where, const AbandonedWriteOutcome& out)
+    {
+        // THE FIRST ARRIVAL DRIVES NOTHING. It is the abandoned batch's, whatever
+        // it says, so it may not dispatch the live batch's next row.
+        QVERIFY2(
+            out.writeCallsMid == 2,
+            qPrintable(where + QStringLiteral("the FIRST completion re-drove the loop: %1 writes have been issued, "
+                                              "not 2")
+                                   .arg(out.writeCallsMid)));
+        QCOMPARE(out.barMid, 0);
+        QCOMPARE(out.upStatusesMid, QStringList() << "Uploading" << "");
+
+        // THE SECOND ARRIVAL IS NOT SWALLOWED: it is the live batch's ticket, so
+        // it counts once and re-drives once - onto row 1, which is the row that
+        // was never dispatched under the defect.
+        QCOMPARE(out.barAfter, 1);
+        QVERIFY2(out.writeCallsAfter == 3,
+                 qPrintable(where + QStringLiteral("the loop was re-driven %1 times in total, not once (%2 writes)")
+                                        .arg(out.writeCallsAfter - 2)
+                                        .arg(out.writeCallsAfter)));
+        QCOMPARE(out.upStatusesAfter.value(1), QStringLiteral("Uploading"));
+        QVERIFY2(out.writeNames.count() == 3 && out.writeNames.value(2) != out.liveName,
+                 qPrintable(where + QStringLiteral("the re-drive did not dispatch a NEW row: writes were [%1]")
+                                        .arg(out.writeNames.join(QStringLiteral("|")))));
+
+        // ...AND THE LIVE BATCH HAS NOT FINISHED. progressLabelText reports only a
+        // completion TAIL's own sentence (it matches on "successfully"), so an
+        // empty read here is the claim that neither batch announced itself: the
+        // live one is still waiting on row 1's write, which is exactly the state a
+        // batch of two rows should be in after one of them has landed.
+        QCOMPARE(out.progressTextAfter, QString());
+
+        // The sync list's row 1 was never dispatched by anybody.
+        QCOMPARE(out.syncStatusesAfter.value(1), QString());
+    }
+
+    // =====================================================================
+    // TEST-125 (A3-R028b-F3, REQ-028 (c), DEC-garmin-037) — a retired ticket
+    // holds a RAW ROW POINTER.
+    // =====================================================================
+    //
+    // The mechanism above keeps an abandoned write's ticket alive past the batch
+    // that armed it, and that ticket holds a `QTreeWidgetItem*`. Refresh is the
+    // one place in this dialog a row dies (:1570/:1577/:1584), so without a clear
+    // beside the existing disarm the fix MANUFACTURES a use-after-free of exactly
+    // the A3-R028-F1 shape - a new defect created by the repair of an old one.
+    //
+    // TWO RUNS, and they measure different things:
+    //
+    //   NO REFRESH   the criterion. The abandoned sync write's completion arrives
+    //                after a restart that dispatched NOTHING (the download tab is
+    //                empty), and must still label the row it was issued for. RED
+    //                before DEC-037: the START branch disarms, so today the
+    //                completion is swallowed and the row keeps "Uploading".
+    //   WITH REFRESH the memory-safety rider on the same mechanism. The Refresh
+    //                between the retire and the delivery FREES that row; a second
+    //                START then re-stamps batchListGeneration so the DEC-034
+    //                compare cannot be what saves the run. Nothing may be
+    //                labelled and the process must survive. This run is green
+    //                before DEC-037 too - there is nothing retained to dangle -
+    //                and it goes red only against DEC-037 WITHOUT its clear, which
+    //                is what makes that line mutation-provable rather than
+    //                asserted.
+    struct RetiredWriteOutcome
+    {
+        bool timedOut = false;
+
+        int syncListCount = 0;
+        int syncChecked = 0;
+        QString staleName;
+        int writeCallsAfterDispatch = 0;
+
+        bool sawAbortLabel = false;
+        bool abortTookTheAbortBranch = false;
+        QString progressTextAfterRestart;
+        int writeCallsAfterRestart = 0;
+
+        bool refreshed = false;
+        bool rowFreedByRefresh = false;
+        QString progressTextAfterSecondRestart;
+
+        QStringList syncStatusesBefore;
+        QStringList syncStatusesAfter;
+        QList<int> rowsRelabelled;
+        int barBefore = 0, barAfter = 0;
+        int writeCallsAfterLate = 0;
+
+        bool restartedWithWrite = false;
+        int parkedBeforeLate = 0;
+        QStringList upStatusesBeforeLate;
+        QStringList upStatusesAfterStale;
+        QStringList upStatusesAfterLive;
+        int barAfterStale = 0;
+        int barAfterLive = 0;
+        bool deliveredStale = false;
+        bool deliveredLive = false;
+
+        bool survivedTheLateCompletion = false;
+    };
+
+    RetiredWriteOutcome runRetiredWriteAcrossRefresh(bool withRefresh, bool restartWriteAfterRefresh = false)
+    {
+        obs::reset();
+        rideopen::reset();
+        ridefail::reset();
+        rideopen::blockingMs = 5;
+
+        RetiredWriteOutcome out;
+
+        const QDir activities = context->athlete->home->activities();
+        QDir().mkpath(activities.absolutePath());
+
+        const QString name = rebuildLocalActivity(0);
+        QFile f(activities.absolutePath() + "/" + name);
+        f.open(QIODevice::WriteOnly);
+        f.write("gcblock");
+        f.close();
+        const QString path = f.fileName();
+
+        RideItem* item = new RideItem(nullptr, context);
+        item->fileName = name;
+        item->path = activities.absolutePath();
+        item->dateTime = QDateTime(QDate::currentDate(), QTime(10, 0, 0));
+        item->planned = false;
+        rideCache->rides().push_back(item);
+
+        QEventLoop appLoop;
+        QMetaObject::invokeMethod(
+            this,
+            [&]() {
+                QWidget* owner = new QWidget;
+
+                BlockingStore* store = new BlockingStore(context);
+                // Nothing remote: one sync UPLOAD row, one upload row, and an
+                // EMPTY download list - which is how the restart below arms
+                // nothing at all.
+                store->entryNames = QStringList();
+                store->blockingMs = 5;
+                store->closeActionContext = qApp;
+                store->writeSucceeds = true;
+                store->completeWrite = false;
+
+                CloudServiceSyncDialog* dialog = new CloudServiceSyncDialog(context, store);
+                dialog->setParent(owner, Qt::Dialog);
+                dialog->start();
+                dialog->open();
+                store->dialog = dialog;
+                store->dialogGuard = dialog;
+
+                QTabWidget* tabs = dialog->findChild<QTabWidget*>();
+                QProgressBar* bar = dialog->findChild<QProgressBar*>();
+
+                // The sync list is looked up FRESH either side of the Refresh:
+                // refreshClicked deletes its rows and builds new ones, and holding
+                // a row pointer across it is the very defect under test.
+                auto syncStatuses = [&]() {
+                    QStringList s;
+                    if (QTreeWidget* w = rideListWithHeader(dialog, QStringLiteral("Source")))
+                        for (int i = 0; i < w->invisibleRootItem()->childCount(); i++)
+                            s << w->invisibleRootItem()->child(i)->text(7);
+                    return s;
+                };
+
+                // ---- CLICKS 1+2. Sync, Select all, Synchronize.
+                if (tabs != nullptr)
+                    tabs->setCurrentIndex(2);
+                dialog->selectAllSyncChanged(Qt::Checked);
+                QTreeWidget* syncList = rideListWithHeader(dialog, QStringLiteral("Source"));
+                if (syncList != nullptr) {
+                    out.syncListCount = syncList->invisibleRootItem()->childCount();
+                    for (int i = 0; i < out.syncListCount; i++) {
+                        QCheckBox* c =
+                            qobject_cast<QCheckBox*>(syncList->itemWidget(syncList->invisibleRootItem()->child(i), 0));
+                        if (c != nullptr && c->isChecked())
+                            out.syncChecked++;
+                    }
+                }
+
+                QPushButton* watched = pushButtonWithText(dialog, QStringLiteral("Synchronize"));
+
+                dialog->downloadClicked();
+                out.staleName = obs::lastWriteName;
+                out.writeCallsAfterDispatch = obs::writeFileCalls;
+
+                // The ADDRESS of the row the ticket is holding, kept as raw
+                // storage. Never cast back, never dereferenced - asking ASan
+                // whether it is poisoned is the only way to ask "is it dead?"
+                // without committing the use-after-free under investigation.
+                const void* syncRow0Addr = (syncList != nullptr && syncList->invisibleRootItem()->childCount() > 0)
+                                               ? static_cast<const void*>(syncList->invisibleRootItem()->child(0))
+                                               : nullptr;
+
+                // ---- CLICK 3. Abort, which leaves the ticket armed.
+                out.sawAbortLabel = (pushButtonWithText(dialog, QStringLiteral("Abort")) != nullptr);
+                dialog->downloadClicked();
+                out.abortTookTheAbortBranch = (watched != nullptr && watched->text() == QStringLiteral("Download"));
+
+                // ---- CLICK 4. The DOWNLOAD tab, which holds no rows at all, so
+                //      this START branch retires the abandoned write ticket and
+                //      then dispatches NOTHING. Only downloadNext's tail writes
+                //      the sentence below, so it is production's own proof that
+                //      the START branch ran and that its batch was empty.
+                if (tabs != nullptr)
+                    tabs->setCurrentIndex(0);
+                dialog->downloadClicked();
+                out.progressTextAfterRestart = progressLabelText(dialog);
+                out.writeCallsAfterRestart = obs::writeFileCalls;
+
+                if (withRefresh) {
+                    // ---- CLICK 5. Refresh: the one place a row dies.
+                    dialog->refreshClicked();
+                    out.refreshed = true;
+                    out.rowFreedByRefresh = isPoisoned(syncRow0Addr, sizeof(QTreeWidgetItem));
+
+                    // ---- CLICK 6. ...and a START behind it, so that the DEC-034
+                    //      generation compare at completedWrite's entry reads EQUAL
+                    //      and cannot be what stands the delivery down. Without
+                    //      this click the run proves nothing about the retired set.
+                    if (restartWriteAfterRefresh) {
+                        if (tabs != nullptr)
+                            tabs->setCurrentIndex(1);
+                        dialog->selectAllUpChanged(Qt::Checked);
+                        dialog->downloadClicked();
+                        out.restartedWithWrite = true;
+                    } else {
+                        dialog->downloadClicked();
+                        out.progressTextAfterSecondRestart = progressLabelText(dialog);
+                    }
+                }
+
+                auto upStatuses = [&]() {
+                    QStringList s;
+                    if (QTreeWidget* w = rideListWithHeader(dialog, QStringLiteral("File")))
+                        for (int i = 0; i < w->invisibleRootItem()->childCount(); i++)
+                            s << w->invisibleRootItem()->child(i)->text(7);
+                    return s;
+                };
+
+                out.syncStatusesBefore = syncStatuses();
+                if (bar != nullptr)
+                    out.barBefore = bar->value();
+
+                // ---- THE LATE COMPLETION: the sync batch's write, arriving now.
+                out.parkedBeforeLate = store->parked.count();
+                if (restartWriteAfterRefresh) {
+                    out.upStatusesBeforeLate = upStatuses();
+                    out.deliveredStale = store->deliverParkedWrite(0, staleWriteResult());
+                    out.upStatusesAfterStale = upStatuses();
+                    if (bar != nullptr)
+                        out.barAfterStale = bar->value();
+                    out.deliveredLive = store->deliverParkedWrite(0, liveWriteResult());
+                    out.upStatusesAfterLive = upStatuses();
+                    if (bar != nullptr)
+                        out.barAfterLive = bar->value();
+                } else {
+                    store->notifyWriteComplete(out.staleName, liveWriteResult());
+                }
+
+                out.syncStatusesAfter = syncStatuses();
+                for (int i = 0; i < out.syncStatusesAfter.count() && i < out.syncStatusesBefore.count(); i++)
+                    if (out.syncStatusesAfter.at(i) != out.syncStatusesBefore.at(i))
+                        out.rowsRelabelled << i;
+                out.writeCallsAfterLate = obs::writeFileCalls;
+                if (bar != nullptr)
+                    out.barAfter = bar->value();
+                out.survivedTheLateCompletion = true;
+
+                QTimer::singleShot(100, qApp, [owner]() { delete owner; });
+                QTimer::singleShot(200, &appLoop, &QEventLoop::quit);
+
+                bool* timedOutp = &out.timedOut;
+                QTimer::singleShot(10000, &appLoop, [timedOutp]() {
+                    *timedOutp = true;
+                    QCoreApplication::exit(1);
+                });
+            },
+            Qt::QueuedConnection);
+
+        appLoop.exec();
+        for (int i = 0; i < 50; ++i)
+            QApplication::processEvents(QEventLoop::AllEvents, 5);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+        rideCache->rides().removeAll(item);
+        delete item->ride(false);
+        delete item;
+        QFile::remove(path);
+
+        return out;
+    }
+
+    void assertRetiredWritePremises(const QString& where, const RetiredWriteOutcome& out)
+    {
+        QVERIFY2(out.timedOut == false, qPrintable(where + QStringLiteral("the run never came back")));
+        QVERIFY2(out.survivedTheLateCompletion,
+                 qPrintable(where + QStringLiteral("the run did not reach its last line")));
+        QCOMPARE(out.syncListCount, 1);
+        QCOMPARE(out.syncChecked, 1);
+        QCOMPARE(out.writeCallsAfterDispatch, 1);
+        QVERIFY2(out.sawAbortLabel, qPrintable(where + QStringLiteral("the button was never labelled \"Abort\"")));
+        QVERIFY2(out.abortTookTheAbortBranch,
+                 qPrintable(where + QStringLiteral("downloadClicked() did not take its abort branch")));
+        QCOMPARE(out.progressTextAfterRestart, QStringLiteral("Downloaded 0 of 0 successfully"));
+        QCOMPARE(out.writeCallsAfterRestart, 1);
+        // The late completion may not dispatch anything, in either run.
+        QCOMPARE(out.writeCallsAfterLate, 1);
+        QCOMPARE(out.barAfter, out.barBefore);
+    }
+
+  private slots:
+    // -- TEST-124 (A3-R028b-F3, REQ-028 (c), DEC-garmin-036) -------------
+    // AN ABANDONED SYNC WRITE MUST NOT BE TAKEN FOR THE LIVE UPLOAD — IN
+    // EITHER ARRIVAL ORDER.
+    //
+    // RED, before DEC-037 (QPA offscreen and minimal both):
+    //   FAIL!  : ...[stale, live]: the FIRST completion re-drove the loop: 3
+    //            writes have been issued, not 2
+    //
+    // Both orders are run so operation/result association is independent of
+    // completion order even when the remote names collide.
+    void anAbandonedSyncWritesCompletionMustNotBeTakenForTheLiveUploadsInEitherOrder()
+    {
+        // ---- ORDER ONE: [stale, live]. The abandoned sync write lands first.
+        const AbandonedWriteOutcome stale = runAbandonedSyncWriteThenUpload(true);
+        const QString first = QStringLiteral("[stale, live]: ");
+        assertAbandonedWritePremises(first, stale);
+        if (QTest::currentTestFailed())
+            return;
+
+        // The first arrival is the abandoned SYNC batch's, and it labels the SYNC
+        // row it was issued for - not the upload row that happens to share its
+        // name.
+        QCOMPARE(stale.syncStatusesMid, QStringList() << staleWriteResult() << "");
+        // ...and the second is the live upload's, on the upload row.
+        QCOMPARE(stale.upStatusesAfter.value(0), liveWriteResult());
+        QCOMPARE(stale.syncStatusesAfter.value(0), staleWriteResult());
+        assertAbandonedWriteEndState(first, stale);
+        if (QTest::currentTestFailed())
+            return;
+
+        // ---- ORDER TWO: [live, stale]. The live operation lands first and must
+        //      still resolve to the upload row by its own id.
+        const AbandonedWriteOutcome live = runAbandonedSyncWriteThenUpload(false);
+        const QString second = QStringLiteral("[live, stale]: ");
+        assertAbandonedWritePremises(second, live);
+        if (QTest::currentTestFailed())
+            return;
+
+        // The live result belongs to the upload row immediately; the later stale
+        // result belongs to the abandoned sync row. No result swap is accepted.
+        QCOMPARE(live.syncStatusesMid, QStringList() << "Uploading" << "");
+        QCOMPARE(live.upStatusesMid.value(0), liveWriteResult());
+        QCOMPARE(live.upStatusesAfter.value(0), liveWriteResult());
+        QCOMPARE(live.syncStatusesAfter.value(0), staleWriteResult());
+        QCOMPARE(live.writeCallsMid, 3);
+        QCOMPARE(live.writeCallsAfter, 3);
+        QCOMPARE(live.barMid, 1);
+        QCOMPARE(live.barAfter, 1);
+        QCOMPARE(live.upStatusesAfter.value(1), QStringLiteral("Uploading"));
+        QCOMPARE(live.progressTextAfter, QString());
+    }
+
+    // -- TEST-125 (A3-R028b-F3, REQ-028 (c), DEC-garmin-037) -------------
+    // A RETIRED TICKET MUST NOT OUTLIVE THE ROW IT NAMES.
+    //
+    // RED, before DEC-037 (QPA offscreen and minimal both):
+    //   FAIL!  : ...Compared values are not the same
+    //            Actual   (out.syncStatusesAfter): "Uploading"
+    //            Expected (...liveWriteResult()) : "Completed."
+    void aRetiredWriteTicketMustNotOutliveTheRowsItNames()
+    {
+        // ---- RUN ONE: no Refresh. The retained ticket labels its own row.
+        const RetiredWriteOutcome kept = runRetiredWriteAcrossRefresh(false);
+        const QString first = QStringLiteral("no refresh: ");
+        assertRetiredWritePremises(first, kept);
+        if (QTest::currentTestFailed())
+            return;
+        QCOMPARE(kept.syncStatusesBefore, QStringList() << "Uploading");
+        QCOMPARE(kept.syncStatusesAfter.value(0), liveWriteResult());
+        QCOMPARE(kept.rowsRelabelled, QList<int>() << 0);
+
+        // ---- RUN TWO: a Refresh between the retire and the delivery. The row the
+        //      ticket names is FREED, so the ticket must be gone with it.
+        const RetiredWriteOutcome dropped = runRetiredWriteAcrossRefresh(true);
+        const QString second = QStringLiteral("refresh: ");
+        assertRetiredWritePremises(second, dropped);
+        if (QTest::currentTestFailed())
+            return;
+
+        // The premise: the row really is dead. Asked of the ALLOCATOR, never by
+        // dereferencing it.
+        QVERIFY2(dropped.refreshed, qPrintable(second + QStringLiteral("no Refresh was issued")));
+        QVERIFY2(dropped.rowFreedByRefresh,
+                 qPrintable(second + QStringLiteral("the Refresh did not free the row the ticket names, so this run "
+                                                    "cannot show the use-after-free it exists for")));
+        // ...and the second START really did re-stamp the generation, so the
+        // DEC-034 compare at completedWrite's entry is not what stands this
+        // delivery down.
+        QCOMPARE(dropped.progressTextAfterSecondRestart, QStringLiteral("Downloaded 0 of 0 successfully"));
+
+        // THE CRITERION: nothing labelled, and - the assertion this run exists for
+        // - the process is still alive to say so. Under ASan with halt_on_error=1
+        // a dangling `row->setText` ends it here instead.
+        QCOMPARE(dropped.syncStatusesBefore, QStringList() << "");
+        QCOMPARE(dropped.syncStatusesAfter, QStringList() << "");
+        QCOMPARE(dropped.rowsRelabelled, QList<int>());
+    }
+
+    // -- TEST-128 (REQ-028 (a)/(c), DEC-garmin-036 Option C) ------------
+    // Preserve both operation identities across Abort -> Refresh -> restart,
+    // while making the abandoned operation row-free. The stale completion must
+    // consume only its own record; the live completion must remain able to label
+    // and count the restarted row exactly once.
+    void refreshMustMakeOutstandingWritesRowFreeWithoutLosingTheirIdentity()
+    {
+        const RetiredWriteOutcome out = runRetiredWriteAcrossRefresh(true, true);
+        QVERIFY2(!out.timedOut, "TEST-128 run never came back");
+        QVERIFY2(out.survivedTheLateCompletion, "TEST-128 did not reach its last observation");
+        QCOMPARE(out.syncListCount, 1);
+        QCOMPARE(out.syncChecked, 1);
+        QCOMPARE(out.writeCallsAfterDispatch, 1);
+        QVERIFY2(out.refreshed && out.rowFreedByRefresh, "Refresh did not free the abandoned operation's original row");
+        QVERIFY2(out.restartedWithWrite, "the post-Refresh batch did not dispatch a live write");
+        QCOMPARE(out.parkedBeforeLate, 2);
+        QVERIFY2(out.deliveredStale && out.deliveredLive, "both parked completions were not delivered");
+
+        QCOMPARE(out.syncStatusesBefore, QStringList() << "");
+        QCOMPARE(out.syncStatusesAfter, QStringList() << "");
+        QCOMPARE(out.upStatusesBeforeLate, QStringList() << "Uploading");
+        QVERIFY2(out.upStatusesAfterStale == (QStringList() << "Uploading"),
+                 qPrintable(QStringLiteral("the row-free stale operation consumed or labelled the LIVE row: [%1]")
+                                .arg(out.upStatusesAfterStale.join(QStringLiteral("|")))));
+        QCOMPARE(out.barAfterStale, 0);
+        QCOMPARE(out.upStatusesAfterLive, QStringList() << liveWriteResult());
+        QCOMPARE(out.barAfterLive, 1);
+        QCOMPARE(out.writeCallsAfterLate, 2);
+    }
+
+  private:
+    // =====================================================================
+    // TEST-127 — THE RANDOMIZED CLICK-SEQUENCE DRIVER.
+    // =====================================================================
+    //
+    // WHY. Every other slot in this file is one route somebody thought of. Six
+    // guard mechanisms now interact inside this dialog and each new one
+    // MULTIPLIES the reachable state space instead of adding to it, so the set of
+    // routes nobody has thought of is growing faster than the set that has a slot.
+    // This drives the same alphabet of user actions the hand-written slots draw
+    // from - Synchronize/Upload/Download, Abort, Refresh, a tab switch and the
+    // delivery of a completion the network has been holding - in orders NOBODY
+    // CHOSE, and judges the result with the two oracles that need no route
+    // knowledge:
+    //
+    //   1. TEST-126's invariants, which are already being evaluated in every run
+    //      of this file and are evaluated in these too.
+    //   2. THE PROCESS ITSELF. This target is built with -fsanitize=address and
+    //      its ctest entries pin halt_on_error=1
+    //      (unittests/Core/garminconnect/CMakeLists.txt:1457/:1486), so a
+    //      use-after-free is not a failed comparison, it is the end of the
+    //      process. "The run came back and printed its trace" is therefore an
+    //      assertion, and the strongest one here.
+    //
+    // SEEDED, AND THE SEED IS PRINTED WITH THE WHOLE ACTION TRACE ON FAILURE. An
+    // unreproducible fuzz failure is a rumour: the next person has to be able to
+    // re-drive the exact sequence. The SCRIPT is a pure function of the seed - it
+    // is generated in full before the dialog is built, so no decision in it
+    // depends on what the dialog does - and the trace records what each step
+    // actually did, including the steps that were skipped because their
+    // precondition did not hold.
+    //
+    // WHERE the click lands is fuzzed as well as WHICH click it is, because that
+    // is the dimension every defect this dialog has had lived in: a click at the
+    // top level and the same click delivered inside a suspended frame's
+    // processEvents() reach completely different code. The three placements use
+    // the file's existing insideframe primitives, which are synchronous seams and
+    // not timing bets (see that block comment).
+    //
+    // NO WALL CLOCK. The store's nested loop is set to its shortest, completions
+    // are PARKED (completeRead/completeWrite off) and delivered only when the
+    // script says so, and nothing waits for a duration to decide anything. The
+    // fixture's teardown timers are bounds, not sequencing.
+    //
+    // THE THIRD TEST-126 INVARIANT LIVES HERE, for the reason given in that block
+    // comment: restart idempotence is an ACTION, and only a run that is already
+    // clicking may perform it.
+    enum FuzzAction {
+        FzStart = 0,   // select the current tab's rows and press the transfer button
+        FzAbort,       // ...press it again while it says Abort
+        FzRefresh,     // Refresh List - the one place a row dies
+        FzTab,         // switch tabs (Download / Upload / Sync)
+        FzDeliver,     // hand back one completion the store has been holding
+        FzIdempotence, // the restart-idempotence probe
+        FzActionCount
+    };
+
+    enum FuzzPlacement {
+        FzNow = 0,             // at the top level, between store calls
+        FzInNextProcessEvents, // inside the next processEvents() anywhere -
+                               // production's own, inside a completion slot or a
+                               // parse-failure branch, when there is one
+        FzAtNextCountedRow,    // inside the processEvents() of the completion slot
+                               // that next counts a row on the progress bar
+        FzPlacementCount
+    };
+
+    struct FuzzStep
+    {
+        int action = 0;
+        int placement = 0;
+        int arg = 0;
+    };
+
+    struct FuzzOutcome
+    {
+        bool completed = false; // the run reached its last line
+        bool timedOut = false;
+        QStringList trace;      // every step, in the order it ran
+        QStringList violations; // TEST-126's, if any
+        QStringList idempotence;
+        QString summary;
+    };
+
+    static void fuzzSelectAll(CloudServiceSyncDialog* d, int tab, Qt::CheckState state)
+    {
+        switch (tab) {
+        case 0:
+            d->selectAllChanged(state);
+            break;
+        case 1:
+            d->selectAllUpChanged(state);
+            break;
+        default:
+            d->selectAllSyncChanged(state);
+            break;
+        }
+    }
+
+    // Everything about the batch state that CAN be read from outside, in one
+    // string. `listindex` is NOT in it and cannot be: it is a private member of
+    // CloudServiceSyncDialog with no widget behind it and this target has no
+    // friend access. So the idempotence probe below is written against
+    // `downloadcounter` (the progress bar's value) and `successful` (which reaches
+    // the progress label) and says so rather than implying it covers all three.
+    static QString fuzzStateSnapshot(QWidget* dialog)
+    {
+        QStringList parts;
+        if (QProgressBar* bar = dialog->findChild<QProgressBar*>())
+            parts << QStringLiteral("bar=%1/%2").arg(bar->value()).arg(bar->maximum());
+        parts << QStringLiteral("label='%1'").arg(progressLabelText(dialog));
+        const QList<QTreeWidget*> lists = dialog->findChildren<QTreeWidget*>();
+        for (QTreeWidget* w : lists) {
+            // The download list labels its status in column 5 (:1104); the upload
+            // and sync lists in column 7 (:1133/:1172).
+            const int col =
+                (w->headerItem() != nullptr && w->headerItem()->text(1) == QStringLiteral("Workout Name")) ? 5 : 7;
+            QStringList rows;
+            for (int i = 0; i < w->invisibleRootItem()->childCount(); i++)
+                rows << w->invisibleRootItem()->child(i)->text(col);
+            parts << QStringLiteral("[%1]").arg(rows.join(QStringLiteral("|")));
+        }
+        return parts.join(QStringLiteral(" "));
+    }
+
+    FuzzOutcome runFuzz(quint32 seed, int steps)
+    {
+        obs::reset();
+        rideopen::reset();
+        ridefail::reset();
+        oracle::reset();
+        rideopen::blockingMs = 1;
+
+        FuzzOutcome out;
+
+        // ---- THE SCRIPT. Generated in full, here, before anything is built: it
+        //      is a pure function of the seed and of nothing else.
+        std::mt19937 rng(seed);
+        // UNIFORM OVER THE ALPHABET, AND THAT WAS MEASURED RATHER THAN ASSUMED.
+        //
+        // A weighted table was tried first, on the reasonable-sounding ground that
+        // Start and Deliver are the two actions that put work in flight and the
+        // idempotence probe by construction leaves the dialog idle - so weighting
+        // 4/2/2/1/4/1 raises the density of transfers per step. It does: over 512
+        // seeds it found INV-1 violations in 40 of them against the uniform draw's
+        // 10, and over 4096 seeds in 323 (7.9%).
+        //
+        // IT ALSO STOPPED FINDING THE OTHER DEFECT. The uniform draw reaches a
+        // heap-use-after-free (completedRead's abort branch writing a row that
+        // refreshClicked freed) at seed 447; the weighted one did not reach it in
+        // 4096 seeds. Tuning for the density of the failure you have already seen
+        // is how a fuzzer stops finding the ones you have not, and a mechanism
+        // that only rediscovers the cheap defect is worth much less than one that
+        // reaches both. So the weights are gone and this paragraph is what is left
+        // of them: if the density is ever raised again, re-check that seed 447's
+        // CLASS of finding is still reachable, not just that the count went up.
+        QList<FuzzStep> script;
+        for (int i = 0; i < steps; i++) {
+            FuzzStep s;
+            s.action = int(rng() % unsigned(FzActionCount));
+            s.placement = int(rng() % unsigned(FzPlacementCount));
+            s.arg = int(rng() % 9973u);
+            script << s;
+        }
+
+        // ---- THE FIXTURE: two local activities (Upload rows on the Upload and
+        //      Sync lists) and two remote ones (Download rows on the Download and
+        //      Sync lists), so every driver and every completion slot is
+        //      reachable and a batch is capable of having a SECOND row to carry on
+        //      to.
+        const QDir activities = context->athlete->home->activities();
+        QDir().mkpath(activities.absolutePath());
+
+        QList<RideItem*> items;
+        QStringList paths;
+        for (int i = 0; i < 2; i++) {
+            const QString name = rebuildLocalActivity(i);
+            QFile f(activities.absolutePath() + "/" + name);
+            f.open(QIODevice::WriteOnly);
+            f.write("gcblock");
+            f.close();
+            paths << f.fileName();
+
+            RideItem* item = new RideItem(nullptr, context);
+            item->fileName = name;
+            item->path = activities.absolutePath();
+            item->dateTime = QDateTime(QDate::currentDate(), QTime(10 + i, 0, 0));
+            item->planned = false; // the upload list skips planned rides (:1723)
+            items << item;
+        }
+        for (RideItem* item : items)
+            rideCache->rides().push_back(item);
+
+        // Shared with the deferred actions, which can outlive the frame that armed
+        // them, so heap-held rather than captured by reference.
+        auto trace = std::make_shared<QStringList>();
+        auto idem = std::make_shared<QStringList>();
+
+        QEventLoop appLoop;
+        QMetaObject::invokeMethod(
+            this,
+            [&]() {
+                QWidget* owner = new QWidget;
+
+                BlockingStore* store = new BlockingStore(context);
+                store->entryNames = QStringList() << rebuildRemoteActivity(0) << rebuildRemoteActivity(1);
+                store->blockingMs = 1;
+                store->closeActionContext = qApp;
+                // GarminConnect's own setting (GarminConnect.cpp:102):
+                // uncompressRide's first guard rejects outright on the default.
+                store->downloadCompression = CloudService::none;
+                // EVERY completion is PARKED. The script decides which of them is
+                // ever handed back, and when - which is what makes "two transfers
+                // outstanding" a state this driver can reach at all.
+                store->completeRead = false;
+                store->completeWrite = false;
+                store->writeSucceeds = true;
+
+                CloudServiceSyncDialog* dialog = new CloudServiceSyncDialog(context, store);
+                dialog->setParent(owner, Qt::Dialog);
+                dialog->start();
+                dialog->open();
+                store->dialog = dialog;
+                store->dialogGuard = dialog;
+
+                const QPointer<CloudServiceSyncDialog> alive(dialog);
+                const QPointer<CloudService> storeGuard(store);
+
+                // ONE STEP. Captured BY VALUE throughout: a deferred placement can
+                // fire after the frame that armed it has gone, and both subjects
+                // are QPointers so a step that arrives after the dialog has been
+                // destroyed is a no-op instead of a crash the fixture invented.
+                auto perform = std::make_shared<std::function<void(FuzzStep)>>();
+                *perform = [alive, storeGuard, trace, idem](FuzzStep s) {
+                    CloudServiceSyncDialog* d = alive.data();
+                    BlockingStore* st = qobject_cast<BlockingStore*>(storeGuard.data());
+                    // The step's own record, appended AND (when GC_ORACLE_TRACE is
+                    // set) interleaved with the oracle's events, so a violation can
+                    // be read as one sequence rather than two.
+                    const auto say = [trace](const QString& s) {
+                        *trace << s;
+                        oracle::trace(QStringLiteral("STEP ") + s);
+                    };
+                    if (d == nullptr || st == nullptr) {
+                        say(QStringLiteral("(dialog gone)"));
+                        return;
+                    }
+                    QTabWidget* tabs = d->findChild<QTabWidget*>();
+                    QPushButton* close = oracle::buttonWithText(d, QStringLiteral("Close"));
+                    // cancelButton hidden <=> `downloading` (see the oracle's
+                    // block comment): this is how the driver knows whether the
+                    // transfer button currently says Abort.
+                    const bool busy = (close != nullptr && close->isHidden());
+                    const int tab = tabs != nullptr ? tabs->currentIndex() : 2;
+
+                    switch (s.action) {
+                    case FzStart:
+                        if (busy) {
+                            say(QStringLiteral("start(skipped: already running)"));
+                            break;
+                        }
+                        // A user selects and then presses; a Refresh leaves every
+                        // box clear, so a driver that did not re-select would run
+                        // empty batches for the rest of the script.
+                        fuzzSelectAll(d, tab, Qt::Checked);
+                        say(QStringLiteral("start(tab %1)").arg(tab));
+                        d->downloadClicked();
+                        break;
+
+                    case FzAbort:
+                        if (!busy) {
+                            say(QStringLiteral("abort(skipped: idle)"));
+                            break;
+                        }
+                        say(QStringLiteral("abort"));
+                        d->downloadClicked();
+                        break;
+
+                    case FzRefresh:
+                        say(QStringLiteral("refresh"));
+                        d->refreshClicked();
+                        break;
+
+                    case FzTab: {
+                        const int k = s.arg % 3;
+                        say(QStringLiteral("tab(%1)").arg(k));
+                        if (tabs != nullptr)
+                            tabs->setCurrentIndex(k);
+                        break;
+                    }
+
+                    case FzDeliver: {
+                        if (st->parked.isEmpty()) {
+                            say(QStringLiteral("deliver(skipped: nothing parked)"));
+                            break;
+                        }
+                        // Removed as it is delivered: each parked completion is
+                        // handed back AT MOST ONCE, so this driver can never
+                        // double-free a read buffer the dialog has already
+                        // released and blame production for it.
+                        const BlockingStore::Parked p = st->parked.takeAt(s.arg % st->parked.count());
+                        if (p.isWrite) {
+                            say(QStringLiteral("deliver(write %1)").arg(p.name));
+                            st->notifyWriteComplete(p.operationId, p.name, QStringLiteral("Completed."));
+                        } else if (s.arg % 5 == 0) {
+                            say(QStringLiteral("deliver(read-failed %1)").arg(p.name));
+                            st->notifyReadFailed(p.token, p.name, QStringLiteral("service refused"));
+                        } else {
+                            say(QStringLiteral("deliver(read %1)").arg(p.name));
+                            st->notifyReadComplete(p.token, p.name, QStringLiteral("Completed."));
+                        }
+                        break;
+                    }
+
+                    case FzIdempotence: {
+                        // TEST-126's third invariant, checked by the run that is
+                        // already clicking. PRECONDITION: idle, with nothing
+                        // outstanding - which is the state the invariant is stated
+                        // for - and with the current tab's rows CLEARED, so that
+                        // neither pair of clicks may transfer anything and the
+                        // only thing that can differ between them is bookkeeping.
+                        if (busy || st->oracle_.liveOutstanding() != 0) {
+                            say(QStringLiteral("idempotence(skipped: not idle)"));
+                            break;
+                        }
+                        fuzzSelectAll(d, tab, Qt::Unchecked);
+                        const int dispatchesBefore = oracle::dispatches;
+
+                        d->downloadClicked();
+                        d->downloadClicked();
+                        const QString afterOne = fuzzStateSnapshot(d);
+
+                        d->downloadClicked();
+                        d->downloadClicked();
+                        const QString afterTwo = fuzzStateSnapshot(d);
+
+                        say(QStringLiteral("idempotence(tab %1)").arg(tab));
+                        if (afterOne != afterTwo)
+                            *idem << QStringLiteral("two no-op restart pairs did not leave what one did: "
+                                                    "after one [%1] after two [%2]")
+                                         .arg(afterOne)
+                                         .arg(afterTwo);
+                        if (oracle::dispatches != dispatchesBefore)
+                            *idem << QStringLiteral("a batch with nothing selected issued %1 store call(s)")
+                                         .arg(oracle::dispatches - dispatchesBefore);
+                        break;
+                    }
+
+                    default:
+                        break;
+                    }
+                };
+
+                bool* timedOutp = &out.timedOut;
+                QTimer::singleShot(60000, &appLoop, [timedOutp]() {
+                    *timedOutp = true;
+                    QCoreApplication::exit(1);
+                });
+
+                for (int i = 0; i < script.count(); i++) {
+                    const FuzzStep s = script.at(i);
+                    if (alive.isNull())
+                        break;
+                    switch (s.placement) {
+                    case FzInNextProcessEvents:
+                        *trace << QStringLiteral("-> armed for the next processEvents()");
+                        oracle::trace(QStringLiteral("ARM -> next processEvents()"));
+                        insideframe::atNextProcessEvents([perform, s]() { (*perform)(s); });
+                        break;
+                    case FzAtNextCountedRow:
+                        *trace << QStringLiteral("-> armed for the next counted row");
+                        oracle::trace(QStringLiteral("ARM -> next counted row"));
+                        insideframe::atTheNextCountedRow(dialog, [perform, s]() { (*perform)(s); });
+                        break;
+                    default:
+                        (*perform)(s);
+                        break;
+                    }
+                    // Let whatever that step started (and anything armed for the
+                    // next processEvents) actually run before the next one.
+                    //
+                    // A FIXED NUMBER OF PASSES, not a millisecond budget. The
+                    // obvious spelling is processEvents(AllEvents, 2), and it
+                    // makes how much of the queue a step drains depend on how
+                    // busy the machine is - which would make a seed's outcome
+                    // depend on the load rather than on the seed, and an
+                    // irreproducible fuzz finding is a rumour. Eight passes is
+                    // enough for a completion slot's own processEvents to be
+                    // reached and for the one-shots armed inside it to fire.
+                    for (int pass = 0; pass < 8; pass++)
+                        QApplication::processEvents(QEventLoop::AllEvents);
+                }
+
+                out.completed = true;
+                delete owner; // takes the dialog, which closes and deletes the store
+                QTimer::singleShot(0, &appLoop, &QEventLoop::quit);
+            },
+            Qt::QueuedConnection);
+
+        appLoop.exec();
+        for (int i = 0; i < 50; ++i)
+            QApplication::processEvents(QEventLoop::AllEvents, 5);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+        for (RideItem* item : items) {
+            rideCache->rides().removeAll(item);
+            delete item->ride(false);
+            delete item;
+        }
+        for (const QString& p : paths)
+            QFile::remove(p);
+        // ...AND ANYTHING A COMPLETED DOWNLOAD SAVED. saveRide writes the parsed
+        // activity into the athlete's folder (CloudService.cpp:2946), and
+        // refreshClicked reads that folder to decide whether a remote row already
+        // "exists" locally - so a run that left one behind would hand the NEXT
+        // seed a different starting fixture and every seed after the first would
+        // be running a batch that skips its rows. One seed, one clean fixture, is
+        // the whole of what makes a seed reproducible.
+        for (int i = 0; i < 2; i++)
+            QFile::remove(activities.absolutePath() + "/" + rebuildRemoteActivity(i));
+
+        out.trace = *trace;
+        out.violations = oracle::violations;
+        out.idempotence = *idem;
+        out.summary = oracle::summary();
+        return out;
+    }
+
+    // The failure report: the seed first, then every step in order. Anyone can
+    // re-drive exactly this run with GC_FUZZ_SEED.
+    static QString fuzzReport(quint32 seed, const FuzzOutcome& out)
+    {
+        return QStringLiteral("\n  SEED %1 (re-run just this one with GC_FUZZ_SEED=%1)\n  %2\n  TRACE:\n    %3\n")
+            .arg(seed)
+            .arg(out.summary)
+            .arg(out.trace.join(QStringLiteral("\n    ")));
+    }
+
+  private slots:
+    // -- TEST-127 (REQ-028) ----------------------------------------------
+    // RANDOM CLICK SEQUENCES, JUDGED BY TEST-126 AND BY THE PROCESS.
+    void randomClickSequencesMustNotBreakTheTransferInvariants()
+    {
+        // THE BUDGET. Every seed is an independent dialog, driven through `steps`
+        // actions; both numbers are printed by the failure report so a run that
+        // finds nothing says exactly what it covered.
+        //
+        // 512 x 24 CHOSEN FOR A REASON THAT IS NOT "IT FEELS LIKE ENOUGH": it is
+        // the smallest round range that contains BOTH classes of finding this
+        // driver made on the tree it was written against - the invariant
+        // violation (first at seed 32, then 77, 128, 244, 271, 312, 336, 395, 402,
+        // 410) and the heap-use-after-free (seed 447). No seed is pinned or listed
+        // in the code: the RANGE is stated and the driver re-derives them, which
+        // is the difference between a fuzzer and a hand-written slot wearing one's
+        // clothes. Measured cost, seeds 1-446 under QPA offscreen: 17.0s, i.e.
+        // ~38ms per seed, so ~20s per backend on top of this target's ~49s.
+        //
+        // GC_FUZZ_SEEDS widens it and GC_FUZZ_SURVEY reports every failing seed in
+        // the range instead of stopping at the first.
+        int seeds = 512;
+        int steps = 24;
+        quint32 first = 1;
+
+        // One seed, on demand, for re-driving a discovery.
+        if (qEnvironmentVariableIsSet("GC_FUZZ_SEED")) {
+            first = quint32(qEnvironmentVariableIntValue("GC_FUZZ_SEED"));
+            seeds = 1;
+        }
+        if (qEnvironmentVariableIsSet("GC_FUZZ_SEEDS"))
+            seeds = qEnvironmentVariableIntValue("GC_FUZZ_SEEDS");
+        if (qEnvironmentVariableIsSet("GC_FUZZ_STEPS"))
+            steps = qEnvironmentVariableIntValue("GC_FUZZ_STEPS");
+
+        // SURVEY MODE, off by default. The verdict below stops at the FIRST
+        // failing seed, which is what a gate should do; a survey wants to know how
+        // MANY of a range fail and which, and an ASan abort ends the process
+        // without a report - so this mode names each seed before it runs it and
+        // carries on past a violation instead of stopping. Diagnosis, not verdict:
+        // it still fails at the end if anything failed.
+        const bool survey = qEnvironmentVariableIsSet("GC_FUZZ_SURVEY");
+        QStringList surveyFailures;
+
+        for (int i = 0; i < seeds; i++) {
+            const quint32 seed = first + quint32(i);
+            if (survey)
+                qInfo("FUZZSEED %u", seed);
+            const FuzzOutcome out = runFuzz(seed, steps);
+
+            if (survey) {
+                if (!out.violations.isEmpty() || !out.idempotence.isEmpty() || out.timedOut || !out.completed)
+                    surveyFailures << QStringLiteral("seed %1: %2")
+                                          .arg(seed)
+                                          .arg((out.violations + out.idempotence).join(QStringLiteral(" / ")));
+                continue;
+            }
+
+            // THE ASAN ORACLE. Under halt_on_error=1 a use-after-free ends the
+            // process, so reaching this line at all is the assertion; `completed`
+            // is the guard against a run that came back for some other reason.
+            QVERIFY2(!out.timedOut, qPrintable(QStringLiteral("the run never came back.") + fuzzReport(seed, out)));
+            QVERIFY2(out.completed,
+                     qPrintable(QStringLiteral("the run did not reach its last line.") + fuzzReport(seed, out)));
+
+            // THE TEST-126 ORACLE.
+            QVERIFY2(out.violations.isEmpty(),
+                     qPrintable(QStringLiteral("TEST-126 invariant violated:\n  ") +
+                                out.violations.join(QStringLiteral("\n  ")) + fuzzReport(seed, out)));
+            QVERIFY2(out.idempotence.isEmpty(),
+                     qPrintable(QStringLiteral("restart idempotence broken:\n  ") +
+                                out.idempotence.join(QStringLiteral("\n  ")) + fuzzReport(seed, out)));
+        }
+
+        if (survey && !surveyFailures.isEmpty())
+            QFAIL(qPrintable(QStringLiteral("%1 of %2 seeds failed:\n  ").arg(surveyFailures.count()).arg(seeds) +
+                             surveyFailures.join(QStringLiteral("\n  "))));
     }
 };
 

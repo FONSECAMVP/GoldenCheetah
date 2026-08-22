@@ -132,16 +132,46 @@ class CloudService : public QObject {
         // set any local settings on folder selection (used by google drive)
         virtual void folderSelected(QString path) { Q_UNUSED(path); return; }
 
-        // write a file - call notify when done
-        virtual bool writeFile(QByteArray &data, QString remotename, RideFile *ride) {
-            Q_UNUSED(data); Q_UNUSED(remotename); Q_UNUSED(ride); return false;
+        // The operation id is local correlation metadata. It must be returned
+        // unchanged and must never alter the remote name or payload.
+        virtual bool writeFile(QByteArray &data, QString remotename, RideFile *ride, quint64 operationId) {
+            Q_UNUSED(data); Q_UNUSED(remotename); Q_UNUSED(ride); Q_UNUSED(operationId); return false;
         }
-        void notifyWriteComplete(QString name,QString message) { emit writeComplete(name,message); }
+        quint64 newWriteOperationId() { if (++nextWriteOperationId_ == 0) ++nextWriteOperationId_; return nextWriteOperationId_; }
+        void notifyWriteComplete(quint64 operationId, QString name, QString message) { emit writeComplete(operationId,name,message); }
 
         // read a file  and notify when done
         virtual bool readFile(QByteArray *data, QString remotename, QString remoteid) {
             Q_UNUSED(data); Q_UNUSED(remotename); Q_UNUSED(remoteid); return false;
         }
+        // DEC-garmin-036 (REQ-028 (c)) - THE BUFFER-IDENTITY CONTRACT, WRITTEN
+        // DOWN. It was always relied on and never stated: notifyReadFailed below
+        // says "pass back the SAME `data` pointer the caller handed to readFile"
+        // (:160-161), and this, its success twin, said nothing at all - even
+        // though the consumer frees whichever pointer arrives on either channel.
+        //
+        // CONTRACT, for every service:
+        //   - emit readComplete OR readFailed for a given readFile() call, never
+        //     both and never neither.
+        //   - pass back the SAME `data` pointer the caller handed to readFile.
+        //     Not a copy, not a replacement, not a re-`new`ed buffer with the same
+        //     bytes: THE POINTER. The sync dialog now uses that pointer as the
+        //     IDENTITY of the transfer - it is how a completion belonging to an
+        //     abandoned batch is told from the live batch's own (the in-flight
+        //     ticket, CloudServiceSyncDialog::inflight) - so a service that
+        //     returns a different buffer has its completions silently swallowed
+        //     rather than merely mislabelled.
+        //   - the caller is the sole owner and the sole deleter of that buffer.
+        //
+        // AUDITED, not assumed, 2026-08-18: all eleven readFile implementations
+        // in this tree satisfy it. Nine (Azum, CyclingAnalytics, Dropbox,
+        // PolarFlow, SixCycle, SportTracks, Strava, Xert, Nolio) stash the
+        // caller's pointer in `buffers.insert(reply,data)` inside readFile and
+        // hand back `buffers.value(reply)` - Strava and Nolio via
+        // prepareResponse(), whose only return statement is `return data;`, and
+        // SportTracks/CyclingAnalytics/Xert via a `returning` local that is that
+        // same lookup. GarminConnect captures the pointer by value in
+        // postReadComplete. LocalFileStore emits with its own parameter.
         void notifyReadComplete(QByteArray *data, QString name, QString message) { emit readComplete(data,name,message); }
 
         // DEC-garmin-023 - the EXPLICIT read-FAILURE channel.
@@ -213,7 +243,11 @@ class CloudService : public QObject {
 
         // UTILITY
         void mapReply(QNetworkReply *reply, QString name) { replymap_.insert(reply,name); }
+        void mapReply(QNetworkReply *reply, QString name, quint64 operationId) {
+            replymap_.insert(reply,name); writeOperationMap_.insert(reply,operationId);
+        }
         QString replyName(QNetworkReply *reply) { return replymap_.value(reply,""); }
+        quint64 replyWriteOperationId(QNetworkReply *reply) { return writeOperationMap_.take(reply); }
         void compressRide(RideFile*ride, QByteArray &data, QString id);
         RideFile *uncompressRide(QByteArray *data, QString id, QStringList &errors);
         QString uploadExtension();
@@ -240,7 +274,7 @@ class CloudService : public QObject {
         QString message;
 
     signals:
-        void writeComplete(QString id, QString message);
+        void writeComplete(quint64 operationId, QString id, QString message);
         void readComplete(QByteArray *data, QString id, QString message);
 
         // DEC-garmin-023 - the alternative to readComplete for a read that did
@@ -255,6 +289,8 @@ class CloudService : public QObject {
         // these entries are deleted too
         CloudServiceEntry *newCloudServiceEntry();
         QMap<QNetworkReply*,QString> replymap_;
+        QMap<QNetworkReply*,quint64> writeOperationMap_;
+        quint64 nextWriteOperationId_ = 0;
         QList<CloudServiceEntry*> list_;
 
         Context *context;
@@ -317,7 +353,7 @@ class CloudServiceUploadDialog : public QDialog
 
     public slots:
         int exec();
-        void completed(QString name, QString message);
+        void completed(quint64 operationId, QString name, QString message);
 
     private:
         Context *context;
@@ -325,6 +361,7 @@ class CloudServiceUploadDialog : public QDialog
         RideItem *item;
         QByteArray data;            // compressed data to upload
         bool status;                // did upload get kicked off ok?
+        quint64 operationId = 0;
 };
 
 // XXX a better approach might be to reimplement QFileSystemModel on 
@@ -405,6 +442,7 @@ class CloudServiceSyncDialog : public QDialog
         // the constructor, so it closes and destroys it here. Callers must not
         // delete the store themselves.
         ~CloudServiceSyncDialog();
+        int outstandingTransferCount() const { return readOperations.count() + writeOperations.count(); }
 
     public slots:
 
@@ -441,7 +479,7 @@ class CloudServiceSyncDialog : public QDialog
         // that refuses leaves this dialog parked on "Downloading n of N".
         void failedRead(QByteArray *data, QString name, QString reason);
 
-        void completedWrite(QString name,QString message);
+        void completedWrite(quint64 operationId, QString name, QString message);
 
         // DEC-garmin-024 (A3-R017-F1) - the LAST gate before this dialog is
         // allowed to destroy itself. QDialog::done() is what reject()/accept()
@@ -642,6 +680,135 @@ class CloudServiceSyncDialog : public QDialog
         // failure it would cause is one stale frame surviving one iteration.
         // See TEST-100.
         int batchGeneration;
+
+        // DEC-garmin-034 (REQ-028) - WHICH LIST A SUSPENDED FRAME BELONGS TO.
+        //
+        // batchGeneration above answers "is this still MY batch". It cannot answer
+        // the other half, because a Refresh starts no batch: refreshClicked
+        // (:1516) DELETES every QTreeWidgetItem in all three lists and rebuilds
+        // them, and it is reachable from inside any of this dialog's nested event
+        // loops - the Refresh button is never disabled (four references in this
+        // file, not one of them a setEnabled) and :2126-2134 already says so.
+        //
+        // Three of this project's decisions - DEC-025, DEC-030, DEC-032 - each
+        // enumerated what must survive a suspension, and all three enumerated
+        // `this`, `store` and `context`. NONE ever enumerated the ROW. Both
+        // transfer loops capture `QTreeWidgetItem *curr` BEFORE openRideFile's
+        // nested loop and use it after (syncNext, uploadNext), and the three
+        // completion slots address rows POSITIONALLY as `child(listindex-1)` in a
+        // list that a Refresh may have replaced under them. The first is a live
+        // heap-use-after-free (PROBE-A, re-measured by TEST-108); REQ-027 widened
+        // it from a read to a WRITE.
+        //
+        // So each generation of the LISTS is numbered too. The counter is bumped
+        // by refreshClicked before it deletes anything; the two drivers snapshot
+        // it into a LOCAL at loop entry, exactly as they do batchGeneration, and
+        // stand down if it has moved while they were suspended. The completion
+        // slots have no "before" of their own - they ARE the resumption - so the
+        // batch's value is snapshotted into batchListGeneration when the batch
+        // starts (downloadClicked) and they compare against that: any Refresh
+        // between the start of a batch and one of its completions invalidates the
+        // positional addressing that completion is about to do, whichever row it
+        // was for.
+        //
+        // WHAT THIS DOES NOT DO, so nobody reads more into it than the mechanism
+        // delivers: it validates the CONTAINER, not the ELEMENT. It is sound only
+        // while a whole-list rebuild is the only way a row dies - true when this
+        // was written and re-verified since (CloudService.cpp:1570/:1577/:1584 are
+        // the only tree-item deletes in that file), but that is an invariant, not
+        // a guarantee, and a future mutator that deletes ONE row defeats it.
+        //
+        // AND IT IS ONLY WORTH THE PLACES IT IS COMPARED AT (A3-R028b-F8). The
+        // counter cannot fire by itself: each frame has to re-compare it after
+        // each of ITS OWN suspensions, and NOTHING IN THIS CODEBASE HOLDS A
+        // COMPLETE LIST OF THOSE. Two were missed by the wave that introduced this
+        // and found afterwards - saveRide, which suspends inside
+        // DataProcessorFactory::autoProcess (CloudService.cpp:2910, A3-R028b-F1),
+        // and the two drivers' parse-failure processEvents(), which suspend and
+        // then keep iterating (:2428/:3184, A3-R028b-F2). Any enumeration of
+        // suspension points in these files, including DEC-029's four store calls,
+        // is a list of the ones someone has looked at. Adding a call that can
+        // suspend means adding a compare beside it.
+        //
+        // It also does NOT close the SORT route (S-R028-01): a
+        // column-header click REORDERS rows without freeing any, so it bumps
+        // nothing and passes every guard here - see TEST-112, which measures the
+        // DRIVER half of that route rather than fixing it (its LABELLING half was
+        // closed by DEC-036, below). And it cannot tell a LATE completion of an
+        // ABORTED batch from a live one (REQ-028 (c)): two transfers are
+        // outstanding at once there, and a single shared snapshot is overwritten
+        // by the restarted batch's own dispatch before the stale completion
+        // arrives - which is what DEC-garmin-036's per-transfer ticket below was
+        // added for, and it is the ticket, not this counter, that answers it.
+        // Wraparound is not guarded, for batchGeneration's reason.
+        // See TEST-108, TEST-109, TEST-110.
+        int listGeneration;      // bumped by refreshClicked
+        int batchListGeneration; // ...and what it read when this batch started
+
+        // DEC-garmin-036 (REQ-028 (c)) - WHICH TRANSFER A COMPLETION BELONGS TO.
+        //
+        // The two counters above answer "is this still my batch" and "is this
+        // still my list". Neither can answer the third question, and the comment
+        // above already admits it: on the abort-and-restart route TWO transfers
+        // are outstanding at once, and a single shared snapshot is overwritten by
+        // the restarted batch's own dispatch before the abandoned batch's
+        // completion arrives, so it reads EQUAL and passes every guard. The
+        // completion then labels whichever row the LIVE batch happens to be
+        // transferring, advances that batch's progress bar for work it never did,
+        // and re-drives the loop - a second driver over the same list (measured
+        // by TEST-107 before this, asserted by TEST-113/115 after it).
+        //
+        // So the completion is made to carry an identity, and the ticket below is
+        // where the dispatch leaves it. It is ARMED immediately before each of the
+        // four store calls that can produce a completion - syncNext's read and its
+        // write, downloadNext's read, uploadNext's write - and CONSUMED at the top
+        // of each of the three completion slots. What it records is exactly what
+        // the slot cannot work out for itself:
+        //
+        //   token   the buffer the read was issued with, freshly `new`ed one line
+        //           earlier. readComplete/readFailed hand back that same pointer -
+        //           a contract that was unwritten until DEC-036 and is now stated
+        //           on notifyReadComplete (:145) and notifyReadFailed - so pointer
+        //           identity IS transfer identity on the read paths. Compared,
+        //           never dereferenced.
+        //   write id the opaque value allocated at dispatch and returned by
+        //           writeComplete. Remote names remain data, never identity.
+        //   row     the QTreeWidgetItem the transfer was issued FOR, already in
+        //           hand at the dispatch. This replaces the seven positional
+        //           `child(listindex-1)` dereferences in the three slots: a
+        //           completion now labels the row it was about instead of the row
+        //           that currently sits at the batch's bookmark.
+        //   col     ...and the status column that row is labelled in (7 on the
+        //           sync and upload lists, 5 on the download list), so the arm
+        //           site is the single source of it.
+        //
+        // Records are one-shot: admission removes the exact identity from its
+        // map, so a second completion cannot count or drive again.
+        //
+        // An abort does not cancel a remote transfer. Its operation record stays
+        // in the map until that exact completion arrives or the dialog is
+        // destroyed. A restart can therefore have its own record concurrently;
+        // equal remote names do not collide because write ids are distinct.
+        // Refresh keeps the operation identity but nulls its row, so a late
+        // completion remains consumable without touching a deleted item.
+        //
+        // WHAT THIS DOES NOT DO. `row` is a raw pointer and this struct does not
+        // prove it alive; the DEC-034 compare immediately above every consumption
+        // site is what does that, which is why that compare stays and why the
+        // ticket is consumed BELOW it and never above it. It also does not close
+        // the SORT route's DRIVER half (S-R028-01): a column-header click
+        // reorders rows without freeing any, and `for (int i=listindex; ...)` in
+        // the three drivers still walks the REORDERED list. Only the LABELLING
+        // half of that route is closed here, because the label no longer goes
+        // through an index - see TEST-112, which is measured, not fixed.
+        struct TransferOperation {
+            QTreeWidgetItem *row = nullptr;
+            int col = 0;
+            int generation = 0;
+            int listGeneration = 0;
+        };
+        QMap<QByteArray*, TransferOperation> readOperations;
+        QMap<quint64, TransferOperation> writeOperations;
 
         bool saveRide(RideFile *, QStringList &);
         bool syncNext();        // kick off another download/upload

@@ -540,7 +540,7 @@ SportTracks::readFileCompleted()
 }
 
 bool
-SportTracks::writeFile(QByteArray &data, QString remotename, RideFile *)
+SportTracks::writeFile(QByteArray &data, QString remotename, RideFile *, quint64 operationId)
 {
     printd("SportTracks::writeFile(%s)\n", remotename.toStdString().c_str());
 
@@ -569,7 +569,7 @@ SportTracks::writeFile(QByteArray &data, QString remotename, RideFile *)
     connect(reply, SIGNAL(finished()), this, SLOT(writeFileCompleted()));
 
     // remember
-    mapReply(reply,remotename);
+    mapReply(reply,remotename,operationId);
 
     return true;
 }
@@ -591,11 +591,11 @@ SportTracks::writeFileCompleted()
     if (reply->error() == QNetworkReply::NoError) {
 
         //QJsonObject result = document.object();
-        notifyWriteComplete( name, tr("Completed."));
+        notifyWriteComplete(replyWriteOperationId(reply), name, tr("Completed."));
 
     } else {
 
-        notifyWriteComplete( replyName(static_cast<QNetworkReply*>(QObject::sender())), tr("Network Error - Upload failed."));
+        notifyWriteComplete(replyWriteOperationId(reply), replyName(reply), tr("Network Error - Upload failed."));
     }
 }
 

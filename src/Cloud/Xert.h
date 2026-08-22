@@ -50,7 +50,7 @@ class Xert : public CloudService {
         bool readFile(QByteArray *data, QString remotename, QString remoteid);
 
         // write a file
-        bool writeFile(QByteArray &data, QString remotename, RideFile *ride);
+        bool writeFile(QByteArray &data, QString remotename, RideFile *ride, quint64 operationId);
 
         // dirent style api
         CloudServiceEntry *root() { return root_; }

@@ -50,7 +50,7 @@ class CyclingAnalytics : public CloudService {
         QList<CloudServiceEntry *> readdir(QString path, QStringList &errors, QDateTime from, QDateTime to);
 
         // write a file
-        bool writeFile(QByteArray &data, QString remotename, RideFile *ride);
+        bool writeFile(QByteArray &data, QString remotename, RideFile *ride, quint64 operationId);
 
         // read a file
         bool readFile(QByteArray *data, QString remotename, QString remoteid);

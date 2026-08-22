@@ -104,7 +104,7 @@ RideWithGPS::close()
 }
 
 bool
-RideWithGPS::writeFile(QByteArray &, QString remotename, RideFile *ride)
+RideWithGPS::writeFile(QByteArray &, QString remotename, RideFile *ride, quint64 operationId)
 {
     Q_UNUSED(ride);
 
@@ -204,7 +204,7 @@ RideWithGPS::writeFile(QByteArray &, QString remotename, RideFile *ride)
     connect(reply, SIGNAL(finished()), this, SLOT(writeFileCompleted()));
 
     // remember
-    mapReply(reply,remotename);
+    mapReply(reply,remotename,operationId);
     return true;
 }
 
@@ -253,9 +253,9 @@ RideWithGPS::writeFileCompleted()
     }
 
     if (uploadSuccessful && reply->error() == QNetworkReply::NoError) {
-        notifyWriteComplete( replyName(static_cast<QNetworkReply*>(QObject::sender())), tr("Completed."));
+        notifyWriteComplete(replyWriteOperationId(reply), replyName(reply), tr("Completed."));
     } else {
-        notifyWriteComplete( replyName(static_cast<QNetworkReply*>(QObject::sender())), tr("Network Error - Upload failed."));
+        notifyWriteComplete(replyWriteOperationId(reply), replyName(reply), tr("Network Error - Upload failed."));
     }
 }
 
