@@ -43,18 +43,30 @@ pulling stale context or re-creating files that already exist.
 
 **Tiered loading** keeps sessions cheap: Tier 0 = WIKI + STATE (~850 tokens); Tier 1 =
 one named index or spoke; Tier 2 = one full entry by ID; Tier 3 = full-corpus walk,
-sanctioned only at release or migration.
+sanctioned only on explicit request, at a release audit, or during migration.
 
-**Lessons escalate.** A mistake seen once becomes an *advisory*; a recurring one becomes
-a *guard* (hard precondition checked before the matching operation); a guard that keeps
-being missed becomes *mechanism* — the anti-duplication hook is exactly that endpoint,
-enforcing lesson LSN-007 deterministically instead of by instruction.
+**Lessons have a capture threshold, then escalate.** Detecting a mistake creates a
+*candidate*, not a lesson. It becomes one — after the repair passes — only if it **recurs**,
+**crosses component or project boundaries**, reveals a **defective workflow rule or
+mechanism**, or carries **material security, data-loss, or irreversible-operation risk**. A
+first-occurrence local implementation or harness bug is normally just repaired. A qualifying
+lesson starts as an *advisory*; **recurrence promotes it toward a *guard*** (hard precondition
+checked before the matching operation); a guard that keeps being missed becomes *mechanism* —
+the anti-duplication hook is exactly that endpoint, enforcing lesson LSN-007 deterministically
+instead of by instruction.
 
 ### The traceability spine
 
 Everything ties together as `REQ → DEC → DES → TEST → COMMIT`. Commits cite their IDs.
 Cross-layer validation (CLV) checks the spine incrementally over the current changeset;
-a full 9-check walk runs only at release gates. **FAIL blocks phase exit or deploy.**
+a full 9-check walk runs only on explicit user request or at a release gate — ordinary
+feature, wave, checkpoint and phase gates get the incremental pass, at every rigor tier. **A FAIL blocks only the gate its assigned
+BLOCKS effects intersect** — `TASK:<id>`, `CHECKPOINT:<slice>`, `RELEASE`, or `DEPLOY` (an
+empty set is advisory and blocks nothing). A feature/checkpoint failure blocks that
+changeset's checkpoint; a release-gate failure blocks release. A **diagnostic or
+user-requested** CLV failure is classified by its **demonstrated impact** — it is neither
+automatically advisory nor automatically a release/deploy block — and a production or release
+defect is never downgraded merely because the run was requested manually.
 
 ### The quality gates
 
@@ -229,7 +241,7 @@ Priorities for "keep improving GC," each mapped to the machinery above:
 | Make a decision | "should we ___?" | scout → three options |
 | Red-team a phase | "run A1 on the PRD" / "run A3 on ___" | adversary, fresh context |
 | Health check | "is anything broken?" | validator, incremental CLV |
-| Full audit | "full CLV walk" | validator, 9 checks (release only) |
+| Full audit | "full CLV walk" | validator, 9 checks (explicit request or release) |
 | Close a phase | "close phase N" | archive-on-close via librarian |
 | Something felt wrong | "capture a lesson: ___" | lessons.md advisory/guard |
 

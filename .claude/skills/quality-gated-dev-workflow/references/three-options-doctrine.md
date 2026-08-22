@@ -6,11 +6,26 @@ Rigor is unchanged from the original; only storage is lean (proposal is ephemera
 one cold entry + one index line persist).
 
 ## When it triggers
-Any choice that shapes downstream work: runtime, persistence, API style, auth, async
-model, validation library, even ID format or error-response shape. Watch for "let's use",
-"I'll go with", "should I do X or Y", "what about Z", "we could just" — especially when
-the user is leaning toward a choice without alternatives. "What do you think?" is
-permission to *recommend after* presenting the trade space, not to skip it.
+The doctrine applies to **architectural choices, irreversible actions, public API changes,
+and materially different trade-offs** — choices that shape downstream work: runtime,
+persistence, API style, auth, async model, validation library, even ID format or
+error-response shape. Watch for "let's use", "I'll go with", "should I do X or Y", "what
+about Z", "we could just" — especially when the user is leaning toward a choice without
+alternatives. "What do you think?" is permission to *recommend after* presenting the trade
+space, not to skip it.
+
+## When it does NOT apply
+A **uniquely determined local bug repair** — one defensible fix, no materially different
+alternatives — plus mechanical conventions and tool invocations inside an already-accepted
+DEC. For those:
+
+> Apply the uniquely determined repair under the existing task/finding and record it in the
+> normal test/commit report. Do not allocate a DEC, option matrix, lesson, or new index entry
+> unless the repair changes architecture, public API, an irreversible behavior, or a
+> previously accepted decision.
+
+The test is whether three genuinely viable options exist, not how much the fix cost. If you
+cannot state three without inventing a strawman, the doctrine does not apply.
 
 ## Proposal template (shown in chat; not stored verbatim beyond the cold entry)
 ```
@@ -55,9 +70,24 @@ and how it changes.
 3. Patch `STATE.md` **only if** the decision adds a dependent or is a one-way door
    (so cascades and risk stay visible at Tier 0).
 
+## Who owns the decision — and batching
+
+Not every decision needs the user. **User-owned** (always presented, never assumed):
+one-way doors; accepting deliberate residual risk or shipping a known defect; scope or
+acceptance-criterion changes; anything spending money or affecting other people's data.
+**Orchestrator-owned** (decide and move on): mechanical calls with one defensible answer —
+the obviously correct safety fix, a naming/location choice fully determined by conventions,
+tool invocations within an already-accepted DEC. These get one index line **only when they
+are genuinely decisions**; a uniquely determined repair gets no index entry at all (above). When several
+user-owned decisions are coupled, **batch them into one presentation** with shared context
+rather than interrupting N times. This removes interruptions without removing rigor — the
+test is reversibility and residual risk, not effort.
+
 ## Anti-patterns
-- **False trio** — three genuinely plausible options, no strawman padding. If you can
-  only find two, say so and ask the user to help find a third.
+- **False trio** — three genuinely plausible options, no strawman padding. On a real
+  decision, if you can only find two, say so and ask the user to help find a third. On a
+  *uniquely determined repair* there is no trio to find: the doctrine doesn't apply — apply
+  the repair and report it (see **When it does NOT apply**).
 - **Generic cascade impact** — always name the concrete downstream step.
 - **Hidden recommendation** — one clear sentence, anchored in the user's constraints.
 - **Skipping "obvious" choices** — present alternatives anyway; the user may know

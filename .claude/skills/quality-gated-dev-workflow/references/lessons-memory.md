@@ -2,8 +2,9 @@
 
 The lessons memory is how the workflow stops repeating mistakes. It is part of the project
 brain: a small, scoped, self-pruning set of **checkable rules** distilled from errors that
-actually happened. A mistake seen once becomes an *advisory*; a mistake that recurs becomes
-a *guard* that blocks the relevant operation until it's checked.
+actually happened — and only errors that clear the **capture threshold** below. A qualifying
+mistake seen once becomes an *advisory*; a mistake that recurs becomes a *guard* that blocks
+the relevant operation until it's checked.
 
 It is the mistake-side complement of the wiki MAP. The MAP says *what exists*; the lessons
 say *what to verify so you don't err here again*. (Distinct from `wiki/architecture.md`'s
@@ -60,14 +61,26 @@ keeps the memory bounded and makes it *incremental* rather than ever-growing.
 
 ## The loop (capture → generalize → surface → verify → escalate → prune)
 
-### 1. Capture triggers (as a byproduct of detection)
-A lesson is captured (or an existing one incremented) when any of these fire:
-- a **CLV FAIL** (the failure class + the IDs name the mistake)
-- a **user correction** ("no, don't…", "you already made that", "that's the wrong file")
-- a **failed create** because the target exists (duplication signal)
-- a **cascade miss** (a change that should have flagged dependents didn't)
-- a **scope creep** caught in REFACTOR or A3 (silent API/behavior growth)
-- an **A5 retrospective** finding (the richest harvest point)
+### 1. Capture threshold (evaluated after the repair passes)
+
+**Capture or promote a lesson only when at least one is true:**
+- the mistake **recurs**;
+- it **crosses component or project boundaries**;
+- it reveals a **defective workflow rule or mechanism**;
+- it creates a **material security, data-loss, or irreversible-operation risk**.
+
+**A first-occurrence local implementation or harness bug is a repair, not automatically a
+lesson.** Fix it, record it in the normal test/commit report (or as one finding line if a
+paper trail is needed), and move on. Manufacturing a permanent rule out of a one-off typo
+inflates every registry it touches and buys nothing.
+
+Detection events are *candidates*, not automatic captures — a CLV FAIL, a user correction, a
+failed create because the target exists, a cascade miss, scope creep caught in REFACTOR or A3,
+an A5 retrospective finding. Each is evaluated against the threshold above, **after the repair
+passes** — never while a gate is red.
+
+A **failed gate may update one active blocker line** — the finding and its `STATE.BLOCKING`
+entry with its BLOCKS effects — **without allocating a new lesson or expanding any registry.**
 
 At capture: compute the sig. If a lesson with that sig exists → `recur++`, re-evaluate
 level (advisory→guard on recur≥2), append to `history`. Else → create a new advisory.
@@ -88,6 +101,37 @@ If a guard's check would fail, **stop and correct first** — that is the whole 
 record the outcome:
 - guard prevented the mistake → `saves++` (the memory is working)
 - the mistake happened anyway, despite the guard → `miss++` (the guard is too weak)
+
+**Mechanism-enforced guards are harvested too:** whenever the deterministic hook denies or
+asks in-session, the orchestrator increments the linked lesson (deny that stopped a real
+clobber → `saves++`; deny of a LEGITIMATE operation → `miss++` on the guard AND a mechanism
+finding) as a byproduct. Without this, a hook can fire for months while its lesson reads
+`saves:0` and the loop never closes.
+
+**A guard's false positive is a mechanism bug (LSN-036).** When a deterministic guard
+denies an operation you believe is legitimate: never work around it (a bypass invented once
+gets reused on the next GENUINE catch). Reproduce the denial in isolation, classify it,
+record it as a finding + `miss`, and fix the mechanism. **Loosening any guard requires a
+two-directional behavior matrix**: genuine violations still denied AND the legitimate case
+now passing. **And the matrix must be re-verified after every skill update**: a reinstall
+replaces the deterministic mechanisms wholesale, so a fixed false positive can RETURN from
+an update with zero new code (field-proven: LSN-036 recurred exactly this way). Post-update
+routine: re-run the guard's behavior matrix — the bundled self-test now ships at
+`scripts/guard_selftest.py`: `python3 .claude/skills/quality-gated-dev-workflow/scripts/guard_selftest.py`
+(defaults to the sibling guard; pass the installed hook's path to test that copy instead) —
+and re-apply any `--extra-hook` syncs, before trusting the guards again.
+
+**Repair attempts are bounded.** An attempt counts only after both a material patch and an
+executed reproducer; hook prompts, unavailable tools, infrastructure failures, and command
+typos do not consume an attempt. After **two unsuccessful material attempts**, return to the
+user rather than allocating more process work.
+
+**When adding a lesson that MANDATES an operation, check it against existing guards for
+conflict first.** A conflicting or impossible workflow rule carries `{TASK:workflow-repair}`
+initially. Add `CHECKPOINT:<slice>` only when it invalidates that slice's evidence. Add
+`RELEASE` or `DEPLOY` only when a stated, demonstrated reason shows the conflict invalidates
+the corresponding gate. A workflow-mechanism defect qualifies for lesson evaluation, but its
+blocking effects are still proven rather than assumed — no effect is assigned automatically.
 
 ### 4. Escalate
 A guard accumulating `miss` is not strong enough as a reminder. Escalation ladder:
@@ -115,7 +159,8 @@ lessons few and high-value — they are the workflow's accumulated wisdom, not a
   `LSN 001–012  active:9 guards:4  lessons.md   next:013`
   and a PAGES pointer: `lessons.md — checkable rules from past mistakes · read guards before the matching operation`.
 - `STATE.md` need not list lessons; guards are loaded per-operation by tag. If a guard is
-  currently blocking work, it appears in `STATE.BLOCKING` as a finding id like any other.
+  currently blocking work, it appears in `STATE.BLOCKING` as a finding id with its BLOCKS
+  effects, like any other — scoped to what it actually stops.
 
 ## Why this is "incremental"
 
@@ -168,6 +213,14 @@ The installer copies `anti_duplication_guard.py` into `<project>/.claude/hooks/`
   }
 }
 ```
+
+**Project-owned mechanisms (extension point):** when a lesson escalates to a project-local
+deterministic mechanism (a drift lint, a custom gate), keep its canonical source in the
+PROJECT (e.g. `scripts/your_lint.py`) and sync it with
+`python3 .../install_hook.py --extra-hook scripts/your_lint.py .` — never patch the skill's
+installer to add it: skill updates overwrite skill-owned scripts, and a local patch to one
+is a divergence that the next update silently destroys. The project owns the extra hook's
+`settings.json` wiring.
 
 For an always-on personal install, add the same block to `~/.claude/settings.json` with an
 absolute path to the script. Restart Claude Code (or `/hooks` to reload) after installing.

@@ -39,16 +39,47 @@ map).
 # STATE — <project>            updated: <ISO> by <op>
 PHASE:     <0|1|2|3> · <sub-step / feature + stage>
 OPEN:      <REQ-ids with (stage)>
-BLOCKING:  <finding-ids | —>                 # ids only; detail in findings.md
+BLOCKING:  <finding-id[EFFECT;EFFECT] … | —> # ids + BLOCKS effects; detail in findings.md
 CASCADE:   <DEC-ids + trigger | —>
 LAST_CLV:  <VAL-id> <PASS|FAIL> · <n WARN(summary)>
 NEXT_GATE: <gate name> → <remaining conditions>
 CHANGESET: <ids touched since LAST_CLV>      # seeds incremental CLV
+TEAM:      on(<n> agents) | off              # qgdw subagents installed? checked at session start
+RIGOR:     light | standard | full [(REQ-nnn@full)]   # tier from Phase 0 calibration (+ per-feature overrides)
+BUDGETS:   WIKI <n>/700 · DECIDX <n>/500 · LSN <n>g/10 · FINDINGS <n>   # tokens/lines vs caps
 COUNTS:    REQ<n> DEC<n> DES<n> TEST<n> · last commit <#>
 ```
 
 `OPEN/BLOCKING/CASCADE` carry IDs only — never inlined detail. `CHANGESET` is appended on
 change and cleared when CLV goes green over it.
+
+**`BLOCKING` carries effects, not just ids.** Each entry is `F-nnn[EFFECT;EFFECT]`, where an
+effect is one of `TASK:<task-or-id>`, `CHECKPOINT:<slice>`, `RELEASE`, `DEPLOY`
+(`references/orchestration.md`). Multi-line form when there is more than one:
+
+```
+BLOCKING:
+  F-018[TASK:REQ-028;CHECKPOINT:REQ-028;RELEASE]
+  F-021[CHECKPOINT:REQ-029]
+```
+
+Findings with an **empty effect set are advisory and never listed here** — they live in
+`findings.md` only. An **untagged legacy id** defaults temporarily to `TASK:<active-slice>`,
+**never** to a global block, and is classified at the next read. A gate fails only when an
+open finding's effects intersect that gate.
+
+**Schema upgrade (older projects).** A project created under an earlier skill version may
+lack fields the current schema defines. At orientation, backfill missing fields as a
+byproduct — never stall on them and never ask permission for the observable ones:
+- **Observable facts → record silently:** `TEAM` (list `.claude/agents/qgdw-*.md` once),
+  `BUDGETS` (measure the hot files), `COUNTS` (from the registries), `CHANGESET` (∅ if
+  unknown — the next CLV rebuilds it).
+- **Judgment fields → one proper ask:** a missing `RIGOR` means the project predates
+  proportional rigor — run the calibration NOW as a standard three-options proposal from
+  the project's current signals (size, users, exposure, data), then record it. That is the
+  only question the upgrade should generate.
+Then proceed to dispatch. "STATE is missing a field" is a 30-second backfill, not a
+blocker and not a menu of options for the user.
 
 ## Index formats (Tier 1, one line per item)
 
@@ -56,8 +87,19 @@ change and cleared when CLV goes green over it.
 ```
 DEC-003 | persistence | chosen:managed-relational | rev:expensive | accepted | deps:5
 ```
+**Active/dormant split (scale rule).** The head index holds only **ACTIVE** DECs — those
+`accepted` with live dependents, `open`, or `needs-review`. Superseded DECs and accepted
+one-shot decisions with no live dependents move under a `## Dormant index` divider (still
+one line each, still ID-addressable, just not read by default). Routine decision-making
+reads the active section only; budget ~20 lines / ~500 tokens. Breach = compaction trigger
+(librarian Job 3).
 **Trace Digest** — head of `traceability.md`: status counts + only non-Deployed rows.
-**Open-Findings** — `findings.md`: only open/blocking, one line each.
+**Open-Findings** — `findings.md`: only open findings, one line each, each carrying its BLOCKS
+effect set (an empty set is written `[]` and means advisory):
+```
+F-018 | [TASK:REQ-028;CHECKPOINT:REQ-028;RELEASE] | use-after-free on the late-completion path | evidence:asan.log
+F-022 | []                                        | stale internal note in wiki/architecture.md
+```
 
 The wiki's PAGES section names these so the agent knows they exist and when to read them.
 
@@ -70,15 +112,23 @@ The wiki's PAGES section names these so the agent knows they exist and when to r
 | Accept a decision | CASCADE if new dependent | decision index +1 | **DEC.next** |
 | Disposition a finding | BLOCKING-=id | findings line→archive | — |
 | CLV green | LAST_CLV; CHANGESET cleared | — | **VAL.next; latest:** |
+| **Gate FAIL** | **verdict + blocker line (id[effects]) ONLY** | — | **— (no bump, no registry)** |
 | Close a phase | PHASE; NEXT_GATE | — | **MAP repoint → archive** |
 
 If `STATE.md` (and, on structural change, `WIKI.md`) weren't touched, the operation isn't
 finished.
 
+**The Gate FAIL row is deliberately narrow.** On a failure write only the current verdict, the
+evidence pointer (command + exit code), the BLOCKS effects with their explicit scope, and the
+next repair. Counts, registry rewrites, index edits, WIKI patches, narratives, compaction,
+archive moves and lesson capture all wait until the repair passes — the byproduct step is
+deferred, not partially performed. Only a security or data-loss discovery may add the minimum
+warning needed to prevent unsafe use.
+
 ## Lessons at pre-flight
 Guards from `lessons.md` are loaded *by tag* at the start of the matching operation (not
 held in `STATE.md`). A guard currently blocking work appears in `STATE.BLOCKING` as a
-finding id. Capturing or incrementing a lesson is a byproduct of detecting a mistake (CLV
+finding id **with its BLOCKS effects**, scoped to what it actually stops. Capturing or incrementing a lesson is a byproduct of detecting a mistake (CLV
 FAIL, user correction, failed create, missed cascade, A5 finding); see
 `references/lessons-memory.md`.
 
