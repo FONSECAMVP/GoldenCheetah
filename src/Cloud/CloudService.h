@@ -723,19 +723,29 @@ class CloudServiceSyncDialog : public QDialog
         // each of ITS OWN suspensions, and NOTHING IN THIS CODEBASE HOLDS A
         // COMPLETE LIST OF THOSE. Two were missed by the wave that introduced this
         // and found afterwards - saveRide, which suspends inside
-        // DataProcessorFactory::autoProcess (CloudService.cpp:2910, A3-R028b-F1),
-        // and the two drivers' parse-failure processEvents(), which suspend and
-        // then keep iterating (:2428/:3184, A3-R028b-F2). Any enumeration of
+        // DataProcessorFactory::autoProcess (A3-R028b-F1), and the two drivers'
+        // parse-failure processEvents(), which suspend and then keep iterating
+        // (A3-R028b-F2). Any enumeration of
+        //
+        // CITED BY SYMBOL, NOT BY LINE, DELIBERATELY (A3-R038-F3, [[LSN-034]]
+        // refinement 8). This paragraph carried three line numbers and by
+        // 2026-08-23 all three pointed at unrelated statements - the file had
+        // grown under them. A comment is the one channel nothing re-reads: a
+        // briefing gets checked by the agent it is sent to, but a stale citation
+        // in source is found only if an adversary happens to be aimed at this
+        // file. Grep the symbol instead; it survives every edit above it.
         // suspension points in these files, including DEC-029's four store calls,
         // is a list of the ones someone has looked at. Adding a call that can
         // suspend means adding a compare beside it.
         //
-        // It also does NOT close the SORT route (S-R028-01): a
-        // column-header click REORDERS rows without freeing any, so it bumps
-        // nothing and passes every guard here - see TEST-112, which measures the
-        // DRIVER half of that route rather than fixing it (its LABELLING half was
-        // closed by DEC-036, below). And it cannot tell a LATE completion of an
-        // ABORTED batch from a live one (REQ-028 (c)): two transfers are
+        // It also does NOT see the SORT route (S-R028-01), and nothing here ever
+        // will: a sort REORDERS rows without freeing any, so it bumps no counter
+        // and passes every guard here BY CONSTRUCTION. That route is closed
+        // somewhere else entirely - DEC-garmin-038 takes the mutator away for the
+        // batch's duration (suspendListSorting/restoreListSorting below) rather
+        // than trying to detect it, because there is nothing here for it to
+        // detect. See TEST-132..TEST-139. And it cannot tell a LATE completion of
+        // an ABORTED batch from a live one (REQ-028 (c)): two transfers are
         // outstanding at once there, and a single shared snapshot is overwritten
         // by the restarted batch's own dispatch before the stale completion
         // arrives - which is what DEC-garmin-036's per-transfer ticket below was
@@ -744,6 +754,102 @@ class CloudServiceSyncDialog : public QDialog
         // See TEST-108, TEST-109, TEST-110.
         int listGeneration;      // bumped by refreshClicked
         int batchListGeneration; // ...and what it read when this batch started
+
+        // DEC-garmin-038 (= DEC-garmin-034 AMENDMENT, S-R028-01 / S-R028-02) -
+        // THE THIRD LIST MUTATOR: SORTING, AND WHY IT IS TAKEN AWAY RATHER THAN
+        // TRACKED.
+        //
+        // The two counters above answer "is this still my batch" and "is this
+        // still my list". A SORT makes both answer YES and still breaks the
+        // drivers: it frees nothing, deletes nothing and starts no batch - it
+        // PERMUTES the rows - so it bumps no counter and passes every guard in
+        // this class by construction, while the three drivers walk their lists
+        // POSITIONALLY (`for (int i=listindex; ...) child(i)`).
+        //
+        // AND IT NEEDS NO CLICK. MEASURED by TEST-131 on Qt 6.8.2, both QPA
+        // backends: with sortingEnabled == true a setText on the SORT COLUMN
+        // reorders the list INSIDE the write (layoutChanged is emitted by setText;
+        // there is no lazy, not-yet-applied window and QTreeWidgetItem::child()'s
+        // executePendingSort() is NOT what delivers it). All three drivers write
+        // the Status column on every dispatch, and all three lists are sortable by
+        // Status out of the constructor - so a user who sorted by Status at any
+        // earlier time makes the batch reorder its own list underneath its own
+        // loop. End to end, with no interaction during the batch at all: the same
+        // row uploaded twice and the other never transferred.
+        //
+        // SO THE MUTATOR IS REMOVED FOR THE BATCH'S DURATION. suspendListSorting()
+        // is called where the batch STARTS - downloadClicked, the one place a
+        // batch can start - and BEFORE its first status write, which is the whole
+        // of what makes this guard load-bearing: a disable arriving after a write
+        // cannot undo the move that write already made (TEST-131 Q3). It closes
+        // BOTH vectors, not only the data one: QTreeView::setSortingEnabled(false)
+        // clears sectionsClickable and sortIndicatorShown too, and a
+        // setSortIndicator made while it is off moves nothing (TEST-131 Q4).
+        //
+        // A BATCH IS NOT ONE STACK FRAME, which is why this is a MEMBER pair and
+        // not an RAII scope guard. The drivers process one row, return, and let a
+        // completion slot re-drive them; a guard scoped to a driver CALL would
+        // re-enable sorting BETWEEN ROWS and reinstate the defect while looking
+        // correct. See TEST-139, which samples inside the first completion.
+        //
+        // WHERE IT IS RESTORED, and the enumeration is the decision's, not the
+        // implementation's afterthought: every path that ENDS a batch while this
+        // dialog is still alive.
+        //   * the three completion tails (the batch finished)
+        //   * downloadClicked's abort branch (the user stopped it)
+        //   * refreshClicked (the lists are being rebuilt; every driver and every
+        //     completion of the running batch then stands down at its
+        //     listGeneration compare and NOTHING re-drives, so no tail can be left
+        //     to do it - and the restore is at the TOP of that function so the
+        //     early return on a freed Context is covered too)
+        // A path that exits WITHOUT restoring leaves the user's lists permanently
+        // unsortable until the dialog is reopened: a silent UX regression no
+        // memory-safety test would catch. See TEST-136 for one run per class.
+        //
+        // WHAT IS DELIBERATELY *NOT* A RESTORE SITE:
+        //   * the stale-frame exits (`batchGeneration != generation`). A frame
+        //     standing down there is NOT the live batch - restoring would turn
+        //     sorting back on underneath the batch that is still running.
+        //   * the self.isNull() exits. The dialog is already destroyed and these
+        //     are its members; the restore is only ever called from paths on which
+        //     `this` is known alive, which is why no bail below one of those
+        //     guards calls it.
+        //   * the driver's own `aborted` exits, which are downstream of the abort
+        //     branch that has already restored.
+        //   * deferCloseIfBusy(), which DOES end a batch and does NOT restore -
+        //     the fourth terminating class, missing from this list until the
+        //     DEC-038 A3 found it (A3-R038-F1). It is safe because every
+        //     deferred close terminates in destruction, so no live dialog
+        //     survives to have unsortable lists; the full argument, and the
+        //     condition under which it would BECOME a restore site, is written
+        //     out at deferCloseIfBusy in CloudService.cpp.
+        //
+        // THE USER'S COLUMN AND ORDER SURVIVE. setSortingEnabled(true) re-applies
+        // whatever indicator the header carries, and on a header that never had
+        // one that is section 0 / DESCENDING (measured, TEST-131 Q1a), so the
+        // pre-batch (section, order) is recorded per list and re-applied BEFORE
+        // sorting is switched back on - one sort, on the user's own column.
+        // See TEST-137.
+        //
+        // ACCEPTED RESIDUAL, recorded rather than hidden: this is PREVENTION, not
+        // TOLERANCE. A future caller that re-enables sorting mid-batch
+        // reintroduces the defect and no architectural guard would catch it; the
+        // drivers become intrinsically reorder-tolerant only if they ever dispatch
+        // from a snapshot of row POINTERS instead of an index (DEC-038's rejected
+        // Option B, which stays additive on top of this). Second residual: the
+        // header really is inert during a batch - a deliberate UX cost.
+        struct ListSortState
+        {
+            bool enabled = true;
+            int section = -1;
+            Qt::SortOrder order = Qt::AscendingOrder;
+        };
+
+        void suspendListSorting(); // at the batch's start, before its first write
+        void restoreListSorting(); // at every termination path, and only those
+
+        bool sortingSuspended;   // is a batch's suspension in force?
+        ListSortState downSortState, upSortState, syncSortState;
 
         // DEC-garmin-036 (REQ-028 (c)) - WHICH TRANSFER A COMPLETION BELONGS TO.
         //
@@ -795,12 +901,18 @@ class CloudServiceSyncDialog : public QDialog
         // WHAT THIS DOES NOT DO. `row` is a raw pointer and this struct does not
         // prove it alive; the DEC-034 compare immediately above every consumption
         // site is what does that, which is why that compare stays and why the
-        // ticket is consumed BELOW it and never above it. It also does not close
-        // the SORT route's DRIVER half (S-R028-01): a column-header click
-        // reorders rows without freeing any, and `for (int i=listindex; ...)` in
-        // the three drivers still walks the REORDERED list. Only the LABELLING
-        // half of that route is closed here, because the label no longer goes
-        // through an index - see TEST-112, which is measured, not fixed.
+        // ticket is consumed BELOW it and never above it.
+        //
+        // WHAT IT DOES FOR THE SORT ROUTE, and where the other half went. This
+        // ticket is what makes the LABELLING half of S-R028-01 sort-proof: the
+        // completion labels the row it was issued FOR, and a permutation does not
+        // move a pointer. The DRIVER half - `for (int i=listindex; ...)` walking a
+        // list that reordered under it - is NOT closed here and cannot be, because
+        // this ticket says nothing about positions. It is closed by
+        // DEC-garmin-038, which suspends sorting for the batch's duration so the
+        // permutation never happens (suspendListSorting above; TEST-132..TEST-139).
+        // The two are adjacent and independent: the ticket still carries the row
+        // through a sort that happens BETWEEN batches.
         struct TransferOperation {
             QTreeWidgetItem *row = nullptr;
             int col = 0;

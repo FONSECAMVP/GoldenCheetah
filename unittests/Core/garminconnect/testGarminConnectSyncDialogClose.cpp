@@ -11739,33 +11739,38 @@ class TestGarminConnectSyncDialogClose : public QObject
         assertNoTailForTheDestroyedBatch(where, out);
     }
 
-    // -- TEST-112 (S-R028-01) — A TRACE, NOT A GUARD ---------------------
+    // -- TEST-112 (S-R028-01) — REWRITTEN 2026-08-23 UNDER DEC-garmin-038 -
     // THE SORT ROUTE: WHAT A COLUMN-HEADER CLICK DOES TO A RUNNING BATCH.
     //
-    // WHAT THIS SLOT IS. DEC-034 validates the CONTAINER: refreshClicked bumps a
-    // counter, and anything holding a row or an index across a suspension stands
-    // down. A SORT frees nothing and rebuilds nothing - it PERMUTES the same
-    // items - so it bumps no counter and passes every guard REQ-028 installs.
-    // That was reasoned, not executed, and reasoning is what this project has
-    // repeatedly found to be wrong about Qt. So this slot MEASURES it. It asserts
-    // what production DOES, exactly as TEST-107 does, and it must NOT be read as
-    // production being correct: whoever closes S-R028-01 should expect the
-    // "MEASURED, NOT DESIRED" block to change.
+    // WHAT THIS SLOT WAS, AND WHY IT CHANGED. It was a TRACE: DEC-034 validates
+    // the CONTAINER, a SORT frees nothing and rebuilds nothing - it PERMUTES the
+    // same items - so it bumped no counter and passed every guard REQ-028
+    // installed, and this slot MEASURED what that cost rather than fixing it.
+    // Its "MEASURED, NOT DESIRED" block pinned the damage: the delivered sort
+    // moved the rows, the loop then transferred the SAME row twice and the other
+    // never, and the slot said in as many words that whoever closed S-R028-01
+    // should expect this block to change. DEC-garmin-038 closed it, so it has:
+    // the pins below are now the RULE, and they are the desired values, not the
+    // measured ones. What the old block measured is kept in prose at the foot of
+    // this slot, because that measurement is the whole reason the fix exists.
     //
-    // WHY THE ROUTE IS OPEN AT ALL, verified in the file rather than assumed: all
-    // three lists are built setSortingEnabled(true) (:1116/:1146/:1186);
-    // downloadClicked disables sorting on rideListDown only (:1930) and
-    // explicitly RE-ENABLES rideListUp (:1931); rideListSync is never disabled
-    // anywhere (its only other setSortingEnabled is the completion tail's
-    // re-enable at :2297). Nothing in the file calls setSectionsClickable.
+    // WHY THE ROUTE WAS OPEN, in the file as it stood: all three lists are built
+    // setSortingEnabled(true) (:1116/:1146/:1186); downloadClicked disabled
+    // sorting on rideListDown ONLY and explicitly RE-ENABLED rideListUp;
+    // rideListSync was never disabled anywhere. Since DEC-038 downloadClicked
+    // calls suspendListSorting(), which takes all three lists out of sorting for
+    // the batch's duration and restores them - column and order intact - at every
+    // termination path.
     //
     // THE DELIVERY IS A REAL CLICK, and the run RECORDS which mechanism moved the
     // rows - QTest::mouseClick on the header viewport, or the setSortIndicator
     // call that a click makes internally (QHeaderView::mouseReleaseEvent ->
-    // setSortIndicator -> sortIndicatorChanged -> QTreeView::sortByColumn). If
-    // only the second works under this QPA backend then "the header is clickable"
-    // remains an API-contract claim for the first, and the slot says so rather
-    // than presenting one as the other.
+    // setSortIndicator -> sortIndicatorChanged -> QTreeView::sortByColumn). Under
+    // DEC-038 the answer must be NEITHER, and the slot samples the list's own
+    // sorting flag inside the same frame so that the negative is attributed to the
+    // guard rather than to a synthetic-delivery artefact (LSN-062/ORCH-017): a
+    // `false` here means "the batch had sorting off", not "this backend does not
+    // deliver clicks".
     void probeWhatAColumnSortDoesToARunningBatch()
     {
         obs::reset();
@@ -11777,6 +11782,10 @@ class TestGarminConnectSyncDialogClose : public QObject
         bool sortingEnabledOnSyncList = false, sectionsClickable = false, sortIndicatorShown = false;
         bool clickDelivered = false, reorderedByRealClick = false, reorderedBySortIndicator = false;
         bool sameItemSetAfter = false;
+        // DEC-garmin-038 — the same three properties, re-read INSIDE the running
+        // batch. This is what separates "the guard shut the vector" from "this
+        // backend does not deliver synthetic clicks".
+        int sortingDuringBatch = -1, clickableDuringBatch = -1, indicatorShownDuringBatch = -1;
         QStringList namesBefore, namesAfter, statuses, namesAtFirstCompletion, statusesAtFirstCompletion;
         int writeFileCalls = 0, rideOpens = 0;
         QString labelledAtFirstCompletion, transferredRow, writeNameAtFirstCompletion;
@@ -11843,6 +11852,11 @@ class TestGarminConnectSyncDialogClose : public QObject
                 rideopen::action = [&, list]() {
                     if (list == nullptr)
                         return;
+                    sortingDuringBatch = int(list->isSortingEnabled());
+                    if (QHeaderView* hv = list->header()) {
+                        clickableDuringBatch = int(hv->sectionsClickable());
+                        indicatorShownDuringBatch = int(hv->isSortIndicatorShown());
+                    }
                     QTreeWidgetItem* root = list->invisibleRootItem();
                     QSet<quintptr> before;
                     for (int i = 0; i < root->childCount(); i++) {
@@ -11950,32 +11964,39 @@ class TestGarminConnectSyncDialogClose : public QObject
         QVERIFY2(rideOpens >= 1, "row[0]'s ride file was never opened, so there was no nested loop to click into");
         QCOMPARE(namesBefore.count(), 2);
 
-        // WHICH MECHANISM MOVED THE ROWS, and the limit of this trace. MEASURED
-        // 2026-08-17 under BOTH offscreen and minimal: the synthetic
-        // QTest::mouseClick on the header viewport did NOT reorder anything
-        // (reorderedByRealClick == false, both backends), and the reorder came
-        // from the setSortIndicator fallback - the call QHeaderView makes for
-        // itself on a real mouse release. So what is EXECUTED here is "a sort
-        // arriving inside the nested loop does this to the batch", and the step
-        // from "the user's click causes that sort" remains an API-contract claim
-        // resting on the three properties above. Not asserted either way, because
-        // synthetic mouse delivery is exactly the backend-dependent thing
-        // LSN-062 / ORCH-017 spent two cycles on and a pinned `false` here would
-        // fail for the environment rather than for the behaviour.
-        QVERIFY2(reorderedByRealClick || reorderedBySortIndicator,
-                 qPrintable(QStringLiteral("neither a header click nor setSortIndicator reordered the rows: [%1]")
-                                .arg(namesBefore.join(QStringLiteral("|")))));
+        // WHY NOTHING MOVED, established BEFORE the negative below is read, so
+        // that the negative cannot be an artefact of synthetic mouse delivery -
+        // the backend-dependent thing LSN-062 / ORCH-017 spent two cycles on. The
+        // batch had sorting OFF on this list while the click was delivered, and
+        // with it the header's own clickability and indicator, which is what
+        // TEST-131 Q4 measured setSortingEnabled(false) to do.
+        QCOMPARE(sortingDuringBatch, 0);
+        QCOMPARE(clickableDuringBatch, 0);
+        QCOMPARE(indicatorShownDuringBatch, 0);
 
-        // ---- MEASURED, NOT DESIRED.
+        // ---- THE RULE (DEC-garmin-038). Was "MEASURED, NOT DESIRED"; the values
+        //      below are now the desired ones.
         //
-        // (i)  A REORDER FREES NOTHING. The same two QTreeWidgetItem addresses are
-        //      still in the list afterwards, in the other order - so there is no
-        //      use-after-free to find here, no delete for a lifetime guard to
-        //      notice, and (by construction) nothing for DEC-034's counter to be
-        //      bumped by. This is why the sort route passes every guard REQ-028
-        //      installs, stated as a measurement rather than as an argument.
-        QVERIFY2(namesAfter != namesBefore,
-                 qPrintable(QStringLiteral("the header click did not reorder the rows at all: [%1] -> [%2]")
+        // (i)  THE SORT DELIVERED INTO THE RUNNING BATCH MOVES NOTHING - by
+        //      EITHER mechanism. The synthetic click is attempted first and the
+        //      setSortIndicator fallback (the call QHeaderView makes for itself on
+        //      a real mouse release) is attempted when the click moved nothing, so
+        //      both vectors are exercised and both must be inert. The rows are
+        //      also still the same two items: nothing is freed here either, which
+        //      is why no lifetime guard was ever going to be what closed this
+        //      route.
+        QVERIFY2(!reorderedByRealClick,
+                 qPrintable(QStringLiteral("a header click reordered a list whose batch had sorting disabled: [%1] -> "
+                                           "[%2]")
+                                .arg(namesBefore.join(QStringLiteral("|")))
+                                .arg(namesAfter.join(QStringLiteral("|")))));
+        QVERIFY2(!reorderedBySortIndicator,
+                 qPrintable(QStringLiteral("setSortIndicator reordered a list whose batch had sorting disabled: [%1] "
+                                           "-> [%2]")
+                                .arg(namesBefore.join(QStringLiteral("|")))
+                                .arg(namesAfter.join(QStringLiteral("|")))));
+        QVERIFY2(namesAfter == namesBefore,
+                 qPrintable(QStringLiteral("the list reordered under the running batch: [%1] -> [%2]")
                                 .arg(namesBefore.join(QStringLiteral("|")))
                                 .arg(namesAfter.join(QStringLiteral("|")))));
         QVERIFY2(sameItemSetAfter, "the rows were REPLACED, not permuted - this slot measures the wrong thing");
@@ -12008,12 +12029,13 @@ class TestGarminConnectSyncDialogClose : public QObject
         //       nothing and permutes nothing but positions - point (i) above. The
         //       index is gone from the slot, and with it that whole failure mode.
         //
-        //       THIS DOES NOT CLOSE S-R028-01. Only the LABELLING half is fixed.
-        //       The DRIVERS still walk `for (int i=listindex; ...)` over a list the
-        //       sort reordered under them, and point (iv) below still measures
-        //       exactly what that costs - unchanged, still MEASURED NOT DESIRED,
-        //       and still the open finding. Read (iii) and (iv) together or not at
-        //       all: half of this route is fixed and half is not.
+        //       AND NOW BOTH HALVES ARE CLOSED (2026-08-23). The ticket kept the
+        //       LABEL right THROUGH a permutation; DEC-garmin-038 stops the
+        //       permutation happening at all while a batch is running, which is
+        //       what the DRIVERS' positional walk needed. The two are independent:
+        //       the ticket is still what carries a row through a sort made BETWEEN
+        //       batches, and point (iv) below is no longer a measurement of damage
+        //       but the assertion that the damage is gone.
         transferredRow = namesBefore.value(0);
         QVERIFY2(!writeNameAtFirstCompletion.isEmpty(),
                  "the first completion's frame was never sampled, so nothing here is a measurement");
@@ -12035,39 +12057,1796 @@ class TestGarminConnectSyncDialogClose : public QObject
                                 .arg(labelledAtFirstCompletion)
                                 .arg(transferredRow)));
 
-        // ...spelled out, so both the fix and what remains are on the record as
-        // VALUES and not only as an inequality. Measured identically under
-        // offscreen and minimal:
+        // ...spelled out as VALUES, before and after the fix, so that what changed
+        // is on the record rather than only in a decision entry. Both columns
+        // measured identically under offscreen and minimal:
         //
-        //   before                 [10:00, 11:00]      (row[0] is dispatched)
-        //   after the sort         [11:00, 10:00]      (same two items, permuted)
-        //   uploaded               10:00               (curr is a POINTER: right row)
-        //   labelled "Completed."  10:00               (DEC-036: the ticket's row
-        //                                               pointer, so the RIGHT row -
-        //                                               it used to read 11:00)
-        //   and 11:00, never transferred, correctly says NOTHING - it used to be
-        //   the row wearing 10:00's verdict, and 10:00 used to be left reading
-        //   "Uploading" for a transfer that had already finished. The empty cell
-        //   is the criterion's other half: no row is labelled that the frame did
-        //   not transfer.
-        QCOMPARE(namesAfter, QStringList() << namesBefore.value(1) << namesBefore.value(0));
+        //                          BEFORE DEC-038        NOW
+        //   before                 [10:00, 11:00]        [10:00, 11:00]
+        //   after the sort         [11:00, 10:00]        [10:00, 11:00]  (inert)
+        //   uploaded first         10:00                 10:00
+        //   labelled "Completed."  10:00                 10:00   (DEC-036's ticket
+        //                                                         - it used to be
+        //                                                         11:00 before that)
+        //   statuses at that point ["", "Completed."]    ["Completed.", ""]
+        //   uploads in total       10:00 TWICE           10:00 then 11:00
+        //   11:00                  never transferred     transferred, once
+        //
+        // The status list flips because the ROWS no longer move: the labelled row
+        // is row[0] both times, and before the fix row[0] was the one the
+        // permutation had put there.
+        QCOMPARE(namesAfter, namesBefore);
         QCOMPARE(labelledAtFirstCompletion, namesBefore.value(0));
-        QCOMPARE(statusesAtFirstCompletion, QStringList() << "" << "Completed.");
+        QCOMPARE(statusesAtFirstCompletion, QStringList() << "Completed." << "");
 
-        // (iv) ...AND THE LOOP THEN TRANSFERS THE SAME ROW TWICE AND THE OTHER
-        //      NEVER. `listindex` is a POSITION: the completion's tail re-drives
-        //      the loop from index 1, which the permutation has made the row that
-        //      was just uploaded, while the row at index 0 - never transferred -
-        //      is behind the bookmark and is never reached. Two writeFile calls
-        //      for two checked rows, both of them the SAME row: the count alone
-        //      would have looked correct, which is why the names are compared.
+        // (iv) ...AND THE LOOP TRANSFERS EACH ROW EXACTLY ONCE. `listindex` is a
+        //      POSITION, and that is only safe while nothing permutes the list
+        //      under it: before DEC-038 the completion's tail re-drove the loop
+        //      from index 1, which the permutation had made the row just uploaded,
+        //      while the row now at index 0 - never transferred - sat behind the
+        //      bookmark forever. Two writeFile calls for two checked rows, and
+        //      they must be DIFFERENT rows: the count alone read correct even when
+        //      the batch was uploading the same activity twice, which is why the
+        //      names are compared.
         QCOMPARE(writeFileCalls, 2);
         QCOMPARE(obs::writeNames.count(), 2);
-        QVERIFY2(obs::writeNames.value(0) == obs::writeNames.value(1),
-                 qPrintable(QStringLiteral("MEASURED, NOT DESIRED — the two uploads were of DIFFERENT rows (%1, %2), "
-                                           "so the sort no longer costs a double transfer. Re-read this slot.")
+        QVERIFY2(obs::writeNames.value(0) != obs::writeNames.value(1),
+                 qPrintable(QStringLiteral("the two uploads were of the SAME row (%1, %2) - the sort route's double "
+                                           "transfer is back")
                                 .arg(obs::writeNames.value(0))
                                 .arg(obs::writeNames.value(1))));
+        // ...and it is the two rows the user checked, not one row twice under two
+        // names: row[0]'s and row[1]'s, in the list's own order.
+        QVERIFY2(obs::writeNames.value(0).startsWith(QFileInfo(namesBefore.value(0)).baseName()) &&
+                     obs::writeNames.value(1).startsWith(QFileInfo(namesBefore.value(1)).baseName()),
+                 qPrintable(QStringLiteral("the batch uploaded [%1] for the rows [%2]")
+                                .arg(obs::writeNames.join(QStringLiteral("|")))
+                                .arg(namesBefore.join(QStringLiteral("|")))));
+    }
+
+    // -- TEST-131 (a) (S-R028-01, probe for the HELD decision) -----------
+    // DOES AN ITEM DATA WRITE SCHEDULE A RESORT BY ITSELF? Qt only, no dialog.
+    //
+    // WHY. The recommendation that wants "disable sorting for the batch" rests
+    // on one claim its author labelled REASONED-not-EXECUTED: that with
+    // sortingEnabled == true, ANY change to an item's data in the SORT COLUMN
+    // schedules a resort, applied at the next child()/index() call - so the
+    // three drivers, which unconditionally write curr->setText(<status col>, ...)
+    // on every dispatch, would trigger the reorder THEMSELVES with no click
+    // during the batch at all. This project has had exactly that class of
+    // reasoned framework claim falsified by measurement twice (TEST-081,
+    // TEST-089), so the claim is measured here before anything is decided on it.
+    //
+    // WHAT THIS SLOT IS NOT. It asserts nothing about production and fixes
+    // nothing. It is a TRACE of Qt's behaviour on this build, pinned so that a
+    // Qt upgrade that changes the answer fails here rather than silently
+    // invalidating the decision that was taken on it.
+    //
+    // THE SUBJECT IS A PLAIN QTreeWidget, deliberately: the dialog, the store and
+    // the drivers are all absent, so nothing in this slot's answer can be an
+    // artefact of GoldenCheetah code. Q5 (TEST-131 (b)/(c)) is where the same
+    // question is asked of the real lists.
+    //
+    // READING THE ORDER IS PART OF THE MEASUREMENT. Every snapshot below goes
+    // through invisibleRootItem()->child(i), which bounds-checks and THEN calls
+    // executePendingSort() (qtreewidget.h:145-150 on this machine) - i.e. the
+    // same addressing call the drivers use at CloudService.cpp:2171 / :2548 /
+    // :3094. The layoutChanged counter beside it is what separates "the resort
+    // ran inside setText" from "the resort was PENDING and ran inside child()".
+    void probeWhetherADataWriteSelfTriggersAResort()
+    {
+        // THE SNAPSHOT KEEPS THE TWO APART ON PURPOSE. `addresses` is what every
+        // reorder comparison below uses; `shown` is name@address, for the log
+        // only. Comparing the names would be a bug in the instrument: a run that
+        // WRITES to the column it is reading would see the text change and call
+        // it a reorder. (It was written that way first, and Q1a caught it.)
+        struct Snapshot
+        {
+            QStringList addresses;
+            QStringList shown;
+        };
+        auto snapshot = [](QTreeWidget& w, int labelColumn) {
+            Snapshot s;
+            QTreeWidgetItem* root = w.invisibleRootItem();
+            for (int i = 0; i < root->childCount(); i++) {
+                QTreeWidgetItem* it = root->child(i); // <- executePendingSort() happens HERE
+                const QString address = QStringLiteral("0x%1").arg(reinterpret_cast<quintptr>(it), 0, 16);
+                s.addresses << address;
+                s.shown << QStringLiteral("%1@%2").arg(it->text(labelColumn), address);
+            }
+            return s;
+        };
+        auto addRows = [](QTreeWidget& w, int statusColumn, const QStringList& names, const QStringList& statuses) {
+            for (int i = 0; i < names.count(); i++) {
+                QTreeWidgetItem* it = new QTreeWidgetItem(&w);
+                it->setText(0, names.at(i));
+                it->setText(statusColumn, statuses.value(i));
+            }
+        };
+
+        // ---- Q1a. THE SORT NOBODY ASKED FOR: setSortingEnabled(true) alone
+        //      sorts on the default indicator section, with no click, no
+        //      setSortIndicator and no sortItems anywhere in this block. The
+        //      section and order are READ rather than assumed, and the text
+        //      written is chosen to be extreme in whichever direction that is,
+        //      so the run cannot pass by writing a value that could not move.
+        QTreeWidget q1a;
+        q1a.setColumnCount(3);
+        addRows(q1a, 2, QStringList() << "A" << "B" << "C", QStringList());
+        q1a.setSortingEnabled(true);
+        const int q1aSection = q1a.header()->sortIndicatorSection();
+        const Qt::SortOrder q1aOrder = q1a.header()->sortIndicatorOrder();
+        const QString q1aExtreme = (q1aOrder == Qt::AscendingOrder) ? QStringLiteral("zzz") : QStringLiteral("000");
+        const Snapshot q1aBefore = snapshot(q1a, 0);
+        int q1aLayoutChanges = 0;
+        QObject::connect(q1a.model(), &QAbstractItemModel::layoutChanged, &q1a, [&]() { q1aLayoutChanges++; });
+        q1a.invisibleRootItem()->child(0)->setText(q1aSection, q1aExtreme); // the ONLY event
+        const int q1aChangesAtWrite = q1aLayoutChanges;
+        const Snapshot q1aAfter = snapshot(q1a, 0);
+        const int q1aChangesAfterRead = q1aLayoutChanges;
+        const bool q1aReordered = (q1aAfter.addresses != q1aBefore.addresses);
+        const int q1aIndexAfter = q1aAfter.addresses.indexOf(q1aBefore.addresses.value(0));
+
+        // ---- Q1b. THE PRODUCTION SHAPE: eight columns, the status column is 7,
+        //      and the sort on it was established EARLIER (the user's header
+        //      click, stood in for by sortItems - a click's own model call).
+        //      Between that and the write there is no further interaction.
+        QTreeWidget q1b;
+        q1b.setColumnCount(8);
+        addRows(q1b, 7, QStringList() << "row0" << "row1" << "row2", QStringList() << "" << "" << "");
+        q1b.setSortingEnabled(true);
+        q1b.sortItems(7, Qt::AscendingOrder);
+        const Snapshot q1bBefore = snapshot(q1b, 0); // any pending sort is executed HERE, not later
+        int q1bLayoutChanges = 0;
+        QObject::connect(q1b.model(), &QAbstractItemModel::layoutChanged, &q1b, [&]() { q1bLayoutChanges++; });
+        q1b.invisibleRootItem()->child(0)->setText(7, QStringLiteral("Uploading")); // CloudService.cpp:2283, verbatim
+        const int q1bChangesAtWrite = q1bLayoutChanges;
+        const Snapshot q1bAfter = snapshot(q1b, 0);
+        const int q1bChangesAfterRead = q1bLayoutChanges;
+        const bool q1bReordered = (q1bAfter.addresses != q1bBefore.addresses);
+        const int q1bIndexAfter = q1bAfter.addresses.indexOf(q1bBefore.addresses.value(0));
+
+        // ---- Q1c. THE SPECIFICITY CONTROL, on the same widget: a write to a
+        //      column that is NOT the sort column. If this moved rows too, the
+        //      counter would be measuring writes rather than sorts, and "the
+        //      drivers write the STATUS column" would stop being the point.
+        q1b.invisibleRootItem()->child(0)->setText(2, QStringLiteral("not the sort column"));
+        const Snapshot q1cAfter = snapshot(q1b, 0);
+        const bool q1cReordered = (q1cAfter.addresses != q1bAfter.addresses);
+        const int q1cChangesAfterWrite = q1bLayoutChanges;
+
+        // ---- Q2. Does setSortingEnabled(false) suppress it? Same construction,
+        //      one variable changed: sorting is off when the write happens.
+        QTreeWidget q2;
+        q2.setColumnCount(8);
+        addRows(q2, 7, QStringList() << "row0" << "row1" << "row2", QStringList() << "" << "" << "");
+        q2.setSortingEnabled(true);
+        q2.sortItems(7, Qt::AscendingOrder);
+        q2.setSortingEnabled(false);
+        const Snapshot q2Before = snapshot(q2, 0);
+        int q2LayoutChanges = 0;
+        QObject::connect(q2.model(), &QAbstractItemModel::layoutChanged, &q2, [&]() { q2LayoutChanges++; });
+        q2.invisibleRootItem()->child(0)->setText(7, QStringLiteral("Uploading"));
+        const Snapshot q2After = snapshot(q2, 0);
+        const bool q2Suppressed = (q2After.addresses == q2Before.addresses);
+
+        // ---- Q3. THE RESIDUAL: is there a PENDING-SORT WINDOW for a later
+        //      setSortingEnabled(false) to arrive too late for?
+        //
+        //      Two separate things are measured, because the answer to the
+        //      second only means something given the first. (q3a) WHEN does the
+        //      resort a data write causes actually run - inside setText, or
+        //      lazily at the next child()? The layoutChanged counter sampled
+        //      between the write and the read is the discriminator. (q3b) If the
+        //      write is followed by setSortingEnabled(false) BEFORE anything
+        //      reads the list, is the order the reader then sees the sorted one
+        //      or the original one?
+        QTreeWidget q3;
+        q3.setColumnCount(8);
+        addRows(q3, 7, QStringList() << "row0" << "row1" << "row2", QStringList() << "" << "" << "");
+        q3.setSortingEnabled(true);
+        q3.sortItems(7, Qt::AscendingOrder);
+        const Snapshot q3Before = snapshot(q3, 0);
+        int q3LayoutChanges = 0;
+        QObject::connect(q3.model(), &QAbstractItemModel::layoutChanged, &q3, [&]() { q3LayoutChanges++; });
+        q3.invisibleRootItem()->child(0)->setText(7, QStringLiteral("Uploading"));
+        const int q3ChangesAtWrite = q3LayoutChanges; // 0 => a sort was left PENDING; 1 => it already ran
+        q3.setSortingEnabled(false);                  // the guard, arriving after the write
+        const int q3ChangesAtDisable = q3LayoutChanges;
+        const Snapshot q3After = snapshot(q3, 0);
+        const bool q3ReorderSurvivedTheDisable = (q3After.addresses != q3Before.addresses);
+
+        // ---- Q3c. ...AND WHETHER ANY LAZY WINDOW EXISTS AT ALL on this build,
+        //      from the OTHER direction: the counter is connected BEFORE sorting
+        //      is turned on, so an enable-path sort that were deferred to the
+        //      first child() call would show up as changes-at-enable == 0 and
+        //      changes-after-read > 0.
+        QTreeWidget q3c;
+        q3c.setColumnCount(8);
+        addRows(q3c, 7, QStringList() << "row0" << "row1" << "row2", QStringList() << "c" << "a" << "b");
+        int q3cLayoutChanges = 0;
+        QObject::connect(q3c.model(), &QAbstractItemModel::layoutChanged, &q3c, [&]() { q3cLayoutChanges++; });
+        q3c.setSortingEnabled(true);
+        q3c.sortItems(7, Qt::AscendingOrder);
+        const int q3cChangesAtEnable = q3cLayoutChanges;
+        const Snapshot q3cAfter = snapshot(q3c, 0);
+        const int q3cChangesAfterRead = q3cLayoutChanges;
+
+        // ---- Q4. WHAT DISABLING SORTING ACTUALLY SEVERS. Two separate
+        //      sub-questions: (a) is the header still section-clickable, and
+        //      (b) does setSortIndicator - the call QHeaderView makes for itself
+        //      on a real mouse release - still reorder?
+        QTreeWidget q4;
+        q4.setColumnCount(8);
+        addRows(q4, 7, QStringList() << "row0" << "row1" << "row2", QStringList() << "" << "Completed." << "Uploading");
+        q4.setSortingEnabled(true);
+        q4.sortItems(7, Qt::AscendingOrder);
+        const bool q4ClickableWhileEnabled = q4.header()->sectionsClickable();
+        const bool q4IndicatorShownWhileEnabled = q4.header()->isSortIndicatorShown();
+        const Snapshot q4Ascending = snapshot(q4, 0);
+        q4.header()->setSortIndicator(7, Qt::DescendingOrder); // the control: it works when enabled
+        const Snapshot q4DescendingWhileEnabled = snapshot(q4, 0);
+        const bool q4IndicatorReordersWhileEnabled = (q4DescendingWhileEnabled.addresses != q4Ascending.addresses);
+        q4.setSortingEnabled(false);
+        const bool q4ClickableWhileDisabled = q4.header()->sectionsClickable();
+        const bool q4IndicatorShownWhileDisabled = q4.header()->isSortIndicatorShown();
+        const Snapshot q4BeforeIndicatorWhileDisabled = snapshot(q4, 0);
+        // Turning sorting off is not itself a reorder: the rows stay where the
+        // last sort left them.
+        const bool q4DisableAloneReordered =
+            (q4BeforeIndicatorWhileDisabled.addresses != q4DescendingWhileEnabled.addresses);
+        q4.header()->setSortIndicator(7, Qt::AscendingOrder);
+        const Snapshot q4AfterIndicatorWhileDisabled = snapshot(q4, 0);
+        const bool q4IndicatorReordersWhileDisabled =
+            (q4AfterIndicatorWhileDisabled.addresses != q4BeforeIndicatorWhileDisabled.addresses);
+        // ...and one more write, to show that the SUPPRESSION SURVIVES a later
+        // indicator change while sorting is still off (Option A's window is the
+        // whole batch, not one call).
+        const Snapshot q4BeforeLateWrite = snapshot(q4, 0);
+        q4.invisibleRootItem()->child(0)->setText(7, QStringLiteral("Uploading"));
+        const Snapshot q4AfterLateWrite = snapshot(q4, 0);
+        const bool q4LateWriteReordered = (q4AfterLateWrite.addresses != q4BeforeLateWrite.addresses);
+
+        // The raw observation, in the run log, per QPA backend - so the numbers
+        // behind the pins below are evidence and not a recollection.
+        qInfo("TEST-131 Q1a [%s] sortingEnabled(true) only (section=%d order=%s), write \"%s\" to that section: "
+              "before=[%s] after=[%s] reordered=%d writtenRowNowAtIndex=%d layoutChanged(at write)=%d "
+              "(after read)=%d",
+              qPrintable(QString::fromLatin1(qgetenv("QT_QPA_PLATFORM"))), q1aSection,
+              q1aOrder == Qt::AscendingOrder ? "asc" : "desc", qPrintable(q1aExtreme),
+              qPrintable(q1aBefore.shown.join(QChar('|'))), qPrintable(q1aAfter.shown.join(QChar('|'))),
+              int(q1aReordered), q1aIndexAfter, q1aChangesAtWrite, q1aChangesAfterRead);
+        qInfo("TEST-131 Q1b sorted on col 7 then setText(7,\"Uploading\") on index 0: before=[%s] after=[%s] "
+              "reordered=%d writtenRowNowAtIndex=%d layoutChanged(at write)=%d (after read)=%d || Q1c write to a "
+              "NON-sort column: reordered=%d layoutChanged=%d",
+              qPrintable(q1bBefore.shown.join(QChar('|'))), qPrintable(q1bAfter.shown.join(QChar('|'))),
+              int(q1bReordered), q1bIndexAfter, q1bChangesAtWrite, q1bChangesAfterRead, int(q1cReordered),
+              q1cChangesAfterWrite);
+        qInfo("TEST-131 Q2 sortingEnabled(false) before the write: before=[%s] after=[%s] suppressed=%d "
+              "layoutChanged=%d",
+              qPrintable(q2Before.shown.join(QChar('|'))), qPrintable(q2After.shown.join(QChar('|'))),
+              int(q2Suppressed), q2LayoutChanges);
+        qInfo("TEST-131 Q3 write THEN disable: before=[%s] after=[%s] reorderSurvivedTheDisable=%d "
+              "layoutChanged(at write)=%d (at disable)=%d (after read)=%d || Q3c enable path: "
+              "layoutChanged(at enable)=%d (after read)=%d order=[%s]",
+              qPrintable(q3Before.shown.join(QChar('|'))), qPrintable(q3After.shown.join(QChar('|'))),
+              int(q3ReorderSurvivedTheDisable), q3ChangesAtWrite, q3ChangesAtDisable, q3LayoutChanges,
+              q3cChangesAtEnable, q3cChangesAfterRead, qPrintable(q3cAfter.shown.join(QChar('|'))));
+        qInfo("TEST-131 Q4 enabled: clickable=%d indicatorShown=%d indicatorReorders=%d || disabled: clickable=%d "
+              "indicatorShown=%d indicatorReorders=%d disableAloneReordered=%d lateWriteReordered=%d before=[%s] "
+              "after=[%s]",
+              int(q4ClickableWhileEnabled), int(q4IndicatorShownWhileEnabled), int(q4IndicatorReordersWhileEnabled),
+              int(q4ClickableWhileDisabled), int(q4IndicatorShownWhileDisabled), int(q4IndicatorReordersWhileDisabled),
+              int(q4DisableAloneReordered), int(q4LateWriteReordered),
+              qPrintable(q4BeforeIndicatorWhileDisabled.shown.join(QChar('|'))),
+              qPrintable(q4AfterIndicatorWhileDisabled.shown.join(QChar('|'))));
+
+        // ---- THE PREMISES. Without these the answers above are about nothing.
+        QCOMPARE(q1aBefore.addresses.count(), 3);
+        QCOMPARE(q1bBefore.addresses.count(), 3);
+        QCOMPARE(q2Before.addresses.count(), 3);
+        QCOMPARE(q3Before.addresses.count(), 3);
+        QCOMPARE(q4Ascending.addresses.count(), 3);
+        QVERIFY2(q1b.isSortingEnabled(), "q1b was not sorting, so its answer is about nothing");
+        QVERIFY2(!q2.isSortingEnabled(), "q2's sorting was never turned off, so its answer is about nothing");
+        // The positive control for Q4's negative half: an indicator change DOES
+        // reorder this data set while sorting is on, so a `false` when it is off
+        // is a real difference and not a data set that cannot move.
+        QVERIFY2(q4IndicatorReordersWhileEnabled,
+                 "setSortIndicator did not reorder even with sorting ENABLED - Q4's negative half would be vacuous");
+
+        // ---- THE ANSWERS, PINNED. Measured 2026-08-22, IDENTICAL under
+        //      QT_QPA_PLATFORM=offscreen and =minimal, Qt 6.8.2.
+        //
+        // Q1: A DATA WRITE TO THE SORT COLUMN IS ENOUGH. No click, no
+        //     setSortIndicator, no sortItems between the write and the read - the
+        //     item that was written moves, and the move is there at the very next
+        //     child() call. The claim the recommendation could not source is TRUE
+        //     on this build, on both the default sort column and on column 7.
+        QVERIFY2(q1aReordered,
+                 qPrintable(QStringLiteral("MEASURED — a write to the DEFAULT sort column did NOT reorder: [%1] -> "
+                                           "[%2]")
+                                .arg(q1aBefore.shown.join(QChar('|')))
+                                .arg(q1aAfter.shown.join(QChar('|')))));
+        QCOMPARE(q1aIndexAfter, 2);
+        QVERIFY2(q1bReordered,
+                 qPrintable(QStringLiteral("MEASURED, NOT DESIRED — setText(7,\"Uploading\") did NOT reorder: "
+                                           "[%1] -> [%2]")
+                                .arg(q1bBefore.shown.join(QChar('|')))
+                                .arg(q1bAfter.shown.join(QChar('|')))));
+        // ...and the row that was written is the row that moved, to the END of an
+        // ascending sort ("" < "Uploading"), which is exactly the direction that
+        // hurts a loop walking forwards from a stored index.
+        QCOMPARE(q1bIndexAfter, 2);
+        //
+        // Q1, THE PART THE RECOMMENDATION GOT WRONG IN DETAIL, and it is worse
+        // rather than better: the resort is NOT lazy. layoutChanged is emitted
+        // INSIDE setText (changes-at-write == 1, and reading afterwards adds
+        // none), so the rows have already moved by the time anything addresses
+        // them - there is no "not yet applied" window between the write and the
+        // read at all, and the child()/executePendingSort() route is not what
+        // delivers this one.
+        QCOMPARE(q1bChangesAtWrite, 1);
+        QCOMPARE(q1bChangesAfterRead, 1);
+        QCOMPARE(q1aChangesAtWrite, 1);
+        // Q1c, the specificity control: the trigger is the SORT COLUMN, not any
+        // write. A write to another column of the same item moves nothing and
+        // emits no layout change - which is exactly why "the drivers write the
+        // status column, and the status column is one users sort by" is the
+        // load-bearing sentence rather than "the drivers write".
+        QVERIFY2(!q1cReordered, "MEASURED — a write to a NON-sort column reordered the list");
+        QCOMPARE(q1cChangesAfterWrite, 1);
+        // Q3c: nor is the ENABLE path lazy on this build - it too sorts inside
+        // the call, not at the first read.
+        QVERIFY2(q3cChangesAtEnable > 0, "the enable-path sort was deferred - re-read Q3");
+        QCOMPARE(q3cChangesAfterRead, q3cChangesAtEnable);
+        //
+        // Q2: turning sorting off DOES suppress it - not one layout change, not
+        //     one moved row.
+        QVERIFY2(q2Suppressed,
+                 qPrintable(QStringLiteral("MEASURED — setSortingEnabled(false) did NOT suppress the self-trigger: "
+                                           "[%1] -> [%2]")
+                                .arg(q2Before.shown.join(QChar('|')))
+                                .arg(q2After.shown.join(QChar('|')))));
+        QCOMPARE(q2LayoutChanges, 0);
+        //
+        // Q3: THE RESIDUAL IS NOT A PENDING SORT - IT IS AN ALREADY-EXECUTED ONE.
+        //     Because the write sorts immediately (changes-at-write == 1, before
+        //     the disable), a setSortingEnabled(false) that arrives after a write
+        //     cannot cancel anything: the rows have already moved, and the
+        //     disable neither undoes that nor adds to it. So "does disabling
+        //     cancel a pending sort" does not arise on this build; what matters
+        //     for a guard is only that it is in place BEFORE the first write.
+        QCOMPARE(q3ChangesAtWrite, 1);
+        QCOMPARE(q3ChangesAtDisable, 1);
+        QCOMPARE(q3LayoutChanges, 1);
+        QVERIFY2(q3ReorderSurvivedTheDisable,
+                 "the reorder that had already executed was undone by setSortingEnabled(false) - re-read this slot");
+        //
+        // Q4 (a): the drafted clause is RIGHT, not wrong. setSortingEnabled(false)
+        //         turns the header's own clickability OFF (QTreeView::
+        //         setSortingEnabled calls setSectionsClickable(enable) and
+        //         setSortIndicatorShown(enable)), so with sorting disabled there
+        //         is no click-to-sort left to close.
+        QVERIFY2(q4ClickableWhileEnabled, "premise: sorting-enabled headers are clickable");
+        QVERIFY2(q4IndicatorShownWhileEnabled, "premise: sorting-enabled headers show the indicator");
+        QVERIFY2(!q4ClickableWhileDisabled, "MEASURED — the header stayed clickable with sorting disabled");
+        QVERIFY2(!q4IndicatorShownWhileDisabled, "MEASURED — the indicator stayed shown with sorting disabled");
+        // Q4 (b): and the connection IS what gets severed - setSortIndicator, the
+        //         call a real mouse release makes, no longer reorders anything
+        //         once sorting is off. Both halves of the click vector are shut,
+        //         not just one.
+        QVERIFY2(!q4IndicatorReordersWhileDisabled,
+                 qPrintable(QStringLiteral("MEASURED — setSortIndicator STILL reordered with sorting disabled: "
+                                           "[%1] -> [%2]")
+                                .arg(q4BeforeIndicatorWhileDisabled.shown.join(QChar('|')))
+                                .arg(q4AfterIndicatorWhileDisabled.shown.join(QChar('|')))));
+        QVERIFY2(!q4DisableAloneReordered, "MEASURED — setSortingEnabled(false) reordered the rows by itself");
+        QVERIFY2(!q4LateWriteReordered, "MEASURED — a write after a disabled-mode indicator change still reordered");
+    }
+
+    // -- TEST-131 (b) (S-R028-01) ----------------------------------------
+    // Q5, HALF ONE: DOES THE Q1 MECHANISM EVEN APPLY TO THESE THREE LISTS?
+    //
+    // A self-trigger that cannot move a row is a curiosity, not a defect. Three
+    // things have to be true of the REAL dialog for Q1 to reach it: the Status
+    // column has to exist within the list's columnCount, the user has to be able
+    // to sort by it, and the strings the drivers write to it have to be able to
+    // change a row's position relative to its siblings. This slot measures all
+    // three on all three lists, using the drivers' own column indices and their
+    // own literal strings.
+    //
+    // NO BATCH RUNS HERE. The status writes are made by the slot, not by
+    // production - what is being measured is the WIDGET's response to them.
+    // TEST-131 (c) is the end-to-end half, where production makes the write.
+    void probeWhetherAStatusWriteCanMoveARowInTheRealLists()
+    {
+        obs::reset();
+        rideopen::reset();
+        ridefail::reset();
+        rideopen::blockingMs = 5;
+
+        struct ListFacts
+        {
+            int columns = -1;
+            int statusColumn = -1;
+            int rows = 0;
+            bool sortingEnabled = false;
+            bool sectionsClickable = false;
+            bool indicatorShown = false;
+            bool statusColumnHidden = true;
+            bool statusColumnWithinCount = false;
+            QStringList afterUserSort;
+            QStringList afterStatusWrite;
+            bool movedByStatusWrite = false;
+        };
+        ListFacts down, up, sync;
+        bool timedOut = false;
+
+        const QDir activities = context->athlete->home->activities();
+        QDir().mkpath(activities.absolutePath());
+
+        QList<RideItem*> items;
+        QStringList paths;
+        for (int i = 0; i < 2; i++) {
+            const QString name = rebuildLocalActivity(i);
+            QFile f(activities.absolutePath() + "/" + name);
+            f.open(QIODevice::WriteOnly);
+            f.write("gcblock");
+            f.close();
+            paths << f.fileName();
+
+            RideItem* item = new RideItem(nullptr, context);
+            item->fileName = name;
+            item->path = activities.absolutePath();
+            item->dateTime = QDateTime(QDate::currentDate(), QTime(10 + i, 0, 0));
+            item->planned = false;
+            items << item;
+        }
+        for (RideItem* item : items)
+            rideCache->rides().push_back(item);
+
+        QEventLoop appLoop;
+        QMetaObject::invokeMethod(
+            this,
+            [&]() {
+                QWidget* owner = new QWidget;
+
+                BlockingStore* store = new BlockingStore(context);
+                // Both halves populated so that ALL THREE lists have >= 2 rows:
+                // two remote (download rows) and two local (upload rows).
+                store->entryNames = QStringList() << rebuildRemoteActivity(0) << rebuildRemoteActivity(1);
+                store->blockingMs = 5;
+                store->closeActionContext = qApp;
+                store->downloadCompression = CloudService::none;
+
+                CloudServiceSyncDialog* dialog = new CloudServiceSyncDialog(context, store);
+                dialog->setParent(owner, Qt::Dialog);
+                dialog->start();
+                dialog->open();
+                store->dialog = dialog;
+                store->dialogGuard = dialog;
+
+                // Names for the log; ADDRESSES for every comparison (a run that
+                // writes the column it reads must never compare texts).
+                auto fingerprints = [](QTreeWidget* w) {
+                    QStringList out;
+                    QTreeWidgetItem* root = w->invisibleRootItem();
+                    for (int i = 0; i < root->childCount(); i++) {
+                        QTreeWidgetItem* it = root->child(i);
+                        out << QStringLiteral("%1@0x%2").arg(it->text(1)).arg(reinterpret_cast<quintptr>(it), 0, 16);
+                    }
+                    return out;
+                };
+                auto addressesOf = [](QTreeWidget* w) {
+                    QStringList out;
+                    QTreeWidgetItem* root = w->invisibleRootItem();
+                    for (int i = 0; i < root->childCount(); i++)
+                        out << QStringLiteral("0x%1").arg(reinterpret_cast<quintptr>(root->child(i)), 0, 16);
+                    return out;
+                };
+
+                auto probe = [&](QTreeWidget* w, ListFacts& f, const QString& driverText) {
+                    if (w == nullptr)
+                        return;
+                    f.columns = w->columnCount();
+                    f.rows = w->invisibleRootItem()->childCount();
+                    f.sortingEnabled = w->isSortingEnabled();
+                    if (QHeaderView* h = w->header()) {
+                        f.sectionsClickable = h->sectionsClickable();
+                        f.indicatorShown = h->isSortIndicatorShown();
+                    }
+                    // The Status column is found the way a user finds it: by its
+                    // header text, over the columns the list actually HAS.
+                    for (int c = 0; c < w->columnCount(); c++)
+                        if (w->headerItem() != nullptr && w->headerItem()->text(c) == QStringLiteral("Status")) {
+                            f.statusColumn = c;
+                            break;
+                        }
+                    f.statusColumnWithinCount = (f.statusColumn >= 0 && f.statusColumn < w->columnCount());
+                    if (f.statusColumn >= 0)
+                        f.statusColumnHidden = w->isColumnHidden(f.statusColumn);
+                    if (f.statusColumn < 0 || f.rows < 2)
+                        return;
+
+                    // THE USER SORTS BY STATUS - once, before anything else. The
+                    // delivery is setSortIndicator because TEST-112 measured that
+                    // a synthetic header click does not reorder under either of
+                    // this target's QPA backends while setSortIndicator does; it
+                    // is the call QHeaderView makes for itself on a real release.
+                    w->header()->setSortIndicator(f.statusColumn, Qt::AscendingOrder);
+                    f.afterUserSort = fingerprints(w);
+                    const QStringList sortedAddresses = addressesOf(w);
+
+                    // ...and then ONE status write, the driver's own literal.
+                    w->invisibleRootItem()->child(0)->setText(f.statusColumn, driverText);
+                    f.afterStatusWrite = fingerprints(w);
+                    f.movedByStatusWrite = (addressesOf(w) != sortedAddresses);
+                };
+
+                probe(rideListWithHeader(dialog, QStringLiteral("Workout Name")), down, QStringLiteral("Downloading"));
+                probe(rideListWithHeader(dialog, QStringLiteral("File")), up, QStringLiteral("Uploading"));
+                probe(rideListWithHeader(dialog, QStringLiteral("Source")), sync, QStringLiteral("Uploading"));
+
+                QTimer::singleShot(100, qApp, [owner]() { delete owner; });
+                QTimer::singleShot(200, &appLoop, &QEventLoop::quit);
+                QTimer::singleShot(20000, &appLoop, [&timedOut]() {
+                    timedOut = true;
+                    QCoreApplication::exit(1);
+                });
+            },
+            Qt::QueuedConnection);
+
+        appLoop.exec();
+        for (int i = 0; i < 50; ++i)
+            QApplication::processEvents(QEventLoop::AllEvents, 5);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+        for (RideItem* item : items) {
+            rideCache->rides().removeAll(item);
+            delete item->ride(false);
+            delete item;
+        }
+        for (const QString& p : paths)
+            QFile::remove(p);
+
+        QVERIFY2(timedOut == false, "the run never came back");
+
+        const ListFacts* all[3] = {&down, &up, &sync};
+        const char* names[3] = {"rideListDown", "rideListUp", "rideListSync"};
+        for (int i = 0; i < 3; i++)
+            qInfo("TEST-131 Q5 [%s] %s: columns=%d statusColumn=%d withinCount=%d hidden=%d rows=%d "
+                  "sortingEnabled=%d clickable=%d indicatorShown=%d movedByStatusWrite=%d afterUserSort=[%s] "
+                  "afterStatusWrite=[%s]",
+                  qPrintable(QString::fromLatin1(qgetenv("QT_QPA_PLATFORM"))), names[i], all[i]->columns,
+                  all[i]->statusColumn, int(all[i]->statusColumnWithinCount), int(all[i]->statusColumnHidden),
+                  all[i]->rows, int(all[i]->sortingEnabled), int(all[i]->sectionsClickable),
+                  int(all[i]->indicatorShown), int(all[i]->movedByStatusWrite),
+                  qPrintable(all[i]->afterUserSort.join(QChar('|'))),
+                  qPrintable(all[i]->afterStatusWrite.join(QChar('|'))));
+
+        // ---- THE PREMISES: three populated, sortable lists.
+        QVERIFY2(down.rows >= 2, "the download list has fewer than two rows, so nothing can be moved relative to it");
+        QVERIFY2(up.rows >= 2, "the upload list has fewer than two rows");
+        QVERIFY2(sync.rows >= 2, "the sync list has fewer than two rows");
+
+        // ---- THE ANSWERS, PINNED. Measured 2026-08-22, identical under both
+        //      QPA backends.
+        //
+        // (i) WHERE THE STATUS COLUMN IS, read off the live widgets rather than
+        //     off the constructor: 5 on the download list (whose columnCount is
+        //     6, so "Workout Id" at index 6 is TRUNCATED AWAY and Status is the
+        //     LAST column), 7 on the upload list, 7 on the sync list (whose
+        //     columnCount is 8, so its "Workout Id" at index 8 is truncated too).
+        //     These are the same indices the drivers write to: :2563 / :3109 /
+        //     :2283.
+        QCOMPARE(down.statusColumn, 5);
+        QCOMPARE(up.statusColumn, 7);
+        QCOMPARE(sync.statusColumn, 7);
+        for (int i = 0; i < 3; i++) {
+            QVERIFY2(all[i]->statusColumnWithinCount, names[i]);
+            QVERIFY2(!all[i]->statusColumnHidden, names[i]);
+            // (ii) ...AND THE USER CAN SORT BY IT: sorting is on and the header
+            //      sections are clickable, on all three, out of the constructor.
+            QVERIFY2(all[i]->sortingEnabled, names[i]);
+            QVERIFY2(all[i]->sectionsClickable, names[i]);
+            QVERIFY2(all[i]->indicatorShown, names[i]);
+            // (iii) AND THE DRIVER'S OWN STRING MOVES THE ROW. One setText with
+            //       the literal the driver uses, on a list sorted by Status, and
+            //       the row leaves index 0. MEASURED, NOT DESIRED.
+            QVERIFY2(all[i]->movedByStatusWrite,
+                     qPrintable(QStringLiteral("%1: the driver's status write did NOT move the row: [%2] -> [%3]")
+                                    .arg(QString::fromLatin1(names[i]))
+                                    .arg(all[i]->afterUserSort.join(QChar('|')))
+                                    .arg(all[i]->afterStatusWrite.join(QChar('|')))));
+        }
+    }
+
+    // -- TEST-131 (c) (S-R028-01) ----------------------------------------
+    // Q5, HALF TWO: THE ORDINARY ROUTE, END TO END, WITH NO CLICK DURING THE
+    // BATCH AT ALL.
+    //
+    // TEST-112 needed a reorder DELIVERED into the running batch (a header click,
+    // in practice a setSortIndicator, inside row[0]'s nested loop). This run
+    // delivers NOTHING. The user sorts by Status BEFORE pressing Synchronize -
+    // an action with no relationship to the batch, taken at any earlier time -
+    // and then only production runs. If the batch still damages itself, the sort
+    // route does not need an untraced click: the drivers trip it themselves,
+    // because every dispatch writes the sort column.
+    //
+    // A NEGATIVE HERE WOULD ALSO BE A RESULT and would be reported as one: it
+    // would mean Q1's mechanism, real as it is, does not reach the drivers.
+    void probeWhetherAPreBatchStatusSortSelfTriggersDuringTheBatch()
+    {
+        obs::reset();
+        rideopen::reset();
+        ridefail::reset();
+        rideopen::blockingMs = 5;
+
+        bool timedOut = false;
+        bool sortingEnabledOnSyncList = false;
+        int statusColumn = -1, rows = 0, checkedRows = 0, writeFileCalls = 0;
+        bool userSortChangedTheOrder = false, reorderedDuringTheBatch = false;
+        QStringList before, afterUserSort, atFirstCompletion, atEnd, statusesAtEnd;
+        QStringList reorderLog; // every reorder the BATCH caused, and when
+        QString writeNameAtFirstCompletion;
+
+        const QDir activities = context->athlete->home->activities();
+        QDir().mkpath(activities.absolutePath());
+
+        QList<RideItem*> items;
+        QStringList paths;
+        for (int i = 0; i < 2; i++) {
+            const QString name = rebuildLocalActivity(i);
+            QFile f(activities.absolutePath() + "/" + name);
+            f.open(QIODevice::WriteOnly);
+            f.write("gcblock");
+            f.close();
+            paths << f.fileName();
+
+            RideItem* item = new RideItem(nullptr, context);
+            item->fileName = name;
+            item->path = activities.absolutePath();
+            item->dateTime = QDateTime(QDate::currentDate(), QTime(10 + i, 0, 0));
+            item->planned = false;
+            items << item;
+        }
+        for (RideItem* item : items)
+            rideCache->rides().push_back(item);
+
+        QEventLoop appLoop;
+        QMetaObject::invokeMethod(
+            this,
+            [&]() {
+                QWidget* owner = new QWidget;
+
+                BlockingStore* store = new BlockingStore(context);
+                store->entryNames = QStringList(); // nothing remote: two UPLOAD rows on the sync tab
+                store->blockingMs = 5;
+                store->closeActionContext = qApp;
+                store->downloadCompression = CloudService::none;
+                store->completeWrite = true;
+
+                CloudServiceSyncDialog* dialog = new CloudServiceSyncDialog(context, store);
+                dialog->setParent(owner, Qt::Dialog);
+                dialog->start();
+                dialog->open();
+                store->dialog = dialog;
+                store->dialogGuard = dialog;
+
+                if (QTabWidget* tabs = dialog->findChild<QTabWidget*>())
+                    tabs->setCurrentIndex(2);
+                dialog->selectAllSyncChanged(Qt::Checked);
+                QTreeWidget* list = rideListWithHeader(dialog, QStringLiteral("Source"));
+
+                auto fingerprints = [](QTreeWidget* w) {
+                    QStringList out;
+                    QTreeWidgetItem* root = w->invisibleRootItem();
+                    for (int i = 0; i < root->childCount(); i++) {
+                        QTreeWidgetItem* it = root->child(i);
+                        out << QStringLiteral("%1@0x%2").arg(it->text(1)).arg(reinterpret_cast<quintptr>(it), 0, 16);
+                    }
+                    return out;
+                };
+
+                if (list != nullptr) {
+                    sortingEnabledOnSyncList = list->isSortingEnabled();
+                    rows = list->invisibleRootItem()->childCount();
+                    for (int c = 0; c < list->columnCount(); c++)
+                        if (list->headerItem()->text(c) == QStringLiteral("Status")) {
+                            statusColumn = c;
+                            break;
+                        }
+                    for (int i = 0; i < rows; i++) {
+                        QCheckBox* check =
+                            qobject_cast<QCheckBox*>(list->itemWidget(list->invisibleRootItem()->child(i), 0));
+                        if (check != nullptr && check->isChecked())
+                            checkedRows++;
+                    }
+                    before = fingerprints(list);
+
+                    // ---- THE USER'S ONLY ACTION, and it happens BEFORE the
+                    //      batch: sort the list by its Status column. Every cell
+                    //      in it is empty at this point, so this is invisible to
+                    //      the user - it changes no row's position.
+                    if (statusColumn >= 0)
+                        list->header()->setSortIndicator(statusColumn, Qt::AscendingOrder);
+                    afterUserSort = fingerprints(list);
+                    userSortChangedTheOrder = (afterUserSort != before);
+
+                    // WHEN the rows move, and what production had done by then.
+                    // A reorder logged at writeFileCalls == 0 happened BEFORE the
+                    // first upload was even dispatched - i.e. it can only be the
+                    // curr->setText(7, "Uploading") at CloudService.cpp:2283 that
+                    // caused it, not a completion, not a tail, and not this slot.
+                    // Captured BY VALUE where the capture could outlive this
+                    // frame: the connection can still fire while the dialog is
+                    // being destroyed, after the enclosing lambda has returned.
+                    // `reorderLog` is a local of the test function itself, which
+                    // is blocked in appLoop.exec() throughout.
+                    QObject::connect(list->model(), &QAbstractItemModel::layoutChanged, list,
+                                     [&reorderLog, list, fingerprints]() {
+                                         reorderLog << QStringLiteral("writeFileCalls=%1 order=%2")
+                                                           .arg(obs::writeFileCalls)
+                                                           .arg(fingerprints(list).join(QChar(',')));
+                                     });
+                }
+
+                // The first completion's OWN frame, for the same reason TEST-112
+                // samples there: read at the end and the re-driven batch has
+                // already overwritten the evidence.
+                store->afterCompletionAction = [&, list]() {
+                    if (list == nullptr || !atFirstCompletion.isEmpty())
+                        return;
+                    writeNameAtFirstCompletion = obs::lastWriteName;
+                    atFirstCompletion = fingerprints(list);
+                };
+
+                // ---- ...AND NOW ONLY PRODUCTION RUNS. No click, no
+                //      setSortIndicator, no setText from this slot: whatever
+                //      reorders the list from here is the dialog's own doing.
+                dialog->downloadClicked();
+
+                for (int i = 0; i < 200; ++i)
+                    QApplication::processEvents(QEventLoop::AllEvents, 5);
+
+                writeFileCalls = obs::writeFileCalls;
+                if (list != nullptr) {
+                    atEnd = fingerprints(list);
+                    QTreeWidgetItem* root = list->invisibleRootItem();
+                    for (int i = 0; i < root->childCount(); i++)
+                        statusesAtEnd << root->child(i)->text(statusColumn < 0 ? 7 : statusColumn);
+                }
+
+                QTimer::singleShot(100, qApp, [owner]() { delete owner; });
+                QTimer::singleShot(200, &appLoop, &QEventLoop::quit);
+                QTimer::singleShot(20000, &appLoop, [&timedOut]() {
+                    timedOut = true;
+                    QCoreApplication::exit(1);
+                });
+            },
+            Qt::QueuedConnection);
+
+        appLoop.exec();
+        for (int i = 0; i < 50; ++i)
+            QApplication::processEvents(QEventLoop::AllEvents, 5);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+        for (RideItem* item : items) {
+            rideCache->rides().removeAll(item);
+            delete item->ride(false);
+            delete item;
+        }
+        for (const QString& p : paths)
+            QFile::remove(p);
+
+        reorderedDuringTheBatch = (atFirstCompletion != afterUserSort || atEnd != afterUserSort);
+
+        qInfo("TEST-131 Q5c [%s] statusColumn=%d rows=%d checked=%d userSortChangedOrder=%d before=[%s] "
+              "afterUserSort=[%s] atFirstCompletion=[%s] atEnd=[%s] statuses=[%s] writeFileCalls=%d writeNames=[%s] "
+              "firstCompletionWrote=%s reorders=[%s]",
+              qPrintable(QString::fromLatin1(qgetenv("QT_QPA_PLATFORM"))), statusColumn, rows, checkedRows,
+              int(userSortChangedTheOrder), qPrintable(before.join(QChar('|'))),
+              qPrintable(afterUserSort.join(QChar('|'))), qPrintable(atFirstCompletion.join(QChar('|'))),
+              qPrintable(atEnd.join(QChar('|'))), qPrintable(statusesAtEnd.join(QChar('|'))), writeFileCalls,
+              qPrintable(obs::writeNames.join(QChar('|'))), qPrintable(writeNameAtFirstCompletion),
+              qPrintable(reorderLog.join(QStringLiteral(" ;; "))));
+
+        // ---- THE PREMISES.
+        QVERIFY2(timedOut == false, "the run never came back");
+        QVERIFY2(sortingEnabledOnSyncList, "the sync list is not sortable, so this whole slot is about nothing");
+        QCOMPARE(statusColumn, 7);
+        QCOMPARE(rows, 2);
+        QCOMPARE(checkedRows, 2);
+        // The user's sort was INVISIBLE: it moved nothing, because every Status
+        // cell was empty. Nobody could tell from the screen that this list is
+        // now sorted on a column production is about to write to.
+        QVERIFY2(!userSortChangedTheOrder,
+                 qPrintable(QStringLiteral("the pre-batch sort itself reordered the rows ([%1] -> [%2]), so what "
+                                           "follows cannot be attributed to the drivers")
+                                .arg(before.join(QChar('|')))
+                                .arg(afterUserSort.join(QChar('|')))));
+        QVERIFY2(writeFileCalls >= 1, "no transfer happened at all, so this run says nothing about the batch");
+
+        // ---- THE ANSWER, PINNED. REWRITTEN 2026-08-23 UNDER DEC-garmin-038.
+        //
+        // WHAT THIS BLOCK USED TO SAY, because it is the whole reason the fix
+        // exists and deleting it would delete the evidence. Measured 2026-08-22
+        // under both QPA backends, with NO interaction during the batch at all:
+        //
+        //   afterUserSort          [10:00, 11:00]   (the sort itself moved nothing)
+        //   atFirstCompletion      [11:00, 10:00]   <- the BATCH reordered itself
+        //   first layout change    at writeFileCalls == 0, i.e. inside syncNext's
+        //                          own curr->setText(7, "Uploading"), before the
+        //                          first dispatch
+        //   writeNames             [10_00.json.zip, 10_00.json.zip]  (twice!)
+        //   statuses               ["", "Completed."]  (11:00 never transferred)
+        //
+        // That block was labelled MEASURED, NOT DESIRED and said in as many words
+        // that whoever closed S-R028-01 should expect it to change. DEC-038 closed
+        // it: sorting is suspended for the batch's duration, so the driver's own
+        // status write moves nothing and the positional walk stays valid. The pins
+        // below are the DESIRED values - a green here is now a statement about
+        // production being right, not about it being broken.
+        //
+        // (i) THE BATCH DOES NOT REORDER ITS OWN LIST. Same order at the first
+        //     completion and at the end as the user's pre-batch sort left it.
+        QVERIFY2(!reorderedDuringTheBatch,
+                 qPrintable(QStringLiteral("the list reordered under the running batch ([%1] -> [%2] -> [%3]) - the "
+                                           "self-trigger is back")
+                                .arg(afterUserSort.join(QChar('|')))
+                                .arg(atFirstCompletion.join(QChar('|')))
+                                .arg(atEnd.join(QChar('|')))));
+        // (ii) ...AND SPECIFICALLY NOT AT THE STATUS WRITE. The layout-change log
+        //      is kept rather than replaced by the inequality above, because it is
+        //      what LOCATES a regression: an entry at writeFileCalls == 0 is
+        //      syncNext's own curr->setText(7, "Uploading") sorting the list
+        //      before it has dispatched anything, which is the defect itself. The
+        //      log is NOT required to be empty - restoring the user's sorting at
+        //      the completion tail is a layout change too, and it happens after
+        //      the last transfer (writeFileCalls == 2).
+        for (const QString& entry : reorderLog)
+            QVERIFY2(!entry.startsWith(QStringLiteral("writeFileCalls=0 ")),
+                     qPrintable(
+                         QStringLiteral("a status write reordered the list before the first dispatch: %1").arg(entry)));
+        // (iii) AND EACH CHECKED ROW IS TRANSFERRED EXACTLY ONCE. Two writeFile
+        //       calls for two checked rows, of two DIFFERENT rows: the count alone
+        //       read correct even when the batch was uploading one activity twice.
+        QCOMPARE(writeFileCalls, 2);
+        QCOMPARE(obs::writeNames.count(), 2);
+        QVERIFY2(obs::writeNames.value(0) != obs::writeNames.value(1),
+                 qPrintable(QStringLiteral("the two uploads were of the SAME row (%1, %2) - a pre-batch sort still "
+                                           "costs a double transfer")
+                                .arg(obs::writeNames.value(0))
+                                .arg(obs::writeNames.value(1))));
+        // ...and the row that was never transferred before now carries a verdict.
+        QCOMPARE(statusesAtEnd, QStringList() << "Completed." << "Completed.");
+    }
+
+  private:
+    // =====================================================================
+    // TEST-132 … TEST-139 (S-R028-01 / S-R028-02, DEC-garmin-038 =
+    // DEC-garmin-034 AMENDMENT) — SORTING IS OFF FOR THE BATCH'S DURATION.
+    // =====================================================================
+    //
+    // WHAT IS BEING TESTED, AND WHY THE PROBES ABOVE ARE NOT IT. TEST-131
+    // MEASURED the route: with sortingEnabled == true a setText on the SORT
+    // COLUMN reorders the list INSIDE the write (Q1b, layoutChanged at write == 1,
+    // no lazy window), all three lists are sortable by their Status column out of
+    // the constructor (Q5), and a user who sorts by Status BEFORE pressing
+    // Synchronize therefore makes the batch reorder its own list underneath the
+    // positional `for (int i=listindex; …) child(i)` walk in all three drivers -
+    // with NO click during the batch at all (Q5c: the same row uploaded twice, the
+    // other never transferred). DEC-garmin-038 chose Option A: disable sorting on
+    // all three lists for the batch's duration and restore it on every
+    // termination path, preserving the user's column and order.
+    //
+    // THESE EIGHT SLOTS ARE THE RULE, not a trace. Each one asserts what
+    // production must DO, and the two probes above (TEST-112, TEST-131 (c)) had
+    // their MEASURED-NOT-DESIRED blocks rewritten to the desired values in the
+    // same commit, for the reason those blocks themselves gave.
+    //
+    // THE FIVE THINGS THE DECISION MAKES CONDITIONS, and where each is measured:
+    //
+    //   1. the disable is in place BEFORE the batch's first status write
+    //      -> reordersAtDispatch == 0 and sortingAtDispatch == [0,0,0]
+    //         (TEST-132/133/134). Placement, not existence: a disable arriving
+    //         after a write cannot undo the move that write already made (Q3).
+    //   2. sorting is restored on EVERY termination path
+    //      -> TEST-136, one run per termination class.
+    //   3. all three drivers can neither duplicate nor skip a row
+    //      -> TEST-132 (syncNext), TEST-133 (uploadNext), TEST-134
+    //         (downloadNext), each asserting that the set of rows TRANSFERRED is
+    //         exactly the set of rows CHECKED, with no repeats. Three slots and
+    //         not three arms of one, because this ledger has repeatedly shipped a
+    //         fix on one of three twins (A3-R028b-F5).
+    //   4. the user's sort column AND order survive the round trip
+    //      -> TEST-137, with a DIFFERENT (section, order) pair pinned on each of
+    //         the three lists so that a restore which copies one list's state onto
+    //         another, or falls back on Qt's default section 0 / DESCENDING
+    //         (measured at Q1a), cannot pass.
+    //   5. the positive control, without which every criterion above is
+    //      satisfiable by never turning sorting back on
+    //      -> TEST-138 (LSN-050).
+    //
+    // ...and TEST-139 is the corollary the decision names as the obvious wrong
+    // answer: a batch is NOT one stack frame, so an RAII guard around a driver
+    // CALL would re-enable sorting BETWEEN ROWS - looking correct, and
+    // reinstating the defect. It samples inside the first completion, one
+    // transfer in and before the tail re-drives.
+    //
+    // ON THE `self.isNull()` EXITS (TEST-136's fourth case): the dialog is
+    // already gone there, so there is nothing to restore and the restore must be
+    // structured so that it cannot touch a dead dialog. What that case asserts is
+    // therefore the ABSENCE of a touch - the run comes back, and this target
+    // aborts on any ASan report (halt_on_error=1), so surviving IS the assertion -
+    // plus the premise that the dialog really did die inside the batch.
+    enum SortTab { SortDownloadTab = 0, SortUploadTab = 1, SortSyncTab = 2 };
+
+    // What, if anything, the user does from INSIDE row[0]'s nested loop - i.e.
+    // while the batch is live and one transfer is on the stack.
+    enum SortDisturbance {
+        NoDisturbance,        // TEST-132/133/134/137/138/139: production alone
+        IndicatorInsideBatch, // TEST-135: the header-click vector (setSortIndicator)
+        AbortInsideBatch,     // TEST-136: downloadClicked's abort branch
+        RefreshInsideBatch,   // TEST-136: refreshClicked -> the stale-generation exits
+        TeardownInsideBatch   // TEST-136: the dialog dies -> the self.isNull() exits
+    };
+
+    struct SortGuardSpec
+    {
+        SortTab tab = SortSyncTab;
+        SortDisturbance disturb = NoDisturbance;
+
+        // Does the user sort BEFORE pressing the button, and by what? The
+        // defaults are the defect's own geometry: every list sorted by its Status
+        // column, ascending - which is INVISIBLE at that moment, because every
+        // Status cell is empty (TEST-131 Q5c).
+        bool preBatchSort = true;
+        int downSection = 5, upSection = 7, syncSection = 7;
+        Qt::SortOrder downOrder = Qt::AscendingOrder;
+        Qt::SortOrder upOrder = Qt::AscendingOrder;
+        Qt::SortOrder syncOrder = Qt::AscendingOrder;
+
+        // TEST-138: after the batch, does an indicator change actually MOVE rows
+        // again - or is the header merely wearing the flags?
+        bool probeSortingAfterTheBatch = false;
+    };
+
+    struct SortGuardOutcome
+    {
+        bool timedOut = false;
+
+        // -- premises: was this a two-row batch on a sortable list at all?
+        int rows = 0, checkedRows = 0, statusColumn = -1;
+        QList<int> sortingBefore;           // 3 entries: down, up, sync
+        bool preBatchSortMovedRows = false; // did the user's sort change the order?
+        QStringList orderAfterUserSort;     // the driven list, name@address
+        QStringList rowKeys;                // the identities the batch must transfer, one each
+
+        // -- inside row[0]'s dispatch frame
+        bool sampledAtDispatch = false;
+        QList<int> sortingAtDispatch;
+        int reordersAtDispatch = -1; // layout changes caused by the batch so far
+        bool disturbanceDelivered = false;
+        QList<int> sortingAfterDisturbance;
+        bool indicatorMovedRowsInsideBatch = false;
+
+        // -- inside the FIRST completion, before its tail re-drives the loop
+        bool sampledBetweenRows = false;
+        QList<int> sortingBetweenRows;
+        int reordersBetweenRows = -1;
+        int transfersAtBetweenRows = -1;
+        QStringList orderBetweenRows;
+
+        // -- the end state
+        bool dialogDestroyed = false;
+        QList<int> sortingAtEnd, clickableAtEnd, indicatorShownAtEnd, sectionAtEnd, orderAtEnd;
+        QStringList orderAtEndFingerprints, namesAtEnd;
+        bool sortingWorksAfterTheBatch = false;
+        QStringList transferKeys, statusesAtEnd;
+        int reordersInTotal = -1;
+        QString progressText, buttonTextAtEnd;
+    };
+
+    // Names for the log, ADDRESSES for every comparison: a run that writes the
+    // column it reads must never compare texts (TEST-131's instrument bug).
+    static QStringList sortFingerprints(QTreeWidget* w)
+    {
+        QStringList out;
+        if (w == nullptr)
+            return out;
+        QTreeWidgetItem* root = w->invisibleRootItem();
+        for (int i = 0; i < root->childCount(); i++) {
+            QTreeWidgetItem* it = root->child(i);
+            out << QStringLiteral("%1@0x%2").arg(it->text(1)).arg(reinterpret_cast<quintptr>(it), 0, 16);
+        }
+        return out;
+    }
+
+    // TWO remote activities the Download tab lists and cannot parse, so that the
+    // download arm is a two-row batch like the other two. .gcfail for TEST-119's
+    // reason: FailingRideFileReader runs no nested loop of its own.
+    static QStringList twoUnparseableRemoteActivities()
+    {
+        const QString day = QDate::currentDate().toString(QStringLiteral("yyyy_MM_dd"));
+        return QStringList() << (day + QStringLiteral("_19_00_00.gcfail"))
+                             << (day + QStringLiteral("_20_00_00.gcfail"));
+    }
+
+    // One run: a REAL sync dialog, a REAL two-row batch on the tab named by the
+    // spec, with the user's sort applied BEFORE the button is pressed and nothing
+    // touching the lists afterwards except (optionally) one disturbance delivered
+    // from inside row[0]'s own nested loop.
+    SortGuardOutcome runSortGuard(const SortGuardSpec& spec)
+    {
+        obs::reset();
+        rideopen::reset();
+        ridefail::reset();
+        rideopen::blockingMs = 5;
+
+        SortGuardOutcome out;
+        QEventLoop appLoop;
+
+        // The download arm runs on REMOTE rows (readFile -> completedRead); the
+        // upload and sync arms on LOCAL parseable rides (openRideFile ->
+        // writeFile -> completedWrite).
+        const bool remoteRows = (spec.tab == SortDownloadTab);
+
+        const QDir activities = context->athlete->home->activities();
+        QDir().mkpath(activities.absolutePath());
+
+        QList<RideItem*> items;
+        QStringList paths;
+        if (!remoteRows) {
+            for (int i = 0; i < 2; i++) {
+                const QString name = rebuildLocalActivity(i);
+                QFile f(activities.absolutePath() + "/" + name);
+                f.open(QIODevice::WriteOnly);
+                f.write("gcblock");
+                f.close();
+                paths << f.fileName();
+
+                RideItem* item = new RideItem(nullptr, context);
+                item->fileName = name;
+                item->path = activities.absolutePath();
+                item->dateTime = QDateTime(QDate::currentDate(), QTime(10 + i, 0, 0));
+                item->planned = false;
+                items << item;
+            }
+        }
+        for (RideItem* item : items)
+            rideCache->rides().push_back(item);
+
+        QMetaObject::invokeMethod(
+            this,
+            [&]() {
+                QWidget* owner = new QWidget;
+                QPointer<QWidget> ownerGuard(owner);
+
+                BlockingStore* store = new BlockingStore(context);
+                store->entryNames = remoteRows ? twoUnparseableRemoteActivities() : QStringList();
+                store->blockingMs = 5;
+                store->closeActionContext = qApp;
+                store->downloadCompression = CloudService::none;
+                store->completeRead = true;
+                store->completeWrite = true;
+
+                CloudServiceSyncDialog* dialog = new CloudServiceSyncDialog(context, store);
+                dialog->setParent(owner, Qt::Dialog);
+                dialog->start();
+                dialog->open();
+                store->dialog = dialog;
+                store->dialogGuard = dialog;
+                QPointer<CloudServiceSyncDialog> dialogGuard(dialog);
+
+                if (QTabWidget* tabs = dialog->findChild<QTabWidget*>())
+                    tabs->setCurrentIndex(int(spec.tab));
+
+                // QPointers throughout: the teardown case destroys the dialog and
+                // every one of these widgets from inside the batch.
+                QPointer<QTreeWidget> lists[3];
+                lists[SortDownloadTab] = rideListWithHeader(dialog, QStringLiteral("Workout Name"));
+                lists[SortUploadTab] = rideListWithHeader(dialog, QStringLiteral("File"));
+                lists[SortSyncTab] = rideListWithHeader(dialog, QStringLiteral("Source"));
+
+                QString buttonLabel;
+                switch (spec.tab) {
+                case SortDownloadTab:
+                    dialog->selectAllChanged(Qt::Checked);
+                    buttonLabel = QStringLiteral("Download");
+                    break;
+                case SortUploadTab:
+                    dialog->selectAllUpChanged(Qt::Checked);
+                    buttonLabel = QStringLiteral("Upload");
+                    break;
+                case SortSyncTab:
+                    dialog->selectAllSyncChanged(Qt::Checked);
+                    buttonLabel = QStringLiteral("Synchronize");
+                    break;
+                }
+                QPushButton* button = pushButtonWithText(dialog, buttonLabel);
+                QTreeWidget* driven = lists[spec.tab].data();
+
+                auto sortingStates = [&lists]() {
+                    QList<int> s;
+                    for (int i = 0; i < 3; i++)
+                        s << (lists[i].isNull() ? -1 : int(lists[i]->isSortingEnabled()));
+                    return s;
+                };
+
+                out.sortingBefore = sortingStates();
+
+                if (driven != nullptr) {
+                    QTreeWidgetItem* root = driven->invisibleRootItem();
+                    out.rows = root->childCount();
+                    for (int i = 0; i < out.rows; i++) {
+                        QCheckBox* check = qobject_cast<QCheckBox*>(driven->itemWidget(root->child(i), 0));
+                        if (check != nullptr && check->isChecked())
+                            out.checkedRows++;
+                        // The identity a transfer of this row will report: the
+                        // download path passes curr->text(1) to readFile, the two
+                        // upload paths pass its baseName + uploadExtension().
+                        out.rowKeys << QFileInfo(root->child(i)->text(1)).baseName();
+                    }
+                    // The Status column is found the way a user finds it, by its
+                    // header text over the columns the list actually HAS.
+                    for (int c = 0; c < driven->columnCount(); c++)
+                        if (driven->headerItem() != nullptr &&
+                            driven->headerItem()->text(c) == QStringLiteral("Status")) {
+                            out.statusColumn = c;
+                            break;
+                        }
+                }
+
+                // ---- THE USER'S ONLY ACTION, and it happens BEFORE the batch.
+                const QStringList orderBeforeUserSort = sortFingerprints(driven);
+                if (spec.preBatchSort) {
+                    const int sections[3] = {spec.downSection, spec.upSection, spec.syncSection};
+                    const Qt::SortOrder orders[3] = {spec.downOrder, spec.upOrder, spec.syncOrder};
+                    for (int i = 0; i < 3; i++)
+                        if (!lists[i].isNull() && lists[i]->header() != nullptr)
+                            lists[i]->header()->setSortIndicator(sections[i], orders[i]);
+                }
+                out.orderAfterUserSort = sortFingerprints(driven);
+                out.preBatchSortMovedRows = (out.orderAfterUserSort != orderBeforeUserSort);
+
+                // Every layout change the BATCH causes, counted. Connected after
+                // the user's own sort, so it counts nothing this fixture did. Held
+                // by value because the connection can outlive this frame.
+                auto reorders = std::make_shared<int>(0);
+                if (driven != nullptr)
+                    QObject::connect(driven->model(), &QAbstractItemModel::layoutChanged, driven,
+                                     [reorders]() { (*reorders)++; });
+
+                // ---- INSIDE ROW[0]'s DISPATCH FRAME: the status write has been
+                //      made and the transfer is on the stack.
+                const auto insideRow0 = [&, owner]() {
+                    if (out.sampledAtDispatch)
+                        return;
+                    out.sampledAtDispatch = true;
+                    out.sortingAtDispatch = sortingStates();
+                    out.reordersAtDispatch = *reorders;
+
+                    switch (spec.disturb) {
+                    case IndicatorInsideBatch: {
+                        QTreeWidget* w = lists[spec.tab].data();
+                        if (w == nullptr || w->header() == nullptr)
+                            break;
+                        // The call QHeaderView makes for itself on a real mouse
+                        // release, which TEST-112 measured as the one delivery
+                        // that reorders under both of this target's QPA backends.
+                        const QStringList before = sortFingerprints(w);
+                        w->header()->setSortIndicator(out.statusColumn < 0 ? 7 : out.statusColumn, Qt::DescendingOrder);
+                        out.indicatorMovedRowsInsideBatch = (sortFingerprints(w) != before);
+                        out.disturbanceDelivered = true;
+                        break;
+                    }
+                    case AbortInsideBatch:
+                        if (!dialogGuard.isNull()) {
+                            dialogGuard->downloadClicked(); // the abort branch
+                            out.disturbanceDelivered = true;
+                        }
+                        break;
+                    case RefreshInsideBatch:
+                        if (!dialogGuard.isNull()) {
+                            dialogGuard->refreshClicked(); // every row deleted, then rebuilt
+                            out.disturbanceDelivered = true;
+                        }
+                        break;
+                    case TeardownInsideBatch:
+                        delete owner; // the dialog dies under the suspended driver
+                        out.disturbanceDelivered = true;
+                        break;
+                    case NoDisturbance:
+                        break;
+                    }
+
+                    out.sortingAfterDisturbance = sortingStates();
+                };
+
+                // ---- INSIDE THE FIRST COMPLETION, after it has labelled its row
+                //      and BEFORE its tail re-drives the loop. This is the
+                //      between-rows point: the driver frame that dispatched row[0]
+                //      has RETURNED and the one for row[1] does not exist yet.
+                store->afterCompletionAction = [&]() {
+                    if (out.sampledBetweenRows)
+                        return;
+                    out.sampledBetweenRows = true;
+                    out.sortingBetweenRows = sortingStates();
+                    out.reordersBetweenRows = *reorders;
+                    out.transfersAtBetweenRows = remoteRows ? obs::readFileCalls : obs::writeFileCalls;
+                    out.orderBetweenRows = sortFingerprints(lists[spec.tab].data());
+                };
+
+                if (remoteRows) {
+                    store->blockingMs = 200;
+                    store->closeAction = insideRow0;
+                } else {
+                    rideopen::blockingMs = 200;
+                    rideopen::action = insideRow0;
+                }
+
+                // ---- ...AND NOW ONLY PRODUCTION RUNS.
+                dialog->downloadClicked();
+
+                for (int i = 0; i < 200; ++i)
+                    QApplication::processEvents(QEventLoop::AllEvents, 5);
+
+                out.reordersInTotal = *reorders;
+                for (const QString& name : (remoteRows ? obs::readNames : obs::writeNames))
+                    out.transferKeys << QFileInfo(name).baseName();
+
+                out.dialogDestroyed = dialogGuard.isNull();
+                if (!out.dialogDestroyed) {
+                    out.sortingAtEnd = sortingStates();
+                    for (int i = 0; i < 3; i++) {
+                        QHeaderView* h = lists[i].isNull() ? nullptr : lists[i]->header();
+                        out.clickableAtEnd << (h == nullptr ? -1 : int(h->sectionsClickable()));
+                        out.indicatorShownAtEnd << (h == nullptr ? -1 : int(h->isSortIndicatorShown()));
+                        out.sectionAtEnd << (h == nullptr ? -99 : h->sortIndicatorSection());
+                        out.orderAtEnd << (h == nullptr ? -1 : int(h->sortIndicatorOrder()));
+                    }
+                    QTreeWidget* w = lists[spec.tab].data();
+                    out.orderAtEndFingerprints = sortFingerprints(w);
+                    if (w != nullptr) {
+                        QTreeWidgetItem* root = w->invisibleRootItem();
+                        for (int i = 0; i < root->childCount(); i++) {
+                            out.namesAtEnd << root->child(i)->text(1);
+                            out.statusesAtEnd << root->child(i)->text(out.statusColumn < 0 ? 7 : out.statusColumn);
+                        }
+                    }
+                    out.progressText = progressLabelText(dialog);
+                    if (button != nullptr)
+                        out.buttonTextAtEnd = button->text();
+
+                    // TEST-138: is the header WORKING again, or merely wearing the
+                    // flags? An indicator change on a column whose values differ
+                    // must move rows.
+                    if (spec.probeSortingAfterTheBatch && w != nullptr && w->header() != nullptr) {
+                        const QStringList before = sortFingerprints(w);
+                        w->header()->setSortIndicator(1, Qt::DescendingOrder);
+                        const QStringList afterDesc = sortFingerprints(w);
+                        w->header()->setSortIndicator(1, Qt::AscendingOrder);
+                        const QStringList afterAsc = sortFingerprints(w);
+                        out.sortingWorksAfterTheBatch = (afterDesc != before || afterAsc != afterDesc);
+                    }
+                }
+
+                QTimer::singleShot(100, qApp, [ownerGuard]() {
+                    if (!ownerGuard.isNull())
+                        delete ownerGuard.data();
+                });
+                QTimer::singleShot(200, &appLoop, &QEventLoop::quit);
+
+                bool* timedOutp = &out.timedOut;
+                QTimer::singleShot(20000, &appLoop, [timedOutp]() {
+                    *timedOutp = true;
+                    QCoreApplication::exit(1);
+                });
+            },
+            Qt::QueuedConnection);
+
+        appLoop.exec();
+        for (int i = 0; i < 50; ++i)
+            QApplication::processEvents(QEventLoop::AllEvents, 5);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+        for (RideItem* item : items) {
+            rideCache->rides().removeAll(item);
+            delete item->ride(false);
+            delete item;
+        }
+        for (const QString& p : paths)
+            QFile::remove(p);
+
+        return out;
+    }
+
+    static QString sortStates(const QList<int>& v)
+    {
+        QStringList out;
+        for (int i : v)
+            out << QString::number(i);
+        return out.join(QChar(','));
+    }
+
+    void logSortGuard(const QString& where, const SortGuardOutcome& out)
+    {
+        qInfo("%s [%s] rows=%d checked=%d statusCol=%d before=[%s] userSortMoved=%d atDispatch=[%s] "
+              "reordersAtDispatch=%d "
+              "betweenRows=[%s] reordersBetween=%d transfersAtBetween=%d afterDisturbance=[%s] atEnd=[%s] "
+              "clickable=[%s] indicator=[%s] section=[%s] order=[%s] reorders=%d transfers=[%s] statuses=[%s] "
+              "names=[%s] progress=\"%s\" button=\"%s\" destroyed=%d",
+              qPrintable(where), qPrintable(QString::fromLatin1(qgetenv("QT_QPA_PLATFORM"))), out.rows, out.checkedRows,
+              out.statusColumn, qPrintable(sortStates(out.sortingBefore)), int(out.preBatchSortMovedRows),
+              qPrintable(sortStates(out.sortingAtDispatch)), out.reordersAtDispatch,
+              qPrintable(sortStates(out.sortingBetweenRows)), out.reordersBetweenRows, out.transfersAtBetweenRows,
+              qPrintable(sortStates(out.sortingAfterDisturbance)), qPrintable(sortStates(out.sortingAtEnd)),
+              qPrintable(sortStates(out.clickableAtEnd)), qPrintable(sortStates(out.indicatorShownAtEnd)),
+              qPrintable(sortStates(out.sectionAtEnd)), qPrintable(sortStates(out.orderAtEnd)), out.reordersInTotal,
+              qPrintable(out.transferKeys.join(QChar('|'))), qPrintable(out.statusesAtEnd.join(QChar('|'))),
+              qPrintable(out.namesAtEnd.join(QChar('|'))), qPrintable(out.progressText),
+              qPrintable(out.buttonTextAtEnd), int(out.dialogDestroyed));
+    }
+
+    // The premises every run of the fixture shares. A run that never reached the
+    // situation must fail LOUDLY rather than pass on nothing (LSN-047, LSN-050).
+    void assertSortGuardPremises(const QString& where, const SortGuardOutcome& out, int expectedStatusColumn)
+    {
+        QVERIFY2(out.timedOut == false, qPrintable(where + QStringLiteral("the run never came back")));
+        QVERIFY2(out.rows == 2, qPrintable(where + QStringLiteral("the list held %1 rows, not 2").arg(out.rows)));
+        QVERIFY2(out.checkedRows == 2,
+                 qPrintable(where + QStringLiteral("%1 rows were checked, not 2").arg(out.checkedRows)));
+        QVERIFY2(out.statusColumn == expectedStatusColumn,
+                 qPrintable(where + QStringLiteral("the Status column is %1, not %2 - this run is about some other "
+                                                   "column than the one the drivers write")
+                                        .arg(out.statusColumn)
+                                        .arg(expectedStatusColumn)));
+        QVERIFY2(out.rowKeys.count() == 2 && out.rowKeys.value(0) != out.rowKeys.value(1),
+                 qPrintable(where + QStringLiteral("the two rows are not distinguishable ([%1]), so \"the same row "
+                                                   "twice\" and \"each row once\" would read alike")
+                                        .arg(out.rowKeys.join(QChar('|')))));
+        // The route exists at all: all three lists come out of the constructor
+        // sortable (:1116/:1146/:1186), which is what makes the pre-batch sort a
+        // thing an ordinary user can do.
+        QVERIFY2(out.sortingBefore == (QList<int>() << 1 << 1 << 1),
+                 qPrintable(where + QStringLiteral("the three lists were not all sortable before the batch ([%1]), so "
+                                                   "this run is about nothing")
+                                        .arg(sortStates(out.sortingBefore))));
+        QVERIFY2(out.sampledAtDispatch,
+                 qPrintable(where + QStringLiteral("row[0]'s dispatch frame was never sampled - the batch never "
+                                                   "reached a transfer, so this run proves nothing")));
+    }
+
+    // Condition 3, for one driver: the set of rows TRANSFERRED is exactly the set
+    // of rows CHECKED, each of them once. A count alone cannot tell "two rows, one
+    // each" from "one row, twice" - which is precisely the damage TEST-131 Q5c
+    // measured - so the names are compared, sorted, as multisets.
+    void assertEveryCheckedRowTransferredExactlyOnce(const QString& where, const SortGuardOutcome& out)
+    {
+        QStringList transferred = out.transferKeys;
+        QStringList expected = out.rowKeys;
+        transferred.sort();
+        expected.sort();
+        QVERIFY2(transferred == expected,
+                 qPrintable(where + QStringLiteral("the batch transferred [%1] for the checked rows [%2] - a row was "
+                                                   "duplicated or skipped, which is the sort route's own damage")
+                                        .arg(out.transferKeys.join(QChar('|')))
+                                        .arg(out.rowKeys.join(QChar('|')))));
+        QVERIFY2(out.statusesAtEnd.count() == 2 && !out.statusesAtEnd.value(0).isEmpty() &&
+                     !out.statusesAtEnd.value(1).isEmpty(),
+                 qPrintable(where + QStringLiteral("a checked row ended the batch with no status at all: [%1] - it was "
+                                                   "never transferred")
+                                        .arg(out.statusesAtEnd.join(QChar('|')))));
+    }
+
+    // Conditions 1 and the mechanism behind it: sorting is OFF on ALL THREE lists
+    // inside the dispatch frame, and the batch's first status write moved nothing.
+    void assertSortingWasOffAtTheFirstWrite(const QString& where, const SortGuardOutcome& out)
+    {
+        QVERIFY2(out.sortingAtDispatch == (QList<int>() << 0 << 0 << 0),
+                 qPrintable(where + QStringLiteral("sorting was still enabled inside row[0]'s dispatch: [%1] (down, "
+                                                   "up, sync) - the guard is missing or is not on all three lists")
+                                        .arg(sortStates(out.sortingAtDispatch))));
+        QVERIFY2(out.reordersAtDispatch == 0,
+                 qPrintable(where + QStringLiteral("the batch's first status write reordered the list (%1 layout "
+                                                   "change(s) before the transfer) - a disable that arrives after the "
+                                                   "write cannot undo the move it already made (TEST-131 Q3)")
+                                        .arg(out.reordersAtDispatch)));
+    }
+
+  private slots:
+    // -- TEST-132 (S-R028-01, DEC-garmin-038) ----------------------------
+    // syncNext: THE SELF-TRIGGER ROUTE, WITH NO CLICK AT ANY POINT.
+    //
+    // TEST-131 Q5c's geometry exactly: the user sorts the Sync list by Status
+    // before pressing Synchronize - invisible, because every Status cell is empty
+    // - and then only production runs. Before DEC-038 this produced
+    // writeNames=[…10_00.json.zip, …10_00.json.zip]: the same row uploaded twice
+    // and the other never transferred.
+    //
+    // RED, before the fix:
+    //   FAIL!  : ... syncNext: sorting was still enabled inside row[0]'s dispatch:
+    //            [0,1,1] (down, up, sync)
+    void aPreBatchStatusSortMustNotMakeSyncNextTransferARowTwice()
+    {
+        SortGuardSpec spec;
+        spec.tab = SortSyncTab;
+        SortGuardOutcome out = runSortGuard(spec);
+        const QString where = QStringLiteral("TEST-132 syncNext: ");
+        logSortGuard(QStringLiteral("TEST-132"), out);
+
+        assertSortGuardPremises(where, out, 7);
+        // The user's sort was INVISIBLE: it moved nothing, because every Status
+        // cell was empty. Nobody could tell from the screen that this list is now
+        // sorted on a column production is about to write to.
+        QVERIFY2(!out.preBatchSortMovedRows,
+                 qPrintable(where + QStringLiteral("the pre-batch sort itself reordered the rows, so what follows "
+                                                   "cannot be attributed to the drivers")));
+
+        assertSortingWasOffAtTheFirstWrite(where, out);
+        QVERIFY2(out.reordersInTotal == 0 || out.sampledBetweenRows,
+                 qPrintable(where + QStringLiteral("the batch never reached a completion")));
+        QVERIFY2(out.orderBetweenRows == out.orderAfterUserSort,
+                 qPrintable(where + QStringLiteral("the list reordered under the running batch: [%1] -> [%2]")
+                                        .arg(out.orderAfterUserSort.join(QChar('|')))
+                                        .arg(out.orderBetweenRows.join(QChar('|')))));
+        assertEveryCheckedRowTransferredExactlyOnce(where, out);
+    }
+
+    // -- TEST-133 (S-R028-01, DEC-garmin-038) ----------------------------
+    // uploadNext: THE UPLOAD TWIN. Same geometry, same criterion, its own run -
+    // three drivers, three slots (A3-R028b-F5).
+    //
+    // RED, before the fix:
+    //   FAIL!  : ... uploadNext: sorting was still enabled inside row[0]'s
+    //            dispatch: [0,1,1] (down, up, sync)
+    void aPreBatchStatusSortMustNotMakeUploadNextTransferARowTwice()
+    {
+        SortGuardSpec spec;
+        spec.tab = SortUploadTab;
+        SortGuardOutcome out = runSortGuard(spec);
+        const QString where = QStringLiteral("TEST-133 uploadNext: ");
+        logSortGuard(QStringLiteral("TEST-133"), out);
+
+        assertSortGuardPremises(where, out, 7);
+        QVERIFY2(!out.preBatchSortMovedRows,
+                 qPrintable(where + QStringLiteral("the pre-batch sort itself reordered the rows")));
+        assertSortingWasOffAtTheFirstWrite(where, out);
+        QVERIFY2(out.orderBetweenRows == out.orderAfterUserSort,
+                 qPrintable(where + QStringLiteral("the list reordered under the running batch: [%1] -> [%2]")
+                                        .arg(out.orderAfterUserSort.join(QChar('|')))
+                                        .arg(out.orderBetweenRows.join(QChar('|')))));
+        assertEveryCheckedRowTransferredExactlyOnce(where, out);
+    }
+
+    // -- TEST-134 (S-R028-01, DEC-garmin-038) ----------------------------
+    // downloadNext: THE DOWNLOAD TWIN, whose status column is 5 rather than 7 and
+    // whose transfer is a readFile rather than a writeFile. Its rows are the
+    // unparseable remote activities TEST-119 uses, so the batch runs to its tail
+    // without a saveRide in the way.
+    //
+    // RED, before the fix:
+    //   FAIL!  : ... downloadNext: sorting was still enabled inside row[0]'s
+    //            dispatch: [0,1,1] - and downloadClicked disables the DOWNLOAD
+    //            list only.
+    void aPreBatchStatusSortMustNotMakeDownloadNextTransferARowTwice()
+    {
+        SortGuardSpec spec;
+        spec.tab = SortDownloadTab;
+        SortGuardOutcome out = runSortGuard(spec);
+        const QString where = QStringLiteral("TEST-134 downloadNext: ");
+        logSortGuard(QStringLiteral("TEST-134"), out);
+
+        assertSortGuardPremises(where, out, 5);
+        QVERIFY2(!out.preBatchSortMovedRows,
+                 qPrintable(where + QStringLiteral("the pre-batch sort itself reordered the rows")));
+        assertSortingWasOffAtTheFirstWrite(where, out);
+        QVERIFY2(out.orderBetweenRows == out.orderAfterUserSort,
+                 qPrintable(where + QStringLiteral("the list reordered under the running batch: [%1] -> [%2]")
+                                        .arg(out.orderAfterUserSort.join(QChar('|')))
+                                        .arg(out.orderBetweenRows.join(QChar('|')))));
+        assertEveryCheckedRowTransferredExactlyOnce(where, out);
+    }
+
+    // -- TEST-135 (S-R028-01, DEC-garmin-038) ----------------------------
+    // THE ORIGINAL SHAPE: A SORT DELIVERED INTO THE RUNNING BATCH.
+    //
+    // This is TEST-112's route - setSortIndicator, the call QHeaderView makes for
+    // itself on a real mouse release, delivered from inside row[0]'s openRideFile
+    // - asserted as a RULE rather than traced. TEST-131 Q4 measured that
+    // setSortingEnabled(false) severs BOTH vectors (clickable=0, indicatorShown=0,
+    // indicatorReorders=0), so with the guard in place the delivered sort must
+    // move nothing and the batch must still transfer each row exactly once.
+    //
+    // RED, before the fix:
+    //   FAIL!  : ... the sort delivered into the running batch MOVED rows
+    void aSortDeliveredIntoARunningBatchMustNotMoveARow()
+    {
+        SortGuardSpec spec;
+        spec.tab = SortSyncTab;
+        spec.disturb = IndicatorInsideBatch;
+        SortGuardOutcome out = runSortGuard(spec);
+        const QString where = QStringLiteral("TEST-135 header vector: ");
+        logSortGuard(QStringLiteral("TEST-135"), out);
+
+        assertSortGuardPremises(where, out, 7);
+        QVERIFY2(out.disturbanceDelivered,
+                 qPrintable(where + QStringLiteral("the sort was never delivered into the batch")));
+        assertSortingWasOffAtTheFirstWrite(where, out);
+        QVERIFY2(!out.indicatorMovedRowsInsideBatch,
+                 qPrintable(where + QStringLiteral("the sort delivered into the running batch MOVED rows - the header "
+                                                   "vector is still open")));
+        assertEveryCheckedRowTransferredExactlyOnce(where, out);
+        // ...and the vector being shut is not permanent: the header is live again
+        // once the batch is over.
+        QVERIFY2(out.sortingAtEnd == (QList<int>() << 1 << 1 << 1),
+                 qPrintable(where + QStringLiteral("the lists were left unsortable after the batch: [%1]")
+                                        .arg(sortStates(out.sortingAtEnd))));
+    }
+
+    // -- TEST-136 (S-R028-02, DEC-garmin-038) ----------------------------
+    // THE RESTORE-ON-EVERY-EXIT MATRIX: one case per TERMINATION CLASS.
+    //
+    // "A path that exits without restoring leaves the user's lists permanently
+    // unsortable until the dialog is reopened - a silent, shipped UX regression
+    // that no memory-safety test would ever catch." Four classes:
+    //
+    //   normal tail        the three completion tails
+    //   abort              downloadClicked's abort branch
+    //   stale generation   a Refresh delivered mid-batch: every driver and every
+    //                      completion then stands down, and NOTHING re-drives, so
+    //                      the restore cannot be left to a tail that never runs
+    //   self.isNull()      the dialog is already gone - there is nothing to
+    //                      restore, and the restore must not touch a dead dialog
+    //
+    // RED, before the fix (the stale-generation case, on the DOWNLOAD tab, which
+    // is the one list downloadClicked already disabled):
+    //   FAIL!  : ... refresh: the lists were left unsortable: [0,1,1]
+    void sortingMustBeRestoredOnEveryTerminationPath()
+    {
+        // ---- (1) THE NORMAL TAIL - ALL THREE OF THEM. syncNext's, downloadNext's
+        //      and uploadNext's are three separate copies of the release in three
+        //      separate functions, so they are three separate runs: this ledger
+        //      has repeatedly shipped a fix on one of three twins, and a matrix
+        //      that exercised one tail would leave the other two unmeasured.
+        {
+            const SortTab tabs[3] = {SortSyncTab, SortUploadTab, SortDownloadTab};
+            const char* names[3] = {"syncNext", "uploadNext", "downloadNext"};
+            for (int t = 0; t < 3; t++) {
+                SortGuardSpec spec;
+                spec.tab = tabs[t];
+                SortGuardOutcome out = runSortGuard(spec);
+                const QString where = QStringLiteral("TEST-136 normal tail (%1): ").arg(QString::fromLatin1(names[t]));
+                logSortGuard(QStringLiteral("TEST-136 normal tail %1").arg(QString::fromLatin1(names[t])), out);
+                assertSortGuardPremises(where, out, tabs[t] == SortDownloadTab ? 5 : 7);
+                assertSortingWasOffAtTheFirstWrite(where, out);
+                // The tail's own sentence: it is the one string only the
+                // completion tail writes, so this is how the run proves it took
+                // THIS exit rather than standing down somewhere earlier.
+                QVERIFY2(out.progressText.contains(QStringLiteral("successfully")),
+                         qPrintable(where + QStringLiteral("the batch never reached its completion tail (progress "
+                                                           "reads \"%1\"), so this case is about some other exit")
+                                                .arg(out.progressText)));
+                QVERIFY2(out.sortingAtEnd == (QList<int>() << 1 << 1 << 1),
+                         qPrintable(
+                             where +
+                             QStringLiteral("the lists were left unsortable: [%1]").arg(sortStates(out.sortingAtEnd))));
+            }
+        }
+
+        // ---- (2) THE ABORT BRANCH, delivered from inside row[0]'s open. The
+        //      restore must be in place the moment downloadClicked returns, not
+        //      at some later tail - there is no later tail on this route.
+        {
+            SortGuardSpec spec;
+            spec.tab = SortSyncTab;
+            spec.disturb = AbortInsideBatch;
+            SortGuardOutcome out = runSortGuard(spec);
+            const QString where = QStringLiteral("TEST-136 abort: ");
+            logSortGuard(QStringLiteral("TEST-136 abort"), out);
+            assertSortGuardPremises(where, out, 7);
+            QVERIFY2(out.disturbanceDelivered,
+                     qPrintable(where + QStringLiteral("the abort was never delivered into the batch")));
+            assertSortingWasOffAtTheFirstWrite(where, out);
+            QVERIFY2(out.sortingAfterDisturbance == (QList<int>() << 1 << 1 << 1),
+                     qPrintable(where + QStringLiteral("the abort branch did not restore sorting: [%1]")
+                                            .arg(sortStates(out.sortingAfterDisturbance))));
+            QVERIFY2(
+                out.sortingAtEnd == (QList<int>() << 1 << 1 << 1),
+                qPrintable(where +
+                           QStringLiteral("the lists were left unsortable: [%1]").arg(sortStates(out.sortingAtEnd))));
+        }
+
+        // ---- (3) THE STALE-GENERATION EXITS. A Refresh delivered mid-batch
+        //      rebuilds every list; the suspended driver then stands down at its
+        //      listGeneration compare and NO completion tail runs for this batch,
+        //      so nothing downstream can restore. Run on the DOWNLOAD tab because
+        //      that is the list downloadClicked already turned sorting off on
+        //      before DEC-038 - the pre-existing half of this defect.
+        {
+            SortGuardSpec spec;
+            spec.tab = SortDownloadTab;
+            spec.disturb = RefreshInsideBatch;
+            SortGuardOutcome out = runSortGuard(spec);
+            const QString where = QStringLiteral("TEST-136 refresh: ");
+            logSortGuard(QStringLiteral("TEST-136 refresh"), out);
+            assertSortGuardPremises(where, out, 5);
+            QVERIFY2(out.disturbanceDelivered,
+                     qPrintable(where + QStringLiteral("the Refresh was never delivered into the batch")));
+            assertSortingWasOffAtTheFirstWrite(where, out);
+            QVERIFY2(out.sortingAfterDisturbance == (QList<int>() << 1 << 1 << 1),
+                     qPrintable(where + QStringLiteral("the Refresh did not restore sorting: [%1]")
+                                            .arg(sortStates(out.sortingAfterDisturbance))));
+            QVERIFY2(
+                out.sortingAtEnd == (QList<int>() << 1 << 1 << 1),
+                qPrintable(where +
+                           QStringLiteral("the lists were left unsortable: [%1]").arg(sortStates(out.sortingAtEnd))));
+        }
+
+        // ---- (4) THE self.isNull() EXITS. The dialog is destroyed from inside
+        //      row[0]'s own nested loop. There is nothing to restore - the lists
+        //      died with the dialog - and the restore must be structured so that
+        //      it cannot touch any of them. This target runs under ASan with
+        //      halt_on_error=1, so coming back at all IS the assertion.
+        {
+            SortGuardSpec spec;
+            spec.tab = SortSyncTab;
+            spec.disturb = TeardownInsideBatch;
+            SortGuardOutcome out = runSortGuard(spec);
+            const QString where = QStringLiteral("TEST-136 teardown: ");
+            logSortGuard(QStringLiteral("TEST-136 teardown"), out);
+            QVERIFY2(out.timedOut == false, qPrintable(where + QStringLiteral("the run never came back")));
+            QVERIFY2(out.disturbanceDelivered,
+                     qPrintable(where + QStringLiteral("the teardown was never delivered into the batch")));
+            QVERIFY2(out.sampledAtDispatch,
+                     qPrintable(where + QStringLiteral("row[0]'s dispatch frame was never sampled")));
+            QVERIFY2(out.sortingAtDispatch == (QList<int>() << 0 << 0 << 0),
+                     qPrintable(where + QStringLiteral("sorting was not suspended when the dialog died ([%1]), so this "
+                                                       "case never exercised a restore-on-a-dead-dialog at all")
+                                            .arg(sortStates(out.sortingAtDispatch))));
+            QVERIFY2(out.dialogDestroyed,
+                     qPrintable(where + QStringLiteral("the dialog survived the teardown, so no self.isNull() exit was "
+                                                       "taken and this case proves nothing")));
+        }
+    }
+
+    // -- TEST-137 (DEC-garmin-038, the user's condition 4) ---------------
+    // THE USER'S SORT COLUMN AND ORDER SURVIVE THE ROUND TRIP.
+    //
+    // setSortingEnabled(true) re-applies whatever indicator the header is
+    // carrying, and TEST-131 Q1a measured that enabling ALONE establishes section
+    // 0 / DESCENDING - so a restore that simply turns sorting back on can silently
+    // reset the user's chosen sort. A DIFFERENT (section, order) pair is pinned on
+    // each of the three lists, none of them (0, Descending) and no two alike, so
+    // that a restore which resets to Qt's default, or copies one list's state onto
+    // another, cannot pass.
+    void theUsersSortColumnAndOrderMustSurviveTheBatch()
+    {
+        SortGuardSpec spec;
+        spec.tab = SortSyncTab;
+        spec.downSection = 2;
+        spec.downOrder = Qt::DescendingOrder;
+        spec.upSection = 3;
+        spec.upOrder = Qt::AscendingOrder;
+        spec.syncSection = 1;
+        spec.syncOrder = Qt::DescendingOrder;
+        SortGuardOutcome out = runSortGuard(spec);
+        const QString where = QStringLiteral("TEST-137 round trip: ");
+        logSortGuard(QStringLiteral("TEST-137"), out);
+
+        assertSortGuardPremises(where, out, 7);
+        // The user's choice was VISIBLE this time: sorting the Sync list by its
+        // Source column, descending, really does move the rows. A run in which it
+        // did not would say nothing about an order being preserved.
+        QVERIFY2(out.preBatchSortMovedRows,
+                 qPrintable(where + QStringLiteral("the user's descending sort on column 1 moved nothing, so there is "
+                                                   "no order here to preserve")));
+        assertSortingWasOffAtTheFirstWrite(where, out);
+
+        QVERIFY2(out.sortingAtEnd == (QList<int>() << 1 << 1 << 1),
+                 qPrintable(where +
+                            QStringLiteral("the lists were left unsortable: [%1]").arg(sortStates(out.sortingAtEnd))));
+        QVERIFY2(out.sectionAtEnd == (QList<int>() << 2 << 3 << 1),
+                 qPrintable(where + QStringLiteral("the sort COLUMN was not preserved: [%1], expected [2,3,1] (down, "
+                                                   "up, sync)")
+                                        .arg(sortStates(out.sectionAtEnd))));
+        QVERIFY2(out.orderAtEnd ==
+                     (QList<int>() << int(Qt::DescendingOrder) << int(Qt::AscendingOrder) << int(Qt::DescendingOrder)),
+                 qPrintable(where + QStringLiteral("the sort ORDER was not preserved: [%1], expected [1,0,1] (1 = "
+                                                   "descending)")
+                                        .arg(sortStates(out.orderAtEnd))));
+        // ...and the indicator is not merely a decoration: the rows really are
+        // still in the user's descending order on column 1.
+        QStringList descending = out.namesAtEnd;
+        std::sort(descending.begin(), descending.end());
+        std::reverse(descending.begin(), descending.end());
+        QVERIFY2(out.namesAtEnd == descending,
+                 qPrintable(where + QStringLiteral("the rows are not in the user's descending order at the end: [%1]")
+                                        .arg(out.namesAtEnd.join(QChar('|')))));
+    }
+
+    // -- TEST-138 (DEC-garmin-038, LSN-050) ------------------------------
+    // THE POSITIVE CONTROL: THE LISTS ARE FULLY USABLE AGAIN AFTERWARDS.
+    //
+    // Without this slot every criterion above is satisfiable by disabling sorting
+    // permanently and never turning it back on. A batch runs with NO pre-batch
+    // sort and nothing delivered into it, and afterwards all three lists must be
+    // sortable, their headers clickable, their indicators shown - and the header
+    // must actually WORK: an indicator change on a column whose values differ has
+    // to move rows, which "isSortingEnabled() == true" alone does not prove.
+    //
+    // The mid-batch premise is deliberate, and it makes this slot RED before the
+    // fix as well: a control that passes on a build where nothing was ever
+    // disabled is measuring nothing.
+    void aBatchThatReordersNothingLeavesTheListsFullyUsable()
+    {
+        SortGuardSpec spec;
+        spec.tab = SortSyncTab;
+        spec.preBatchSort = false;
+        spec.probeSortingAfterTheBatch = true;
+        SortGuardOutcome out = runSortGuard(spec);
+        const QString where = QStringLiteral("TEST-138 positive control: ");
+        logSortGuard(QStringLiteral("TEST-138"), out);
+
+        assertSortGuardPremises(where, out, 7);
+        assertSortingWasOffAtTheFirstWrite(where, out);
+        assertEveryCheckedRowTransferredExactlyOnce(where, out);
+
+        QVERIFY2(out.sortingAtEnd == (QList<int>() << 1 << 1 << 1),
+                 qPrintable(where + QStringLiteral("the lists are not sortable after the batch: [%1]")
+                                        .arg(sortStates(out.sortingAtEnd))));
+        QVERIFY2(out.clickableAtEnd == (QList<int>() << 1 << 1 << 1),
+                 qPrintable(where + QStringLiteral("the headers are not clickable after the batch: [%1]")
+                                        .arg(sortStates(out.clickableAtEnd))));
+        QVERIFY2(out.indicatorShownAtEnd == (QList<int>() << 1 << 1 << 1),
+                 qPrintable(where + QStringLiteral("the sort indicators are not shown after the batch: [%1]")
+                                        .arg(sortStates(out.indicatorShownAtEnd))));
+        QVERIFY2(out.sortingWorksAfterTheBatch,
+                 qPrintable(where + QStringLiteral("an indicator change after the batch moved no rows - the header is "
+                                                   "wearing the flags but the connection is severed")));
+    }
+
+    // -- TEST-139 (DEC-garmin-038, the corollary) ------------------------
+    // THE DISABLE PERSISTS ACROSS THE CALLBACK-DRIVEN LOOP.
+    //
+    // "A batch is NOT one stack frame. These loops are process one row, return,
+    // let the completion re-drive me - so an RAII scope guard around a driver call
+    // would re-enable sorting BETWEEN ROWS and reinstate the defect while looking
+    // correct." This slot samples at exactly that point: inside the FIRST
+    // completion, after it has labelled its row and before its tail re-drives the
+    // loop. The driver frame that dispatched row[0] has returned; the frame for
+    // row[1] does not exist yet. An RAII-per-call design reads [1,1,1] here and
+    // passes every other slot in this block.
+    //
+    // RED, before the fix:
+    //   FAIL!  : ... sorting was enabled between rows: [0,1,1]
+    void theDisableMustPersistBetweenRowsNotJustWithinADriverCall()
+    {
+        SortGuardSpec spec;
+        spec.tab = SortSyncTab;
+        SortGuardOutcome out = runSortGuard(spec);
+        const QString where = QStringLiteral("TEST-139 between rows: ");
+        logSortGuard(QStringLiteral("TEST-139"), out);
+
+        assertSortGuardPremises(where, out, 7);
+        QVERIFY2(out.sampledBetweenRows,
+                 qPrintable(where + QStringLiteral("the first completion was never sampled, so nothing here is a "
+                                                   "measurement")));
+        // WHERE the sample was taken, measured rather than asserted: exactly one
+        // transfer had been issued, so this is after row[0]'s and before row[1]'s.
+        QVERIFY2(out.transfersAtBetweenRows == 1,
+                 qPrintable(where + QStringLiteral("%1 transfer(s) had been issued at the sample, not 1 - the sample "
+                                                   "is not between rows")
+                                        .arg(out.transfersAtBetweenRows)));
+        QVERIFY2(out.sortingBetweenRows == (QList<int>() << 0 << 0 << 0),
+                 qPrintable(where + QStringLiteral("sorting was enabled between rows: [%1] (down, up, sync) - the "
+                                                   "guard is per driver CALL rather than per BATCH")
+                                        .arg(sortStates(out.sortingBetweenRows))));
+        QVERIFY2(out.reordersBetweenRows == 0,
+                 qPrintable(where + QStringLiteral("%1 layout change(s) had happened by the first completion")
+                                        .arg(out.reordersBetweenRows)));
     }
 
   private:

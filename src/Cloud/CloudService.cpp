@@ -960,6 +960,7 @@ CloudServiceSyncDialog::CloudServiceSyncDialog(Context *context, CloudService *s
       downloading(false), sync(false), aborted(false),
       blockingCallDepth(0), closeDeferred(false), reaper(NULL),
       listindex(0), batchGeneration(0), listGeneration(0), batchListGeneration(0),
+      sortingSuspended(false),
       tabs(nullptr), athleteCombo(nullptr), refreshButton(nullptr),
       cancelButton(nullptr), downloadButton(nullptr), from(nullptr), to(nullptr),
       selectAll(nullptr), rideListDown(nullptr), selectAllUp(nullptr),
@@ -1467,6 +1468,28 @@ CloudServiceSyncDialog::BlockingCall::~BlockingCall()
 // sync carried on downloading the remaining activities behind a dialog they had
 // already dismissed. completedRead/failedRead consult it and stop the loop.
 //
+// WHY THIS DOES NOT CALL restoreListSorting(), THOUGH IT ENDS A BATCH
+// (A3-R038-F1). It sets `aborted` and returns without restoring, which in every
+// other terminating path of this dialog would be the bug DEC-garmin-038 names:
+// an exit that leaves the user's lists permanently unsortable. It is safe here
+// for ONE reason, and the reason was load-bearing but written down nowhere until
+// the DEC-038 A3 went looking for it:
+//
+//   EVERY DEFERRED CLOSE TERMINATES IN DESTRUCTION. `closeDeferred` is replayed
+//   only by ~BlockingCall, and only once `--blockingCallDepth == 0`; the
+//   close() it then calls re-enters closeEvent, whose deferCloseIfBusy() now
+//   finds blockingCallDepth <= 0 and returns false, so the event falls through
+//   to QDialog::closeEvent and WA_DeleteOnClose destroys the dialog. There is no
+//   path on which this function defers a close and a LIVE dialog survives it.
+//
+// So there are no lists left to restore, and calling restoreListSorting() here
+// would be touching members of a dialog on its way to deletion. IF THAT
+// INVARIANT EVER CHANGES - if any caller learns to cancel a deferred close, or
+// to keep the dialog alive after replaying one - THIS BECOMES A RESTORE SITE.
+// That is the whole of the coupling, stated here rather than left to be
+// rediscovered: it is the A3-R028c-F5 shape, which was a real defect the last
+// time a safety property lived only in someone's head.
+//
 bool
 CloudServiceSyncDialog::deferCloseIfBusy()
 {
@@ -1512,6 +1535,108 @@ CloudServiceSyncDialog::cancelClicked()
     reject();
 }
 
+// DEC-garmin-038 (= DEC-garmin-034 AMENDMENT, S-R028-01/S-R028-02) - SORTING IS
+// OFF FOR THE BATCH'S DURATION. The full reasoning is on the members in
+// CloudService.h; these two functions are the whole of the mechanism.
+//
+// Called ONCE per batch, from the one place a batch starts (downloadClicked) and
+// above everything that batch writes. Records what each list was doing so that
+// restoreListSorting can put it back exactly, then takes the mutator away.
+void
+CloudServiceSyncDialog::suspendListSorting()
+{
+    // ALREADY SUSPENDED means a second start with no intervening restore, and the
+    // damage that would do is silent and permanent: the second record would say
+    // "sorting was off" and the restore would honour it forever. No route reaches
+    // this today - downloadClicked's abort branch and the three completion tails
+    // all restore before `downloading` can go false again, and downloadClicked's
+    // start branch runs only with `downloading == false`. So this line is DEFENCE
+    // IN DEPTH and it SURVIVES MUTATION: removed alone (2026-08-23) the suite is
+    // 89/89 green under both QPA backends. Said plainly per LSN-059 rather than
+    // left to be discovered, and kept because the property it protects - that the
+    // record always describes what the USER chose and never what a batch did - is
+    // the one a future second start site would break invisibly.
+    if (sortingSuspended) return;
+
+    QTreeWidget *lists[3] = { rideListDown, rideListUp, rideListSync };
+    ListSortState *states[3] = { &downSortState, &upSortState, &syncSortState };
+
+    for (int i=0; i<3; i++) {
+        if (lists[i] == NULL) continue;
+
+        states[i]->enabled = lists[i]->isSortingEnabled();
+        if (lists[i]->header() != NULL) {
+            states[i]->section = lists[i]->header()->sortIndicatorSection();
+            states[i]->order = lists[i]->header()->sortIndicatorOrder();
+        }
+        lists[i]->setSortingEnabled(false);
+    }
+
+    sortingSuspended = true;
+}
+
+// Called from every path that ENDS a batch with this dialog still alive, and
+// from no other - see the member comment for the three sites and for the exits
+// that must NOT call this (stale frames, and the self.isNull() bails, where
+// these members are gone).
+void
+CloudServiceSyncDialog::restoreListSorting()
+{
+    // NOT SUSPENDED means no batch of ours turned sorting off, and the recorded
+    // state describes nothing. refreshClicked calls this unconditionally - an idle
+    // Refresh is the ordinary case - so without this line every Refresh would
+    // apply a default record to three live lists.
+    //
+    // AND IT IS LOAD-BEARING FOR A SECOND, MEASURED REASON, which is worth more
+    // than the first: a REDUNDANT setSortingEnabled(true) on a list that is
+    // already sorting leaves the header's sort connection in a state that a LATER
+    // setSortingEnabled(false) does not fully sever. Removed alone (mutation,
+    // 2026-08-23), the construction-time Refresh in start() makes exactly that
+    // redundant call on all three lists, and a setSortIndicator delivered into a
+    // batch that has since disabled sorting STILL reorders the list - TEST-112
+    // dies on "setSortIndicator reordered a list whose batch had sorting
+    // disabled", with the list's own isSortingEnabled() reading false at the same
+    // instant. So this guard is not hygiene: it is what keeps every enable a real
+    // transition, and it is why nothing in this file may call setSortingEnabled
+    // (true) on a list that is already sorting.
+    if (!sortingSuspended) return;
+    sortingSuspended = false;
+
+    QTreeWidget *lists[3] = { rideListDown, rideListUp, rideListSync };
+    const ListSortState *states[3] = { &downSortState, &upSortState, &syncSortState };
+
+    for (int i=0; i<3; i++) {
+        if (lists[i] == NULL) continue;
+
+        // THE INDICATOR FIRST, THEN THE ENABLE, and that order is the whole of
+        // how the user's column and order survive: setSortingEnabled(true) sorts
+        // by whatever indicator the header is carrying at that moment (QTreeView
+        // calls sortByColumn(sortIndicatorSection(), sortIndicatorOrder())), and
+        // on a header that never carried one that is section 0 / DESCENDING
+        // (measured, TEST-131 Q1a). Setting it while sorting is still OFF moves
+        // no rows (TEST-131 Q4), so this costs exactly one sort - on the user's
+        // own column - rather than one on Qt's default followed by another.
+        //
+        // MUTATION-SURVIVING, AND SAID PLAINLY (LSN-059): removing THIS LINE alone
+        // leaves all 89 slots green under both QPA backends, because Qt 6.8.2
+        // happens to keep the indicator across the disable/enable pair, so the
+        // enable below re-applies the user's column on its own. It is kept because
+        // that is an implementation detail of a framework this project has had
+        // falsified under it three times (TEST-081, TEST-089, TEST-131), because
+        // the user's condition was "the column AND order survive" rather than
+        // "survive if Qt remembers", and because the criterion IS measured: with
+        // the line present, a restore that applies ONE list's state to all three
+        // takes TEST-137 red on the column clause, and one that applies the
+        // section but not the order takes it red on the order clause. Do not
+        // delete it on the strength of a mutation run: mutation measures coverage,
+        // not necessity.
+        if (lists[i]->header() != NULL && states[i]->section >= 0)
+            lists[i]->header()->setSortIndicator(states[i]->section, states[i]->order);
+
+        lists[i]->setSortingEnabled(states[i]->enabled);
+    }
+}
+
 void
 CloudServiceSyncDialog::refreshClicked()
 {
@@ -1527,6 +1652,25 @@ CloudServiceSyncDialog::refreshClicked()
 
     for (auto i = readOperations.begin(); i != readOperations.end(); ++i) i.value().row = nullptr;
     for (auto i = writeOperations.begin(); i != writeOperations.end(); ++i) i.value().row = nullptr;
+
+    // DEC-garmin-038 (S-R028-02) - ...AND ANY BATCH RUNNING ON THE OLD GENERATION
+    // IS OVER, so its sorting suspension is released HERE.
+    //
+    // THE TERMINATION CLASS THIS COVERS, and it is the one no completion tail can:
+    // the line above has just made every driver and every completion of the
+    // running batch stand down at its listGeneration compare. A completion whose
+    // row has been nulled is SWALLOWED - no label, no count, no re-drive - so
+    // nothing downstream will ever run a tail for that batch, and a restore left
+    // to the tails would never happen at all. Its lists would stay unsortable
+    // until the dialog was reopened.
+    //
+    // AT THE TOP, above the deletes and above the readdir below, for two reasons:
+    // the early return at the end of that call (a Context freed under us) is a
+    // live exit that must not skip this, and the rebuild that follows then inserts
+    // the new rows with sorting on - exactly as an idle Refresh always has. Safe
+    // when NO batch is running, which is the ordinary case: restoreListSorting()
+    // returns immediately unless a suspension is actually in force.
+    restoreListSorting();
 
     double distanceFactor = GlobalContext().useMetricUnits ? 1.0 : MILES_PER_KM;
     QString distanceUnits = GlobalContext().useMetricUnits ? tr("km") : tr("mi");
@@ -1921,8 +2065,13 @@ void
 CloudServiceSyncDialog::downloadClicked()
 {
     if (downloading == true) {
-        rideListDown->setSortingEnabled(true);
-        rideListUp->setSortingEnabled(true);
+        // DEC-garmin-038 (S-R028-02) - THE ABORT IS A TERMINATION PATH, and on
+        // this route there is no later tail to defer to: the suspended driver
+        // resumes only to label its row "Aborted" and return. This replaces the
+        // two-list re-enable that used to stand here, which left rideListSync -
+        // never disabled, but also never anyone's responsibility - out of the
+        // symmetry entirely. See TEST-136's abort case.
+        restoreListSorting();
         progressLabel->setText("");
         downloadButton->setText(tr("Download"));
         downloading=false;
@@ -1930,8 +2079,23 @@ CloudServiceSyncDialog::downloadClicked()
         cancelButton->show();
         return;
     } else {
-        rideListDown->setSortingEnabled(false);
-        rideListUp->setSortingEnabled(true);
+        // DEC-garmin-038 (S-R028-01) - A BATCH STARTS HERE, SO SORTING STOPS HERE,
+        // ON ALL THREE LISTS.
+        //
+        // What used to stand here disabled the DOWNLOAD list only and re-enabled
+        // the UPLOAD one, which is why the sync and upload drivers walked lists
+        // that reordered underneath them on every status write they made
+        // (TEST-131 Q5c: the same row uploaded twice, the other never
+        // transferred). PLACEMENT is what makes this load-bearing: it is above
+        // everything this batch writes - the drivers are not called until the foot
+        // of this function - and a disable that arrives after a write cannot undo
+        // the move that write already made (TEST-131 Q3).
+        //
+        // It is NOT scoped to a driver call: the loops return between rows and are
+        // re-driven by their completions, so the suspension is released only at
+        // true batch termination. See the member comment in CloudService.h and
+        // TEST-132..TEST-139.
+        suspendListSorting();
         downloading=true;
         aborted=false;
 
@@ -2508,9 +2672,9 @@ CloudServiceSyncDialog::syncNext()
     //
     // Our work is done!
     //
-    rideListDown->setSortingEnabled(true);
-    rideListUp->setSortingEnabled(true);
-    rideListSync->setSortingEnabled(true);
+    // DEC-garmin-038 - the batch is over, so the user's sorting comes back, on all
+    // three lists and with the column and order they chose (TEST-136/137).
+    restoreListSorting();
     progressLabel->setText(tr("Sync complete"));
     downloadButton->setText(tr("Synchronize"));
     downloading=false;
@@ -2641,8 +2805,10 @@ CloudServiceSyncDialog::downloadNext()
     //
     // Our work is done!
     //
-    rideListDown->setSortingEnabled(true);
-    rideListUp->setSortingEnabled(true);
+    // DEC-garmin-038 - as in syncNext's tail, and this one now restores the SYNC
+    // list too: the suspension is per BATCH and covers all three lists, so the
+    // release has to be the same shape wherever the batch ends.
+    restoreListSorting();
     progressLabel->setText(tr("Downloads complete"));
     downloadButton->setText(tr("Download"));
     downloading=false;
@@ -3254,8 +3420,8 @@ CloudServiceSyncDialog::uploadNext()
     //
     // Our work is done!
     //
-    rideListDown->setSortingEnabled(true);
-    rideListUp->setSortingEnabled(true);
+    // DEC-garmin-038 - syncNext's tail, third copy. Same reason, same shape.
+    restoreListSorting();
     progressLabel->setText(tr("Uploads complete"));
     downloadButton->setText(tr("Upload"));
     downloading=false;
@@ -3286,10 +3452,14 @@ CloudServiceSyncDialog::completedWrite(quint64 operationId, QString, QString res
     // A3-R028b-F8 - "one of DEC-029's four suspension points" is what this used to
     // say, and the phrasing was read as a closed world. DEC-029 enumerated the
     // four STORE calls that suspend; it never claimed those were the only
-    // suspensions in this dialog, and they are not - saveRide is one (:2910,
-    // A3-R028b-F1), openRideFile is another (:2317/:3117, DEC-024), and the
-    // drivers' own parse-failure processEvents() are two more (:2428/:3184,
-    // A3-R028b-F2). Nothing in this file holds a complete list. See TEST-111.
+    // suspensions in this dialog, and they are not - saveRide is one
+    // (A3-R028b-F1), RideFileFactory::openRideFile is another (DEC-024), and the
+    // drivers' own parse-failure processEvents() are two more (A3-R028b-F2).
+    // Nothing in this file holds a complete list. See TEST-111.
+    //
+    // CITED BY SYMBOL, NOT BY LINE (A3-R038-F3, [[LSN-034]] refinement 8): this
+    // block previously carried five line numbers and by 2026-08-23 every one of
+    // them pointed somewhere else. See the matching note in CloudService.h.
     const auto operationIt = writeOperations.constFind(operationId);
     if (operationIt == writeOperations.constEnd()) return;
     const TransferOperation operation = operationIt.value();
