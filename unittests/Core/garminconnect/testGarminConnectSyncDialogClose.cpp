@@ -13011,6 +13011,19 @@ class TestGarminConnectSyncDialogClose : public QObject
         // TEST-138: after the batch, does an indicator change actually MOVE rows
         // again - or is the header merely wearing the flags?
         bool probeSortingAfterTheBatch = false;
+
+        // TEST-142 (A3-R038-F2) — ONE LIST IS ALREADY OUT OF SORTING WHEN THE
+        // BATCH STARTS. Index into lists[] (0 down, 1 up, 2 sync); -1, the
+        // default, leaves every run above byte-for-byte what it was.
+        //
+        // Why the fixture needs this at all: suspendListSorting's own early
+        // return (CloudService.cpp:1559) means production can never RECORD an
+        // already-disabled list of its own accord, so every other run in this
+        // block starts from [1,1,1] and ends at [1,1,1] - and a restore that
+        // REPLAYS what it recorded and one that unconditionally force-enables
+        // produce the identical answer. This is the one dimension that tells
+        // them apart, and it can only be created from outside production.
+        int preDisableList = -1;
     };
 
     struct SortGuardOutcome
@@ -13020,6 +13033,7 @@ class TestGarminConnectSyncDialogClose : public QObject
         // -- premises: was this a two-row batch on a sortable list at all?
         int rows = 0, checkedRows = 0, statusColumn = -1;
         QList<int> sortingBefore;           // 3 entries: down, up, sync
+        QList<int> sortingAtBatchStart;     // ...and again AFTER spec.preDisableList
         bool preBatchSortMovedRows = false; // did the user's sort change the order?
         QStringList orderAfterUserSort;     // the driven list, name@address
         QStringList rowKeys;                // the identities the batch must transfer, one each
@@ -13208,6 +13222,16 @@ class TestGarminConnectSyncDialogClose : public QObject
                         if (!lists[i].isNull() && lists[i]->header() != nullptr)
                             lists[i]->header()->setSortIndicator(sections[i], orders[i]);
                 }
+                // TEST-142 — ...and, for the one run that asks it, ONE list is
+                // put out of sorting before the button is pressed. AFTER the sort
+                // above, so the list carries a real (section, order) as well as a
+                // real `enabled` for suspendListSorting to record. Synthetic by
+                // necessity: this dialog offers the user no way to reach it, and
+                // production's own suspend can never create it (:1559).
+                if (spec.preDisableList >= 0 && spec.preDisableList < 3 && !lists[spec.preDisableList].isNull())
+                    lists[spec.preDisableList]->setSortingEnabled(false);
+                out.sortingAtBatchStart = sortingStates();
+
                 out.orderAfterUserSort = sortFingerprints(driven);
                 out.preBatchSortMovedRows = (out.orderAfterUserSort != orderBeforeUserSort);
 
@@ -13373,13 +13397,14 @@ class TestGarminConnectSyncDialogClose : public QObject
 
     void logSortGuard(const QString& where, const SortGuardOutcome& out)
     {
-        qInfo("%s [%s] rows=%d checked=%d statusCol=%d before=[%s] userSortMoved=%d atDispatch=[%s] "
+        qInfo("%s [%s] rows=%d checked=%d statusCol=%d before=[%s] atBatchStart=[%s] userSortMoved=%d atDispatch=[%s] "
               "reordersAtDispatch=%d "
               "betweenRows=[%s] reordersBetween=%d transfersAtBetween=%d afterDisturbance=[%s] atEnd=[%s] "
               "clickable=[%s] indicator=[%s] section=[%s] order=[%s] reorders=%d transfers=[%s] statuses=[%s] "
               "names=[%s] progress=\"%s\" button=\"%s\" destroyed=%d",
               qPrintable(where), qPrintable(QString::fromLatin1(qgetenv("QT_QPA_PLATFORM"))), out.rows, out.checkedRows,
-              out.statusColumn, qPrintable(sortStates(out.sortingBefore)), int(out.preBatchSortMovedRows),
+              out.statusColumn, qPrintable(sortStates(out.sortingBefore)),
+              qPrintable(sortStates(out.sortingAtBatchStart)), int(out.preBatchSortMovedRows),
               qPrintable(sortStates(out.sortingAtDispatch)), out.reordersAtDispatch,
               qPrintable(sortStates(out.sortingBetweenRows)), out.reordersBetweenRows, out.transfersAtBetweenRows,
               qPrintable(sortStates(out.sortingAfterDisturbance)), qPrintable(sortStates(out.sortingAtEnd)),
@@ -13847,6 +13872,115 @@ class TestGarminConnectSyncDialogClose : public QObject
         QVERIFY2(out.reordersBetweenRows == 0,
                  qPrintable(where + QStringLiteral("%1 layout change(s) had happened by the first completion")
                                         .arg(out.reordersBetweenRows)));
+    }
+
+    // -- TEST-142 (A3-R038-F2, DEC-garmin-038, REQ-028 (e)) --------------
+    // THE RESTORE REPLAYS WHAT WAS RECORDED - IT DOES NOT FORCE-ENABLE.
+    //
+    // WHAT THE OTHER EIGHT SLOTS CANNOT SEE. suspendListSorting records each
+    // list's own `enabled` bit (CloudService.cpp:1567) and restoreListSorting
+    // plays that bit back (:1636). Every run above starts with all three lists
+    // sorting - which is what the dialog's constructor leaves behind
+    // (:1116/:1146/:1186) - and production's own suspend can never manufacture
+    // any other starting state, because its early return at :1559 makes a second
+    // suspension a no-op. So on this suite's whole 89-slot geometry the recorded
+    // vector is [1,1,1], and
+    //
+    //     lists[i]->setSortingEnabled(states[i]->enabled);   // what is written
+    //     lists[i]->setSortingEnabled(true);                 // a force-enable
+    //
+    // are INDISTINGUISHABLE: the second survives all 89 slots under both QPA
+    // backends (measured, 2026-08-23). The field `ListSortState::enabled`
+    // (CloudService.h:842) is therefore written, read, and never once observed
+    // to carry anything but `true`.
+    //
+    // WHAT THIS RUN CHANGES. Exactly one thing: the UPLOAD list is put out of
+    // sorting before the button is pressed, so the vector production records is
+    // [1,0,1] rather than [1,1,1]. Nothing else about the run differs from
+    // TEST-132's - same tab, same two-row sync batch, same pre-batch sort, no
+    // disturbance. The disable is SYNTHETIC and openly so (no widget in this
+    // dialog offers it); the criterion it makes measurable is not.
+    //
+    // BOTH HALVES ARE ASSERTED, AND THE SECOND IS WHAT MAKES THE FIRST MEAN
+    // ANYTHING (LSN-050). "The disabled list comes back disabled" on its own is
+    // satisfied by a restore that force-DISABLES all three - the exact bug
+    // DEC-038's own positive control (TEST-138) exists to forbid - so the two
+    // lists that were sorting must come back sorting in the same breath.
+    //
+    // RED, by mutation (2026-08-23, both backends) - AND WHAT IS, AND IS NOT,
+    // EXCLUSIVE TO THIS SLOT. Both directions of :1636 were driven. This slot
+    // dies on both, but only ONE of them is evidence FOR IT (A3-R028e-F3).
+    //
+    //   :1636 -> lists[i]->setSortingEnabled(true);      EXCLUSIVE TO THIS SLOT.
+    //     Measured: 90 passed, 1 failed, EXIT=1 - the other 89 slots stay green
+    //     and this one alone dies on
+    //       FAIL!  : ... TEST-142 recorded state: the batch did not restore what
+    //                it recorded: [1,1,1], expected [1,0,1] ...
+    //     This IS the slot's unique contribution, and it is the whole reason the
+    //     slot exists: this is the only run in the suite whose recorded vector is
+    //     anything other than [1,1,1], so it is the only run that can tell a
+    //     REPLAY of the recorded bit from a FORCE-ENABLE.
+    //
+    //   :1636 -> lists[i]->setSortingEnabled(false);     NOT EXCLUSIVE.
+    //     Measured: 86 passed, 5 FAILED, EXIT=5. Four of those five PRE-DATE this
+    //     slice and already catch it, each on [0,0,0]:
+    //       TEST-135 aSortDeliveredIntoARunningBatchMustNotMoveARow
+    //       TEST-136 sortingMustBeRestoredOnEveryTerminationPath
+    //       TEST-137 theUsersSortColumnAndOrderMustSurviveTheBatch
+    //       TEST-138 aBatchThatReordersNothingLeavesTheListsFullyUsable
+    //     ...and TEST-142 with them. Removing this slot would not let that
+    //     mutant live, so the kill says nothing about this slot in particular.
+    //
+    // Both measurements are kept above because both were run; what must not be
+    // read off them is "killed twice, independently". Only the ->true direction
+    // is exclusive evidence for TEST-142.
+    void theRestoreMustReplayEachListsOwnRecordedSortingState()
+    {
+        SortGuardSpec spec;
+        spec.tab = SortSyncTab;
+        spec.preDisableList = SortUploadTab; // the list that is NOT driven
+        SortGuardOutcome out = runSortGuard(spec);
+        const QString where = QStringLiteral("TEST-142 recorded state: ");
+        logSortGuard(QStringLiteral("TEST-142"), out);
+
+        // The shared premises still hold, INCLUDING sortingBefore == [1,1,1]:
+        // that is what makes the [1,0,1] below this fixture's doing and not the
+        // dialog's.
+        assertSortGuardPremises(where, out, 7);
+        QVERIFY2(out.sortingAtBatchStart == (QList<int>() << 1 << 0 << 1),
+                 qPrintable(where + QStringLiteral("the batch did not start from the state this run is about: [%1], "
+                                                   "expected [1,0,1] (down, up, sync) - the synthetic disable did not "
+                                                   "take, so there is nothing here to record")
+                                        .arg(sortStates(out.sortingAtBatchStart))));
+
+        // The batch really ran, and the suspension covered the list that was
+        // ALREADY off as well as the two that were on.
+        assertSortingWasOffAtTheFirstWrite(where, out);
+        assertEveryCheckedRowTransferredExactlyOnce(where, out);
+        QVERIFY2(!out.dialogDestroyed,
+                 qPrintable(where + QStringLiteral("the dialog did not survive the batch, so no restore ran")));
+
+        // ---- THE CRITERION, both halves in one comparison so that neither can
+        //      be satisfied without the other: the list that was not sorting
+        //      comes back NOT SORTING, and the two that were come back SORTING.
+        QVERIFY2(out.sortingAtEnd == (QList<int>() << 1 << 0 << 1),
+                 qPrintable(where + QStringLiteral("the batch did not restore what it recorded: [%1], expected [1,0,1] "
+                                                   "(down, up, sync). [1,1,1] means the restore FORCE-ENABLES and the "
+                                                   "recorded bit is dead; [0,0,0] means it left the lists disabled")
+                                        .arg(sortStates(out.sortingAtEnd))));
+
+        // ...and the header agrees with the widget, so this is a real state
+        // rather than a flag nobody acted on: TEST-131 Q4 measured that a list
+        // out of sorting has a header that is neither clickable nor carrying a
+        // visible indicator, and the two lists that ARE sorting have both.
+        QVERIFY2(out.clickableAtEnd == (QList<int>() << 1 << 0 << 1),
+                 qPrintable(where + QStringLiteral("the headers do not match the restored sorting states: clickable "
+                                                   "[%1], expected [1,0,1]")
+                                        .arg(sortStates(out.clickableAtEnd))));
+        QVERIFY2(out.indicatorShownAtEnd == (QList<int>() << 1 << 0 << 1),
+                 qPrintable(where + QStringLiteral("the sort indicators do not match the restored sorting states: "
+                                                   "[%1], expected [1,0,1]")
+                                        .arg(sortStates(out.indicatorShownAtEnd))));
     }
 
   private:
@@ -15479,6 +15613,417 @@ class TestGarminConnectSyncDialogClose : public QObject
         if (survey && !surveyFailures.isEmpty())
             QFAIL(qPrintable(QStringLiteral("%1 of %2 seeds failed:\n  ").arg(surveyFailures.count()).arg(seeds) +
                              surveyFailures.join(QStringLiteral("\n  "))));
+    }
+
+  private:
+    // =====================================================================
+    // TEST-140 (A3-R028c-F7, REQ-028 (e), DEC-garmin-034) —
+    // A CLOSE DELIVERED FROM INSIDE saveRide.
+    // =====================================================================
+    //
+    // THE GUARD. completedRead wraps its saveRide call in a BlockingCall
+    // (CloudService.cpp:3078). saveRide is not a store call, but it SUSPENDS -
+    // DataProcessorFactory::autoProcess (:3569) runs every processor whose
+    // configKeyAutomation is "Auto", and FixElevation's postProcess waits on an
+    // HTTPS round trip in an untimed QEventLoop (FixElevation.cpp:288-300). A
+    // window X delivered into that loop reaches closeEvent -> deferCloseIfBusy
+    // (:1494), and it is the DEPTH THIS FRAME RAISES that turns the close into a
+    // deferral. Without it deferCloseIfBusy returns false, QDialog's
+    // WA_DeleteOnClose path posts the DeferredDelete that same loop then
+    // delivers, and saveRide resumes on freed memory: `context` at :3576 is a
+    // member READ and `rideFiles` at :3579 a member WRITE, both BELOW the
+    // suspension and both ABOVE any guard completedRead has.
+    //
+    // WHY THE 89-SLOT SUITE COULD NOT SEE IT (B-R028-13). Removing that one line
+    // left the whole suite green: no run in this file had ever delivered a close
+    // into saveRide, so the frame it protects was never entered. Every other
+    // BlockingCall in the file wraps a STORE call, and the store stub's
+    // fireActionThenBlock is the only suspension the close routes were ever
+    // driven into. The guard shipped labelled "reasoned, not traced".
+    //
+    // WHY THIS RUN CAN. The autoProcess seam (stubs/ImportSeamStubs.cpp:136-137,
+    // fired at :452-465) puts a real nested QEventLoop back where production has
+    // one. It is TEST-121's seam and TEST-121's arming shape, aimed at a
+    // different question: TEST-121 delivers a REFRESH there and is about the row,
+    // this one delivers the WINDOW X and is about the dialog.
+    //
+    // THE CLOSE IS QUEUED AND THE LOOP DELIVERS IT, which is not a detail: an
+    // event delivered through QCoreApplication::notifyInternal2 runs one
+    // scopeLevel deeper than the loop that dispatched it, so a DeferredDelete
+    // posted from inside it OUTRANKS that loop and is delivered by it. Called
+    // synchronously instead, the deleteLater would sit undelivered until the
+    // stack unwound and the run would prove nothing. This is exactly why
+    // BlockingStore::fireActionThenBlock queues its own action.
+    //
+    // THE WINDOW X RATHER THAN THE Close BUTTON: cancelClicked's button is
+    // HIDDEN for the duration of a batch (CloudService.cpp:2198), so during a
+    // sync the routes a user actually has are the title-bar X (closeEvent) and
+    // Escape (done()). Both funnel through deferCloseIfBusy; this run drives the
+    // first, as TEST-070 does.
+    //
+    // THE SECOND GUARD IN THAT BLOCK IS NOT DRIVABLE HERE, AND THE MEASUREMENT
+    // THAT DECIDED IT IS THIS FIXTURE (2026-08-23, run T-141 probe, offscreen).
+    // A3-R028c-F7 proposed a companion slot for the `self.isNull()` bail at
+    // CloudService.cpp:3086, on the reading that the athlete-tab teardown - which
+    // the deferral above CANNOT intercept, because Qt destroys child widgets
+    // straight from ~QObject - reaches it. IT DOES NOT REACH IT. Driven into
+    // this same seam (`delete owner` queued into the nested loop, TEST-136's
+    // TeardownInsideBatch shape), with :3086 fully present and unmutated, the
+    // run dies BEFORE completedRead resumes at all:
+    //
+    //   ==NNNN==ERROR: AddressSanitizer: heap-use-after-free READ of size 8
+    //     #0 CloudServiceSyncDialog::saveRide(...)      CloudService.cpp:3576
+    //     #1 CloudServiceSyncDialog::completedRead(...) CloudService.cpp:3079
+    //    freed by thread T0 here:
+    //     #0 operator delete(void*, unsigned long)
+    //     #1 QObjectPrivate::deleteChildren()
+    //
+    // The first half of the reason is structural, not a fixture artefact:
+    // saveRide touches `this` TWICE below its own suspension point - `context`
+    // at :3576 and `rideFiles` at :3579 - so any destruction the BlockingCall
+    // cannot defer has already been dereferenced three statements before :3086
+    // can run.
+    //
+    // THE SECOND HALF IS WEAKER THAN AN EARLIER DRAFT OF THIS BLOCK CLAIMED, AND
+    // THE CORRECTION MATTERS. The only statement between saveRide's return and
+    // :3086 is `delete ride` (CloudService.cpp:3084), and it is tempting - and
+    // FALSE - to say that a delete cannot pump events. ~RideFile() OPENS with
+    // `emit deleted();` (src/FileIO/RideFile.cpp:118-120), and a directly
+    // connected slot would run synchronously inside that delete, which is exactly
+    // the kind of code that reaches an event loop. What actually holds is
+    // narrower and CONNECTION-DEPENDENT: at HEAD the only two connectors of
+    // RideFile::deleted() in the whole tree are XDataTableModel
+    // (XDataTableModel.cpp:48) and RideFileTableModel (RideFileTableModel.cpp:48),
+    // both Ride Editor table models that attach themselves to a ride they are
+    // DISPLAYING - and neither is attached to the freshly-parsed, never-displayed
+    // temporary ride completedRead hands to saveRide and then deletes here. For
+    // THIS instance the emission therefore has no receivers and is a no-op, and
+    // only because of that does no route exist on which `self` is null at :3086
+    // and was not null INSIDE saveRide.
+    //
+    // SO THE GUARANTEE IS FRAGILE, NOT STRUCTURAL. It rests on a fact about the
+    // current connection graph rather than on anything the code enforces. The day
+    // any future code connects a live observer to that ride instance before
+    // `delete ride`, the emission becomes a call into arbitrary code, the route to
+    // :3086 reopens SILENTLY, and nothing in this suite stands guard over it.
+    //
+    // :3086 therefore stays reasoned-not-traced, with this run as the record of
+    // why; a slot claiming otherwise would have to fabricate a destruction route
+    // production does not have TODAY. This is REPORTED, not fixed: changing
+    // saveRide is outside this slice.
+    //
+    // WHAT ASSERTS THE CRITERION. Half of it is the PROCESS: this target is built
+    // with -fsanitize=address and run with halt_on_error=1, so a use-after-free
+    // in saveRide ends the binary and no later slot runs at all. The other half
+    // is behavioural and is asserted below, because "it did not crash" is also
+    // satisfied by a dialog that wedged, by a batch that never reached saveRide,
+    // and by a deferral that swallowed the user's close for good.
+    struct SaveRideCloseOutcome
+    {
+        bool timedOut = false;
+
+        // -- premises: did this run reach the situation it claims to test?
+        int listCount = 0;
+        int checkedRows = 0;
+        QString row0Action; // sync list column 6: "Download" for a remote row
+        int autoProcessCalls = 0;
+        int rideOpens = 0;
+        int readFileCalls = 0;
+        bool closeDeliveredInsideTheSeam = false;
+
+        // -- the verdict
+        int dialogAliveAtSeamTail = -1;            // was `this` still there when saveRide resumed?
+        int dialogAliveAfterTheBatch = -1;         // ...and when the batch's frame returned
+        bool dialogGoneBeforeOwnerDeleted = false; // the deferral was REPLAYED, not swallowed
+        bool storeGoneAtEnd = false;               // ...and DEC-031 reaped the store
+        QStringList statuses;
+        QString progressText;
+        QString buttonTextAtEnd;
+    };
+
+    // One run:
+    //
+    //   QEventLoop (stands in for QApplication::exec())
+    //     -> queued call [event delivery]
+    //          -> owner QWidget, and a WA_DeleteOnClose dialog inside it
+    //          -> Sync tab / Select all / Synchronize
+    //               -> syncNext -> store->readFile -> queued completion
+    //                    -> completedRead -> saveRide -> autoProcess
+    //                         -> THE SEAM: queue the window X, then a nested loop
+    //                              -> dialog->close()
+    //                         -> saveRide RESUMES on `this`
+    //
+    // Nothing in this fixture deletes the dialog: the dialog is supposed to
+    // outlive saveRide and then delete itself.
+    SaveRideCloseOutcome runCloseInsideSaveRide()
+    {
+        obs::reset();
+        rideopen::reset();
+        ridefail::reset();
+        rideopen::blockingMs = 5; // the READER must not block: the delivery has to
+                                  // land inside saveRide, not inside uncompressRide
+        gcstub::autoProcessAction = nullptr;
+        gcstub::autoProcessCalls = 0;
+
+        SaveRideCloseOutcome out;
+        QEventLoop appLoop;
+        QPointer<CloudServiceSyncDialog> dialogGuard;
+        QPointer<CloudService> storeGuard;
+
+        QMetaObject::invokeMethod(
+            this,
+            [&]() {
+                QWidget* owner = new QWidget;
+                QPointer<QWidget> ownerGuard(owner);
+
+                BlockingStore* store = new BlockingStore(context);
+                store->entryNames = QStringList() << rebuildRemoteActivity(0) << rebuildRemoteActivity(1);
+                store->blockingMs = 5;
+                store->closeActionContext = qApp;
+                // GarminConnect's own setting (GarminConnect.cpp:102):
+                // uncompressRide's first guard rejects outright on the default.
+                store->downloadCompression = CloudService::none;
+
+                CloudServiceSyncDialog* dialog = new CloudServiceSyncDialog(context, store);
+                dialog->setParent(owner, Qt::Dialog);
+                // VERBATIM the production line (MainWindow.cpp:2605,
+                // AddCloudWizard.cpp:899): the dialog owns itself, and a close is
+                // what FREES it. Without this attribute a close is a hide and
+                // this run would be about nothing.
+                dialog->setAttribute(Qt::WA_DeleteOnClose);
+                dialog->start();
+                dialog->open();
+                store->dialog = dialog;
+                store->dialogGuard = dialog;
+                dialogGuard = dialog;
+                storeGuard = store;
+
+                if (QTabWidget* tabs = dialog->findChild<QTabWidget*>())
+                    tabs->setCurrentIndex(2);
+                dialog->selectAllSyncChanged(Qt::Checked);
+                QPointer<QTreeWidget> list(rideListWithHeader(dialog, QStringLiteral("Source")));
+
+                if (!list.isNull()) {
+                    QTreeWidgetItem* root = list->invisibleRootItem();
+                    out.listCount = root->childCount();
+                    for (int i = 0; i < out.listCount; i++) {
+                        QCheckBox* check = qobject_cast<QCheckBox*>(list->itemWidget(root->child(i), 0));
+                        if (check != nullptr && check->isChecked())
+                            out.checkedRows++;
+                    }
+                    if (out.listCount > 0)
+                        out.row0Action = root->child(0)->text(6);
+                }
+
+                QPushButton* button = pushButtonWithText(dialog, QStringLiteral("Synchronize"));
+
+                // saveRide REFUSES before it ever reaches autoProcess when the
+                // target .json already exists and this box is clear
+                // (CloudService.cpp:3559-3563), and by the time this slot runs
+                // TEST-121 has already written that file. Ticked through the real
+                // widget, by its label; the autoProcessCalls premise MEASURES the
+                // result rather than trusting it.
+                for (QCheckBox* box : dialog->findChildren<QCheckBox*>())
+                    if (box->text().contains(QStringLiteral("Overwrite")))
+                        box->setChecked(true);
+
+                gcstub::autoProcessAction = [&, dialogGuard]() {
+                    // THE PREMISE THIS RUN STANDS ON, recorded where it actually
+                    // happens. What has to be true is not "the seam fired" - that
+                    // is out.autoProcessCalls, and a flag set here would say
+                    // nothing more - but "the queued close was delivered WHILE
+                    // THE NESTED LOOP BELOW WAS LIVE". Only an event dispatched
+                    // by that loop runs a scopeLevel deeper than it, and only
+                    // then does the DeferredDelete a successful close posts
+                    // outrank it. Delivered instead by the OUTER appLoop, or by
+                    // the drain after it, the whole BlockingCall frame has
+                    // already unwound: the close would take the ordinary
+                    // undeferred path, the dialog would still be gone before the
+                    // owner, and every other assertion below would pass on
+                    // nothing. So the flag is written by the QUEUED LAMBDA
+                    // ITSELF and read back only once the loop has closed.
+                    //
+                    // A shared bool rather than a capture of a stack local: the
+                    // very failure this flag exists to catch is a delivery that
+                    // lands after this action has returned, and a pointer or
+                    // reference into that dead frame would be written through at
+                    // exactly that moment. The flag outlives the loop and the
+                    // queued call alike, whichever of them wins.
+                    const std::shared_ptr<bool> closeCallbackRan = std::make_shared<bool>(false);
+
+                    // QUEUED, so the loop below delivers it one scopeLevel deeper
+                    // and the DeferredDelete a successful close would post
+                    // outranks that loop. See the block comment above.
+                    QMetaObject::invokeMethod(
+                        qApp,
+                        [dialogGuard, closeCallbackRan]() {
+                            *closeCallbackRan = true;
+                            if (!dialogGuard.isNull())
+                                dialogGuard->close(); // the window X
+                        },
+                        Qt::QueuedConnection);
+
+                    // FixElevation's loop, in shape: untimed there, bounded here.
+                    QEventLoop loop;
+                    QTimer timer;
+                    timer.setSingleShot(true);
+                    QObject::connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
+                    timer.start(300);
+                    loop.exec(QEventLoop::WaitForMoreEvents);
+
+                    // Read the instant the loop closes and not one statement
+                    // later: anything after this point could be a delivery from
+                    // a shallower frame, which is the case this flag exists to
+                    // reject.
+                    out.closeDeliveredInsideTheSeam = *closeCallbackRan;
+
+                    // saveRide is about to resume and touch `this` twice. Whether
+                    // `this` is still there is the whole of the criterion, and it
+                    // is read from a QPointer that never dereferences anything.
+                    out.dialogAliveAtSeamTail = int(!dialogGuard.isNull());
+                };
+
+                dialog->downloadClicked(); // -> syncNext()
+
+                out.dialogAliveAfterTheBatch = int(!dialogGuard.isNull());
+                out.autoProcessCalls = gcstub::autoProcessCalls;
+                out.rideOpens = rideopen::opens;
+                out.readFileCalls = obs::readFileCalls;
+                if (!dialogGuard.isNull()) {
+                    if (!list.isNull()) {
+                        QTreeWidgetItem* root = list->invisibleRootItem();
+                        for (int i = 0; i < root->childCount(); i++)
+                            out.statuses << root->child(i)->text(7);
+                    }
+                    out.progressText = progressLabelText(dialog);
+                    if (button != nullptr)
+                        out.buttonTextAtEnd = button->text();
+                }
+
+                // WHERE "the close was replayed" IS SEPARATED FROM "the owner
+                // took it with it": sampled BEFORE the owner goes.
+                QTimer::singleShot(300, qApp, [&, ownerGuard]() {
+                    out.dialogGoneBeforeOwnerDeleted = dialogGuard.isNull();
+                    if (!ownerGuard.isNull())
+                        delete ownerGuard.data();
+                });
+                QTimer::singleShot(400, &appLoop, &QEventLoop::quit);
+
+                bool* timedOutp = &out.timedOut;
+                QTimer::singleShot(20000, &appLoop, [timedOutp]() {
+                    *timedOutp = true;
+                    QCoreApplication::exit(1);
+                });
+            },
+            Qt::QueuedConnection);
+
+        appLoop.exec();
+        for (int i = 0; i < 50; ++i)
+            QApplication::processEvents(QEventLoop::AllEvents, 5);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+        gcstub::autoProcessAction = nullptr;
+        out.storeGoneAtEnd = storeGuard.isNull();
+        return out;
+    }
+
+  private slots:
+    // -- TEST-140 (A3-R028c-F7, REQ-028 (e), DEC-garmin-034) -------------
+    // THE USER'S CLOSE IS DEFERRED ACROSS saveRide, NOT HONOURED UNDER IT.
+    //
+    // RED, by mutation (2026-08-23, both QPA backends): with the BlockingCall at
+    // CloudService.cpp:3078 removed and its braces left in place, the run dies -
+    // measured VERBATIM, under `offscreen` and under `minimal` alike:
+    //   ==NNNN==ERROR: AddressSanitizer: heap-use-after-free
+    //                  READ of size 8 ... thread T0
+    //     #0 CloudServiceSyncDialog::saveRide(...)     CloudService.cpp:3576
+    //     #1 CloudServiceSyncDialog::completedRead(...) CloudService.cpp:3079
+    //     ...
+    //     #22 CloudServiceSyncDialog::syncNext()        CloudService.cpp:2444
+    //    freed by thread T0 here:
+    //     #0 operator delete(void*, unsigned long)
+    //     #1 QObject::event(QEvent*)            <- the DeferredDelete this run's
+    //                                             own nested loop delivered
+    //   SUMMARY: AddressSanitizer: heap-use-after-free CloudService.cpp:3576 in
+    //            CloudServiceSyncDialog::saveRide(RideFile*, QList<QString>&)
+    void aCloseDeliveredInsideSaveRideMustNotFreeTheDialogUnderIt()
+    {
+        const SaveRideCloseOutcome out = runCloseInsideSaveRide();
+        const QString where = QStringLiteral("TEST-140 close in saveRide: ");
+        qInfo("TEST-140 [%s] rows=%d checked=%d row0=\"%s\" autoProcess=%d opens=%d reads=%d closeInSeam=%d "
+              "aliveAtSeamTail=%d aliveAfterBatch=%d goneBeforeOwner=%d storeGone=%d statuses=[%s] progress=\"%s\" "
+              "button=\"%s\"",
+              qPrintable(QString::fromLatin1(qgetenv("QT_QPA_PLATFORM"))), out.listCount, out.checkedRows,
+              qPrintable(out.row0Action), out.autoProcessCalls, out.rideOpens, out.readFileCalls,
+              int(out.closeDeliveredInsideTheSeam), out.dialogAliveAtSeamTail, out.dialogAliveAfterTheBatch,
+              int(out.dialogGoneBeforeOwnerDeleted), int(out.storeGoneAtEnd), qPrintable(out.statuses.join(QChar('|'))),
+              qPrintable(out.progressText), qPrintable(out.buttonTextAtEnd));
+
+        // ---- PREMISES. A run that never reached the window must fail loudly
+        //      rather than pass on nothing (LSN-047, LSN-050).
+        QVERIFY2(!out.timedOut,
+                 qPrintable(where + QStringLiteral("the run never came back - the deferral wedged the dialog")));
+        QVERIFY2(out.listCount == 2,
+                 qPrintable(where + QStringLiteral("the sync list held %1 rows, not 2").arg(out.listCount)));
+        QVERIFY2(out.checkedRows == 2,
+                 qPrintable(where + QStringLiteral("%1 rows were checked, not 2").arg(out.checkedRows)));
+        QVERIFY2(out.row0Action == QStringLiteral("Download"),
+                 qPrintable(where + QStringLiteral("row[0] is a \"%1\" row, not a Download - completedRead is only "
+                                                   "reached through the download side")
+                                        .arg(out.row0Action)));
+        QVERIFY2(out.rideOpens >= 1,
+                 qPrintable(where + QStringLiteral("uncompressRide never parsed a ride, so completedRead's "
+                                                   "ride-bearing branch and its saveRide were never reached")));
+        QVERIFY2(out.closeDeliveredInsideTheSeam,
+                 qPrintable(where + QStringLiteral("the queued close was NOT delivered while the seam's own nested "
+                                                   "loop was live - it was left to a shallower frame (the outer loop "
+                                                   "or the drain behind it), by which time the BlockingCall had "
+                                                   "unwound, so nothing below this line says anything about a close "
+                                                   "arriving one scopeLevel deeper than a suspended saveRide")));
+
+        // ---- THE CRITERION, first half: `this` outlived the call it was
+        //      suspended in. saveRide reads `context` and writes `rideFiles`
+        //      after the seam returns; under ASan with halt_on_error=1 the
+        //      process would already be gone if it had not.
+        QVERIFY2(out.dialogAliveAtSeamTail == 1,
+                 qPrintable(where + QStringLiteral("the dialog was destroyed while saveRide was still on the stack "
+                                                   "(aliveAtSeamTail=%1) - the close was honoured under a suspended "
+                                                   "frame instead of being deferred")
+                                        .arg(out.dialogAliveAtSeamTail)));
+
+        // ---- ...and saveRide RAN TO COMPLETION through the suspension. It makes
+        //      exactly two autoProcess calls ("Auto"/Import, then "Save"/ADD) and
+        //      the seam is one-shot on the first, so 2 is "one row saved, all the
+        //      way past the close"; 1 would be a saveRide that never came back
+        //      from the seam, and 4 a batch that carried on to row[1].
+        QVERIFY2(out.autoProcessCalls == 2,
+                 qPrintable(where + QStringLiteral("autoProcess was called %1 time(s), not 2 - saveRide either did not "
+                                                   "finish the row it was on or the batch carried on past the user's "
+                                                   "close")
+                                        .arg(out.autoProcessCalls)));
+
+        // ---- THE CLOSE WAS HONOURED AS AN ABORT. deferCloseIfBusy sets
+        //      `aborted` as well as `closeDeferred` (:1498-1499), which is what
+        //      makes deferring honest rather than a shrug: completedRead's tail
+        //      reads it (:3125) and the batch stands down, so the second checked
+        //      row is never fetched.
+        QVERIFY2(out.readFileCalls == 1,
+                 qPrintable(where + QStringLiteral("%1 store->readFile call(s) were issued - the batch carried on "
+                                                   "downloading behind a dialog the user had already dismissed")
+                                        .arg(out.readFileCalls)));
+
+        // ---- THE WEDGE CONTROL (LSN-050). Everything above is satisfiable by a
+        //      guard that can never be lowered again - which would leave the
+        //      dialog permanently un-closable, a worse bug than the crash. The
+        //      deferred close must be REPLAYED from ~BlockingCall, and it must be
+        //      the replay that frees the dialog rather than the owner's teardown.
+        QVERIFY2(out.dialogGoneBeforeOwnerDeleted,
+                 qPrintable(where + QStringLiteral("the dialog was still alive when the batch was over - the deferral "
+                                                   "swallowed the user's close instead of replaying it")));
+        // ...and DEC-031's half of the same unwinding: the store the dialog owns
+        // goes with it, closed and deleted once no frame is executing on it.
+        QVERIFY2(out.storeGoneAtEnd,
+                 qPrintable(where + QStringLiteral("the store outlived the dialog - the reaper never released it")));
     }
 };
 
