@@ -52,12 +52,16 @@
 
 const QString TTB_URL( "http://trainingstagebuch.org" );
 
-TrainingsTageBuch::TrainingsTageBuch(Context *context) : CloudService(context), context(context), root_(NULL) {
+TrainingsTageBuch::TrainingsTageBuch(Context *context, QNetworkAccessManager *injectedNam)
+    : CloudService(context, injectedNam), context(context), root_(NULL) {
 
-    if (context) {
-        nam = new QNetworkAccessManager(this);
-        connect(nam, SIGNAL(sslErrors(QNetworkReply*, const QList<QSslError> & )), this, SLOT(onSslErrors(QNetworkReply*, const QList<QSslError> & )));
-    }
+    // DEC-040 Stage 1 (S-1) - the manager is CloudService's now, and it is not
+    // built until something actually asks for it (nam()). Nothing is created
+    // here, so this constructor is inert when the factory runs it pre-main.
+    //
+    // The sslErrors connect that used to sit here has moved to wireNam(), which
+    // the base calls exactly once, when the manager comes into being. It cannot
+    // stay in a constructor: there is no manager to connect to yet.
 
     uploadCompression = none; // gzip
     filetype = CloudService::uploadType::PWX;
@@ -69,7 +73,19 @@ TrainingsTageBuch::TrainingsTageBuch(Context *context) : CloudService(context), 
 }
 
 TrainingsTageBuch::~TrainingsTageBuch() {
-    if (context) delete nam;
+    // DEC-040 Stage 1 (S-1) - `if (context) delete nam;` removed. CloudService
+    // owns the manager on both the default and the injected path and is its sole
+    // deleter, so it is destroyed exactly once, with this service.
+}
+
+// DEC-040 Stage 1 (S-1) - called by CloudService::nam() EXACTLY ONCE, the first
+// time a manager exists. This is the same connect that used to live in the
+// constructor; only its timing changed, because with lazy creation the
+// constructor no longer has a manager to connect to.
+void
+TrainingsTageBuch::wireNam(QNetworkAccessManager *nam)
+{
+    connect(nam, SIGNAL(sslErrors(QNetworkReply*, const QList<QSslError> & )), this, SLOT(onSslErrors(QNetworkReply*, const QList<QSslError> & )));
 }
 
 void
@@ -101,14 +117,29 @@ TrainingsTageBuch::open(QStringList &errors)
     request.setRawHeader( "Accept", "application/xml" );
     request.setRawHeader( "Accept-Charset", "utf-8" );
 
-    // block waiting for response...
-    QEventLoop loop;
-    reply = nam->get(request);
-    connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-    loop.exec();
+    // DEC-040 Stage 1 (W2) - THE FIRST OF TWO INDEPENDENT BOUNDED REQUESTS.
+    //
+    // These two waits used to SHARE one QEventLoop declared here and re-exec'd
+    // 40 lines further down, with a second connect stacked onto the same loop
+    // object. Two requests sharing one loop is not one wait, it is two, and the
+    // shared loop made that hard to see: the settings reply's finished() stayed
+    // connected to the same loop across the second exec(), so a late finish from
+    // request one could quit the wait for request two. They are decomposed here
+    // into two separate bounded requests and are deliberately NOT collapsed into
+    // one: they are different endpoints answering different questions, and the
+    // first one can make the second unnecessary (see the early return below).
+    const RequestResult settingsResult = blockingRequest(nam()->get(request), kOpenTimeoutMs);
+
+    if (!settingsResult.ok()) {
+        errors << (tr("failed to get settings: ") + settingsResult.errorString);
+        return false;
+    }
 
     TTBSettingsParser handler;
-    QXmlInputSource source(reply);
+    // The body was snapshotted by blockingRequest and the reply is gone, so the
+    // parser is fed the bytes rather than the QIODevice it used to read from.
+    QXmlInputSource source;
+    source.setData(settingsResult.body);
 
     QXmlSimpleReader reader;
     reader.setContentHandler(&handler);
@@ -144,13 +175,18 @@ TrainingsTageBuch::open(QStringList &errors)
     request.setRawHeader( "Accept", "application/xml" );
     request.setRawHeader( "Accept-Charset", "utf-8" );
 
-    // block waiting for response
-    reply = nam->get(request);
-    connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-    loop.exec();
+    // DEC-040 Stage 1 (W2) - THE SECOND INDEPENDENT BOUNDED REQUEST. Its own
+    // wait, its own bound; see the note on the first one above.
+    const RequestResult sessionResult = blockingRequest(nam()->get(request), kOpenTimeoutMs);
+
+    if (!sessionResult.ok()) {
+        errors << (tr("failed to get new session: ") + sessionResult.errorString);
+        return false;
+    }
 
     TTBSessionParser shandler;
-    QXmlInputSource ssource(reply);
+    QXmlInputSource ssource;
+    ssource.setData(sessionResult.body);
 
     reader.setContentHandler(&shandler);
 
@@ -226,7 +262,7 @@ TrainingsTageBuch::writeFile(QByteArray &data, QString remotename, RideFile *rid
 
     // this must be performed asyncronously and call made
     // to notifyWriteCompleted(QString remotename, QString message) when done
-    reply = nam->post(request, body);
+    reply = nam()->post(request, body);
 
     // catch finished signal
     connect(reply, SIGNAL(finished()), this, SLOT(writeFileCompleted()));

@@ -50,12 +50,16 @@
     } while(0)
 #endif
 
-CyclingAnalytics::CyclingAnalytics(Context *context) : CloudService(context), context(context), root_(NULL) {
+CyclingAnalytics::CyclingAnalytics(Context *context, QNetworkAccessManager *injectedNam)
+    : CloudService(context, injectedNam), context(context), root_(NULL) {
 
-    if (context) {
-        nam = new QNetworkAccessManager(this);
-        connect(nam, SIGNAL(sslErrors(QNetworkReply*, const QList<QSslError> & )), this, SLOT(onSslErrors(QNetworkReply*, const QList<QSslError> & )));
-    }
+    // DEC-040 Stage 1 (S-1) - the manager is CloudService's now, and it is not
+    // built until something actually asks for it (nam()). Nothing is created
+    // here, so this constructor is inert when the factory runs it pre-main.
+    //
+    // The sslErrors connect that used to sit here has moved to wireNam(), which
+    // the base calls exactly once, when the manager comes into being. It cannot
+    // stay in a constructor: there is no manager to connect to yet.
 
     uploadCompression = none; // gzip
     downloadCompression = none; // gzip
@@ -67,7 +71,19 @@ CyclingAnalytics::CyclingAnalytics(Context *context) : CloudService(context), co
 }
 
 CyclingAnalytics::~CyclingAnalytics() {
-    if (context) delete nam;
+    // DEC-040 Stage 1 (S-1) - `if (context) delete nam;` removed. CloudService
+    // owns the manager on both the default and the injected path and is its sole
+    // deleter, so it is destroyed exactly once, with this service.
+}
+
+// DEC-040 Stage 1 (S-1) - called by CloudService::nam() EXACTLY ONCE, the first
+// time a manager exists. This is the same connect that used to live in the
+// constructor; only its timing changed, because with lazy creation the
+// constructor no longer has a manager to connect to.
+void
+CyclingAnalytics::wireNam(QNetworkAccessManager *nam)
+{
+    connect(nam, SIGNAL(sslErrors(QNetworkReply*, const QList<QSslError> & )), this, SLOT(onSslErrors(QNetworkReply*, const QList<QSslError> & )));
 }
 
 void
@@ -121,24 +137,36 @@ CyclingAnalytics::readdir(QString path, QStringList &errors, QDateTime, QDateTim
     request.setRawHeader("Authorization", QString("Bearer %1").arg(getSetting(GC_CYCLINGANALYTICS_TOKEN,"").toString()).toLatin1());
     request.setRawHeader("Accept", "application/json");
 
-    // make request
+    // make request - DEC-040 Stage 1 (W2), ACTUALLY bounded this time.
+    //
+    // What was here looked bounded and was not. The 30s QTimer::singleShot was
+    // armed on the line AFTER loop.exec() returned, so it could only ever start
+    // once the wait it was meant to bound had already ended - dead code that read
+    // in review as a working timeout. That is precisely the failure mode
+    // blockingRequest exists to make impossible: the watchdog is armed before
+    // exec(), inside the helper, where no call site can get the order wrong.
+    //
+    // The bound is the generic listing timeout rather than the 30s written here,
+    // because this listing is a single "fetch in one hit" of the whole ride
+    // history and 30s was never actually applied to it.
     printd("fetch list: %s\n", urlstr.toStdString().c_str());
-    QNetworkReply *reply = nam->get(request);
+    const RequestResult result = blockingRequest(nam()->get(request), kListTimeoutMs);
 
-    // blocking request, with a 30s timeout
-    QEventLoop loop;
-    connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-    loop.exec();
-    QTimer::singleShot(30000,&loop, SLOT(quit())); // timeout after 30 seconds
+    printd("fetch response: status=%d, error=%d: %s\n", result.httpStatus, result.error, result.errorString.toStdString().c_str());
 
-    int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-    printd("fetch response: status=%d, error=%d: %s\n", statusCode, reply->error(), reply->errorString().toStdString().c_str());
+    // A listing that failed or timed out is reported, not returned as an empty
+    // directory: the old code fell past the `if (error == 0)` block leaving
+    // `errors` untouched.
+    if (!result.ok()) {
+        errors << result.errorString;
+        return returning;
+    }
 
-    // if successful, lets unpack
-    if (reply->error() == 0) {
-
+    // The old error guard's block, kept as a plain scope: the guard itself moved
+    // above and re-testing it here would be a branch that can no longer be false.
+    {
         // get the data
-        QByteArray r = reply->readAll();
+        QByteArray r = result.body;
 
         // parse JSON payload
         QJsonParseError parseError;
@@ -270,7 +298,7 @@ CyclingAnalytics::readFile(QByteArray *data, QString remotename, QString remotei
     request.setRawHeader("Authorization", (QString("Bearer %1").arg(token)).toLatin1());
 
     // put the file
-    QNetworkReply *reply = nam->get(request);
+    QNetworkReply *reply = nam()->get(request);
 
     // remember
     mapReply(reply,remotename);
@@ -474,7 +502,7 @@ CyclingAnalytics::writeFile(QByteArray &data, QString remotename, RideFile *ride
     multiPart->append(dataTypePart);
     multiPart->append(filePart);
 
-    reply = nam->post(request, multiPart);
+    reply = nam()->post(request, multiPart);
     // this must be performed asyncronously and call made
     // to notifyWriteCompleted(QString remotename, QString message) when done
 

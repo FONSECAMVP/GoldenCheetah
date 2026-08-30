@@ -38,12 +38,16 @@ Q_LOGGING_CATEGORY(gcSportTracks, "gc.sporttracks")
 #define printd(fmt, args...) qCDebug(gcSportTracks, fmt, ##args);
 #endif
 
-SportTracks::SportTracks(Context *context) : CloudService(context), context(context), root_(NULL) {
+SportTracks::SportTracks(Context *context, QNetworkAccessManager *injectedNam)
+    : CloudService(context, injectedNam), context(context), root_(NULL) {
 
-    if (context) {
-        nam = new QNetworkAccessManager(this);
-        connect(nam, SIGNAL(sslErrors(QNetworkReply*, const QList<QSslError> & )), this, SLOT(onSslErrors(QNetworkReply*, const QList<QSslError> & )));
-    }
+    // DEC-040 Stage 1 (S-1) - the manager is CloudService's now, and it is not
+    // built until something actually asks for it (nam()). Nothing is created
+    // here, so this constructor is inert when the factory runs it pre-main.
+    //
+    // The sslErrors connect that used to sit here has moved to wireNam(), which
+    // the base calls exactly once, when the manager comes into being. It cannot
+    // stay in a constructor: there is no manager to connect to yet.
 
     uploadCompression = none; // gzip
     downloadCompression = none;
@@ -57,7 +61,19 @@ SportTracks::SportTracks(Context *context) : CloudService(context), context(cont
 }
 
 SportTracks::~SportTracks() {
-    if (context) delete nam;
+    // DEC-040 Stage 1 (S-1) - `if (context) delete nam;` removed. CloudService
+    // owns the manager on both the default and the injected path and is its sole
+    // deleter, so it is destroyed exactly once, with this service.
+}
+
+// DEC-040 Stage 1 (S-1) - called by CloudService::nam() EXACTLY ONCE, the first
+// time a manager exists. This is the same connect that used to live in the
+// constructor; only its timing changed, because with lazy creation the
+// constructor no longer has a manager to connect to.
+void
+SportTracks::wireNam(QNetworkAccessManager *nam)
+{
+    connect(nam, SIGNAL(sslErrors(QNetworkReply*, const QList<QSslError> & )), this, SLOT(onSslErrors(QNetworkReply*, const QList<QSslError> & )));
 }
 
 void
@@ -92,26 +108,22 @@ SportTracks::open(QStringList &errors)
     data += "&refresh_token=" + getSetting(GC_SPORTTRACKS_REFRESH_TOKEN).toString();
     data += "&grant_type=refresh_token";
 
-    // make request
-    QNetworkReply* reply = nam->post(request, data.toLatin1());
+    // make request - DEC-040 Stage 1 (W2), bounded by the generic auth timeout
+    const RequestResult result = blockingRequest(nam()->post(request, data.toLatin1()), kOpenTimeoutMs);
 
-    // blocking request
-    QEventLoop loop;
-    connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-    loop.exec();
+    printd("HTTP response code: %d\n", result.httpStatus);
 
-    int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-    printd("HTTP response code: %d\n", statusCode);
-
-    // oops, no dice
-    if (reply->error() != 0) {
-        printd("Got error %s\n", reply->errorString().toStdString().c_str());
-        errors << reply->errorString();
+    // oops, no dice. This now covers a TIMEOUT as well as a network error: both
+    // mean we have no access token, and neither may be allowed to fall through
+    // to the parse below with an empty body.
+    if (!result.ok()) {
+        printd("Got error %s\n", result.errorString.toStdString().c_str());
+        errors << result.errorString;
         return false;
     }
 
     // lets extract the access token, and possibly a new refresh token
-    QByteArray r = reply->readAll();
+    QByteArray r = result.body;
     printd("Got response: %s\n", r.data());
 
     QJsonParseError parseError;
@@ -179,24 +191,32 @@ SportTracks::readdir(QString path, QStringList &errors, QDateTime, QDateTime)
         request.setRawHeader("Authorization", QString("Bearer %1").arg(getSetting(GC_SPORTTRACKS_TOKEN,"").toString()).toLatin1());
         request.setRawHeader("Accept", "application/json");
 
-        // make request
+        // make request - DEC-040 Stage 1 (W2), bounded once per PAGE
         printd("fetch page: %s\n", urlstr.toStdString().c_str());
-        QNetworkReply *reply = nam->get(request);
-
-        // blocking request
-        QEventLoop loop;
-        connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-        loop.exec();
+        const RequestResult result = blockingRequest(nam()->get(request), kListTimeoutMs);
 
         // if successful, lets unpack
-        int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-        printd("HTTP response code: %d\n", statusCode);
-        if (reply->error() != 0) printd("fetch response: %d: %s\n", reply->error(), reply->errorString().toStdString().c_str());
+        printd("HTTP response code: %d\n", result.httpStatus);
 
-        if (reply->error() == 0) {
+        // A page that failed or timed out ENDS the listing, and says so.
+        //
+        // What used to be here was `if (reply->error() == 0) { ... }` with no
+        // else: a failed page fell straight past the block with `wantmore` still
+        // false, so the loop ended SILENTLY and readdir returned however many
+        // entries it had collected so far as though that were the whole
+        // directory. Nothing was appended to `errors` on any path.
+        if (!result.ok()) {
+            printd("fetch response: %d: %s\n", result.error, result.errorString.toStdString().c_str());
+            errors << result.errorString;
+            return returning;
+        }
 
+        // The old error guard's block, kept as a plain scope: the guard itself
+        // moved above and re-testing it here would be a branch that can no
+        // longer be false.
+        {
             // get the data
-            QByteArray r = reply->readAll();
+            QByteArray r = result.body;
 
             int received = 0;
             printd("page %d: %s\n", page, r.toStdString().c_str());
@@ -270,7 +290,7 @@ SportTracks::readFile(QByteArray *data, QString remotename, QString remoteid)
     request.setRawHeader("Authorization", (QString("Bearer %1").arg(token)).toLatin1());
 
     // put the file
-    QNetworkReply *reply = nam->get(request);
+    QNetworkReply *reply = nam()->get(request);
 
     // remember
     mapReply(reply,remotename);
@@ -563,7 +583,7 @@ SportTracks::writeFile(QByteArray &data, QString remotename, RideFile *, quint64
     params.addQueryItem("format", "TCX");
     params.addQueryItem("data", data); // I know, this is really how it gets posted !
 
-    QNetworkReply *reply = nam->post(request, params.query(QUrl::FullyEncoded).toUtf8());
+    QNetworkReply *reply = nam()->post(request, params.query(QUrl::FullyEncoded).toUtf8());
 
     // catch finished signal
     connect(reply, SIGNAL(finished()), this, SLOT(writeFileCompleted()));

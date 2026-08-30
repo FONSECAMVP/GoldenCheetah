@@ -32,6 +32,7 @@
 
 #include <QIcon>
 #include <QFileIconProvider>
+#include <QThread>       // DEC-040 Stage 1 (S-1) - the nam() affinity check
 #include <QMessageBox>
 #include <QHeaderView>
 #include <QCloseEvent>   // DEC-garmin-024 - CloudServiceSyncDialog::closeEvent
@@ -51,11 +52,89 @@
 
 CloudServiceFactory *CloudServiceFactory::instance_;
 
-// nothing doing in base class, for now
-CloudService::CloudService(Context *context) :
+// DEC-040 Stage 1 (S-1) - see the constructor comment in CloudService.h for why
+// the network access manager is created here rather than in each subclass.
+CloudService::CloudService(Context *context, QNetworkAccessManager *injectedNam) :
     uploadCompression(zip), downloadCompression(zip),
-    filetype(JSON), useMetric(false), useEndDate(false), context(context)
+    filetype(JSON), useMetric(false), useEndDate(false), context(context),
+    nam_(injectedNam), namWired_(false)
 {
+    // NOTHING IS CREATED HERE. This constructor runs pre-main for every
+    // `static bool add = addXxx();` factory registration, and pre-main is no
+    // place to build a QNetworkAccessManager - see CloudService.h.
+    //
+    // An injected manager is the one exception, and it is not a creation: the
+    // caller already made it, we merely adopt it on the same ownership terms as
+    // one we would have made ourselves - parented to this service, destroyed
+    // once, with it. Re-parenting something that is already our child is a
+    // no-op, so this is unconditional and idempotent.
+    //
+    // ADOPTION IS CONDITIONAL ON AFFINITY. setParent() across threads is not a
+    // legal repair, and moveToThread() on a manager the caller may already be
+    // driving is worse - it would take a visible object out from under them. So
+    // a mismatch is rejected, loudly, rather than accommodated.
+    //
+    // Only non-virtual state is read here. This runs inside the BASE
+    // constructor, where the subclass does not exist yet, so the diagnostic
+    // deliberately names no provider: id() and uiName() are virtual, and calling
+    // one from here would be undefined behaviour of its own.
+    if (nam_) {
+        if (nam_->thread() != thread()) {
+            qFatal("DEC040_INJECTED_NAM_AFFINITY: injected QNetworkAccessManager "
+                   "has affinity %p but the CloudService adopting it has affinity %p",
+                   static_cast<void *>(nam_->thread()), static_cast<void *>(thread()));
+        }
+        nam_->setParent(this);
+    }
+}
+
+QNetworkAccessManager *
+CloudService::nam()
+{
+    // AFFINITY IS CHECKED FIRST, BEFORE nam_ OR namWired_ ARE READ OR WRITTEN,
+    // so a rejected call leaves this object exactly as it found it.
+    //
+    // This is a detection, not an accommodation. The previous revision built the
+    // manager on the caller's thread and moveToThread()'d it across, which made
+    // an off-affinity first use appear to work; but a QNetworkAccessManager is
+    // driven from the thread that calls into it, and driving one from a thread
+    // that is not its own is undefined behaviour no matter where its affinity
+    // was subsequently set. Making the wrong call work is what hid the defect.
+    //
+    // Verified against every production path before this was tightened:
+    // CloudServiceAutoDownload builds its services inside run() and calls them
+    // from that same worker, the GUI sites are GUI-thread throughout, and the
+    // one cross-thread call onto a main-thread factory template
+    // (syncOnStartupSettingName()) is a pure string builder that never reaches
+    // here. So this cannot fire on any path that ships today - it exists to stop
+    // a future one from being silent.
+    if (QThread::currentThread() != thread()) {
+        qFatal("DEC040_NAM_OFF_AFFINITY: CloudService::nam() called from thread %p "
+               "but this service has affinity %p",
+               static_cast<void *>(QThread::currentThread()),
+               static_cast<void *>(thread()));
+    }
+
+    if (nam_ == NULL) {
+
+        // ONE OPERATION. Now that the caller is known to be on this object's
+        // own thread, the manager can be constructed directly into its parent -
+        // which is the only form of this that is correct without a follow-up
+        // fix-up step. There is no window in which the manager exists unparented
+        // or on the wrong thread.
+        nam_ = new QNetworkAccessManager(this);
+    }
+
+    // EXACTLY ONCE, on the first call, whichever manager we ended up with -
+    // injected or default. The latch is set BEFORE the call so that a wireNam()
+    // implementation which itself reaches nam() sees a built, latched manager and
+    // does not recurse.
+    if (!namWired_) {
+        namWired_ = true;
+        wireNam(nam_);
+    }
+
+    return nam_;
 }
 
 // clean up on delete
@@ -63,6 +142,240 @@ CloudService::~CloudService()
 {
     foreach(CloudServiceEntry *p, list_) delete p;
     list_.clear();
+}
+
+// DEC-040 Stage 1 (W2) - THE BOUNDED REQUEST.
+namespace {
+
+// The wait state for ONE call to blockingRequest, shared between the finished()
+// slot, the watchdog slot and the disposer.
+//
+// naturalFinish_ is the only thing the outcome is allowed to depend on, and it
+// is set ONLY by finished(), and ONLY while no abort has been issued. That guard
+// is what makes row 6 of the transition table work: disposal aborts the reply,
+// the abort synthesises a finished(), and that synthetic finish must NOT be able
+// to promote a timeout into a success.
+//
+// pending_ is first-writer-wins between the watchdog and finished(), so the
+// simultaneous case (row 5) is decided by which slot the event loop happened to
+// dispatch first - and then IGNORED, because naturalFinish_ outranks it. A
+// finish that really happened is a finish, whatever the timer did in the same
+// dispatch.
+struct BlockingWaitState {
+    bool naturalFinish_ = false;
+    bool abortIssued_ = false;
+    bool pendingSet_ = false;
+    RequestOutcome pending_ = RequestOutcome::NetworkError;
+};
+
+// Disposal, RAII, so it happens exactly once on EVERY path out of
+// blockingRequest - the early returns, the normal tail, and any exception a
+// caller's Qt build might let through.
+//
+// deleteLater() rather than delete: we are inside (or just outside) the reply's
+// own signal emission, and destroying a QObject that is in the middle of
+// emitting is a use-after-free. deleteLater posts a DeferredDelete that Qt runs
+// once the stack unwinds to an event loop.
+//
+// abortIssued_ is set BEFORE abort() and never cleared, so the finished() slot
+// is already disarmed by the time abort() can call it.
+class ReplyDisposer {
+
+    public:
+        ReplyDisposer(QNetworkReply *reply, BlockingWaitState *state)
+            : reply_(reply), state_(state), disposed_(false) {}
+
+        // IDEMPOTENT, AND CALLED EXPLICITLY ON THE NORMAL PATH.
+        //
+        // The normative sequence is reconcile -> snapshot -> dispose -> verify
+        // -> return, and the verify step has to observe the state AFTER
+        // disposal. A destructor that runs at scope exit fires only once the
+        // return value has already been constructed, which is too late to check
+        // anything. So the normal path disposes here, by name, and the
+        // destructor remains the backstop that guarantees disposal on the early
+        // return and on any exception a caller's Qt build might let through.
+        void dispose() {
+            if (disposed_) return;
+            disposed_ = true;
+            state_->abortIssued_ = true;
+            if (!reply_->isFinished()) reply_->abort();
+            reply_->deleteLater();
+        }
+
+        ~ReplyDisposer() { dispose(); }
+
+    private:
+        QNetworkReply *reply_;
+        BlockingWaitState *state_;
+        bool disposed_;
+};
+
+} // anonymous namespace
+
+RequestResult
+CloudService::blockingRequest(QNetworkReply *reply, int timeoutMs)
+{
+    RequestResult result;
+
+    // A manager that refuses to produce a reply is a failure, not a wait. There
+    // is nothing to dispose and nothing to wait for.
+    if (reply == NULL) {
+        result.outcome = RequestOutcome::NetworkError;
+        result.errorString = tr("no reply from network access manager");
+        return result;
+    }
+
+    BlockingWaitState state;
+
+    // DECLARATION ORDER IS LOAD-BEARING, AND IT IS THE OPPOSITE OF WHAT IT LOOKS
+    // LIKE IT SHOULD BE.
+    //
+    // `loop` is the CONTEXT OBJECT of the finished() connection below, so the
+    // connection dies with it. An earlier revision declared the disposer FIRST,
+    // which meant it was destroyed LAST - after `loop` - so by the time disposal
+    // aborted the reply there was no receiver left and the abort's synthetic
+    // finished() went nowhere. abortIssued_ was then unreachable code guarding
+    // an event that could not be delivered, and the row that claimed to test it
+    // passed just as well with the guard deleted. Measured, not deduced.
+    //
+    // Declaring the disposer LAST makes it destroyed FIRST, while `loop` and
+    // `state` are both still alive, so the abort echo is genuinely delivered to
+    // the lambda and abortIssued_ is doing real work. Nothing between `loop` and
+    // here can return, so the "every exit disposes" property is unchanged.
+    QEventLoop loop;
+    QTimer watchdog;
+    watchdog.setSingleShot(true);
+
+    ReplyDisposer disposer(reply, &state);
+
+    QObject::connect(reply, &QNetworkReply::finished, &loop, [&state, &loop]() {
+
+        // Row 6. An abort has already been issued, so the outcome is fixed and
+        // this finish is the abort's own echo. Do not touch either flag.
+        if (state.abortIssued_) return;
+
+        state.naturalFinish_ = true;
+        if (!state.pendingSet_) {
+            state.pendingSet_ = true;
+            state.pending_ = RequestOutcome::Finished;
+        }
+        loop.quit();
+    });
+
+    QObject::connect(&watchdog, &QTimer::timeout, &loop, [&state, &loop]() {
+        if (!state.pendingSet_) {
+            state.pendingSet_ = true;
+            state.pending_ = RequestOutcome::TimedOut;
+        }
+        loop.quit();
+    });
+
+    // THE WATCHDOG IS ARMED BEFORE exec(), NOT AFTER.
+    //
+    // This is the entire point of the helper and it is not a stylistic detail.
+    // CyclingAnalytics::readdir shipped a 30s QTimer::singleShot armed on the
+    // line AFTER loop.exec() returned, which is dead code: control only reaches
+    // it once the wait it was meant to bound has already ended. An unbounded wait
+    // with a timer underneath it looks bounded in review and is not.
+    //
+    // The override is consumed HERE, once, and nowhere else. No call site knows
+    // it exists.
+    const int t = (requestTimeoutOverrideMs_ >= 0) ? requestTimeoutOverrideMs_ : timeoutMs;
+    watchdog.start(t);
+
+    loop.exec();
+
+    //
+    // STEP 1 - RECONCILE THE OUTCOME. Nothing is read from the reply here except
+    // error(), and only on the paths where the table says it decides.
+    //
+    // Everything the outcome is derived from is FIXED at this point. The three
+    // fields are copied out so that step 4 can prove they did not move
+    // afterwards; they are the whole input to the decision below.
+    const bool fixedNaturalFinish = state.naturalFinish_;
+    const bool fixedPendingSet    = state.pendingSet_;
+    const RequestOutcome fixedPending = state.pending_;
+
+    if (state.naturalFinish_) {
+
+        // Rows 1, 2 and 5. The reply genuinely finished before any abort, so its
+        // error state - and nothing else - decides between success and failure.
+        // A finish carrying an error is a NetworkError, never a Finished.
+        result.outcome = (reply->error() == QNetworkReply::NoError)
+                       ? RequestOutcome::Finished
+                       : RequestOutcome::NetworkError;
+
+    } else if (state.pendingSet_) {
+
+        // Row 3, and row 6's timeout arm. In Stage 1 pending_ can only ever hold
+        // TimedOut; Stage 2 adds Cancelled to the same slot and this line does
+        // not change.
+        result.outcome = state.pending_;
+
+    } else {
+
+        // Row 7. exec() returned without either slot having run - a nested loop
+        // quit us, or the thread's event loop was torn down underneath us. We do
+        // not know that the request succeeded, so we must not say that it did.
+        result.outcome = RequestOutcome::NetworkError;
+        result.errorString = tr("event loop returned without an outcome");
+    }
+
+    //
+    // STEP 2 - SNAPSHOT, while the reply is still alive and before the disposer
+    // touches it. Everything the caller may ever need has to be copied out now.
+    //
+    const QVariant status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
+    if (status.isValid()) result.httpStatus = status.toInt();
+
+    result.error = reply->error();
+
+    if (result.outcome == RequestOutcome::TimedOut) {
+        result.errorString = tr("Timed out after %1 ms").arg(t);
+    } else if (result.errorString.isEmpty()) {
+        result.errorString = reply->errorString();
+    }
+
+    // THE ONLY readAll() IN THIS FUNCTION, and it is reached only by row 1.
+    // Every other outcome leaves body default-constructed, so "outcome is not
+    // Finished" and "body is empty" cannot come apart.
+    if (result.outcome == RequestOutcome::Finished) result.body = reply->readAll();
+
+    //
+    // STEP 3 - DISPOSAL, by name rather than at scope exit, so that step 4 can
+    // observe what it did. `loop` and `state` are both still alive here, so the
+    // abort's synthetic finished() is really delivered to the lambda above - and
+    // it is that delivery which abortIssued_ exists to neutralise.
+    //
+    disposer.dispose();
+
+    //
+    // STEP 4 - THE POST-DISPOSAL INVARIANT.
+    //
+    // Disposal aborts the reply; the abort synthesises a finished(); that
+    // finished() reaches a receiver which is still connected and still alive.
+    // The ONLY thing standing between that echo and a corrupted outcome is the
+    // abortIssued_ guard in the lambda. This is where that guard is proven to be
+    // load-bearing: if it is ever removed or bypassed, the echo promotes
+    // naturalFinish_ after the outcome above was already derived from it, the
+    // three fixed fields no longer match, and the process stops here with a
+    // named diagnostic instead of returning a result nobody can trust.
+    //
+    // Note what this does NOT do: it does not re-derive the outcome, and it does
+    // not let a late event change one. The outcome was fixed in step 1 and is
+    // final. This only asserts that nothing moved underneath it.
+    if (state.naturalFinish_ != fixedNaturalFinish
+        || state.pendingSet_ != fixedPendingSet
+        || state.pending_ != fixedPending) {
+        qFatal("DEC040_POST_DISPOSAL_STATE_CHANGED: blocking wait state changed after "
+               "the outcome was reconciled (naturalFinish %d->%d, pendingSet %d->%d, "
+               "pending %d->%d)",
+               int(fixedNaturalFinish), int(state.naturalFinish_),
+               int(fixedPendingSet), int(state.pendingSet_),
+               int(fixedPending), int(state.pending_));
+    }
+
+    return result;
 }
 
 // DEC-garmin-030 (REQ-021) / A3-R021-F3 - WHO THE CLOUD DIALOGS HANG OFF.
@@ -3645,6 +3958,10 @@ CloudServiceAutoDownload::run()
     // so we can loop through services and download the data needed.
     // we notify the main gui via the usual signals.
 
+    // DEC-040 Stage 1 - this run's failure report starts empty. See
+    // CloudServiceAutoDownload::autoDownloadErrors() for why it exists.
+    autoDownloadErrors_.clear();
+
     // get a list of services to sync from
     QStringList worklist;
     foreach(QString name, CloudServiceFactory::instance().serviceNames()) {
@@ -3675,7 +3992,49 @@ CloudServiceAutoDownload::run()
 
             // open connection
             QStringList errors;
-            if (service->open(errors) == false) {
+
+            // DEC-040 Stage 1 (A3f-R040-A) - ONE ERROR-CAPTURE SITE, INVOKED AFTER
+            // EVERY OPERATION THAT CAN WRITE TO `errors`.
+            //
+            // `errors` is the only channel a provider has for saying WHY an
+            // operation did not do what was asked, and post-W2 it carries the reason
+            // a BOUNDED wait gave up. That is not a readdir-only concern: eight of
+            // the thirteen migrated providers issue a bounded blockingRequest inside
+            // open() itself (SixCycle::open, for one, does `errors << ...` and
+            // returns false after a 5000 ms bound; TrainingsTageBuch has three such
+            // sites), and readdir reports a mid-pagination timeout by returning the
+            // pages it already had AND a reason (Azum::readdir's guard is exactly
+            // that shape: on a page whose `!result.ok()` it does
+            // `errors << result.errorString;` and returns what it collected).
+            //
+            // A reason that is written and never read is the SILENT SKIP W2 exists
+            // to remove. Before bounding, a dead provider hung visibly; after
+            // bounding it returns promptly with nothing, so if nobody drains
+            // `errors` the run simply reports "nothing to do" - the visible hang
+            // became an invisible no-op, which is the failure mode, not the fix.
+            //
+            // CONSUMING, NOT COPYING. The lambda clears what it has appended, so
+            // each reason is reported EXACTLY ONCE. That is load-bearing because it
+            // is called MORE THAN ONCE per service: a warning left in the list by an
+            // open() that SUCCEEDED must not be re-reported after readdir. It emits
+            // nothing when the operation it follows wrote nothing.
+            auto reportPendingErrors = [&]() {
+                foreach(QString e, errors)
+                    autoDownloadErrors_ << QString("%1: %2").arg(service->uiName()).arg(e);
+                errors.clear();
+            };
+
+            const bool opened = service->open(errors);
+
+            // AFTER open(), BEFORE ITS BOOL IS TESTED. The failure arm below is
+            // `continue`, so any report placed after it is made only for the
+            // services that DID open - which is exactly backwards, and was the
+            // defect: every reason open() wrote was discarded, turning the eight
+            // bounded open() sites above into prompt silent skips. Capturing here
+            // also covers the open that succeeded but left a warning.
+            reportPendingErrors();
+
+            if (opened == false) {
                 delete service;
                 continue;
             }
@@ -3683,6 +4042,23 @@ CloudServiceAutoDownload::run()
             // get list of entries
             QDateTime now = QDateTime::currentDateTime();
             QList<CloudServiceEntry*> found = service->readdir(service->home(), errors, now.addDays(-30), now);
+
+            // THE SAME SITE AGAIN (A3-F1), BEFORE THE BRANCH - because whether the
+            // listing FAILED is independent of whether it returned anything.
+            //
+            // This reporting used to live inside the empty branch only, which made
+            // the three-way distinction work for an EMPTY listing and silently lose
+            // it for a PARTIAL one: a paginated provider whose second page timed out
+            // came back with entries AND a reason, and the reason was dropped unread.
+            //
+            // Hoisting it also fixes the coupling the old shape implied: an error is
+            // NOT a reason to discard the entries that did come back. The branch
+            // below still processes every valid entry, so a partial listing both
+            // reports its reason and downloads what it managed to list.
+            //
+            // The branches below must NOT report errors again - that would report
+            // each reason twice for a partial result.
+            reportPendingErrors();
 
             // some were found, so lets see if they match
             if (found.count()) {
@@ -3736,6 +4112,12 @@ CloudServiceAutoDownload::run()
                 }
 
             } else {
+
+                // No entries came back. Whether that is "nothing new" or "the
+                // listing failed" is decided by `errors` - and that decision is
+                // now made ABOVE this branch, for the empty and partial cases
+                // alike (DEC-040 Stage 1 / A3-F1). Reporting it again here would
+                // double-report every reason.
 
                 // none found
                 service->close();

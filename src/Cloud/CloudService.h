@@ -25,6 +25,7 @@
 #include <QDateTime>
 #include <QObject>
 #include <QPointer>
+#include <QNetworkAccessManager>
 #include <QNetworkReply>
 
 #include <QDialog>
@@ -51,6 +52,47 @@
 class RideItem;
 class CloudServiceEntry;
 
+// DEC-040 Stage 1 (W2) - THE BOUNDED-REQUEST OUTCOME CONTRACT.
+//
+// Every blocking provider wait in this tree used to be the same three lines:
+//
+//     QEventLoop loop;
+//     connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
+//     loop.exec();
+//
+// which is unbounded: a server that accepts the connection and then never
+// answers parks the calling thread forever, and for the ten providers migrated
+// here that thread is either the GUI thread or CloudServiceAutoDownload's
+// worker. CloudService::blockingRequest replaces all of them with one wait that
+// cannot outlive its timeout and that reports WHY it stopped waiting, so a
+// caller can no longer mistake "we gave up" for "the server said yes".
+//
+// Cancelled is DECLARED here but is UNREACHABLE IN STAGE 1: nothing in this
+// version constructs a cancellation, and blockingRequest never assigns it. It
+// is present so that Stage 2 (generic cooperative cancellation) adds a new
+// arm rather than churning this enum and every switch over it.
+enum class RequestOutcome {
+    Finished,       // the reply emitted finished() naturally, with no error
+    TimedOut,       // the watchdog fired before any natural finish was observed
+    Cancelled,      // STAGE 2 ONLY - unreachable in Stage 1, see above
+    NetworkError    // a natural finish carrying an error, or no outcome at all
+};
+
+struct RequestResult {
+
+    RequestOutcome outcome = RequestOutcome::NetworkError;
+    int httpStatus = -1;
+    QNetworkReply::NetworkError error = QNetworkReply::NoError;
+    QString errorString;
+
+    // Populated ONLY when outcome == Finished. Every other outcome leaves this
+    // default-constructed, so a caller that forgets to test ok() and parses the
+    // body anyway gets an empty document rather than a stale or partial one.
+    QByteArray body;
+
+    bool ok() const { return outcome == RequestOutcome::Finished; }
+};
+
 // Representing an Athlete when the service allows for
 // a coach or manager relationship -- i.e. it lists athletes
 // so you can choose which one you want to sync with
@@ -75,8 +117,85 @@ class CloudService : public QObject {
         // TYPE OF FILESTORE. SEE Dropbox.{h,cpp}
         // FOR A REFERENCE IMPLEMENTATION THE
 
-        CloudService(Context *context);
+        // DEC-040 Stage 1 (S-1) - THE BASE OWNS THE NETWORK ACCESS MANAGER.
+        //
+        // Thirteen services in this tree each declared their own `nam` member and
+        // each built it as `if (context) nam = new QNetworkAccessManager(this);`
+        // with `nam` absent from the initialiser list. On the NULL-context path -
+        // which every one of them takes pre-main, from the `static bool add =
+        // addXxx();` factory registration at the bottom of its .cpp - the member
+        // was therefore left INDETERMINATE, and the matching destructor's
+        // `if (context) delete nam;` skipped it. Nothing read it, so nothing
+        // noticed. blockingRequest changes that: the migrated call sites read the
+        // manager on paths the old code guarded by hand, so the member's
+        // initialisation became load-bearing and had to stop being conditional.
+        //
+        // THE INVARIANT IS "DETERMINISTICALLY NULL-OR-VALID, NEVER INDETERMINATE".
+        // Eager construction in this constructor was one way to reach that, and it
+        // was the first thing tried; it was withdrawn because it is not free. Those
+        // seventeen `static bool add = addXxx();` registrations run BEFORE main(),
+        // and therefore before any QCoreApplication exists. Building a
+        // QNetworkAccessManager there measurably works - correct affinity, no
+        // crash - but each one emits two
+        //   QObject::connect(QObject, Unknown): invalid nullptr parameter
+        // warnings as it wires itself to an application object that is not there
+        // yet, and leaves a partially wired manager behind. Roughly thirty-four
+        // lines of startup noise, for objects that in the common case are never
+        // used: the factory's registered instances exist to answer id(), uiName()
+        // and clone(), and clone() makes a fresh service for the real work.
+        //
+        // So the manager is created LAZILY, on first real use, by nam() below.
+        // Pre-main construction is inert: no manager, no warnings. The member is
+        // NULL until nam() runs and valid afterwards - never indeterminate, which
+        // is the property that mattered.
+        //
+        // `injectedNam` is the test seam and the ONLY way a different manager can
+        // get in. It is adopted at construction, parented to `this`, and used
+        // EXACTLY as supplied - nam() never builds a default alongside it.
+        //
+        // An injected manager whose affinity does not match this service's is
+        // REJECTED, not repaired: adopting it would either reparent across
+        // threads or silently move a manager the caller may already be using.
+        // The diagnostic carries the stable sentinel DEC040_INJECTED_NAM_AFFINITY.
+        // Ownership
+        // is therefore the same on both paths; there is no "the caller still owns
+        // it" special case to get wrong. Production callers pass nothing and keep
+        // the historic CloudService(Context*) / Provider(Context*) signature
+        // unchanged; this is ordinary defaulted-argument construction, present in
+        // the SAME compiled code that ships, not a test-only preprocessor branch.
+        CloudService(Context *context, QNetworkAccessManager *injectedNam = NULL);
         virtual ~CloudService();
+
+        // DEC-040 Stage 1 (S-1) - "has the manager been materialised yet?"
+        //
+        // The lazy contract above is only a contract if something can check it, and
+        // the thing that most needs checking cannot be checked any other way: that
+        // pre-main factory registration builds NO manager. That construction has
+        // already happened by the time any code can run, so the only trace it can
+        // leave is the state of the object it built. This is a const observer over
+        // that state; it starts no request and creates nothing.
+        bool namCreated() const { return nam_ != NULL; }
+
+        // DEC-040 Stage 1 (S-1) - the generic bounds, calibrated on GarminConnect's
+        // shipped kListTimeoutMs/kDownloadTimeoutMs (GarminConnect.cpp).
+        //
+        // SixCycle does NOT use these: it shipped with its own, tighter 5s open /
+        // 10s readdir and keeps them, because nothing here is evidence about
+        // SixCycle's server and loosening a bound that already works is a
+        // regression dressed up as consistency.
+        static const int kOpenTimeoutMs = 30000;    // open / auth / one-shot calls
+        static const int kListTimeoutMs = 60000;    // directory listings
+
+        // DEC-040 Stage 1 (S-1) - test-facing timeout override.
+        //
+        // A watchdog test cannot afford to spend the real 30s or 60s, and a suite
+        // that shortens the bound with #ifdef would no longer be testing the code
+        // that ships. So the override is an ordinary member of the production
+        // class, consumed at ONE point inside blockingRequest; no call site passes
+        // it, mentions it, or changes shape because of it. Negative means "use the
+        // bound the call site asked for", which is what every production caller
+        // gets.
+        void setRequestTimeoutOverrideMs(int ms) { requestTimeoutOverrideMs_ = ms; }
 
         // The following must be reimplemented
         virtual bool initialize() { return true; }
@@ -288,24 +407,136 @@ class CloudService : public QObject {
         // don't have to. When the filestore is deleted
         // these entries are deleted too
         CloudServiceEntry *newCloudServiceEntry();
+
+        // DEC-040 Stage 1 (W2) - RUN ONE REQUEST TO A BOUNDED, REPORTED OUTCOME.
+        //
+        // OWNERSHIP OF `reply` IS TRANSFERRED. blockingRequest disposes of it on
+        // every path out, and the caller must not touch it afterwards - which is
+        // why everything a caller could still want is snapshotted into the
+        // returned RequestResult BEFORE disposal happens.
+        //
+        // ORDER, and it is the whole design: reconcile the outcome, THEN snapshot
+        // the fields, THEN dispose, THEN verify that disposal changed nothing,
+        // and only then return. The fourth step is not decoration: disposal
+        // aborts the reply and the abort synthesises a finished() which is
+        // genuinely delivered, so the guard that stops it rewriting the outcome
+        // has to be observable. If it is ever removed, the verify step stops the
+        // process with DEC040_POST_DISPOSAL_STATE_CHANGED rather than returning a
+        // result derived from state that moved. abort() is never issued until the outcome is
+        // already fixed, so the finished() that an abort provokes arrives after
+        // reconciliation is over and cannot rewrite it. Correspondingly,
+        // reply->isFinished() is NEVER consulted to decide an outcome - only the
+        // naturalFinish_ flag, which the finished() slot sets solely while no
+        // abort has been issued. Asking the reply "are you finished?" after an
+        // abort gets the answer "yes", and that answer is precisely the false
+        // success this contract exists to prevent.
+        //
+        // A natural finish carrying an error is NetworkError, never Finished, and
+        // only Finished populates body.
+        RequestResult blockingRequest(QNetworkReply *reply, int timeoutMs);
+
         QMap<QNetworkReply*,QString> replymap_;
         QMap<QNetworkReply*,quint64> writeOperationMap_;
         quint64 nextWriteOperationId_ = 0;
         QList<CloudServiceEntry*> list_;
 
+        // DEC-040 Stage 1 (S-1) - THE ONLY WAY TO REACH THE NETWORK MANAGER.
+        //
+        // Every `nam->get(...)` / `nam->post(...)` in the thirteen migrated
+        // services is now `nam()->get(...)`, because the manager may not exist
+        // yet and this is where it comes into being. Making the accessor the only
+        // route is what makes "lazy" safe: there is no member left to dereference
+        // by mistake before it has been built.
+        //
+        // WHAT IT GUARANTEES
+        //   - an injected manager is returned EXACTLY as supplied; no default is
+        //     ever built alongside one.
+        //   - otherwise exactly ONE default manager is built, on the first call,
+        //     and every later call returns that same one.
+        //   - the manager's thread affinity is THIS SERVICE'S affinity thread,
+        //     and that is DETECTED rather than accommodated. Calling nam() from
+        //     any thread other than thread() is a programming error and is
+        //     rejected deterministically - see the affinity note below.
+        //     Because the check runs first, the manager can then be built and
+        //     parented in ONE operation, `new QNetworkAccessManager(this)`,
+        //     which is the only construction that is correct by itself.
+        //   - wireNam() is called EXACTLY ONCE, the first time a manager becomes
+        //     available - see wireNam below.
+        //
+        // THE AFFINITY RULE, AND WHY IT IS NOT AN ASSERT.
+        //
+        // An earlier revision created the manager parentless on the CALLER's
+        // thread and pushed it across with moveToThread(). That is
+        // accommodation: it makes an off-affinity first use silently work, and
+        // a QNetworkAccessManager driven from the wrong thread is undefined
+        // behaviour whatever its affinity says. The contract is now the
+        // opposite - off-affinity use is DETECTED and stops the process.
+        //
+        // It is not Q_ASSERT. This tree builds its providers, and the test
+        // target that gates them, with -DNDEBUG -DQT_NO_DEBUG, so Q_ASSERT is
+        // compiled out of both the shipping binary AND the binary the gate
+        // runs. An invariant that disappears from every build that matters is
+        // not an invariant. qFatal() is present in all builds; the diagnostic
+        // carries the stable sentinel DEC040_NAM_OFF_AFFINITY so a death test
+        // can match on it rather than on "exited nonzero".
+        QNetworkAccessManager *nam();
+
+        // DEC-040 Stage 1 (S-1) - PROVIDER-SPECIFIC WIRING, INSTALLED EXACTLY ONCE.
+        //
+        // Nine of the ten migrated services connected the manager's sslErrors
+        // signal to their own onSslErrors slot in their CONSTRUCTOR. With lazy
+        // creation there is no manager in the constructor, so that connect has to
+        // move to the moment the manager appears - and it has to happen exactly
+        // once, because dropping it silently disables SSL error handling and
+        // repeating it pops the certificate dialog twice.
+        //
+        // This is a virtual, and that is safe HERE where it would not have been in
+        // the constructor: nam() is only ever reached from a fully constructed
+        // object, so the call dispatches to the subclass override as written. The
+        // namWired_ latch is set BEFORE the call, so a wireNam implementation that
+        // itself reaches nam() re-enters onto the already-built manager and does
+        // not recurse.
+        //
+        // Dropbox has NO onSslErrors slot at all and never had one, so it does not
+        // override this. That asymmetry is preserved deliberately: giving Dropbox
+        // SSL error handling it never had would change how it behaves on a bad
+        // certificate, which is not what this slice is for.
+        virtual void wireNam(QNetworkAccessManager *) {}
+
         Context *context;
-        
+
+        // DEC-040 Stage 1 (S-1) - NULL until nam() materialises it, valid
+        // afterwards, never indeterminate. Owned by this service (parented to it)
+        // on both the default and the injected path, so it is destroyed exactly
+        // once, with the service.
+        QNetworkAccessManager *nam_;
+        bool namWired_;
+
+        // DEC-040 Stage 1 (S-1) - see setRequestTimeoutOverrideMs. Consumed at
+        // exactly one point, inside blockingRequest.
+        int requestTimeoutOverrideMs_ = -1;
 };
 
 // REQ-017 (b)/(e) - teardown of a store that an owner opened.
 //
 // Whoever creates a CloudService owns it, and on teardown must close() it and
 // only THEN destroy it. close() is what performs the bounded session teardown -
-// for GarminConnect that is stopping the download worker thread (quit()+wait(),
-// never terminate()) and releasing the embedded interpreter session - so a store
+// for GarminConnect that is stopping the download worker thread and releasing
+// the embedded interpreter session - so a store
 // that is merely dropped, or deleted without being closed, leaves that worker and
 // that session alive until process exit. This is the same close()-then-delete
 // idiom CloudServiceAutoDownload already uses (CloudService.cpp).
+//
+// This paragraph used to describe that worker stop as "quit()+wait(), never
+// terminate()". That was FALSE of the shipped code and is corrected here:
+// GarminDownloadChain and GarminAuthChain both run
+// `quit(); if (!wait(kQuitWaitMs)) { terminate(); wait(kTerminateWaitMs); }`,
+// each citing DES-001 invariant 3, which defines terminate()-as-last-resort as
+// the DESIGNED escape hatch for a worker that will not come back - a bounded
+// teardown has to terminate rather than block its owner forever. The flat "never"
+// read as a project-wide prohibition and contradicted two shipped files. The
+// narrower "never terminate() *from here*" at GarminConnect.cpp is accurate
+// about its own call site and is deliberately left alone.
 //
 // The caller's pointer is cleared BEFORE close()/delete, so a second teardown of
 // the same owner is a no-op that cannot double-delete, and no re-entrant path can
@@ -1023,6 +1254,29 @@ class CloudServiceAutoDownload : public QThread {
         // re-run after inital
         void checkDownload();
 
+        // DEC-040 Stage 1 - WHY AN EMPTY LISTING IS NOT ONE THING.
+        //
+        // run() asked each service for a listing and then branched on
+        // found.count() alone, so it had exactly two states where there are
+        // three: it could tell "entries" from "no entries", but it could not tell
+        // "no entries because there is nothing new" from "no entries because the
+        // listing FAILED". The `errors` QStringList that readdir fills was
+        // constructed, passed in by reference, populated on failure, and then
+        // dropped on the floor unread.
+        //
+        // That was survivable while an unbounded listing simply never returned:
+        // the thread parked and there was no empty list to misread. Bounding the
+        // wait (W2) turns that hang into a prompt, silent, EMPTY listing - so the
+        // failure mode the bound removes would have come straight back as "auto
+        // download finished, nothing to do", which is worse than a hang because
+        // it is quiet and looks like success.
+        //
+        // So the errors are kept. This is the observable the refusal needs: a
+        // caller can distinguish the two empty cases, which is the only thing
+        // that makes readdir's failure report a report at all rather than a
+        // local variable. Reset at the top of every run().
+        QStringList autoDownloadErrors() const { return autoDownloadErrors_; }
+
     public slots:
 
         // external entry point to trigger auto download
@@ -1044,6 +1298,9 @@ class CloudServiceAutoDownload : public QThread {
 
         Context *context;
         bool initial;
+
+        // DEC-040 Stage 1 - see autoDownloadErrors() above.
+        QStringList autoDownloadErrors_;
 
         // list of files to download
         QList <CloudServiceDownloadEntry> downloadlist;

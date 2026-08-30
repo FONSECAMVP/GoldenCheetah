@@ -29,7 +29,10 @@ class Dropbox : public CloudService {
 
     public:
 
-        Dropbox(Context *context);
+        // DEC-040 Stage 1 (S-1) - injectedNam defaults to NULL, so every existing
+        // production caller keeps writing Dropbox(context) and gets a manager the
+        // base makes. Tests pass one in.
+        Dropbox(Context *context, QNetworkAccessManager *injectedNam = NULL);
         CloudService *clone(Context *context) { return new Dropbox(context); }
         ~Dropbox();
 
@@ -69,7 +72,9 @@ class Dropbox : public CloudService {
 
     private:
         Context *context;
-        QNetworkAccessManager *nam;
+        // DEC-040 Stage 1 (S-1) - `nam` now lives in CloudService, which creates
+        // it on every construction path and owns it. The member that used to be
+        // here was left indeterminate whenever context was NULL.
         QNetworkReply *reply;
         CloudServiceEntry *root_;
 

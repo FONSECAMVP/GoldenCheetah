@@ -32,13 +32,18 @@
 #endif
 
 
-Azum::Azum(Context *context) : CloudService(context), context(context), root_(NULL)
+Azum::Azum(Context *context, QNetworkAccessManager *injectedNam)
+    : CloudService(context, injectedNam), context(context), root_(NULL)
 {
     printd("Azum::Azum\n");
-    if (context) {
-        nam = new QNetworkAccessManager(this);
-        connect(nam, SIGNAL(sslErrors(QNetworkReply*, const QList<QSslError> & )), this, SLOT(onSslErrors(QNetworkReply*, const QList<QSslError> & )));
-    }
+
+    // DEC-040 Stage 1 (S-1) - the manager is CloudService's now, and it is not
+    // built until something actually asks for it (nam()). Nothing is created
+    // here, so this constructor is inert when the factory runs it pre-main.
+    //
+    // The sslErrors connect that used to sit here has moved to wireNam(), which
+    // the base calls exactly once, when the manager comes into being. It cannot
+    // stay in a constructor: there is no manager to connect to yet.
 
     // how is data uploaded and downloaded
     downloadCompression = none;
@@ -55,7 +60,18 @@ Azum::Azum(Context *context) : CloudService(context), context(context), root_(NU
 
 Azum::~Azum() {
     printd("Azum::~Azum\n");
-    if (context) delete nam;
+    // DEC-040 Stage 1 (S-1) - `if (context) delete nam;` removed; CloudService is
+    // the sole owner and sole deleter of the manager.
+}
+
+// DEC-040 Stage 1 (S-1) - called by CloudService::nam() EXACTLY ONCE, the first
+// time a manager exists. This is the same connect that used to live in the
+// constructor; only its timing changed, because with lazy creation the
+// constructor no longer has a manager to connect to.
+void
+Azum::wireNam(QNetworkAccessManager *nam)
+{
+    connect(nam, SIGNAL(sslErrors(QNetworkReply*, const QList<QSslError> & )), this, SLOT(onSslErrors(QNetworkReply*, const QList<QSslError> & )));
 }
 
 void
@@ -100,24 +116,20 @@ Azum::open(QStringList &errors)
     data += "&refresh_token=" + getSetting(GC_AZUM_REFRESH_TOKEN).toString();
     data += "&grant_type=refresh_token";
 
-    // make request
-    QNetworkReply* reply = nam->post(request, data.toLatin1());
+    // make request - DEC-040 Stage 1 (W2), bounded by the generic auth timeout
+    const RequestResult result = blockingRequest(nam()->post(request, data.toLatin1()), kOpenTimeoutMs);
 
-    // blocking request
-    QEventLoop loop;
-    connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-    loop.exec();
+    printd("HTTP response code: %d\n", result.httpStatus);
 
-    int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-    printd("HTTP response code: %d\n", statusCode);
-
-    if (reply->error() != 0) {
-        printd("Got error %s\n", reply->errorString().toStdString().c_str());
-        errors << reply->errorString();
+    // Covers a network error AND a timeout: both mean we do not have a token, and
+    // neither may be allowed to fall through to the parse below with an empty body.
+    if (!result.ok()) {
+        printd("Got error %s\n", result.errorString.toStdString().c_str());
+        errors << result.errorString;
         return false;
     }
 
-    QByteArray r = reply->readAll();
+    QByteArray r = result.body;
     printd("Got response: %s\n", r.data());
 
     QJsonParseError parseError;
@@ -187,20 +199,19 @@ Azum::readdir(QString path, QStringList &errors, QDateTime from, QDateTime to)
     do {
         QNetworkRequest request(next);
         request.setRawHeader("Authorization", (QString("Bearer %1").arg(token)).toLatin1());
-        QNetworkReply *reply = nam->get(request);
+        // DEC-040 Stage 1 (W2) - bounded, once per page of this do/while.
+        const RequestResult result = blockingRequest(nam()->get(request), kListTimeoutMs);
 
-        // blocking request
-        QEventLoop loop;
-        connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-        loop.exec();
-
-        if (reply->error() != QNetworkReply::NoError) {
-            errors << "Network Problem reading Nolio data";
+        // A page that failed or timed out ends the listing here. Following
+        // `next` after a failure would silently skip a page and return a
+        // short list that is indistinguishable from a complete one.
+        if (!result.ok()) {
+            errors << result.errorString;
             return returning;
         }
 
         // did we get a good response ?
-        QByteArray r = reply->readAll();
+        QByteArray r = result.body;
         QJsonParseError parseError;
         QJsonDocument document = QJsonDocument::fromJson(r, &parseError);
 
@@ -268,7 +279,7 @@ Azum::readFile(QByteArray *data, QString remotename, QString remoteid)
     request.setRawHeader("Authorization", (QString("Bearer %1").arg(token)).toLatin1());
 
     // put the file
-    QNetworkReply *reply = nam->get(request);
+    QNetworkReply *reply = nam()->get(request);
 
     // remember
     mapReply(reply,remotename);
@@ -312,15 +323,19 @@ Azum::listAthletes()
         // request using csrf token + session id
         QNetworkRequest request(next);
         request.setRawHeader("Authorization", (QString("Bearer %1").arg(token)).toLatin1());
-        QNetworkReply *reply = nam->get(request);
+        // DEC-040 Stage 1 (W2) - bounded. Called from the GUI thread by
+        // AddCloudWizard, so an unbounded wait here froze the wizard and the
+        // whole application with it.
+        const RequestResult result = blockingRequest(nam()->get(request), kOpenTimeoutMs);
 
-        // blocking request
-        QEventLoop loop;
-        connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-        loop.exec();
+        // Stop on the first page that did not arrive rather than paging on.
+        // The old code reached the parser with an empty body and bailed out of
+        // the loop as a "parse error"; being explicit costs nothing and says
+        // what actually happened.
+        if (!result.ok()) return returning;
 
         // did we get a good response ?
-        QByteArray r = reply->readAll();
+        QByteArray r = result.body;
 
         QJsonParseError parseError;
         QJsonDocument document = QJsonDocument::fromJson(r, &parseError);

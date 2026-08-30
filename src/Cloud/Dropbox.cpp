@@ -23,10 +23,18 @@
 #include <QJsonObject>
 #include <QByteArray>
 
-Dropbox::Dropbox(Context *context) : CloudService(context), context(context), root_(NULL) {
-    if (context) {
-        nam = new QNetworkAccessManager(this);
-    }
+Dropbox::Dropbox(Context *context, QNetworkAccessManager *injectedNam)
+    : CloudService(context, injectedNam), context(context), root_(NULL) {
+
+    // DEC-040 Stage 1 (S-1) - the manager is CloudService's now, built lazily by
+    // nam() on first use, so nothing is created here and this constructor is
+    // inert when the factory runs it pre-main.
+    //
+    // Dropbox is the ONE service of the ten with no onSslErrors slot at all, so
+    // unlike its nine siblings it overrides no wireNam() either. That asymmetry
+    // is preserved deliberately rather than tidied up: giving Dropbox an SSL
+    // error handler it never had would change how it behaves on a bad
+    // certificate, which is not what this slice is for.
 
     // config
     settings.insert(OAuthToken, GC_DROPBOX_TOKEN);
@@ -34,8 +42,10 @@ Dropbox::Dropbox(Context *context) : CloudService(context), context(context), ro
     settings.insert(Combo1, QString("%1::Format::JSON::FIT::TCX::PWX::CSV").arg(GC_DROPBOX_FORMAT));
 }
 
+// DEC-040 Stage 1 (S-1) - the `if (context) delete nam;` that used to be here is
+// gone: CloudService owns the manager and destroys it with the service, so the
+// base is the sole owner and there is exactly one deleter.
 Dropbox::~Dropbox() {
-    if (context) {delete nam;}
 }
 
 // open by connecting and getting a basic list of folders available
@@ -113,15 +123,14 @@ bool Dropbox::createFolder(QString path)
 
     QByteArray data;
     data.append(QString("{ \"path\": \"%1\", \"autorename\": false }").arg(path).toUtf8());
-    QNetworkReply *reply = nam->post(request, data);
+    // DEC-040 Stage 1 (W2) - bounded. This runs on the GUI THREAD (the folder
+    // dialog calls it straight through), so the unbounded wait that used to be
+    // here froze the whole application for as long as Dropbox chose not to answer.
+    const RequestResult result = blockingRequest(nam()->post(request, data), kOpenTimeoutMs);
 
-    // blocking request
-    QEventLoop loop;
-    connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-    loop.exec();
-
-    // 403 EXISTS, otherwise OK
-    return (reply->error() == QNetworkReply::NoError);
+    // 403 EXISTS, otherwise OK. A timeout is now a failure rather than a wait
+    // that never ends, and reports as one.
+    return result.ok();
 }
 
 QList<CloudServiceEntry*> 
@@ -161,21 +170,19 @@ Dropbox::readdir(QString path, QStringList &errors)
             request.setUrl(QUrl("https://api.dropboxapi.com/2/files/list_folder/continue"));
             data.append(QString("{ \"cursor\": \"%1\" }").arg(cursor).toUtf8());
         }
-        QNetworkReply *reply = nam->post(request, data);
+        // DEC-040 Stage 1 (W2) - bounded, once per PAGE of the listing.
+        const RequestResult result = blockingRequest(nam()->post(request, data), kListTimeoutMs);
 
-        // blocking request
-        QEventLoop loop;
-        connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-        loop.exec();
-
-        // oops, no dice
-        if (reply->error() != 0) {
-            errors << reply->errorString();
+        // oops, no dice. A page that did not arrive ends the listing: continuing
+        // would re-post the same cursor, or a stale one, and hand back a
+        // partial directory that reads exactly like a complete short one.
+        if (!result.ok()) {
+            errors << result.errorString;
             return returning;
         }
 
         // did we get a good response ?
-        QByteArray r = reply->readAll();
+        QByteArray r = result.body;
 
         QJsonParseError parseError;
         QJsonDocument document = QJsonDocument::fromJson(r, &parseError);
@@ -244,7 +251,7 @@ Dropbox::readFile(QByteArray *data, QString remotename, QString)
     request.setRawHeader("Dropbox-API-Arg", (QString("{ \"path\": \"%1/%2\" }").arg(path).arg(remotename)).toLatin1());
     // put the file
     QByteArray emptyPostData = "";
-    QNetworkReply *reply = nam->post(request, emptyPostData);
+    QNetworkReply *reply = nam()->post(request, emptyPostData);
 
     // remember
     mapReply(reply,remotename);
@@ -282,7 +289,7 @@ Dropbox::writeFile(QByteArray &data, QString remotename, RideFile *ride, quint64
     request.setRawHeader("Content-Type", "application/octet-stream");
 
     // put the file
-    QNetworkReply *reply = nam->post(request, data);
+    QNetworkReply *reply = nam()->post(request, data);
 
     // catch finished signal
     connect(reply, SIGNAL(finished()), this, SLOT(writeFileCompleted()));

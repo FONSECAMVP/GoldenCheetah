@@ -49,12 +49,16 @@
     } while(0)
 #endif
 
-SixCycle::SixCycle(Context *context) : CloudService(context), context(context), root_(NULL)
+SixCycle::SixCycle(Context *context, QNetworkAccessManager *injectedNam)
+    : CloudService(context, injectedNam), context(context), root_(NULL)
 {
-    if (context) {
-        nam = new QNetworkAccessManager(this);
-        connect(nam, SIGNAL(sslErrors(QNetworkReply*, const QList<QSslError> & )), this, SLOT(onSslErrors(QNetworkReply*, const QList<QSslError> & )));
-    }
+    // DEC-040 Stage 1 (S-1) - the manager is CloudService's now, and it is not
+    // built until something actually asks for it (nam()). Nothing is created
+    // here, so this constructor is inert when the factory runs it pre-main.
+    //
+    // The sslErrors connect that used to sit here has moved to wireNam(), which
+    // the base calls exactly once, when the manager comes into being. It cannot
+    // stay in a constructor: there is no manager to connect to yet.
 
     // how is data uploaded and downloaded?
     uploadCompression = gzip;
@@ -73,7 +77,19 @@ SixCycle::SixCycle(Context *context) : CloudService(context), context(context), 
 }
 
 SixCycle::~SixCycle() {
-    if (context) delete nam;
+    // DEC-040 Stage 1 (S-1) - `if (context) delete nam;` removed. CloudService
+    // owns the manager on both the default and the injected path and is its sole
+    // deleter, so it is destroyed exactly once, with this service.
+}
+
+// DEC-040 Stage 1 (S-1) - called by CloudService::nam() EXACTLY ONCE, the first
+// time a manager exists. This is the same connect that used to live in the
+// constructor; only its timing changed, because with lazy creation the
+// constructor no longer has a manager to connect to.
+void
+SixCycle::wireNam(QNetworkAccessManager *nam)
+{
+    connect(nam, SIGNAL(sslErrors(QNetworkReply*, const QList<QSslError> & )), this, SLOT(onSslErrors(QNetworkReply*, const QList<QSslError> & )));
 }
 
 void
@@ -108,25 +124,32 @@ SixCycle::open(QStringList &errors)
 
     QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::ContentTypeHeader,  "application/x-www-form-urlencoded");
-    QNetworkReply *reply = nam->post(request, postData.toString(QUrl::FullyEncoded).toUtf8());
+    // DEC-040 Stage 1 (W2) - bounded, KEEPING SIXCYCLE'S OWN 5 SECONDS.
+    //
+    // This site already armed its timer BEFORE exec(), so unlike the other nine
+    // providers the arming half was never broken here. What it could not do was
+    // tell the two ways out apart: exec() returned either way and the code then
+    // asked reply->error(), which for a timed-out-but-still-running reply is
+    // NoError - so a timeout read as a SUCCESS with an empty body, and fell
+    // through to the parser. That is the finish-check half, and that is what
+    // changes here.
+    //
+    // The 5s bound is SixCycle's, measured against SixCycle's server, and is kept
+    // rather than widened to the generic 30s: nothing in this slice is evidence
+    // about this service, and loosening a bound that already works would be a
+    // regression dressed up as consistency.
+    const int kSixCycleOpenTimeoutMs = 5000;
+    const RequestResult result = blockingRequest(nam()->post(request, postData.toString(QUrl::FullyEncoded).toUtf8()),
+                                                 kSixCycleOpenTimeoutMs);
 
-    // blocking request - wait for response, timeout after 5 seconds
-    QEventLoop loop;
-
-    connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-    connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-    QTimer::singleShot(5000,&loop, SLOT(quit())); // timeout after 5 seconds
-
-    loop.exec();
-
-    if (reply->error() != QNetworkReply::NoError) {
-        qDebug() << "error" << reply->errorString();
-        errors << tr("Network Problem authenticating with the Sixcycle service");
+    if (!result.ok()) {
+        qDebug() << "error" << result.errorString;
+        errors << QString("%1: %2").arg(tr("Network Problem authenticating with the Sixcycle service")).arg(result.errorString);
         return false;
     }
 
     // did we get a good response ?
-    QByteArray r = reply->readAll();
+    QByteArray r = result.body;
     QJsonParseError parseError;
     QJsonDocument document = QJsonDocument::fromJson(r, &parseError);
 
@@ -235,18 +258,29 @@ SixCycle::readdir(QString path, QStringList &errors, QDateTime from, QDateTime t
 
     printd("user: %s\n", session_user.toStdString().c_str());
 
-    // post the request
-    reply = nam->post(request, postData.toString(QUrl::FullyEncoded).toUtf8());
+    // post the request - DEC-040 Stage 1 (W2), bounded, KEEPING SIXCYCLE'S OWN
+    // 10 SECONDS (it might have a lot of data).
+    //
+    // Arming was already correct here; the finish check was not, and in this
+    // function it was absent altogether - reply->error() was never consulted on
+    // any path, so a timeout AND a network error both arrived at readAll() and
+    // parsed an empty body into an empty directory listing.
+    //
+    // C5: the comment on the old timer line read "timeout after 10000 seconds".
+    // The argument is milliseconds, so the bound was 10 seconds and the comment
+    // overstated it by a factor of 1000. The 5s line in open() is worded
+    // correctly and is left alone.
+    const int kSixCycleListTimeoutMs = 10000;
+    const RequestResult result = blockingRequest(nam()->post(request, postData.toString(QUrl::FullyEncoded).toUtf8()),
+                                                 kSixCycleListTimeoutMs);
 
-    // blocking request, with a 10 seconds timeout (might have a lot of data)
-    QEventLoop loop;
-    connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-    QTimer::singleShot(10000,&loop, SLOT(quit())); // timeout after 10000 seconds
-
-    loop.exec();
+    if (!result.ok()) {
+        errors << QString("%1: %2").arg(tr("Network Problem reading Sixcycle data")).arg(result.errorString);
+        return returning;
+    }
 
     // did we get a good response ?
-    QByteArray r = reply->readAll();
+    QByteArray r = result.body;
     printd("response begins: %s ...\n", r.toStdString().substr(0,900).c_str());
 
     QJsonParseError parseError;
@@ -334,7 +368,7 @@ SixCycle::readFile(QByteArray *data, QString remotename, QString remoteid)
     //request.setRawHeader("Accept-Encoding", "gzip, deflate");
 
     // put the file
-    QNetworkReply *reply = nam->get(request);
+    QNetworkReply *reply = nam()->get(request);
 
     // remember
     mapReply(reply,remotename);
@@ -424,7 +458,7 @@ SixCycle::writeFile(QByteArray &data, QString remotename, RideFile *ride, quint6
     multiPart->append(userPart);
 
     // post the file
-    reply = nam->post(request, multiPart);
+    reply = nam()->post(request, multiPart);
 
     multiPart->setParent(reply);
 

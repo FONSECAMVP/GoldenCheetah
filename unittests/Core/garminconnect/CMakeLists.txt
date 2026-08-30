@@ -1484,3 +1484,168 @@ add_test(NAME testGarminConnectSyncDialogClose_minimal COMMAND testGarminConnect
 set_tests_properties(testGarminConnectSyncDialogClose_minimal PROPERTIES
     LABELS "garmin-fast"
     ENVIRONMENT "QT_QPA_PLATFORM=minimal;ASAN_OPTIONS=detect_leaks=0:abort_on_error=0:halt_on_error=1")
+
+# ---------------------------------------------------------------------------
+# DEC-040 Stage 1 - TEST-143/144/145/146/147/150/151/152/153.
+#
+# THE PROVIDER WATCHDOG TARGET. It compiles the REAL src/Cloud provider sources
+# - all thirteen of them - and drives their REAL call sites (Strava::open,
+# Xert::readdir, Dropbox::createFolder, ...) through the REAL S-1 seam, with a
+# fake QNetworkAccessManager injected as the constructor's `injectedNam`
+# argument. There is no test-only preprocessor branch anywhere: the code that
+# runs here is the code that ships.
+#
+# A row that called blockingRequest directly would cover the HELPER, not the
+# SITE, and would pass just as well if a provider had been left unmigrated. So
+# every row goes through a production entry point.
+#
+# `garmin-fast` is PYTHON-FREE and this target keeps it that way: it links no
+# Python and force-includes no py stubs (GarminConnect.cpp is NOT among its
+# sources).
+# ---------------------------------------------------------------------------
+add_executable(testCloudProviderWatchdog
+    testCloudProviderWatchdog.cpp
+    stubs/ProviderSeamStubs.cpp
+    # The classes under test: the base helper plus every migrated provider.
+    ${CMAKE_SOURCE_DIR}/src/Cloud/CloudService.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/CloudService.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/Dropbox.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/Dropbox.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/Azum.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/Azum.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/SportTracks.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/SportTracks.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/Xert.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/Xert.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/Nolio.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/Nolio.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/PolarFlow.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/PolarFlow.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/Strava.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/Strava.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/TrainingsTageBuch.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/TrainingsTageBuch.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/CyclingAnalytics.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/CyclingAnalytics.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/SixCycle.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/SixCycle.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/RideWithGPS.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/RideWithGPS.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/Selfloops.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/Selfloops.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/SportsPlusHealth.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/SportsPlusHealth.h
+    # The REAL ride model the providers build into, and the REAL json reader
+    # several of them parse upload responses with.
+    ${CMAKE_SOURCE_DIR}/src/FileIO/RideFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/FileIO/RideFile.h
+    ${CMAKE_SOURCE_DIR}/contrib/qtsolutions/json/mvjson.cpp
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zip.cpp
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipreader.h
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipwriter.h
+)
+
+set_target_properties(testCloudProviderWatchdog PROPERTIES AUTOMOC ON)
+
+target_include_directories(testCloudProviderWatchdog PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/ANT
+    ${CMAKE_SOURCE_DIR}/src/Train
+    ${CMAKE_SOURCE_DIR}/src/FileIO
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+    ${CMAKE_SOURCE_DIR}/src/Charts
+    ${CMAKE_SOURCE_DIR}/src/Metrics
+    ${CMAKE_SOURCE_DIR}/src/Gui
+    ${CMAKE_SOURCE_DIR}/src/Core
+    ${CMAKE_SOURCE_DIR}/src/Planning
+    ${CMAKE_SOURCE_DIR}/src/Coach
+    ${CMAKE_SOURCE_DIR}/qwt/src
+    ${CMAKE_SOURCE_DIR}/contrib/qxt/src
+    ${CMAKE_SOURCE_DIR}/contrib/qtsolutions/json
+    ${CMAKE_SOURCE_DIR}/contrib/qtsolutions/qwtcurve
+    ${CMAKE_SOURCE_DIR}/contrib/qtsolutions/flowlayout
+    ${CMAKE_SOURCE_DIR}/contrib/qtsolutions/codeeditor
+    ${CMAKE_SOURCE_DIR}/contrib/lmfit
+    ${CMAKE_SOURCE_DIR}/contrib/boost
+    ${CMAKE_SOURCE_DIR}/contrib/kmeans
+    ${CMAKE_SOURCE_DIR}/contrib/voronoi
+    ${CMAKE_SOURCE_DIR}/contrib/httpserver
+    ${CMAKE_SOURCE_DIR}/contrib/qzip
+    ${CMAKE_BINARY_DIR}
+)
+
+# The lifetime half of this slice (TEST-145: exactly-once reply destruction) is
+# only evidence under a sanitizer, so the build fails outright without one.
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(testCloudProviderWatchdog PRIVATE
+        -fsanitize=address -fno-omit-frame-pointer -g)
+    target_link_options(testCloudProviderWatchdog PRIVATE -fsanitize=address)
+else()
+    message(FATAL_ERROR
+        "testCloudProviderWatchdog (TEST-145) is a lifetime test and requires "
+        "AddressSanitizer; no -fsanitize=address for compiler ${CMAKE_CXX_COMPILER_ID}.")
+endif()
+
+find_package(ZLIB REQUIRED)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS
+    Sql Concurrent SerialPort Multimedia MultimediaWidgets PrintSupport Svg
+    Bluetooth DBus Charts OpenGL OpenGLWidgets WebEngineCore WebEngineWidgets
+    WebEngineQuick WebChannel Positioning Qml Quick)
+target_link_libraries(testCloudProviderWatchdog PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Gui
+    Qt${QT_VERSION_MAJOR}::Widgets
+    Qt${QT_VERSION_MAJOR}::Network
+    Qt${QT_VERSION_MAJOR}::Xml
+    Qt${QT_VERSION_MAJOR}::Sql
+    Qt${QT_VERSION_MAJOR}::Concurrent
+    Qt${QT_VERSION_MAJOR}::SerialPort
+    Qt${QT_VERSION_MAJOR}::Multimedia
+    Qt${QT_VERSION_MAJOR}::MultimediaWidgets
+    Qt${QT_VERSION_MAJOR}::PrintSupport
+    Qt${QT_VERSION_MAJOR}::Svg
+    Qt${QT_VERSION_MAJOR}::Bluetooth
+    Qt${QT_VERSION_MAJOR}::DBus
+    Qt${QT_VERSION_MAJOR}::Charts
+    Qt${QT_VERSION_MAJOR}::OpenGL
+    Qt${QT_VERSION_MAJOR}::OpenGLWidgets
+    Qt${QT_VERSION_MAJOR}::WebEngineCore
+    Qt${QT_VERSION_MAJOR}::WebEngineWidgets
+    Qt${QT_VERSION_MAJOR}::WebEngineQuick
+    Qt${QT_VERSION_MAJOR}::WebChannel
+    Qt${QT_VERSION_MAJOR}::Positioning
+    Qt${QT_VERSION_MAJOR}::Qml
+    Qt${QT_VERSION_MAJOR}::Quick
+    Qt${QT_VERSION_MAJOR}::Core5Compat
+    Qt${QT_VERSION_MAJOR}::Test
+    ZLIB::ZLIB
+    qwt
+)
+target_compile_features(testCloudProviderWatchdog PRIVATE cxx_std_17)
+
+# QT_FATAL_CRITICALS=0 IS PINNED, NOT ASSUMED UNSET (A3f-R040-C).
+#
+# ~WorkerGuard reports a cleanup it could NOT complete through qCritical,
+# because it runs on the early-return path where a QTest macro would just
+# `return` past the remaining checks. Qt can turn criticals into aborts via
+# QT_FATAL_CRITICALS, and it is a COUNTDOWN rather than a flag: measured on
+# Qt 6.8.2, `=1` aborts on the first critical (SIGABRT, exit 134, not
+# intercepted by QTest's handler), `=2` aborts on the second, and `=0` is
+# non-fatal - `0` is NOT read as "set, therefore fatal". An inherited `=1` would
+# therefore abort the process inside teardown and destroy the diagnostic, so the
+# value is pinned here rather than left to whatever the caller exported.
+#
+# This governs the CTest-registered runs only. Running the binary directly
+# inherits the caller's environment unless that command pins the value too.
+add_test(NAME testCloudProviderWatchdog COMMAND testCloudProviderWatchdog)
+set_tests_properties(testCloudProviderWatchdog PROPERTIES
+    LABELS "garmin-fast"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;ASAN_OPTIONS=detect_leaks=0:abort_on_error=0:halt_on_error=1;QT_FATAL_CRITICALS=0")
+
+# The same executable under the second QPA backend - see the note on
+# testGarminConnectSyncDialogClose_minimal above for why the backend is a
+# dimension of this gate rather than a constant of it.
+add_test(NAME testCloudProviderWatchdog_minimal COMMAND testCloudProviderWatchdog)
+set_tests_properties(testCloudProviderWatchdog_minimal PROPERTIES
+    LABELS "garmin-fast"
+    ENVIRONMENT "QT_QPA_PLATFORM=minimal;ASAN_OPTIONS=detect_leaks=0:abort_on_error=0:halt_on_error=1;QT_FATAL_CRITICALS=0")

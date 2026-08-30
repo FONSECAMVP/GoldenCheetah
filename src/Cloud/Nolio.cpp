@@ -50,11 +50,15 @@
     } while(0)
 #endif
 
-Nolio::Nolio(Context *context) : CloudService(context), context(context), root_(NULL) {
-    if (context) {
-        nam = new QNetworkAccessManager(this);
-        connect(nam, SIGNAL(sslErrors(QNetworkReply*, const QList<QSslError> & )), this, SLOT(onSslErrors(QNetworkReply*, const QList<QSslError> & )));
-    }
+Nolio::Nolio(Context *context, QNetworkAccessManager *injectedNam)
+    : CloudService(context, injectedNam), context(context), root_(NULL) {
+    // DEC-040 Stage 1 (S-1) - the manager is CloudService's now, and it is not
+    // built until something actually asks for it (nam()). Nothing is created
+    // here, so this constructor is inert when the factory runs it pre-main.
+    //
+    // The sslErrors connect that used to sit here has moved to wireNam(), which
+    // the base calls exactly once, when the manager comes into being. It cannot
+    // stay in a constructor: there is no manager to connect to yet.
 
     downloadCompression = none;
     filetype = uploadType::JSON;
@@ -70,7 +74,19 @@ Nolio::Nolio(Context *context) : CloudService(context), context(context), root_(
 }
 
 Nolio::~Nolio() {
-    if (context) delete nam;
+    // DEC-040 Stage 1 (S-1) - `if (context) delete nam;` removed. CloudService
+    // owns the manager on both the default and the injected path and is its sole
+    // deleter, so it is destroyed exactly once, with this service.
+}
+
+// DEC-040 Stage 1 (S-1) - called by CloudService::nam() EXACTLY ONCE, the first
+// time a manager exists. This is the same connect that used to live in the
+// constructor; only its timing changed, because with lazy creation the
+// constructor no longer has a manager to connect to.
+void
+Nolio::wireNam(QNetworkAccessManager *nam)
+{
+    connect(nam, SIGNAL(sslErrors(QNetworkReply*, const QList<QSslError> & )), this, SLOT(onSslErrors(QNetworkReply*, const QList<QSslError> & )));
 }
 
 void Nolio::onSslErrors(QNetworkReply *reply, const QList<QSslError>&errors){
@@ -104,22 +120,19 @@ bool Nolio::open(QStringList &errors){
 
     QString data = QString("grant_type=refresh_token&refresh_token=").append(refresh_token);
 
-    QNetworkReply* reply = nam->post(request, data.toLatin1());
+    // DEC-040 Stage 1 (W2) - bounded by the generic auth timeout
+    const RequestResult result = blockingRequest(nam()->post(request, data.toLatin1()), kOpenTimeoutMs);
 
-    // blocking request
-    QEventLoop loop;
-    connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-    loop.exec();
+    printd("HTTP response code: %d\n", result.httpStatus);
 
-    int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-    printd("HTTP response code: %d\n", statusCode);
-
-    if (reply->error() != 0) {
-        printd("Got error %d\n", reply->error());
-        errors << reply->errorString();
+    // Covers a TIMEOUT as well as a network error: both mean we have no token,
+    // and neither may fall through to the parse below with an empty body.
+    if (!result.ok()) {
+        printd("Got error %d\n", result.error);
+        errors << result.errorString;
         return false;
     }
-    QByteArray r = reply->readAll();
+    QByteArray r = result.body;
     printd("Got response: %s\n", r.data());
 
     QJsonParseError parseError;
@@ -161,19 +174,20 @@ QList<CloudServiceEntry*> Nolio::readdir(QString path, QStringList &errors, QDat
     QNetworkRequest request(url);
     // request using the bearer token
     request.setRawHeader("Authorization", (QString("Bearer %1").arg(access_token)).toLatin1());
-    QNetworkReply *reply = nam->get(request);
+    // DEC-040 Stage 1 (W2) - bounded by the generic listing timeout. This listing
+    // is a SINGLE request: Nolio's /api/get/training/ endpoint takes a from/to
+    // range and answers in one hit, so there is one wait here, not one per page.
+    const RequestResult result = blockingRequest(nam()->get(request), kListTimeoutMs);
 
-    // blocking request
-    QEventLoop loop;
-    connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-    loop.exec();
-
-    if (reply->error() != QNetworkReply::NoError) {
-        errors << "Network Problem reading Nolio data";
+    // A listing that failed OR timed out. The message keeps the original wording
+    // and adds what actually went wrong - "Network Problem reading Nolio data"
+    // alone cannot tell a refused connection from a server that went quiet.
+    if (!result.ok()) {
+        errors << QString("%1: %2").arg(tr("Network Problem reading Nolio data")).arg(result.errorString);
         return returning;
     }
     // did we get a good response ?
-    QByteArray r = reply->readAll();
+    QByteArray r = result.body;
 
     QJsonParseError parseError;
     QJsonDocument document = QJsonDocument::fromJson(r, &parseError);
@@ -222,7 +236,7 @@ bool Nolio::readFile(QByteArray *data, QString remotename, QString remoteid){
     request.setRawHeader("Authorization", (QString("Bearer %1").arg(access_token)).toLatin1());
 
     // put the file
-    QNetworkReply *reply = nam->get(request);
+    QNetworkReply *reply = nam()->get(request);
 
     // remember
     mapReply(reply,remotename);
@@ -377,15 +391,26 @@ QList<CloudServiceAthlete> Nolio::listAthletes(){
     QUrl url = QUrl(urlstr + params.toString());
     QNetworkRequest request(url);
     request.setRawHeader("Authorization", (QString("Bearer %1").arg(access_token)).toLatin1());
-    QNetworkReply *reply = nam->get(request);
+    // DEC-040 Stage 1 (W2) - bounded. Called from the GUI thread by
+    // AddCloudWizard, so the unbounded wait that used to be here froze the wizard
+    // and the whole application with it.
+    //
+    // A SINGLE request, not a paginated loop: /api/get/athletes/ answers in one
+    // hit and there is no `next`, offset or page parameter anywhere in this
+    // function. Azum::listAthletes, which shares the name, IS paginated - the two
+    // are not structurally parallel and were read, not assumed.
+    const RequestResult result = blockingRequest(nam()->get(request), kOpenTimeoutMs);
 
-    // blocking request
-    QEventLoop loop;
-    connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-    loop.exec();
+    // listAthletes has no errors channel - it returns the list and nothing else -
+    // so a failure can only be reported as "no athletes". That was already true
+    // of a network error; what changes is that it is now also true of a timeout,
+    // instead of the wizard hanging. Returning early keeps the empty list from
+    // being produced by a parse of an empty body, which is the same outcome
+    // reached for a different and less honest reason.
+    if (!result.ok()) return returning;
 
     // did we get a good response ?
-    QByteArray r = reply->readAll();
+    QByteArray r = result.body;
 
     QJsonParseError parseError;
     QJsonDocument document = QJsonDocument::fromJson(r, &parseError);

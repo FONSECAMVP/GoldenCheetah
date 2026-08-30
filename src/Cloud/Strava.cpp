@@ -52,12 +52,16 @@
     } while(0)
 #endif
 
-Strava::Strava(Context *context) : CloudService(context), context(context), root_(NULL) {
+Strava::Strava(Context *context, QNetworkAccessManager *injectedNam)
+    : CloudService(context, injectedNam), context(context), root_(NULL) {
 
-    if (context) {
-        nam = new QNetworkAccessManager(this);
-        connect(nam, SIGNAL(sslErrors(QNetworkReply*, const QList<QSslError> & )), this, SLOT(onSslErrors(QNetworkReply*, const QList<QSslError> & )));
-    }
+    // DEC-040 Stage 1 (S-1) - the manager is CloudService's now, and it is not
+    // built until something actually asks for it (nam()). Nothing is created
+    // here, so this constructor is inert when the factory runs it pre-main.
+    //
+    // The sslErrors connect that used to sit here has moved to wireNam(), which
+    // the base calls exactly once, when the manager comes into being. It cannot
+    // stay in a constructor: there is no manager to connect to yet.
 
     uploadCompression = gzip; // gzip
     downloadCompression = none;
@@ -72,12 +76,24 @@ Strava::Strava(Context *context) : CloudService(context), context(context), root
 }
 
 Strava::~Strava() {
-    if (context) delete nam;
+    // DEC-040 Stage 1 (S-1) - `if (context) delete nam;` removed. CloudService
+    // owns the manager on both the default and the injected path and is its sole
+    // deleter, so it is destroyed exactly once, with this service.
 }
 
 QImage Strava::logo() const
 {
     return QImage(":images/services/strava.png");
+}
+
+// DEC-040 Stage 1 (S-1) - called by CloudService::nam() EXACTLY ONCE, the first
+// time a manager exists. This is the same connect that used to live in the
+// constructor; only its timing changed, because with lazy creation the
+// constructor no longer has a manager to connect to.
+void
+Strava::wireNam(QNetworkAccessManager *nam)
+{
+    connect(nam, SIGNAL(sslErrors(QNetworkReply*, const QList<QSslError> & )), this, SLOT(onSslErrors(QNetworkReply*, const QList<QSslError> & )));
 }
 
 void
@@ -109,26 +125,22 @@ Strava::open(QStringList &errors)
     data += "&refresh_token=" + getSetting(GC_STRAVA_REFRESH_TOKEN).toString();
     data += "&grant_type=refresh_token";
 
-    // make request
-    QNetworkReply* reply = nam->post(request, data.toLatin1());
+    // make request - DEC-040 Stage 1 (W2), bounded by the generic auth timeout
+    const RequestResult result = blockingRequest(nam()->post(request, data.toLatin1()), kOpenTimeoutMs);
 
-    // blocking request
-    QEventLoop loop;
-    connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-    loop.exec();
+    printd("HTTP response code: %d\n", result.httpStatus);
 
-    int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-    printd("HTTP response code: %d\n", statusCode);
-
-    // oops, no dice
-    if (reply->error() != 0) {
-        printd("Got error %s\n", reply->errorString().toStdString().c_str());
-        errors << reply->errorString();
+    // oops, no dice. This now covers a TIMEOUT as well as a network error: both
+    // mean we have no access token, and neither may be allowed to fall through
+    // to the parse below with an empty body.
+    if (!result.ok()) {
+        printd("Got error %s\n", result.errorString.toStdString().c_str());
+        errors << result.errorString;
         return false;
     }
 
     // lets extract the access token, and possibly a new refresh token
-    QByteArray r = reply->readAll();
+    QByteArray r = result.body;
     printd("Got response: %s\n", r.data());
 
     QJsonParseError parseError;
@@ -199,20 +211,25 @@ Strava::readdir(QString path, QStringList &errors, QDateTime from, QDateTime to)
         QNetworkRequest request(url);
         request.setRawHeader("Authorization", (QString("Bearer %1").arg(token)).toLatin1());
 
-        QNetworkReply *reply = nam->get(request);
+        // DEC-040 Stage 1 (W2) - bounded, once per PAGE of this listing.
+        const RequestResult result = blockingRequest(nam()->get(request), kListTimeoutMs);
 
-        // blocking request
-        QEventLoop loop;
-        connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-        loop.exec();
-
-        if (reply->error() != QNetworkReply::NoError) {
-            qDebug() << "error" << reply->errorString();
-            errors << tr("Network Problem reading Strava data");
-            //return returning;
+        // A page that failed or timed out ENDS the listing and propagates.
+        //
+        // The `//return returning;` that used to be commented out on the next
+        // line is the whole problem: the old code appended to `errors` and then
+        // carried straight on into the parser with an empty body, which failed to
+        // parse, which set offset = INT_MAX, which ended the loop - so a failed
+        // page produced a SHORT listing plus an error nobody looked at. It must
+        // not continue either: re-requesting the next page after a failure skips
+        // a page and returns a directory that reads exactly like a complete one.
+        if (!result.ok()) {
+            qDebug() << "error" << result.errorString;
+            errors << QString("%1: %2").arg(tr("Network Problem reading Strava data")).arg(result.errorString);
+            return returning;
         }
         // did we get a good response ?
-        QByteArray r = reply->readAll();
+        QByteArray r = result.body;
         printd("response: %s\n", r.toStdString().c_str());
 
         QJsonParseError parseError;
@@ -280,7 +297,7 @@ Strava::readFile(QByteArray *data, QString remotename, QString remoteid)
     request.setRawHeader("Authorization", (QString("Bearer %1").arg(token)).toLatin1());
 
     // put the file
-    QNetworkReply *reply = nam->get(request);
+    QNetworkReply *reply = nam()->get(request);
 
     // remember
     mapReply(reply,remotename);
@@ -436,7 +453,7 @@ Strava::writeFile(QByteArray &data, QString remotename, RideFile *ride, quint64 
 
     // this must be performed asyncronously and call made
     // to notifyWriteCompleted(QString remotename, QString message) when done
-    reply = nam->post(request, multiPart);
+    reply = nam()->post(request, multiPart);
 
     // catch finished signal
     connect(reply, SIGNAL(finished()), this, SLOT(writeFileCompleted()));
@@ -516,6 +533,20 @@ Strava::readyRead()
     buffers.value(reply)->append(reply->readAll());
 }
 
+// DEC-040 Stage 1 (W2) / DEC-garmin-023 + DEC-garmin-036 - EXACTLY ONE
+// COMPLETION, AND THE CALLER'S BUFFER BACK UNCHANGED WHEN THERE IS NOTHING IN IT.
+//
+// What used to be here emitted readComplete unconditionally: it did not look at
+// reply->error(), and prepareResponse had no way to tell it that the parse had
+// failed or that the nested streams request (addSamples) had come back empty. So
+// a failed read arrived at the sync dialog as a COMPLETED one carrying either the
+// server's error document or a ride header with no samples, and was staged.
+//
+// The buffer is the caller's on both channels - the consumer frees whichever
+// pointer arrives - so this must emit exactly one of readComplete/readFailed for
+// every readFile(), pass back THE SAME pointer, and stage nothing into it on the
+// failure path. Two emissions would be a double free; none would be a leak plus a
+// sync that never finishes.
 void
 Strava::readFileCompleted()
 {
@@ -523,21 +554,49 @@ Strava::readFileCompleted()
 
     QNetworkReply *reply = static_cast<QNetworkReply*>(QObject::sender());
 
-    printd("reply:%s\n", buffers.value(reply)->toStdString().c_str());
+    QByteArray *buffer = buffers.value(reply, NULL);
 
-    QByteArray* data = prepareResponse(buffers.value(reply));
+    // Not one of ours (or already answered). Emitting on a buffer we do not have
+    // would mean inventing a pointer for the consumer to free.
+    if (buffer == NULL) return;
+
+    // Taken off the map BEFORE either emission, so there is exactly one
+    // completion per reply even if this slot were ever reached twice.
+    buffers.remove(reply);
+
+    printd("reply:%s\n", buffer->toStdString().c_str());
+
+    // The reply itself failed. readyRead may already have appended part of an
+    // error document, so the buffer is cleared: notifyReadFailed's contract is
+    // that nothing is staged in it.
+    if (reply->error() != QNetworkReply::NoError) {
+        buffer->clear();
+        notifyReadFailed(buffer, replyName(reply), tr("Strava: %1").arg(reply->errorString()));
+        return;
+    }
+
+    QString failure;
+    QByteArray* data = prepareResponse(buffer, &failure);
+
+    if (!failure.isEmpty()) {
+        // Nothing was staged by prepareResponse on this path; clearing removes
+        // whatever the server sent instead of a ride, which is not ours to import.
+        data->clear();
+        notifyReadFailed(data, replyName(reply), failure);
+        return;     // and NO readComplete afterwards
+    }
 
     notifyReadComplete(data, replyName(reply), tr("Completed."));
 }
 
-void
+bool
 Strava::addSamples(RideFile* ret, QString remoteid)
 {
     printd("Strava::addSamples(%s)\n", remoteid.toStdString().c_str());
 
     // do we have a token ?
     QString token = getSetting(GC_STRAVA_TOKEN, "").toString();
-    if (token == "") return;
+    if (token == "") return false;
 
     // lets connect and get basic info on the root directory
     QString streamsList = "time,latlng,distance,altitude,velocity_smooth,heartrate,cadence,watts,temp";
@@ -551,20 +610,25 @@ Strava::addSamples(RideFile* ret, QString remoteid)
     QNetworkRequest request(url);
     request.setRawHeader("Authorization", (QString("Bearer %1").arg(token)).toLatin1());
 
-    // put the file
-    QNetworkReply *reply = nam->get(request);
+    // DEC-040 Stage 1 (W2) - THE SHAPE-C SITE, AND THE DEEPEST WAIT IN THE TREE.
+    //
+    // The call chain is readFile -> (async) readFileCompleted -> prepareResponse
+    // -> here, and prepareResponse is itself reached once per activity from
+    // CloudServiceAutoDownload::run()'s download loop. So this unbounded wait was
+    // nested inside a per-activity loop on the auto-download WORKER thread: one
+    // silent Strava streams endpoint parked the whole automatic download, not one
+    // activity.
+    const RequestResult result = blockingRequest(nam()->get(request), kOpenTimeoutMs);
 
-    // blocking request
-    QEventLoop loop;
-    connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-    loop.exec();
-
-    if (reply->error() != QNetworkReply::NoError) {
-        qDebug() << "error" << reply->errorString();
-        return;
+    // Covers a TIMEOUT as well as a network error, and - unlike the `return;`
+    // that used to be here - it is now DISTINGUISHABLE by the caller from "this
+    // activity has no samples", so the ride is not staged as though it did.
+    if (!result.ok()) {
+        qDebug() << "error" << result.errorString;
+        return false;
     }
     // did we get a good response ?
-    QByteArray r = reply->readAll();
+    QByteArray r = result.body;
     printd("response: %s\n", r.toStdString().c_str());
 
     QJsonParseError parseError;
@@ -686,6 +750,11 @@ Strava::addSamples(RideFile* ret, QString remoteid)
 
         } while (!end);
     }
+
+    // We got a body and consumed it. Whether it contained any streams is Strava's
+    // business; what this reports is that the REQUEST completed, which is the
+    // thing the caller cannot otherwise find out.
+    return true;
 }
 
 void
@@ -866,12 +935,22 @@ Strava:: fixSmartRecording(RideFile* ret)
 }
 
 QByteArray*
-Strava::prepareResponse(QByteArray* data)
+Strava::prepareResponse(QByteArray* data, QString *failure)
 {
     printd("Strava::prepareResponse()\n");
 
     QJsonParseError parseError;
     QJsonDocument document = QJsonDocument::fromJson(data->constData(), &parseError);
+
+    // DEC-040 Stage 1 (W2) - a body that is not a ride is a FAILED read, and now
+    // says so. The `if (parseError.error == NoError)` below has always had no
+    // else: an unparseable body fell straight to `return data` with the caller's
+    // buffer still holding whatever the server sent, and readFileCompleted
+    // announced that as a completed download.
+    if (parseError.error != QJsonParseError::NoError) {
+        if (failure) *failure = tr("Strava: could not parse the activity (%1)").arg(parseError.errorString());
+        return data;
+    }
 
     // if path was returned all is good, lets set root
     if (parseError.error == QJsonParseError::NoError) {
@@ -959,7 +1038,20 @@ Strava::prepareResponse(QByteArray* data)
             }
 
         } else {
-            addSamples(ride, QString("%1").arg(each["id"].toVariant().toULongLong()));
+
+            // DEC-040 Stage 1 (W2) - THE PARTIAL RIDE IS NOT STAGED.
+            //
+            // addSamples used to return void: a streams request that failed left
+            // `ride` as a header with no data points, and the code below happily
+            // serialised that into the caller's buffer and reported "Completed."
+            // A ride whose samples we could not fetch is not a shorter ride, it is
+            // a ride we do not have. So we drop it and say why - and because the
+            // buffer has not been touched yet, nothing is staged.
+            if (!addSamples(ride, QString("%1").arg(each["id"].toVariant().toULongLong()))) {
+                delete ride;
+                if (failure) *failure = tr("Strava: could not fetch the activity samples");
+                return data;
+            }
 
             // laps?
             if (!each["laps"].isNull()) {

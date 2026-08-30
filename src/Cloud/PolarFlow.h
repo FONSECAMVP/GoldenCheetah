@@ -39,7 +39,10 @@ class PolarFlow : public CloudService {
 
     public:
 
-        PolarFlow(Context *context);
+        // DEC-040 Stage 1 (S-1) - injectedNam defaults to NULL, so every
+        // existing production caller keeps writing PolarFlow(context) unchanged and
+        // gets the manager CloudService makes. Tests pass one in.
+        PolarFlow(Context *context, QNetworkAccessManager *injectedNam = NULL);
         CloudService *clone(Context *context) { return new PolarFlow(context); }
         ~PolarFlow();
 
@@ -70,13 +73,19 @@ class PolarFlow : public CloudService {
 
     private:
         Context *context;
-        QNetworkAccessManager *nam;
+        // DEC-040 Stage 1 (S-1) - `nam` now lives in CloudService, which builds
+        // it on every construction path and owns it. The member that used to be
+        // declared here was left indeterminate whenever context was NULL.
         QNetworkReply *reply;
         CloudServiceEntry *root_;
 
         QMap<QNetworkReply*, QByteArray*> buffers;
 
         QString userId;
+
+        // DEC-040 Stage 1 (S-1) - installs this service's sslErrors handling on
+        // the lazily created manager, exactly once. See CloudService::wireNam.
+        void wireNam(QNetworkAccessManager *nam) override;
 
     private slots:
         void onSslErrors(QNetworkReply *reply, const QList<QSslError>&error);

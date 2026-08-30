@@ -49,12 +49,16 @@
     } while(0)
 #endif
 
-PolarFlow::PolarFlow(Context *context) : CloudService(context), context(context), root_(NULL) {
+PolarFlow::PolarFlow(Context *context, QNetworkAccessManager *injectedNam)
+    : CloudService(context, injectedNam), context(context), root_(NULL) {
 
-    if (context) {
-        nam = new QNetworkAccessManager(this);
-        connect(nam, SIGNAL(sslErrors(QNetworkReply*, const QList<QSslError> & )), this, SLOT(onSslErrors(QNetworkReply*, const QList<QSslError> & )));
-    }
+    // DEC-040 Stage 1 (S-1) - the manager is CloudService's now, and it is not
+    // built until something actually asks for it (nam()). Nothing is created
+    // here, so this constructor is inert when the factory runs it pre-main.
+    //
+    // The sslErrors connect that used to sit here has moved to wireNam(), which
+    // the base calls exactly once, when the manager comes into being. It cannot
+    // stay in a constructor: there is no manager to connect to yet.
 
     uploadCompression = gzip; // gzip
     downloadCompression = none;
@@ -66,7 +70,19 @@ PolarFlow::PolarFlow(Context *context) : CloudService(context), context(context)
 }
 
 PolarFlow::~PolarFlow() {
-    if (context) delete nam;
+    // DEC-040 Stage 1 (S-1) - `if (context) delete nam;` removed. CloudService
+    // owns the manager on both the default and the injected path and is its sole
+    // deleter, so it is destroyed exactly once, with this service.
+}
+
+// DEC-040 Stage 1 (S-1) - called by CloudService::nam() EXACTLY ONCE, the first
+// time a manager exists. This is the same connect that used to live in the
+// constructor; only its timing changed, because with lazy creation the
+// constructor no longer has a manager to connect to.
+void
+PolarFlow::wireNam(QNetworkAccessManager *nam)
+{
+    connect(nam, SIGNAL(sslErrors(QNetworkReply*, const QList<QSslError> & )), this, SLOT(onSslErrors(QNetworkReply*, const QList<QSslError> & )));
 }
 
 void
@@ -98,20 +114,20 @@ PolarFlow::open(QStringList &errors)
     QNetworkRequest request(url);
     request.setRawHeader("Authorization", (QString("Bearer %1").arg(token)).toLatin1());
 
-    QNetworkReply *reply = nam->get(request);
+    // DEC-040 Stage 1 (W2) - bounded by the generic auth timeout
+    const RequestResult result = blockingRequest(nam()->get(request), kOpenTimeoutMs);
 
-    // blocking request
-    QEventLoop loop;
-    connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-    loop.exec();
-
-    if (reply->error() != QNetworkReply::NoError) {
-        qDebug() << "error" << reply->errorString();
-        errors << tr("Network Problem reading Polar Flow data");
+    // Covers a TIMEOUT as well as a network error. The message keeps the original
+    // wording and adds what actually went wrong - "Network Problem reading Polar
+    // Flow data" alone cannot tell a refused connection from a server that
+    // accepted the connection and then went quiet.
+    if (!result.ok()) {
+        qDebug() << "error" << result.errorString;
+        errors << QString("%1: %2").arg(tr("Network Problem reading Polar Flow data")).arg(result.errorString);
         return false;
     }
     // did we get a good response ?
-    QByteArray r = reply->readAll();
+    QByteArray r = result.body;
     printd("response: %s\n", r.toStdString().c_str());
 
     QJsonParseError parseError;
@@ -188,7 +204,7 @@ PolarFlow::readFile(QByteArray *data, QString remotename, QString remoteid)
     request.setRawHeader("Authorization", (QString("Bearer %1").arg(token)).toLatin1());
 
     // put the file
-    QNetworkReply *reply = nam->get(request);
+    QNetworkReply *reply = nam()->get(request);
 
     // remember
     mapReply(reply,remotename);

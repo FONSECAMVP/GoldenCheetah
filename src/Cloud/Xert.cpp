@@ -52,12 +52,16 @@
     } while(0)
 #endif
 
-Xert::Xert(Context *context) : CloudService(context), context(context), root_(NULL) {
+Xert::Xert(Context *context, QNetworkAccessManager *injectedNam)
+    : CloudService(context, injectedNam), context(context), root_(NULL) {
 
-    if (context) {
-        nam = new QNetworkAccessManager(this);
-        connect(nam, SIGNAL(sslErrors(QNetworkReply*, const QList<QSslError> & )), this, SLOT(onSslErrors(QNetworkReply*, const QList<QSslError> & )));
-    }
+    // DEC-040 Stage 1 (S-1) - the manager is CloudService's now, and it is not
+    // built until something actually asks for it (nam()). Nothing is created
+    // here, so this constructor is inert when the factory runs it pre-main.
+    //
+    // The sslErrors connect that used to sit here has moved to wireNam(), which
+    // the base calls exactly once, when the manager comes into being. It cannot
+    // stay in a constructor: there is no manager to connect to yet.
 
     uploadCompression = none;
     downloadCompression = none;
@@ -74,7 +78,19 @@ Xert::Xert(Context *context) : CloudService(context), context(context), root_(NU
 }
 
 Xert::~Xert() {
-    if (context) delete nam;
+    // DEC-040 Stage 1 (S-1) - `if (context) delete nam;` removed. CloudService
+    // owns the manager on both the default and the injected path and is its sole
+    // deleter, so it is destroyed exactly once, with this service.
+}
+
+// DEC-040 Stage 1 (S-1) - called by CloudService::nam() EXACTLY ONCE, the first
+// time a manager exists. This is the same connect that used to live in the
+// constructor; only its timing changed, because with lazy creation the
+// constructor no longer has a manager to connect to.
+void
+Xert::wireNam(QNetworkAccessManager *nam)
+{
+    connect(nam, SIGNAL(sslErrors(QNetworkReply*, const QList<QSslError> & )), this, SLOT(onSslErrors(QNetworkReply*, const QList<QSslError> & )));
 }
 
 void
@@ -110,26 +126,22 @@ Xert::open(QStringList &errors)
     data += "refresh_token=" + getSetting(GC_XERT_REFRESH_TOKEN).toString();
     data += "&grant_type=refresh_token";
 
-    // make request
-    QNetworkReply* reply = nam->post(request, data.toLatin1());
+    // make request - DEC-040 Stage 1 (W2), bounded by the generic auth timeout
+    const RequestResult result = blockingRequest(nam()->post(request, data.toLatin1()), kOpenTimeoutMs);
 
-    // blocking request
-    QEventLoop loop;
-    connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-    loop.exec();
+    printd("HTTP response code: %d\n", result.httpStatus);
 
-    int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-    printd("HTTP response code: %d\n", statusCode);
-
-    // oops, no dice
-    if (reply->error() != 0) {
-        printd("Got error %s\n", reply->errorString().toStdString().c_str());
-        errors << reply->errorString();
+    // oops, no dice. This now covers a TIMEOUT as well as a network error: both
+    // mean we have no access token, and neither may be allowed to fall through
+    // to the parse below with an empty body.
+    if (!result.ok()) {
+        printd("Got error %s\n", result.errorString.toStdString().c_str());
+        errors << result.errorString;
         return false;
     }
 
     // lets extract the access token, and possibly a new refresh token
-    QByteArray r = reply->readAll();
+    QByteArray r = result.body;
     printd("Got response: %s\n", r.data());
 
     QJsonParseError parseError;
@@ -190,22 +202,25 @@ Xert::readdir(QString path, QStringList &errors, QDateTime from, QDateTime to)
     request.setRawHeader("Authorization", QString("Bearer %1").arg(getSetting(GC_XERT_TOKEN,"").toString()).toLatin1());
     request.setRawHeader("Accept", "application/json");
 
-    // make request
+    // make request - DEC-040 Stage 1 (W2), bounded by the generic listing timeout
     printd("fetch : %s\n", urlstr.toStdString().c_str());
-    QNetworkReply *reply = nam->get(request);
+    const RequestResult result = blockingRequest(nam()->get(request), kListTimeoutMs);
 
-    // blocking request
-    QEventLoop loop;
-    connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-    loop.exec();
+    printd("fetch response: status=%d, error=%d: %s\n", result.httpStatus, result.error, result.errorString.toStdString().c_str());
 
-    int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-    printd("fetch response: status=%d, error=%d: %s\n", statusCode, reply->error(), reply->errorString().toStdString().c_str());
+    // A listing that failed or timed out is reported, not silently returned as
+    // an empty directory. The old code simply fell past the `if (error == 0)`
+    // block and returned an empty `returning` with `errors` untouched.
+    if (!result.ok()) {
+        errors << result.errorString;
+        return returning;
+    }
 
-    // if successful, lets unpack
-    if (reply->error() == 0) {
+    // The old error guard's block, kept as a plain scope: the guard itself moved
+    // above and re-testing it here would be a branch that can no longer be false.
+    {
         // get the data
-        QByteArray r = reply->readAll();
+        QByteArray r = result.body;
 
         printd("page : %s\n", r.toStdString().c_str());
 
@@ -245,8 +260,22 @@ Xert::readdir(QString path, QStringList &errors, QDateTime from, QDateTime to)
                 add->label = activity["name"].toString();
                 add->isDir = false;
 
-                // Details
-                QJsonObject detail = readActivityDetail(add->id, false);
+                // Details - DEC-040 Stage 1 (W2). This is the SHAPE-C site: a
+                // second bounded request per activity, issued from inside this
+                // per-activity loop, so a listing of N activities performs N+1
+                // waits and every one of them is separately bounded.
+                //
+                // A detail fetch that failed or timed out BREAKS the listing and
+                // propagates. It must not continue: readActivityDetail returns an
+                // empty QJsonObject on failure, and the two lines below would then
+                // quietly write distance=0 and duration=0 into an entry that looks
+                // in every other respect like a good one.
+                QString detailError;
+                QJsonObject detail = readActivityDetail(add->id, false, &detailError);
+                if (!detailError.isEmpty()) {
+                    errors << detailError;
+                    return returning;
+                }
                 add->distance = detail["summary"].toObject()["distance"].toDouble();
                 add->duration = detail["summary"].toObject()["duration"].toDouble();
 
@@ -286,7 +315,7 @@ Xert::getRideName(RideFile *ride)
 }
 
 QJsonObject
-Xert::readActivityDetail(QString path, bool withSessionData)
+Xert::readActivityDetail(QString path, bool withSessionData, QString *error)
 {
     printd("Xert::readDetail(%s)\n", path.toStdString().c_str());
 
@@ -298,23 +327,27 @@ Xert::readActivityDetail(QString path, bool withSessionData)
     request.setRawHeader("Authorization", QString("Bearer %1").arg(getSetting(GC_XERT_TOKEN,"").toString()).toLatin1());
     request.setRawHeader("Accept", "application/json");
 
-    // make request
+    // make request - DEC-040 Stage 1 (W2), bounded. Called once per activity from
+    // readdir's loop, so this bound applies per activity, not per listing.
     printd("fetch : %s\n", urlstr.toStdString().c_str());
-    QNetworkReply *reply = nam->get(request);
+    const RequestResult result = blockingRequest(nam()->get(request), kOpenTimeoutMs);
 
-    // blocking request
-    QEventLoop loop;
-    connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-    loop.exec();
+    printd("fetch response: status=%d, error=%d: %s\n", result.httpStatus, result.error, result.errorString.toStdString().c_str());
 
-    int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-    printd("fetch response: status=%d, error=%d: %s\n", statusCode, reply->error(), reply->errorString().toStdString().c_str());
+    // The failure channel readdir needs in order to stop. Without it the only
+    // signal of a failed detail fetch is an empty QJsonObject, which is also what
+    // a successful fetch of an activity with no summary returns - so the caller
+    // could not tell "no detail" from "no answer".
+    if (!result.ok()) {
+        if (error) *error = result.errorString;
+        return QJsonObject();
+    }
 
-    // if successful, lets unpack
-    if (reply->error() == 0) {
-
+    // The old error guard's block, kept as a plain scope: the guard itself moved
+    // above and re-testing it here would be a branch that can no longer be false.
+    {
         // get the data
-        QByteArray data = reply->readAll();
+        QByteArray data = result.body;
 
         printd("page : %s\n", data.toStdString().c_str());
 
@@ -352,7 +385,7 @@ Xert::readFile(QByteArray *data, QString remotename, QString remoteid)
     request.setRawHeader("Authorization", (QString("Bearer %1").arg(token)).toLatin1());
 
     // put the file
-    QNetworkReply *reply = nam->get(request);
+    QNetworkReply *reply = nam()->get(request);
 
     // remember
     mapReply(reply,remotename);
@@ -517,7 +550,7 @@ Xert::writeFile(QByteArray &data, QString remotename, RideFile *ride, quint64 op
     // post the file
     QNetworkReply *reply;
 
-    reply = nam->post(request, multiPart);
+    reply = nam()->post(request, multiPart);
 
     // catch finished signal
     connect(reply, SIGNAL(finished()), this, SLOT(writeFileCompleted()));
