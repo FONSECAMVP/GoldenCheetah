@@ -368,7 +368,7 @@ Xert::readActivityDetail(QString path, bool withSessionData, QString *error)
 
 // read a file at location (relative to home) into passed array
 bool
-Xert::readFile(QByteArray *data, QString remotename, QString remoteid)
+Xert::readFile(QByteArray *data, QString remotename, QString remoteid, CloudService::ReadFileArmed *)
 {
     printd("Xert::readFile(%s, %s)\n", remotename.toStdString().c_str(), remoteid.toStdString().c_str());
 

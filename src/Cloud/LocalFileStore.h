@@ -49,7 +49,7 @@ class LocalFileStore : public CloudService {
         bool writeFile(QByteArray &data, QString remotename, RideFile *ride, quint64 operationId);
 
         // read a file
-        bool readFile(QByteArray *data, QString remotename, QString);
+        bool readFile(QByteArray *data, QString remotename, QString, ReadFileArmed * = nullptr);
 
         // create a folder
         bool createFolder(QString path);

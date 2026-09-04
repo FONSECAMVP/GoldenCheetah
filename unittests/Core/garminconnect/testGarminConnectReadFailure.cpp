@@ -224,10 +224,18 @@ class TestGarminConnectReadFailure : public QObject
     // The shared shape of all five sites. Returns the reason that was posted.
     // `data` is the caller-preallocated buffer, exactly as syncNext/downloadNext
     // and CloudServiceAutoDownload::run build it.
+    //
+    // TEST-154 (DEC-garmin-033, REQ-027 (e)) — `armedOut`, optional and additive:
+    // when a caller passes one, it is filled with the out-param GarminConnect's
+    // readFile set at this site, so the doctrine and assertions above are
+    // unchanged and this is purely an extra observation channel.
     QString driveRefusal(GarminConnect& gc, CloudService& svc, QByteArray* data, const QString& remotename,
-                         const QString& remoteid)
+                         const QString& remoteid, CloudService::ReadFileArmed* armedOut = nullptr)
     {
-        const bool ok = gc.readFile(data, remotename, remoteid);
+        CloudService::ReadFileArmed armed = CloudService::ArmedNothing;
+        const bool ok = gc.readFile(data, remotename, remoteid, &armed);
+        if (armedOut)
+            *armedOut = armed;
 
         // Reporting is not permission.
         if (ok) {
@@ -294,10 +302,16 @@ class TestGarminConnectReadFailure : public QObject
         const quint64 epochAtOpen = GarminAccountEpoch::current(tmp.path());
 
         QByteArray* data = new QByteArray;
-        const QString reason = driveRefusal(gc, svc, data, QStringLiteral("garmin-8001.fit"), QStringLiteral("8001"));
+        CloudService::ReadFileArmed armed = CloudService::ArmedNothing;
+        const QString reason =
+            driveRefusal(gc, svc, data, QStringLiteral("garmin-8001.fit"), QStringLiteral("8001"), &armed);
 
         QVERIFY2(!reason.isEmpty(), "the RateLimit fast-fail must REPORT itself, not return false in silence");
         verifyExactlyOneFailureFor(svc, data, QStringLiteral("garmin-8001.fit"));
+        // TEST-154 (DEC-garmin-033) — this site posts a completion (readFailed)
+        // before returning false, so the out-param must say ArmedCompletion, not
+        // the silent default.
+        QCOMPARE(armed, CloudService::ArmedCompletion);
 
         // DEC-016 anti retry-storm: RateLimit makes NO second request.
         QCOMPARE(client.downloadFmts, QStringList() << QStringLiteral("ORIGINAL"));
@@ -329,10 +343,13 @@ class TestGarminConnectReadFailure : public QObject
         CloudService& svc = static_cast<CloudService&>(gc);
 
         QByteArray* data = new QByteArray;
-        const QString reason = driveRefusal(gc, svc, data, QStringLiteral("garmin-8002.fit"), QStringLiteral("8002"));
+        CloudService::ReadFileArmed armed = CloudService::ArmedNothing;
+        const QString reason =
+            driveRefusal(gc, svc, data, QStringLiteral("garmin-8002.fit"), QStringLiteral("8002"), &armed);
 
         QVERIFY2(!reason.isEmpty(), "an activity that is downloadable in NEITHER format must report itself");
         verifyExactlyOneFailureFor(svc, data, QStringLiteral("garmin-8002.fit"));
+        QCOMPARE(armed, CloudService::ArmedCompletion); // TEST-154
 
         // DEC-016: the fallback WAS attempted — exactly once.
         QCOMPARE(client.downloadFmts, QStringList() << QStringLiteral("ORIGINAL") << QStringLiteral("TCX"));
@@ -366,10 +383,13 @@ class TestGarminConnectReadFailure : public QObject
         const quint64 epochAtOpen = GarminAccountEpoch::current(tmp.path());
 
         QByteArray* data = new QByteArray;
-        const QString reason = driveRefusal(gc, svc, data, QStringLiteral("garmin-8003.fit"), QStringLiteral("8003"));
+        CloudService::ReadFileArmed armed = CloudService::ArmedNothing;
+        const QString reason =
+            driveRefusal(gc, svc, data, QStringLiteral("garmin-8003.fit"), QStringLiteral("8003"), &armed);
 
         QVERIFY2(!reason.isEmpty(), "a mid-flight disconnect must report the discard, not stall the loop");
         verifyExactlyOneFailureFor(svc, data, QStringLiteral("garmin-8003.fit"));
+        QCOMPARE(armed, CloudService::ArmedCompletion); // TEST-154
 
         // It really was the clause-(c) DISCARD: the download completed (so the
         // guard cannot have been an entry guard) and no TCX retry was issued.
@@ -405,10 +425,13 @@ class TestGarminConnectReadFailure : public QObject
         CloudService& svc = static_cast<CloudService&>(gc);
 
         QByteArray* data = new QByteArray;
-        const QString reason = driveRefusal(gc, svc, data, QStringLiteral("garmin-8004.fit"), QStringLiteral("8004"));
+        CloudService::ReadFileArmed armed = CloudService::ArmedNothing;
+        const QString reason =
+            driveRefusal(gc, svc, data, QStringLiteral("garmin-8004.fit"), QStringLiteral("8004"), &armed);
 
         QVERIFY2(!reason.isEmpty(), "a refusal to even attempt the retry must report itself");
         verifyExactlyOneFailureFor(svc, data, QStringLiteral("garmin-8004.fit"));
+        QCOMPARE(armed, CloudService::ArmedCompletion); // TEST-154
 
         // The whole point of this site: NO second wire call, even though the
         // scripted TCX would have succeeded.
@@ -441,10 +464,13 @@ class TestGarminConnectReadFailure : public QObject
         CloudService& svc = static_cast<CloudService&>(gc);
 
         QByteArray* data = new QByteArray;
-        const QString reason = driveRefusal(gc, svc, data, QStringLiteral("garmin-8005.fit"), QStringLiteral("8005"));
+        CloudService::ReadFileArmed armed = CloudService::ArmedNothing;
+        const QString reason =
+            driveRefusal(gc, svc, data, QStringLiteral("garmin-8005.fit"), QStringLiteral("8005"), &armed);
 
         QVERIFY2(!reason.isEmpty(), "a mid-retry disconnect must report the discard, not stall the loop");
         verifyExactlyOneFailureFor(svc, data, QStringLiteral("garmin-8005.fit"));
+        QCOMPARE(armed, CloudService::ArmedCompletion); // TEST-154
 
         // Both requests were made — so this is the RETRY-path discard, not the
         // pre-TCX recheck above.

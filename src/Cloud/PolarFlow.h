@@ -59,7 +59,7 @@ class PolarFlow : public CloudService {
         bool close();
 
         // read a file
-        bool readFile(QByteArray *data, QString remotename, QString remoteid);
+        bool readFile(QByteArray *data, QString remotename, QString remoteid, ReadFileArmed *armed = nullptr);
 
         // dirent style api
         CloudServiceEntry *root() { return root_; }

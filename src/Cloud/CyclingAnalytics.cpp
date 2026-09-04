@@ -280,7 +280,7 @@ CyclingAnalytics::readdir(QString path, QStringList &errors, QDateTime, QDateTim
 
 // read a file at location (relative to home) into passed array
 bool
-CyclingAnalytics::readFile(QByteArray *data, QString remotename, QString remoteid)
+CyclingAnalytics::readFile(QByteArray *data, QString remotename, QString remoteid, CloudService::ReadFileArmed *)
 {
     printd("CyclingAnalytics::readFile(%s, %s)\n", remotename.toStdString().c_str(), remoteid.toStdString().c_str());
 

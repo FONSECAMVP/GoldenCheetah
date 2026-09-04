@@ -259,9 +259,30 @@ class CloudService : public QObject {
         quint64 newWriteOperationId() { if (++nextWriteOperationId_ == 0) ++nextWriteOperationId_; return nextWriteOperationId_; }
         void notifyWriteComplete(quint64 operationId, QString name, QString message) { emit writeComplete(operationId,name,message); }
 
+        // DEC-garmin-033 (REQ-027 (e)) - THE THIRD STATE, MADE VISIBLE. `false`
+        // from readFile() used to mean two different things a caller could not
+        // tell apart: "nothing was armed, give up on this row" and "I already
+        // queued a completion, keep waiting" - GarminConnect's own override is
+        // seven-eighths the second shape and one-eighth the first (:452 below is
+        // the only genuinely silent site). syncNext/downloadNext discarded the
+        // bool outright and always chose the second reading, which hung the
+        // dialog forever on the first (B-R027-01) and leaked the caller's
+        // preallocated buffer with it (B-R027-02).
+        //
+        // A defaulted OUT-PARAM rather than a narrower bool, so a future 12th
+        // override that needs the same split does not force widening the
+        // signature again. Every override that does not touch it - which is
+        // every override except GarminConnect's - leaves whatever the CALLER
+        // initialized it to, and syncNext/downloadNext initialize it to
+        // ArmedNothing before the call: exactly the "false=silent" shape this
+        // base stub, and the ten mechanical overrides, already had. It is
+        // consulted by the caller ONLY when readFile returns false; a `true`
+        // return is unaffected by this widening and is not required to touch it.
+        enum ReadFileArmed { ArmedNothing, ArmedCompletion };
+
         // read a file  and notify when done
-        virtual bool readFile(QByteArray *data, QString remotename, QString remoteid) {
-            Q_UNUSED(data); Q_UNUSED(remotename); Q_UNUSED(remoteid); return false;
+        virtual bool readFile(QByteArray *data, QString remotename, QString remoteid, ReadFileArmed *armed = nullptr) {
+            Q_UNUSED(data); Q_UNUSED(remotename); Q_UNUSED(remoteid); Q_UNUSED(armed); return false;
         }
         // DEC-garmin-036 (REQ-028 (c)) - THE BUFFER-IDENTITY CONTRACT, WRITTEN
         // DOWN. It was always relied on and never stated: notifyReadFailed below

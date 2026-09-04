@@ -181,7 +181,7 @@ PolarFlow::readdir(QString path, QStringList &errors, QDateTime, QDateTime)
 
 // read a file at location (relative to home) into passed array
 bool
-PolarFlow::readFile(QByteArray *data, QString remotename, QString remoteid)
+PolarFlow::readFile(QByteArray *data, QString remotename, QString remoteid, CloudService::ReadFileArmed *)
 {
     printd("PolarFlow::readFile(%s)\n", remotename.toStdString().c_str());
 

@@ -103,7 +103,7 @@ class GarminConnect : public CloudService
     // Network/Unknown/not-FIT retry once as TCX → stage garmin-<id>.tcx.
     // REQ-008 Slice C — on a successful stage the download is recorded into
     // imported-<uid>.json and backfill-state is advanced (DES-010 steps 5e/6).
-    bool readFile(QByteArray* data, QString remotename, QString remoteid) override;
+    bool readFile(QByteArray* data, QString remotename, QString remoteid, ReadFileArmed* armed = nullptr) override;
 
     // REQ-008 Slice C (DES-010) — the incremental-sync enumeration. Drives the
     // worker list op (Slice A) for activities newer than the "since" timestamp

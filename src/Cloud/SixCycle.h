@@ -53,7 +53,7 @@ class SixCycle : public CloudService {
         bool writeFile(QByteArray &data, QString remotename, RideFile *ride, quint64 operationId);
 
         // read a file
-        bool readFile(QByteArray *data, QString remotename, QString remoteid);
+        bool readFile(QByteArray *data, QString remotename, QString remoteid, ReadFileArmed *armed = nullptr);
 
         // create a folder
         bool createFolder(QString);

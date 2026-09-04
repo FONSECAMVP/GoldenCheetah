@@ -218,7 +218,7 @@ QList<CloudServiceEntry*> Nolio::readdir(QString path, QStringList &errors, QDat
     return returning;
 }
 
-bool Nolio::readFile(QByteArray *data, QString remotename, QString remoteid){
+bool Nolio::readFile(QByteArray *data, QString remotename, QString remoteid, CloudService::ReadFileArmed *){
     printd("Nolio::readFile\n");
 
     // do we have a token

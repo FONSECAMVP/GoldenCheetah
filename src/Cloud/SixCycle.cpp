@@ -346,7 +346,7 @@ SixCycle::readdir(QString path, QStringList &errors, QDateTime from, QDateTime t
 
 // read a file at location (relative to home) into passed array
 bool
-SixCycle::readFile(QByteArray *data, QString remotename, QString remoteid)
+SixCycle::readFile(QByteArray *data, QString remotename, QString remoteid, CloudService::ReadFileArmed *)
 {
     printd("Sixcycle::readFile(%s)\n", remotename.toStdString().c_str());
 

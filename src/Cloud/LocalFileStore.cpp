@@ -126,7 +126,7 @@ LocalFileStore::readdir(QString path, QStringList &errors)
 
 // read a file at location (relative to home) into passed array
 bool
-LocalFileStore::readFile(QByteArray *data, QString remotename, QString)
+LocalFileStore::readFile(QByteArray *data, QString remotename, QString, CloudService::ReadFileArmed *)
 {
 
     // is the path set ?

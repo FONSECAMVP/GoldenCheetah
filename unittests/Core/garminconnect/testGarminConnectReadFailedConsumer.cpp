@@ -257,7 +257,19 @@ class SpyStore : public CloudService
         return out;
     }
 
-    bool readFile(QByteArray* data, QString remotename, QString remoteid) override
+    // DEC-garmin-033 (REQ-027 (e)) — NOT a mechanical no-op edit: unlike the ten
+    // production siblings this comment used to (wrongly) equate this fixture
+    // with, Channel::Failure below is GarminConnect's OWN "return false after
+    // arming" shape (queue readFailed, then still return false) — the exact
+    // majority shape B-R027-03 is about. Leaving the out-param untouched here
+    // would make syncNext's/downloadNext's new branch mistreat this armed
+    // refusal as a silent one (labelling the row "Refused" instead of letting
+    // failedRead's tail render `reason`), which is precisely the regression an
+    // incomplete mechanical edit would have hidden. Caught by
+    // readFailedAdvancesTheSyncLoopAndFreesTheCallersBuffer going red before
+    // this line was added.
+    bool readFile(QByteArray* data, QString remotename, QString remoteid,
+                  CloudService::ReadFileArmed* armed = nullptr) override
     {
         requestedIds << remoteid;
         watchSlots << bufferwatch::watch(data);
@@ -267,6 +279,8 @@ class SpyStore : public CloudService
             QMetaObject::invokeMethod(
                 this, [this, data, remotename, why]() { notifyReadFailed(data, remotename, why); },
                 Qt::QueuedConnection);
+            if (armed)
+                *armed = CloudService::ArmedCompletion;
             return false; // a refusal stays a refusal
         }
 

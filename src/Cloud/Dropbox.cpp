@@ -229,7 +229,7 @@ Dropbox::readdir(QString path, QStringList &errors)
 
 // read a file at location (relative to home) into passed array
 bool
-Dropbox::readFile(QByteArray *data, QString remotename, QString)
+Dropbox::readFile(QByteArray *data, QString remotename, QString, CloudService::ReadFileArmed *)
 {
     // this must be performed asyncronously and call made
     // to notifyReadComplete(QByteArray &data, QString remotename, QString message) when done

@@ -446,8 +446,13 @@ void GarminConnect::disconnectService()
     GarminAccountEpoch::bump(dir);
 }
 
-bool GarminConnect::readFile(QByteArray* data, QString remotename, QString remoteid)
+bool GarminConnect::readFile(QByteArray* data, QString remotename, QString remoteid, CloudService::ReadFileArmed* armed)
 {
+    // DEC-garmin-033 (REQ-027 (e)) - `armed` may be NULL: CloudServiceAutoDownload::run
+    // (CloudService.cpp:4161) calls through the base default and does not pass
+    // one, and is confirmed out of scope for this DEC (it blocks on both signals
+    // itself and never branches on this bool). Every site below that sets the
+    // out-param therefore checks it first.
     if (data == nullptr || m_client == nullptr)
         return false;
 
@@ -471,6 +476,11 @@ bool GarminConnect::readFile(QByteArray* data, QString remotename, QString remot
     if (sessionSuperseded()) {
         postReadComplete(data, remotename,
                          tr("Garmin Connect: this session's account was disconnected; please sign in again."));
+        // DEC-garmin-033 (REQ-027 (e)) - ARMED, not silent: the postReadComplete
+        // above just queued the completion this `false` used to be indistinguishable
+        // from a genuine refusal-with-nothing-queued. See the seven twins below.
+        if (armed)
+            *armed = CloudService::ArmedCompletion;
         return false;
     }
 
@@ -490,6 +500,9 @@ bool GarminConnect::readFile(QByteArray* data, QString remotename, QString remot
     // is connected at all) and is still used by the guard immediately above.
     if (!accountStillConnected()) {
         postReadComplete(data, remotename, tr("Garmin Connect: no connected account; please sign in again."));
+        // DEC-garmin-033 (REQ-027 (e)) - ARMED, as above.
+        if (armed)
+            *armed = CloudService::ArmedCompletion;
         return false;
     }
 
@@ -516,6 +529,9 @@ bool GarminConnect::readFile(QByteArray* data, QString remotename, QString remot
                 postReadFailed(data, remotename,
                                tr("Garmin Connect: the account was disconnected while this activity was "
                                   "downloading; it was discarded."));
+                // DEC-garmin-033 (REQ-027 (e)) - ARMED, as above.
+                if (armed)
+                    *armed = CloudService::ArmedCompletion;
                 return false;
             }
             *data = inner; // stage the UNZIPPED FIT bytes
@@ -537,6 +553,9 @@ bool GarminConnect::readFile(QByteArray* data, QString remotename, QString remot
         postReadFailed(data, remotename,
                        tr("Garmin Connect: rate limited by the server; this activity was not downloaded. "
                           "Please try again later."));
+        // DEC-garmin-033 (REQ-027 (e)) - ARMED, as above.
+        if (armed)
+            *armed = CloudService::ArmedCompletion;
         return false;
     }
     // Network / Unknown (DEC-016 Assumption-B: Network legitimately conflates a
@@ -554,6 +573,9 @@ bool GarminConnect::readFile(QByteArray* data, QString remotename, QString remot
         postReadFailed(data, remotename,
                        tr("Garmin Connect: the account was disconnected; the TCX retry for this activity was "
                           "not attempted."));
+        // DEC-garmin-033 (REQ-027 (e)) - ARMED, as above.
+        if (armed)
+            *armed = CloudService::ArmedCompletion;
         return false;
     }
 
@@ -569,6 +591,9 @@ bool GarminConnect::readFile(QByteArray* data, QString remotename, QString remot
             postReadFailed(data, remotename,
                            tr("Garmin Connect: the account was disconnected while the TCX retry for this "
                               "activity was downloading; it was discarded."));
+            // DEC-garmin-033 (REQ-027 (e)) - ARMED, as above.
+            if (armed)
+                *armed = CloudService::ArmedCompletion;
             return false;
         }
         *data = tcx.bytes; // TCX is raw XML, not ZIP-wrapped
@@ -585,6 +610,13 @@ bool GarminConnect::readFile(QByteArray* data, QString remotename, QString remot
     // will not hand over. Silence here left the sync dialog stuck on this row
     // forever; now the row says so and the loop moves to the next activity.
     postReadFailed(data, remotename, tr("Garmin Connect: this activity could not be downloaded as either FIT or TCX."));
+    // DEC-garmin-033 (REQ-027 (e)) - ARMED, as above: the seventh and last of
+    // GarminConnect's "return false after arming" sites. Only the entry guard at
+    // the top of this function (`data == nullptr || m_client == nullptr`) leaves
+    // `armed` untouched (ArmedNothing, the default) - it is the one genuinely
+    // silent site.
+    if (armed)
+        *armed = CloudService::ArmedCompletion;
     return false;
 }
 

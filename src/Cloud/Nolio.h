@@ -53,7 +53,7 @@ class Nolio : public CloudService {
         QList<CloudServiceEntry*> readdir(QString path, QStringList &errors, QDateTime from, QDateTime to);
 
         // read a file
-        bool readFile(QByteArray *data, QString remotename, QString remoteid);
+        bool readFile(QByteArray *data, QString remotename, QString remoteid, ReadFileArmed *armed = nullptr);
         QByteArray* prepareResponse(QByteArray* data);
 
         // create a folder

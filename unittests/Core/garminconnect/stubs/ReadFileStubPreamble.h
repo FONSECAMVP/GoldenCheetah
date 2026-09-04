@@ -168,11 +168,20 @@ class CloudService
     }
     virtual void disconnectService() {}
 
-    virtual bool readFile(QByteArray* data, QString remotename, QString remoteid)
+    // DEC-garmin-033 (REQ-027 (e)) - mirrors the real CloudService.h's widened
+    // virtual: a defaulted out-param distinguishing "armed nothing" from "armed a
+    // deferred completion". GarminConnect.cpp (compiled real, against this stub,
+    // by every target that force-includes this preamble) references
+    // CloudService::ReadFileArmed/ArmedCompletion directly, so this stand-in must
+    // declare the same enum and the same widened signature or it fails to link
+    // against its own base class.
+    enum ReadFileArmed { ArmedNothing, ArmedCompletion };
+    virtual bool readFile(QByteArray* data, QString remotename, QString remoteid, ReadFileArmed* armed = nullptr)
     {
         Q_UNUSED(data);
         Q_UNUSED(remotename);
         Q_UNUSED(remoteid);
+        Q_UNUSED(armed);
         return false;
     }
 

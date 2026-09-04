@@ -278,7 +278,7 @@ Strava::readdir(QString path, QStringList &errors, QDateTime from, QDateTime to)
 
 // read a file at location (relative to home) into passed array
 bool
-Strava::readFile(QByteArray *data, QString remotename, QString remoteid)
+Strava::readFile(QByteArray *data, QString remotename, QString remoteid, CloudService::ReadFileArmed *)
 {
     printd("Strava::readFile(%s)\n", remotename.toStdString().c_str());
 

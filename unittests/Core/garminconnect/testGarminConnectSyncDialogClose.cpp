@@ -1074,7 +1074,8 @@ class BlockingStore : public CloudService
         return out;
     }
 
-    bool readFile(QByteArray* data, QString remotename, QString /*remoteid*/) override
+    bool readFile(QByteArray* data, QString remotename, QString /*remoteid*/,
+                  CloudService::ReadFileArmed* armed = nullptr) override
     {
         ++obs::readFileCalls;
         obs::lastBuffer = data;
@@ -1101,6 +1102,84 @@ class BlockingStore : public CloudService
         // rather than something further downstream.
         if (canary_ != kCanary)
             return false;
+
+        // DEC-garmin-033 (REQ-027 (e) / B-R027-03) — TWO DISTINGUISHABLE REFUSAL
+        // MODES, corrected 2026-09-03 after a reviewer catch on the original
+        // briefing (which named only one and conflated its shape with the other).
+        // A fixture offering only one of these would let a test go green without
+        // ever exercising the branch it claims to cover:
+        //
+        //   Mode 1 (readFileRefusesSilently, ArmedNothing) — returns false, emits
+        //   NOTHING. This is the genuinely-silent shape the O-R027-01 clause (e)
+        //   itself needs (GarminConnect's own one silent site, its null guard, and
+        //   every OTHER service's base-default shape all behave this way). See
+        //   TEST-155(a)/TEST-156(a).
+        //
+        //   Mode 2 (readFileRefusesAfterArming, ArmedCompletion) — returns false
+        //   AFTER queueing a REAL completion via Qt::QueuedConnection, matching
+        //   GarminConnect's own actual majority shape (seven of its eight `return
+        //   false` sites do exactly this). This is the mode that proves the new
+        //   syncNext/downloadNext branch does NOT mistreat "false but something is
+        //   coming" as "armed nothing" — the double-drive risk B-R027-01 actually
+        //   named. Building this as "false + emits nothing" would silently retest
+        //   clause (e) a second time under a different name instead of covering
+        //   the real bug. See TEST-155(b)/TEST-156(b).
+        if (readFileRefusesSilently) {
+            if (armed)
+                *armed = CloudService::ArmedNothing;
+            // TEST-126 — TEACH THE ORACLE ABOUT THIS THIRD RESOLUTION PATH.
+            // Production resolves this dispatch SYNCHRONOUSLY in the CALLER's own
+            // frame (syncNext/downloadNext's `readOperations.remove(data)`) with
+            // NO completion signal ever emitted — that silence is the entire
+            // point of clause (e). The oracle's independent ledger (built for an
+            // earlier cycle, before this DEC) only ever learns a dispatch is
+            // resolved via noteDelivery, which the store's notifyReadComplete/
+            // notifyReadFailed wrappers call on a real signal — neither fires
+            // here. Without this, the oracle would keep this dispatch "live"
+            // forever while the dialog's own outstandingTransferCount() has
+            // already dropped it: a conservation mismatch this fixture would
+            // manufacture against itself, not a defect in production.
+            //
+            // noteDelivery() runs NOW, matching what production is ABOUT to do.
+            // The resample is QUEUED rather than run inline, because production's
+            // OWN removal has not happened yet at this line — it happens in the
+            // caller, after readFile returns. Queuing lands it inside the
+            // caller's own QApplication::processEvents() call, which runs AFTER
+            // that removal — the identical timing trick armCompletionAction()
+            // uses elsewhere in this fixture (TEST-102) for the same reason: the
+            // action must land inside a specific window in the CALLER's frame,
+            // not this one.
+            oracle_.noteDelivery(false, data, 0, remotename);
+            // TEST-076 (DEC-garmin-033's O-R027-01 guard) — a parent/dialog
+            // teardown delivered while THIS call was suspended
+            // (fireActionThenBlock(), above) means the caller's
+            // `self.isNull()` guard is about to stand syncNext/downloadNext
+            // down WITHOUT ever touching the dialog again for this dispatch —
+            // there is no frame left for the queued resample below to run
+            // against. That is not the store-death case
+            // observerDestroyedInDelivery already names (this store survives
+            // a silent refusal, per DEC-garmin-025/031 — only the DIALOG the
+            // oracle's checkConservation reads is gone), so it needs the
+            // identical exemption for the identical reason: a legitimately-
+            // passing run has no observer left capable of a post-removal
+            // resample. Every other run through this branch has the dialog
+            // alive here (T-155(a)/T-156(a)), so this is additive, not a
+            // softening of those.
+            if (dialogGuard.isNull())
+                oracle::observerDestroyedInDelivery++;
+            else
+                QMetaObject::invokeMethod(this, [this]() { oracle_.checkCompletionRemoval(); }, Qt::QueuedConnection);
+            return false;
+        }
+        if (readFileRefusesAfterArming) {
+            QMetaObject::invokeMethod(
+                this, [this, data, remotename]() { notifyReadFailed(data, remotename, tr("service refused")); },
+                Qt::QueuedConnection);
+            armCompletionAction();
+            if (armed)
+                *armed = CloudService::ArmedCompletion;
+            return false;
+        }
 
         // TEST-087 - the completion is what puts the dialog INSIDE completedRead,
         // and that run drives the slot itself so that it can queue the teardown
@@ -1341,19 +1420,26 @@ class BlockingStore : public CloudService
     oracle::TransferOracle oracle_;
 
     QStringList entryNames;
-    QDialog* dialog = nullptr;                   // where the close is sent
-    std::function<void()> closeAction;           // what the user does, inside the loop
-    std::function<void()> nextAction;            // ...and what happens inside the NEXT one (TEST-090)
-    ReapLog* log = nullptr;                      // per-store reap record, when one store is not enough
-    QObject* closeActionContext = nullptr;       // who it is delivered to (default: dialog)
-    bool blockInReaddir = false;                 // does readdir run a nested loop too?
-    bool blockInOpen = false;                    // does open() run a nested loop too? (TEST-075)
-    bool openFailMode = false;                   // does open() FAIL, taking start()'s open-failure branch? (TEST-077)
-    bool blockInWrite = false;                   // does writeFile run a nested loop? (TEST-079)
-    bool writeSucceeds = true;                   // ...and does it report the upload started?
-    bool completeWrite = false;                  // ...and does writeComplete ever arrive? (TEST-080)
-    bool completeRead = true;                    // ...and does readComplete? (TEST-087 drives it itself)
-    bool failRead = false;                       // ...or does the read REFUSE instead? (TEST-102)
+    QDialog* dialog = nullptr;             // where the close is sent
+    std::function<void()> closeAction;     // what the user does, inside the loop
+    std::function<void()> nextAction;      // ...and what happens inside the NEXT one (TEST-090)
+    ReapLog* log = nullptr;                // per-store reap record, when one store is not enough
+    QObject* closeActionContext = nullptr; // who it is delivered to (default: dialog)
+    bool blockInReaddir = false;           // does readdir run a nested loop too?
+    bool blockInOpen = false;              // does open() run a nested loop too? (TEST-075)
+    bool openFailMode = false;             // does open() FAIL, taking start()'s open-failure branch? (TEST-077)
+    bool blockInWrite = false;             // does writeFile run a nested loop? (TEST-079)
+    bool writeSucceeds = true;             // ...and does it report the upload started?
+    bool completeWrite = false;            // ...and does writeComplete ever arrive? (TEST-080)
+    bool completeRead = true;              // ...and does readComplete? (TEST-087 drives it itself)
+    bool failRead = false;                 // ...or does the read REFUSE instead? (TEST-102)
+    // DEC-garmin-033 (REQ-027 (e) / B-R027-03) — the two DISTINGUISHABLE refusal
+    // modes readFile() above implements. Mutually exclusive by construction (both
+    // branches `return` before falling through), but kept as two flags rather
+    // than one enum so a caller cannot set an invalid combination by typo-ing a
+    // shared value.
+    bool readFileRefusesSilently = false;    // Mode 1 (ArmedNothing): false, emits nothing (clause (e))
+    bool readFileRefusesAfterArming = false; // Mode 2 (ArmedCompletion): false AFTER queueing readFailed (B-R027-03)
     std::function<void()> afterCompletionAction; // what the user does behind that completion (TEST-102)
     QPointer<QDialog> dialogGuard;
     int blockingMs = 120;
@@ -16024,6 +16110,509 @@ class TestGarminConnectSyncDialogClose : public QObject
         // goes with it, closed and deleted once no frame is executing on it.
         QVERIFY2(out.storeGoneAtEnd,
                  qPrintable(where + QStringLiteral("the store outlived the dialog - the reaper never released it")));
+    }
+
+    // =====================================================================
+    // TEST-155 / TEST-156 (REQ-027 clause (e), DEC-garmin-033) — THE
+    // O-R027-01 CLAUSE, on BOTH syncNext (TEST-155) and downloadNext
+    // (TEST-156).
+    // =====================================================================
+    //
+    // ACCEPTANCE CRITERION, quoted verbatim from the briefing: "A Download row
+    // whose service returns `false` from `readFile` without emitting anything
+    // is labelled with a refusal string, the bar advances, and the next
+    // checked row is still attempted — on both syncNext and downloadNext."
+    //
+    // TWO SUB-CASES PER FUNCTION, because ONE fixture mode cannot prove both
+    // halves of DEC-033 at once (corrected 2026-09-03, reviewer catch):
+    //   (a) Mode 1 (readFileRefusesSilently) — BOTH checked rows refuse with
+    //       NOTHING armed. This is clause (e) itself: row[0] must be labelled,
+    //       the bar must advance for it, and row[1] must still be ATTEMPTED
+    //       (readFileCalls == 2) rather than the batch hanging on row[0]
+    //       forever (the pre-fix defect: readFile's bool was discarded, so a
+    //       silent refusal was indistinguishable from "wait for a signal that
+    //       is never coming").
+    //   (b) Mode 2 (readFileRefusesAfterArming) — BOTH checked rows refuse
+    //       AFTER queueing a real completion (GarminConnect's own actual
+    //       majority shape: 7 of its 8 `return false` sites do this). This is
+    //       B-R027-03's proof that the new branch does NOT mistreat "false but
+    //       something is coming" as "armed nothing": neither row may be
+    //       labelled with the NEW "Refused" string (my own branch's literal),
+    //       only with the REASON failedRead's tail sets ("service refused"),
+    //       and the buffer must not be freed by my new branch (only by
+    //       failedRead's own, pre-existing, exactly-once free).
+  private:
+    struct ClauseEOutcome
+    {
+        bool timedOut = false;
+        int listCount = 0;
+        int checkedRows = 0;
+        int readFileCalls = 0;
+        QStringList statuses; // status column, in row order
+        int progressValue = -1;
+        int progressMax = -1;
+        QString progressText;
+        QString buttonTextAtEnd;
+        int stillCheckedAtEnd = -1;
+        bool row0BufferFreed = false; // ASan poison check (B-R027-02)
+    };
+
+    // The two remote activities BOTH clause-(e) runs list. Distinct from every
+    // other static activity-name helper in this file (grepped clean) so this
+    // fixture cannot collide with another test's rideCache/list state.
+    static QStringList clauseEActivities()
+    {
+        const QString day = QDate::currentDate().toString(QStringLiteral("yyyy_MM_dd"));
+        return QStringList() << (day + QStringLiteral("_16_00_00.gcfail"))
+                             << (day + QStringLiteral("_17_00_00.gcfail"));
+    }
+
+    // `sync` picks syncNext (Sync tab, index 2, status column 7) vs
+    // downloadNext (Download tab, index 0, status column 5). `afterArming`
+    // picks Mode 2 over Mode 1 for BOTH checked rows. Neither local rideCache
+    // item is created: both rows are Download-type by construction (a name
+    // the store lists but the cache does not hold), on either tab.
+    ClauseEOutcome runClauseEBatch(bool sync, bool afterArming)
+    {
+        obs::reset();
+        rideopen::reset();
+        ridefail::reset();
+        rideopen::blockingMs = 5;
+
+        ClauseEOutcome out;
+        QEventLoop appLoop;
+
+        const QDir activities = context->athlete->home->activities();
+        QDir().mkpath(activities.absolutePath());
+
+        QMetaObject::invokeMethod(
+            this,
+            [&]() {
+                QWidget* owner = new QWidget;
+
+                BlockingStore* store = new BlockingStore(context);
+                store->entryNames = clauseEActivities();
+                store->blockingMs = 5;
+                store->closeActionContext = qApp;
+                // GarminConnect's own setting (GarminConnect.cpp:102):
+                // uncompressRide's first guard rejects outright on the default.
+                // Irrelevant to THIS fixture (both rows refuse before any
+                // uncompressRide call), kept for consistency with every other
+                // download-row harness in this file.
+                store->downloadCompression = CloudService::none;
+                store->readFileRefusesSilently = !afterArming;
+                store->readFileRefusesAfterArming = afterArming;
+
+                CloudServiceSyncDialog* dialog = new CloudServiceSyncDialog(context, store);
+                dialog->setParent(owner, Qt::Dialog);
+                dialog->start();
+                dialog->open();
+                store->dialog = dialog;
+                store->dialogGuard = dialog;
+
+                QTreeWidget* list = nullptr;
+                if (QTabWidget* tabs = dialog->findChild<QTabWidget*>())
+                    tabs->setCurrentIndex(sync ? 2 : 0);
+                if (sync) {
+                    dialog->selectAllSyncChanged(Qt::Checked);
+                    list = rideListWithHeader(dialog, QStringLiteral("Source"));
+                } else {
+                    // The DOWNLOAD tab's column-1 header is "Workout Name", NOT
+                    // "File" (CloudService.cpp:1100) — asking for "File" here
+                    // silently returns the (empty) upload list and every count
+                    // below reads zero (see runAbortBehindCompletion's comment).
+                    dialog->selectAllChanged(Qt::Checked);
+                    list = rideListWithHeader(dialog, QStringLiteral("Workout Name"));
+                }
+
+                if (list != nullptr) {
+                    QTreeWidgetItem* root = list->invisibleRootItem();
+                    out.listCount = root->childCount();
+                    for (int i = 0; i < out.listCount; i++) {
+                        QCheckBox* check = qobject_cast<QCheckBox*>(list->itemWidget(root->child(i), 0));
+                        if (check != nullptr && check->isChecked())
+                            out.checkedRows++;
+                    }
+                }
+
+                dialog->downloadClicked();
+
+                // B-R027-02 — row[0]'s buffer address, read from `parked`
+                // (BlockingStore::readFile appends one entry per dispatch,
+                // keyed by `token`) rather than from obs::lastBuffer, which
+                // row[1]'s dispatch has already overwritten by now. `store` is
+                // still alive here: nothing in this run tears the dialog (and
+                // therefore the store) down before the owner's delete fires
+                // below.
+                QByteArray* row0Buffer = store->parked.isEmpty() ? nullptr : store->parked.first().token;
+                out.row0BufferFreed = (row0Buffer != nullptr) && isPoisoned(row0Buffer, sizeof(QByteArray));
+
+                out.readFileCalls = obs::readFileCalls;
+                const int col = sync ? 7 : 5;
+                if (list != nullptr) {
+                    QTreeWidgetItem* root = list->invisibleRootItem();
+                    out.stillCheckedAtEnd = 0;
+                    for (int i = 0; i < root->childCount(); i++) {
+                        out.statuses << root->child(i)->text(col);
+                        QCheckBox* check = qobject_cast<QCheckBox*>(list->itemWidget(root->child(i), 0));
+                        if (check != nullptr && check->isChecked())
+                            out.stillCheckedAtEnd++;
+                    }
+                }
+                if (QProgressBar* bar = dialog->findChild<QProgressBar*>()) {
+                    out.progressValue = bar->value();
+                    out.progressMax = bar->maximum();
+                }
+                out.progressText = progressLabelText(dialog);
+                QPushButton* button =
+                    pushButtonWithText(dialog, sync ? QStringLiteral("Synchronize") : QStringLiteral("Download"));
+                if (button != nullptr)
+                    out.buttonTextAtEnd = button->text();
+
+                QTimer::singleShot(100, qApp, [owner]() { delete owner; });
+                QTimer::singleShot(200, &appLoop, &QEventLoop::quit);
+
+                bool* timedOutp = &out.timedOut;
+                QTimer::singleShot(20000, &appLoop, [timedOutp]() {
+                    *timedOutp = true;
+                    QCoreApplication::exit(1);
+                });
+            },
+            Qt::QueuedConnection);
+
+        appLoop.exec();
+        for (int i = 0; i < 50; ++i)
+            QApplication::processEvents(QEventLoop::AllEvents, 5);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+        return out;
+    }
+
+    // The shared premises for every clause-(e) run.
+    void assertClauseEPremises(const QString& where, const ClauseEOutcome& out)
+    {
+        QVERIFY2(!out.timedOut, qPrintable(where + QStringLiteral("the batch never came back - it hung on row[0]")));
+        QCOMPARE(out.listCount, 2);
+        QCOMPARE(out.checkedRows, 2);
+    }
+
+  private slots:
+    // -- TEST-155(a) — syncNext, Mode 1 (clause (e) itself) --------------
+    void syncNextSilentRefusalLabelsAdvancesAndAttemptsTheNextRow()
+    {
+        const ClauseEOutcome out = runClauseEBatch(/*sync=*/true, /*afterArming=*/false);
+        const QString where = QStringLiteral("TEST-155(a) syncNext silent refusal: ");
+        assertClauseEPremises(where, out);
+
+        // THE POINT: readFile was called for BOTH rows, not just row[0]. On
+        // pre-fix production (the bool discarded, always "wait for a signal")
+        // this reads 1 — the batch hung on row[0] forever.
+        QVERIFY2(out.readFileCalls == 2,
+                 qPrintable(where + QStringLiteral("store->readFile was called %1 time(s), not 2 - the batch did not "
+                                                   "attempt the next row after a silent refusal")
+                                        .arg(out.readFileCalls)));
+
+        // Both rows labelled with a refusal string (not left blank).
+        QCOMPARE(out.statuses.count(), 2);
+        for (const QString& s : out.statuses)
+            QVERIFY2(!s.isEmpty() && s != QStringLiteral("Downloading"),
+                     qPrintable(where + QStringLiteral("a refused row's status cell was \"%1\"").arg(s)));
+
+        // The bar advanced for BOTH refusals and reached its maximum — the
+        // batch reached its completion tail rather than stalling mid-run.
+        QCOMPARE(out.progressValue, 2);
+        QCOMPARE(out.progressMax, 2);
+        QVERIFY2(out.progressText.contains(QStringLiteral("successfully")),
+                 qPrintable(where + QStringLiteral("the completion tail's sentence never appeared (\"%1\") - the "
+                                                   "batch did not terminate")
+                                        .arg(out.progressText)));
+        QCOMPARE(out.buttonTextAtEnd, QStringLiteral("Synchronize"));
+        QCOMPARE(out.stillCheckedAtEnd, 0);
+
+        // B-R027-02 — row[0]'s preallocated buffer was freed exactly once by
+        // the new branch (readOperations.remove + delete data), not leaked
+        // because nothing ever emitted a completion for it.
+        QVERIFY2(out.row0BufferFreed,
+                 qPrintable(where + QStringLiteral("row[0]'s buffer was never freed - a silent refusal leaks the "
+                                                   "caller's preallocated QByteArray")));
+    }
+
+    // -- TEST-155(b) — syncNext, Mode 2 (B-R027-03: majority shape safety) --
+    void syncNextArmedRefusalIsNotMistakenForASilentOne()
+    {
+        const ClauseEOutcome out = runClauseEBatch(/*sync=*/true, /*afterArming=*/true);
+        const QString where = QStringLiteral("TEST-155(b) syncNext armed refusal: ");
+        assertClauseEPremises(where, out);
+
+        // Both rows still attempted and the batch still reaches its tail — the
+        // PRE-EXISTING failedRead path, unchanged by this DEC.
+        QVERIFY2(
+            out.readFileCalls == 2,
+            qPrintable(where + QStringLiteral("store->readFile was called %1 time(s), not 2").arg(out.readFileCalls)));
+        QCOMPARE(out.progressValue, 2);
+        QCOMPARE(out.progressMax, 2);
+        QCOMPARE(out.buttonTextAtEnd, QStringLiteral("Synchronize"));
+
+        // THE POINT: neither row is labelled with the NEW "Refused" string —
+        // that would mean the new branch fired for a dispatch that had
+        // actually armed a completion, double-handling it. Both must carry
+        // failedRead's OWN reason instead.
+        QCOMPARE(out.statuses.count(), 2);
+        for (const QString& s : out.statuses) {
+            QVERIFY2(s != QStringLiteral("Refused"),
+                     qPrintable(where + QStringLiteral("a row armed a completion but was labelled by the NEW silent-"
+                                                       "refusal branch anyway - the out-param was not read")));
+            QCOMPARE(s, QStringLiteral("service refused"));
+        }
+    }
+
+    // -- TEST-156(a) — downloadNext, Mode 1 (clause (e) itself) -----------
+    void downloadNextSilentRefusalLabelsAdvancesAndAttemptsTheNextRow()
+    {
+        const ClauseEOutcome out = runClauseEBatch(/*sync=*/false, /*afterArming=*/false);
+        const QString where = QStringLiteral("TEST-156(a) downloadNext silent refusal: ");
+        assertClauseEPremises(where, out);
+
+        QVERIFY2(out.readFileCalls == 2,
+                 qPrintable(where + QStringLiteral("store->readFile was called %1 time(s), not 2 - the batch did not "
+                                                   "attempt the next row after a silent refusal")
+                                        .arg(out.readFileCalls)));
+        QCOMPARE(out.statuses.count(), 2);
+        for (const QString& s : out.statuses)
+            QVERIFY2(!s.isEmpty() && s != QStringLiteral("Downloading"),
+                     qPrintable(where + QStringLiteral("a refused row's status cell was \"%1\"").arg(s)));
+        QCOMPARE(out.progressValue, 2);
+        QCOMPARE(out.progressMax, 2);
+        QVERIFY2(
+            out.progressText.contains(QStringLiteral("successfully")),
+            qPrintable(where +
+                       QStringLiteral("the completion tail's sentence never appeared (\"%1\")").arg(out.progressText)));
+        QCOMPARE(out.buttonTextAtEnd, QStringLiteral("Download"));
+        QCOMPARE(out.stillCheckedAtEnd, 0);
+
+        QVERIFY2(out.row0BufferFreed,
+                 qPrintable(where + QStringLiteral("row[0]'s buffer was never freed - a silent refusal leaks the "
+                                                   "caller's preallocated QByteArray")));
+    }
+
+    // -- TEST-156(b) — downloadNext, Mode 2 (B-R027-03: majority shape safety) --
+    void downloadNextArmedRefusalIsNotMistakenForASilentOne()
+    {
+        const ClauseEOutcome out = runClauseEBatch(/*sync=*/false, /*afterArming=*/true);
+        const QString where = QStringLiteral("TEST-156(b) downloadNext armed refusal: ");
+        assertClauseEPremises(where, out);
+
+        QVERIFY2(
+            out.readFileCalls == 2,
+            qPrintable(where + QStringLiteral("store->readFile was called %1 time(s), not 2").arg(out.readFileCalls)));
+        QCOMPARE(out.progressValue, 2);
+        QCOMPARE(out.progressMax, 2);
+        QCOMPARE(out.buttonTextAtEnd, QStringLiteral("Download"));
+
+        QCOMPARE(out.statuses.count(), 2);
+        for (const QString& s : out.statuses) {
+            QVERIFY2(s != QStringLiteral("Refused"),
+                     qPrintable(where + QStringLiteral("a row armed a completion but was labelled by the NEW silent-"
+                                                       "refusal branch anyway - the out-param was not read")));
+            QCOMPARE(s, QStringLiteral("service refused"));
+        }
+    }
+
+    // =====================================================================
+    // TEST-076 (DEC-garmin-033, the `self.isNull()` guard immediately below
+    // `store->readFile(...)`'s BlockingCall, in BOTH syncNext and
+    // downloadNext) — is that guard actually EXERCISED, or merely correct in
+    // isolation?
+    // =====================================================================
+    //
+    // B-R027-09 (orchestrator mutation, 2026-09-04): the guard was neutered
+    // (`if (false && self.isNull()) return true;`), the suite rebuilt and
+    // run: 0 of its 91 slots failed. Restored byte-identical (`cmp`
+    // confirmed), rebuilt, reran: 91/91 green again. Nothing in this file
+    // delivers a parent/dialog teardown WHILE readFile is suspended on a row
+    // that then refuses silently (Mode 1, ArmedNothing, DEC-garmin-033) — the
+    // one shape that makes the branch immediately below the guard
+    // (`readOperations.remove`, `curr->setText`, `progressBar->setValue`,
+    // `delete data`) a real member access on a `this`/`curr`/`progressBar`
+    // the teardown may already have freed.
+    //
+    // Reuses two existing seams rather than building new ones:
+    //   - readFile's OWN suspension (fireActionThenBlock() — unconditional,
+    //     unlike writeFile/readdir/open: every call already blocks, so no
+    //     new blockInRead flag is needed) with the DEC-garmin-025 idiom
+    //     TEST-072/073 use to land a teardown mid-call (closeAction /
+    //     closeActionContext, `delete owner` destroying the dialog).
+    //   - readFileRefusesSilently (DEC-garmin-033, T-155(a)/T-156(a)'s Mode
+    //     1) — the ArmedNothing refusal the guarded branch exists to handle.
+    //
+    // THE PROOF: if the guard is removed, the branch below it runs on `this`
+    // (readOperations), on `curr` (a QTreeWidgetItem owned by the tree widget
+    // the destroyed dialog parented) and on `progressBar` (a dialog member) —
+    // all freed. Under this target's ASan policy (halt_on_error=1) that is a
+    // heap-use-after-free, caught and aborted before any QCOMPARE below could
+    // run — the crash itself IS the failure signal for the mutation proof.
+    // The in-process assertions below are what a run that DOES complete must
+    // additionally satisfy: the batch really stopped at row[0] instead of the
+    // guarded branch quietly finishing and the loop limping on to row[1].
+  private:
+    struct GuardTeardownOutcome
+    {
+        bool timedOut = false;
+        int listCount = 0;
+        int checkedRows = 0;
+        int readFileCalls = 0;                  // must stay 1 - the guard stops the WHOLE batch, not just this row
+        bool dialogAliveOnResume = true;        // must be false - proves the teardown really landed inside readFile
+        bool dialogGoneAtEnd = false;           // must be true - proves the teardown really destroyed the dialog
+        bool storeSurvivedBlockingCall = false; // resumedAfterNestedLoop - the store's own tail ran, unharmed
+    };
+
+    // `sync` picks syncNext's guard (Sync tab) vs downloadNext's guard
+    // (Download tab) — the "two near-identical sites" this build's briefing
+    // names. Two rows, via clauseEActivities() (reused rather than
+    // duplicated): a wrongly-continued batch — guard removed, and somehow
+    // surviving the resulting UAF instead of being caught by ASan — would
+    // show up as readFileCalls == 2.
+    GuardTeardownOutcome runGuardTeardownBatch(bool sync)
+    {
+        obs::reset();
+
+        GuardTeardownOutcome out;
+        QPointer<CloudServiceSyncDialog> dialogGuard;
+        QEventLoop appLoop;
+
+        const QDir activities = context->athlete->home->activities();
+        QDir().mkpath(activities.absolutePath());
+
+        QMetaObject::invokeMethod(
+            this,
+            [&]() {
+                QWidget* owner = new QWidget;
+
+                BlockingStore* store = new BlockingStore(context);
+                store->entryNames = clauseEActivities();
+                // Long enough that the queued teardown below is reliably
+                // delivered well inside fireActionThenBlock()'s nested loop
+                // rather than raced against it — the same value TEST-072's
+                // "busy" route uses for the identical reason.
+                store->blockingMs = 120;
+                store->downloadCompression = CloudService::none;
+                // Mode 1 (ArmedNothing) — the refusal the guarded branch
+                // exists to handle. See DEC-garmin-033 / TEST-155(a)/TEST-156(a).
+                store->readFileRefusesSilently = true;
+
+                // DEC-garmin-025 — the SAME parent/dialog teardown idiom
+                // TEST-072/073 use: the dialog is destroyed from INSIDE
+                // readFile's nested loop, via a queued call on qApp that
+                // fires before the loop's own timer quits it.
+                store->closeActionContext = qApp;
+                store->closeAction = [owner]() { delete owner; };
+
+                CloudServiceSyncDialog* dialog = new CloudServiceSyncDialog(context, store);
+                dialog->setParent(owner, Qt::Dialog);
+                dialog->setAttribute(Qt::WA_DeleteOnClose);
+                dialog->start();
+                dialog->open();
+                store->dialog = dialog;
+                store->dialogGuard = dialog;
+                dialogGuard = dialog;
+
+                QTreeWidget* list = nullptr;
+                if (QTabWidget* tabs = dialog->findChild<QTabWidget*>())
+                    tabs->setCurrentIndex(sync ? 2 : 0);
+                if (sync) {
+                    dialog->selectAllSyncChanged(Qt::Checked);
+                    list = rideListWithHeader(dialog, QStringLiteral("Source"));
+                } else {
+                    dialog->selectAllChanged(Qt::Checked);
+                    list = rideListWithHeader(dialog, QStringLiteral("Workout Name"));
+                }
+
+                if (list != nullptr) {
+                    QTreeWidgetItem* root = list->invisibleRootItem();
+                    out.listCount = root->childCount();
+                    for (int i = 0; i < out.listCount; i++) {
+                        QCheckBox* check = qobject_cast<QCheckBox*>(list->itemWidget(root->child(i), 0));
+                        if (check != nullptr && check->isChecked())
+                            out.checkedRows++;
+                    }
+                }
+
+                // Enters syncNext/downloadNext; row[0]'s readFile blocks,
+                // delivers the teardown, and (Mode 1) refuses silently on
+                // resume. `dialog` must not be dereferenced again after this
+                // call — it may already be dangling.
+                dialog->downloadClicked();
+
+                QTimer::singleShot(300, &appLoop, &QEventLoop::quit);
+                bool* timedOutp = &out.timedOut;
+                QTimer::singleShot(20000, &appLoop, [timedOutp]() {
+                    *timedOutp = true;
+                    QCoreApplication::exit(1);
+                });
+            },
+            Qt::QueuedConnection);
+
+        appLoop.exec();
+        for (int i = 0; i < 50; ++i)
+            QApplication::processEvents(QEventLoop::AllEvents, 5);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+        out.readFileCalls = obs::readFileCalls;
+        out.dialogAliveOnResume = obs::dialogAliveOnResume;
+        out.dialogGoneAtEnd = dialogGuard.isNull();
+        out.storeSurvivedBlockingCall = obs::resumedAfterNestedLoop;
+        return out;
+    }
+
+    void assertGuardTeardownPremises(const QString& where, const GuardTeardownOutcome& out)
+    {
+        QVERIFY2(!out.timedOut, qPrintable(where + QStringLiteral("the batch never came back - it hung")));
+        QCOMPARE(out.listCount, 2);
+        QCOMPARE(out.checkedRows, 2);
+        QVERIFY2(out.storeSurvivedBlockingCall,
+                 qPrintable(where + QStringLiteral("readFile's nested loop never resumed - this run proves nothing")));
+        QVERIFY2(!out.dialogAliveOnResume,
+                 qPrintable(where + QStringLiteral("the dialog was still alive when readFile resumed - the teardown "
+                                                   "did not land inside the suspension, this run proves nothing")));
+        QVERIFY2(out.dialogGoneAtEnd,
+                 qPrintable(where + QStringLiteral("the dialog outlived the run - the teardown never completed")));
+    }
+
+  private slots:
+    // TEST-076(a) — syncNext's guard.
+    void syncNextSilentRefusalGuardStopsOnATornDownDialog()
+    {
+        const GuardTeardownOutcome out = runGuardTeardownBatch(/*sync=*/true);
+        const QString where = QStringLiteral("TEST-076(a) syncNext teardown-during-silent-refusal: ");
+        assertGuardTeardownPremises(where, out);
+
+        // THE POINT: the guard stops the WHOLE batch at row[0] instead of the
+        // refusal branch below it running its member-touching cleanup
+        // (readOperations.remove/curr->setText/progressBar->setValue/delete
+        // data) on the dialog the teardown just freed and then continuing to
+        // row[1]. If the guard is REMOVED, that branch runs on freed
+        // `this`/`curr`/`progressBar` and this target's ASan policy
+        // (halt_on_error=1) aborts the process before this assertion runs —
+        // or, in the improbable event nothing crashes, row[1] is still
+        // wrongly attempted and this fails cleanly instead.
+        QVERIFY2(out.readFileCalls == 1,
+                 qPrintable(where + QStringLiteral("store->readFile was called %1 time(s), not 1 - the batch kept "
+                                                   "going after the dialog was torn down")
+                                        .arg(out.readFileCalls)));
+    }
+
+    // TEST-076(b) — downloadNext's guard (the "analogous" site the briefing
+    // names).
+    void downloadNextSilentRefusalGuardStopsOnATornDownDialog()
+    {
+        const GuardTeardownOutcome out = runGuardTeardownBatch(/*sync=*/false);
+        const QString where = QStringLiteral("TEST-076(b) downloadNext teardown-during-silent-refusal: ");
+        assertGuardTeardownPremises(where, out);
+
+        QVERIFY2(out.readFileCalls == 1,
+                 qPrintable(where + QStringLiteral("store->readFile was called %1 time(s), not 1 - the batch kept "
+                                                   "going after the dialog was torn down")
+                                        .arg(out.readFileCalls)));
     }
 };
 

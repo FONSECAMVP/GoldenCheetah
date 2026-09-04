@@ -263,7 +263,7 @@ Azum::readdir(QString path, QStringList &errors, QDateTime from, QDateTime to)
 }
 
 bool
-Azum::readFile(QByteArray *data, QString remotename, QString remoteid)
+Azum::readFile(QByteArray *data, QString remotename, QString remoteid, CloudService::ReadFileArmed *)
 {
     printd("Azum::readFile(%s, %s)\n", remotename.toStdString().c_str(), remoteid.toStdString().c_str());
     QString url = QString("%1/api/goldencheetah/athletes/%2/activities/%3/export/")

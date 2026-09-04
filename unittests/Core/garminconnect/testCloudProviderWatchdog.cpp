@@ -2345,7 +2345,11 @@ class EmptyListingService : public CloudService
     // which is the only thing that frees it (DEC-garmin-023). Nothing is staged,
     // which is exactly right: the point of these rows is that the attempt
     // HAPPENED, not that the download succeeded.
-    bool readFile(QByteArray* data, QString remotename, QString remoteid) override
+    // DEC-garmin-033 (REQ-027 (e)) — mechanical signature widening: this
+    // fixture always arms a completion (readFailed, queued, below), so the
+    // out-param is accepted and left untouched.
+    bool readFile(QByteArray* data, QString remotename, QString remoteid,
+                  CloudService::ReadFileArmed* = nullptr) override
     {
         readFileCalls++;
         Q_UNUSED(remoteid);

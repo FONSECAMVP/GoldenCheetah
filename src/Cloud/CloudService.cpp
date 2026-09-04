@@ -2732,27 +2732,66 @@ CloudServiceSyncDialog::syncNext()
                 // (parent teardown, which no close gate can intercept), so
                 // everything after it is a member access on a dead object.
                 QPointer<CloudServiceSyncDialog> self(this);
+
+                // DEC-garmin-033 (REQ-027 (e)) - initialized to ArmedNothing, the
+                // "false=silent" reading readFile's bool return has always had by
+                // convention: CloudService.h's base stub and the ten mechanical
+                // (non-GarminConnect) overrides never touch this out-param, so it
+                // keeps whatever the CALLER put here. GarminConnect's seven
+                // "return false after arming" sites are the only ones that
+                // overwrite it (to ArmedCompletion); its one genuinely silent site
+                // leaves it at this default too.
+                CloudService::ReadFileArmed armed = CloudService::ArmedNothing;
+                bool readOk;
                 {
                     // DEC-garmin-024 - GarminConnect::readFile runs a nested
                     // QEventLoop (blockingDownload), so the user can close this
                     // dialog from inside this call; doing so used to delete
                     // `store` while it was executing.
                     BlockingCall blocking(this);
-                    store->readFile(data, curr->text(1), curr->text(8)); // filename
+                    readOk = store->readFile(data, curr->text(1), curr->text(8), &armed); // filename
                 }
-                // Nothing below this line may touch a member. The buffer and the
-                // ride list are the store's and Qt's respectively; our caller
-                // (downloadClicked / completedRead / failedRead) calls us last
-                // and ignores the result, so returning is the whole of standing
-                // down.
-                // UNTESTED-BY-DESIGN (A3-R025-F2 / B-R025-02): because no member
-                // access follows this blocking call today, this guard is dead
-                // code w.r.t. the current control flow — removing it leaves the
-                // suite green (proven by mutation). It is kept as defence-in-depth
-                // for whoever next adds a member access below. If you do, TEST-076
-                // becomes feasible AND required (make this guard load-bearing with
-                // a teardown-during-readFile ASan test).
+                // DEC-garmin-033 (REQ-027 (e)) - THIS GUARD IS NOW LOAD-BEARING.
+                // It used to protect nothing below it but a static
+                // processEvents() (proven UNTESTED-BY-DESIGN by three independent
+                // mutations, A3-R025-F2/B-R025-02 - hence TEST-076 sat
+                // allocated-unused). The refusal branch immediately below is a
+                // real member access (readOperations.remove/curr->setText/
+                // progressBar->setValue, all reads/writes on `this`/`curr`), so a
+                // parent teardown delivered inside readFile now resumes onto it if
+                // this bail is ever removed. TEST-076 now makes this guard's
+                // lifetime role executable with a teardown-during-readFile ASan
+                // regression on both batch drivers.
                 if (self.isNull()) return true;
+
+                if (!readOk && armed == CloudService::ArmedNothing) {
+                    // DEC-garmin-033 (REQ-027 (e)) - THE O-R027-01 CLAUSE. readFile
+                    // armed NOTHING: no signal is in flight for this `data`, so
+                    // waiting for one (as the branch below does) would hang the
+                    // batch on this row forever - the double-drive risk B-R027-01
+                    // named. The ticket armed above is torn down here rather than
+                    // left for a completion that will never arrive (closes
+                    // B-R027-02's leak: `data` is freed exactly once), the row is
+                    // labelled and counted towards the bar (it WAS one of the
+                    // `downloadtotal` rows asked for), and the loop CONTINUES to
+                    // the next checked row rather than returning - the same
+                    // "continue, don't return" shape DEC-garmin-032 chose for the
+                    // parse-failure branch below, for the identical reason
+                    // (returning here would silently end the whole batch, freezing
+                    // the progress bar with no row ever attempted again). See
+                    // TEST-155.
+                    readOperations.remove(data);
+                    curr->setText(7, tr("Refused"));
+                    progressBar->setValue(++downloadcounter);
+                    delete data;
+
+                    QApplication::processEvents();
+                    if (self.isNull()) return true;
+                    if (aborted == true) return true;
+                    if (batchGeneration != generation) return true;
+                    if (listGeneration != listgen) return true;
+                    continue;
+                }
 
                 QApplication::processEvents();
 
@@ -3022,6 +3061,14 @@ CloudServiceSyncDialog::downloadNext()
     // tails, and TEST-119, which is the run that kills this line.
     if (listGeneration != batchListGeneration) return true;
 
+    // DEC-garmin-033 (REQ-027 (e)) - snapshotted for the SAME reason syncNext
+    // takes its own pair (:2630/:2646): the refusal branch below suspends
+    // (processEvents()) and then CONTINUES iterating rather than returning,
+    // which this function did not do anywhere before this DEC - every prior
+    // route through this loop returned immediately after its one suspension.
+    const int generation = batchGeneration;
+    const int listgen = listGeneration;
+
     for (int i=listindex; i<rideListDown->invisibleRootItem()->childCount(); i++) {
         QTreeWidgetItem *curr = rideListDown->invisibleRootItem()->child(i);
         QCheckBox *check = (QCheckBox*)rideListDown->itemWidget(curr, 0);
@@ -3096,18 +3143,44 @@ CloudServiceSyncDialog::downloadNext()
             // DEC-garmin-025 - as in syncNext: the call below can destroy `this`
             // outright when the owning window is torn down.
             QPointer<CloudServiceSyncDialog> self(this);
+
+            // DEC-garmin-033 (REQ-027 (e)) - as in syncNext: initialized to
+            // ArmedNothing, the existing "false=silent" default every override
+            // except GarminConnect's still has.
+            CloudService::ReadFileArmed armed = CloudService::ArmedNothing;
+            bool readOk;
             {
                 // DEC-garmin-024 - as in syncNext: a nested QEventLoop inside
                 // readFile means a close can land mid-call.
                 BlockingCall blocking(this);
-                store->readFile(data, curr->text(1), curr->text(6));
+                readOk = store->readFile(data, curr->text(1), curr->text(6), &armed);
             }
-            // UNTESTED-BY-DESIGN (A3-R025-F2 / B-R025-02): as in syncNext, no
-            // member access follows this blocking call today, so this guard is
-            // dead code w.r.t. current control flow (mutation-proven) and is kept
-            // as defence-in-depth. Add any member touch below and TEST-076 becomes
-            // feasible AND required.
+            // DEC-garmin-033 (REQ-027 (e)) - THIS GUARD IS NOW LOAD-BEARING, as in
+            // syncNext (see the twin comment there for the full account of
+            // A3-R025-F2/B-R025-02 and why TEST-076 was allocated-unused). The
+            // refusal branch immediately below is the member access the Watch
+            // entry was waiting for.
             if (self.isNull()) return true;
+
+            if (!readOk && armed == CloudService::ArmedNothing) {
+                // DEC-garmin-033 (REQ-027 (e)) - THE O-R027-01 CLAUSE, downloadNext's
+                // copy of syncNext's identical branch (see that comment for the
+                // full reasoning). `data` was commented "gets deleted when read
+                // completes" two lines above the ticket was armed - that promise
+                // is honoured here explicitly, since no completion is coming to
+                // keep it (closes B-R027-02). See TEST-156.
+                readOperations.remove(data);
+                curr->setText(5, tr("Refused"));
+                progressBar->setValue(++downloadcounter);
+                delete data;
+
+                QApplication::processEvents();
+                if (self.isNull()) return true;
+                if (aborted == true) return true;
+                if (batchGeneration != generation) return true;
+                if (listGeneration != listgen) return true;
+                continue;
+            }
 
             QApplication::processEvents();
             //delete data;

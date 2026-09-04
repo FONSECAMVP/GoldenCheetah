@@ -446,18 +446,29 @@ class TestGarminConnectReadFile : public QObject
             FakeDownloadClient fake;
             fake.responses[QStringLiteral("ORIGINAL")] = {true, makeZip(QStringLiteral("1.fit"), makeFitBytes()), {}};
             GarminConnect gc(nullptr, &fake, cfg.path());
-            const bool ok = gc.readFile(nullptr, QStringLiteral("n"), QStringLiteral("1"));
+            // TEST-154 (DEC-garmin-033, REQ-027 (e)) — this guard is the ONE site of
+            // GarminConnect's eight `return false` sites that stays genuinely
+            // silent (:452 in the DEC's citation). It is entered before anything
+            // is posted, so it must leave the out-param exactly as the CALLER
+            // initialized it — the same "false=silent" default every production
+            // caller (syncNext/downloadNext) relies on — rather than ever setting
+            // it to ArmedCompletion.
+            CloudService::ReadFileArmed armed = CloudService::ArmedNothing;
+            const bool ok = gc.readFile(nullptr, QStringLiteral("n"), QStringLiteral("1"), &armed);
             QVERIFY2(!ok, "null data pointer must return false");
             QCOMPARE(fake.downloadCalls, 0); // no download attempted
             QCOMPARE(static_cast<CloudService&>(gc).readCompleteCount, 0);
+            QCOMPARE(armed, CloudService::ArmedNothing); // TEST-154 — the one genuinely silent site
         }
         // (b) null client seam (injected nullptr), valid data.
         {
             GarminConnect gc(nullptr, nullptr, cfg.path());
             QByteArray data;
-            const bool ok = gc.readFile(&data, QStringLiteral("n"), QStringLiteral("1"));
+            CloudService::ReadFileArmed armed = CloudService::ArmedNothing;
+            const bool ok = gc.readFile(&data, QStringLiteral("n"), QStringLiteral("1"), &armed);
             QVERIFY2(!ok, "null client seam must return false");
             QCOMPARE(static_cast<CloudService&>(gc).readCompleteCount, 0);
+            QCOMPARE(armed, CloudService::ArmedNothing); // TEST-154
         }
     }
 };

@@ -37,7 +37,7 @@ class Azum : public CloudService {
         bool createFolder(QString);
 
         // read a file
-        bool readFile(QByteArray *data, QString remotename, QString remoteid);
+        bool readFile(QByteArray *data, QString remotename, QString remoteid, ReadFileArmed *armed = nullptr);
 
         // athlete selection
         QList<CloudServiceAthlete> listAthletes();

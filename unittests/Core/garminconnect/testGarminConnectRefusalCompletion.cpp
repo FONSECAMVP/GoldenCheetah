@@ -238,9 +238,13 @@ class TestGarminConnectRefusalCompletion : public QObject
         // The dialog's preallocated buffer, exactly as syncNext/downloadNext build
         // it: heap-allocated, freed by whoever handles the completion.
         QByteArray* data = new QByteArray;
-        const bool ok = gc.readFile(data, QStringLiteral("garmin-5001.fit"), QStringLiteral("5001"));
+        // TEST-154 (DEC-garmin-033, REQ-027 (e)) — this site posts postReadComplete
+        // before returning false, so the out-param must say ArmedCompletion.
+        CloudService::ReadFileArmed armed = CloudService::ArmedNothing;
+        const bool ok = gc.readFile(data, QStringLiteral("garmin-5001.fit"), QStringLiteral("5001"), &armed);
 
         QVERIFY2(!ok, "a superseded session must still REFUSE — reporting is not permission");
+        QCOMPARE(armed, CloudService::ArmedCompletion); // TEST-154
         QCOMPARE(client.downloadCalls, 0);
         QCOMPARE(client.listCalls, 0);
 
@@ -302,9 +306,11 @@ class TestGarminConnectRefusalCompletion : public QObject
         QCOMPARE(GarminAccountEpoch::current(tmp.path()), epochAtOpen);
 
         QByteArray* data = new QByteArray;
-        const bool ok = gc.readFile(data, QStringLiteral("garmin-6001.fit"), QStringLiteral("6001"));
+        CloudService::ReadFileArmed armed = CloudService::ArmedNothing;
+        const bool ok = gc.readFile(data, QStringLiteral("garmin-6001.fit"), QStringLiteral("6001"), &armed);
 
         QVERIFY2(!ok, "a session whose credential is gone must still REFUSE");
+        QCOMPARE(armed, CloudService::ArmedCompletion); // TEST-154
         QCOMPARE(client.downloadCalls, 0);
         QCOMPARE(client.listCalls, 0);
 
