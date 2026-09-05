@@ -1,0 +1,32 @@
+=== Orchestrator-independent mutation proof, T-148 piece 3b ===
+Date: 2026-09-05
+Mutation: src/Cloud/CloudService.h, CancelToken::cancelled(): 'return flag_ && flag_->load(...)' -> 'return !flag_ || flag_->load(...)' (default/no-flag token now reports cancelled)
+
+--- RED: guiThread_defaultTokenNeverCancels (all 3 T-148 rows) under the mutation ---
+********* Start testing of TestCloudProviderWatchdog *********
+Config: Using QtTest library 6.8.2, Qt 6.8.2 (x86_64-little_endian-lp64 shared (dynamic) release build; by GCC 14.2.0), debian 13
+PASS   : TestCloudProviderWatchdog::initTestCase()
+FAIL!  : TestCloudProviderWatchdog::guiThread_defaultTokenNeverCancels(01 Dropbox::createFolder) 'out.callerSuccess' returned FALSE. (01 Dropbox::createFolder failed against a RESPONDING endpoint under the default (never-cancelling) token; errors: )
+   Loc: [/media/andy/TOSHIBA EXT/Backup2/Documents/GoldenCheetah/unittests/Core/garminconnect/testCloudProviderWatchdog.cpp(2205)]
+QDEBUG : TestCloudProviderWatchdog::guiThread_defaultTokenNeverCancels(05 Azum::listAthletes) token:  "TOKEN"
+FAIL!  : TestCloudProviderWatchdog::guiThread_defaultTokenNeverCancels(05 Azum::listAthletes) 'out.callerSuccess' returned FALSE. (05 Azum::listAthletes failed against a RESPONDING endpoint under the default (never-cancelling) token; errors: )
+   Loc: [/media/andy/TOSHIBA EXT/Backup2/Documents/GoldenCheetah/unittests/Core/garminconnect/testCloudProviderWatchdog.cpp(2205)]
+FAIL!  : TestCloudProviderWatchdog::guiThread_defaultTokenNeverCancels(13 Nolio::listAthletes) 'out.callerSuccess' returned FALSE. (13 Nolio::listAthletes failed against a RESPONDING endpoint under the default (never-cancelling) token; errors: )
+   Loc: [/media/andy/TOSHIBA EXT/Backup2/Documents/GoldenCheetah/unittests/Core/garminconnect/testCloudProviderWatchdog.cpp(2205)]
+PASS   : TestCloudProviderWatchdog::cleanupTestCase()
+Totals: 2 passed, 3 failed, 0 skipped, 0 blacklisted, 779ms
+********* Finished testing of TestCloudProviderWatchdog *********
+
+--- ISOLATION CHECK: real-token tests unaffected by the same mutation ---
+PASS   : TestCloudProviderWatchdog::initTestCase()
+PASS   : TestCloudProviderWatchdog::table_row4_cancellationNoFinishObserved()
+PASS   : TestCloudProviderWatchdog::shapeBC_cancellationBreaksTheListing(02 Dropbox::readdir)
+PASS   : TestCloudProviderWatchdog::shapeBC_cancellationBreaksTheListing(04 Azum::readdir)
+PASS   : TestCloudProviderWatchdog::shapeBC_cancellationBreaksTheListing(05 Azum::listAthletes)
+PASS   : TestCloudProviderWatchdog::shapeBC_cancellationBreaksTheListing(07 SportTracks::readdir)
+PASS   : TestCloudProviderWatchdog::shapeBC_cancellationBreaksTheListing(10 Xert::readActivityDetail)
+PASS   : TestCloudProviderWatchdog::shapeBC_cancellationBreaksTheListing(16 Strava::readdir)
+PASS   : TestCloudProviderWatchdog::table_row6_cancelInducedFinishLeavesOutcomeUnchanged()
+PASS   : TestCloudProviderWatchdog::cancel_observationIntervalWithinBound()
+PASS   : TestCloudProviderWatchdog::cleanupTestCase()
+Totals: 11 passed, 0 failed, 0 skipped, 0 blacklisted, 2183ms

@@ -1,0 +1,61 @@
+=== ORCH-054/ORCH-055 re-verification against the reconstructed CloudService.h bytes, orchestrator-executed 2026-09-05 ===
+
+Context: the prior session's git-incident (LSN-084) discarded DEC-040 Stage 2 pieces 1+2's
+uncommitted CloudService.h content via a bare `git checkout -- src/Cloud/CloudService.h` while
+the file also carried unrelated uncommitted content. The file was reconstructed same session from
+three independent sources (decisions.md's verbatim CancelToken class body, CloudService.cpp's
+untouched piece-2 diff, and an evidence-log/grep trail) and the unchanged 168-test suite passed
+168/0 on both backends against it -- but neither piece 2's nor piece 3b's own mutation-proof had
+been RE-RUN against the reconstructed bytes, and the full ctest -L garmin-fast regression had not
+been re-run since the reconstruction. This log closes that gap.
+
+--- baseline: full testCloudProviderWatchdog suite against reconstructed bytes, BEFORE any mutation ---
+offscreen: Totals: 168 passed, 0 failed, 0 skipped, 0 blacklisted, 28857ms
+minimal:   Totals: 168 passed, 0 failed, 0 skipped, 0 blacklisted, 28498ms
+
+--- snapshot ---
+cp src/Cloud/CloudService.h src/Cloud/CloudService.h.orig
+git diff --stat src/Cloud/CloudService.h (pre-mutation): 45 insertions(+)
+
+--- PIECE 2 RE-VERIFICATION: kCancelPollMs 250 -> 2000 ---
+Mutation: static const int kCancelPollMs = 250; -> = 2000;
+Rebuild: EXIT=0 (ninja, testCloudProviderWatchdog target)
+RED, offscreen, cancel_observationIntervalWithinBound only:
+  FAIL!  : TestCloudProviderWatchdog::cancel_observationIntervalWithinBound() 'observed <= 500' returned FALSE. (observed 1852ms)
+  Totals: 2 passed, 1 failed, 0 skipped, 0 blacklisted, 1906ms -- exit=1
+  (identical observed value, 1852ms, to the original 2026-09-04 proof against the pre-incident bytes)
+
+Restore: cp src/Cloud/CloudService.h.orig src/Cloud/CloudService.h; cmp exit=0; git diff --stat unchanged (45 insertions(+))
+Rebuild: EXIT=0
+PASS re-confirmed, offscreen, cancel_observationIntervalWithinBound only:
+  PASS   : TestCloudProviderWatchdog::cancel_observationIntervalWithinBound()
+  Totals: 3 passed, 0 failed, 0 skipped, 0 blacklisted, 243ms -- exit=0
+
+--- PIECE 3b RE-VERIFICATION: CancelToken::cancelled() default-flips-to-cancelled ---
+Mutation: 'return flag_ && flag_->load(...)' -> 'return !flag_ || flag_->load(...)'
+Rebuild: EXIT=0
+RED, offscreen, guiThread_defaultTokenNeverCancels (all 3 T-148 rows):
+  FAIL!  : guiThread_defaultTokenNeverCancels(01 Dropbox::createFolder) 'out.callerSuccess' returned FALSE.
+  FAIL!  : guiThread_defaultTokenNeverCancels(05 Azum::listAthletes) 'out.callerSuccess' returned FALSE.
+  FAIL!  : guiThread_defaultTokenNeverCancels(13 Nolio::listAthletes) 'out.callerSuccess' returned FALSE.
+  Totals: 2 passed, 3 failed, 0 skipped, 0 blacklisted, 799ms -- exit=3
+ISOLATION under the SAME mutation, offscreen (11 real-token tests, expect all PASS):
+  table_row4_cancellationNoFinishObserved, shapeBC_cancellationBreaksTheListing (6 rows),
+  table_row6_cancelInducedFinishLeavesOutcomeUnchanged, cancel_observationIntervalWithinBound
+  Totals: 11 passed, 0 failed, 0 skipped, 0 blacklisted, 2356ms -- exit=0
+
+Restore: cp src/Cloud/CloudService.h.orig src/Cloud/CloudService.h; cmp exit=0; git diff --stat unchanged (45 insertions(+)); rm src/Cloud/CloudService.h.orig
+Rebuild (full ninja): EXIT=0
+Full suite re-confirmed clean, both backends:
+  offscreen: Totals: 168 passed, 0 failed, 0 skipped, 0 blacklisted, 28855ms
+  minimal:   Totals: 168 passed, 0 failed, 0 skipped, 0 blacklisted, 28576ms
+
+--- FULL REGRESSION, reconstructed bytes, unchanged testCloudProviderWatchdog.cpp ---
+ctest -L garmin-fast --output-on-failure --timeout 480
+  100% tests passed, 0 tests failed out of 27
+  garmin-fast = 231.76 sec*proc
+  [exited with code 0]
+
+=== VERDICT: both piece-2 and piece-3b mutation proofs REPRODUCED IDENTICALLY against the
+reconstructed CloudService.h/.cpp bytes. Full ctest -L garmin-fast regression 27/27, EXIT=0.
+ORCH-054's "not yet re-verified" gap is CLOSED with real re-executed evidence, not narrative. ===

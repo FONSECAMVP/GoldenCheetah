@@ -10,14 +10,23 @@
 // TEST garmin:TEST-143 - arming order / boundedness, 22 sites.
 // TEST garmin:TEST-144 - false-success prevention, 22 sites.
 // TEST garmin:TEST-145 - exactly-once ACTUAL reply destruction, 22 sites.
-// TEST garmin:TEST-146 - PARTIAL. Transition-table rows 1, 2, 3, 5, 7 and row
-//                        6's TIMEOUT arm. Row 4 and row 6's Cancelled arm are
-//                        DEFERRED to Stage 2, which is where cancellation is
-//                        introduced; RequestOutcome::Cancelled is declared but
-//                        unreachable here and is deliberately NOT asserted to be
-//                        either reachable or permanently unreachable.
-// TEST garmin:TEST-147 - PARTIAL. TIMEOUT propagation across the shape-B/C set.
-//                        The Cancelled-mid-listing rows are Stage 2.
+// TEST garmin:TEST-146 - BUILT IN FULL. Transition-table rows 1-7, including
+//                        row 4 (cancellation, no finish observed) and row 6's
+//                        Cancelled arm (an abort induced by cancellation, not
+//                        timeout, whose synthetic finished() must not promote
+//                        the outcome). DEC-040 Stage 2 wired CancelToken onto
+//                        CloudService and blockingRequest's cancelPoll timer,
+//                        so RequestOutcome::Cancelled is now reachable and
+//                        these two rows exercise it directly.
+// TEST garmin:TEST-147 - BUILT IN FULL. TIMEOUT propagation across the
+//                        shape-B/C set (shapeBC_timeoutBreaksTheListing), and
+//                        its Cancelled-mid-listing counterpart, Stage 2 piece 3
+//                        (shapeBC_cancellationBreaksTheListing), over the same
+//                        seven sites.
+// TEST garmin:TEST-149 - Stage 2 cancellation genericity + lifetime safety:
+//                        the observation interval is <= 500 ms with the
+//                        timeout override at 5000 ms, so a real timeout cannot
+//                        be what ends the wait.
 // TEST garmin:TEST-150 - non-vacuity control: a RESPONDING endpoint yields
 //                        Finished with the correct body at every migrated site.
 // TEST garmin:TEST-151 - error propagation at CloudServiceAutoDownload::run()'s
@@ -27,9 +36,11 @@
 // TEST garmin:TEST-153 - S-1 manager lifecycle across all THIRTEEN migrated
 //                        providers.
 //
-// DEC-040 Stage 1. NOT BUILT HERE: TEST-148, TEST-149 - both are about
-// cooperative cancellation and no CancelToken type exists in Stage 1. There is
-// no stand-in for one anywhere in this file.
+// TEST garmin:TEST-148 - Stage 2 piece 3b: the three GUI-thread call sites that
+//                        never call setCancelToken() (Dropbox::createFolder,
+//                        Azum::listAthletes, Nolio::listAthletes) still succeed
+//                        against a responding endpoint under the implicit,
+//                        default-constructed CancelToken().
 //
 // ===========================================================================
 // WHAT IS REAL HERE, AND WHY THAT IS THE WHOLE POINT
@@ -91,6 +102,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <optional>
 #include <utility>
 
 // Defined in stubs/ProviderSeamStubs.cpp - clears the in-memory GSettings store
@@ -1094,7 +1106,18 @@ class StravaCompletionWatcher : public QObject
 };
 
 // Drive ONE production call site to completion and report what the CALLER saw.
-SiteOutcome driveSite(SiteId site, const QList<net::Plan>& plans, int timeoutOverrideMs)
+//
+// `cancelToken` defaults to std::nullopt, which means "do not call
+// setCancelToken() at all" - the caller relies entirely on CloudService's own
+// construction-time default for `cancelToken_` (ORCH-055: a defaulted
+// CancelToken() argument passed to an UNCONDITIONAL setCancelToken() call
+// overwrites that member with a fresh default before the site method ever
+// runs, so a broken member initializer would be silently papered over and
+// never observed by TEST-148's rows). Passing an explicit CancelToken (as the
+// Stage-2-piece-3 Cancelled-mid-listing rows do) still works unchanged -
+// std::optional converts implicitly from its value type.
+SiteOutcome driveSite(SiteId site, const QList<net::Plan>& plans, int timeoutOverrideMs,
+                      std::optional<CancelToken> cancelToken = std::nullopt)
 {
     SiteOutcome out;
 
@@ -1107,6 +1130,8 @@ SiteOutcome driveSite(SiteId site, const QList<net::Plan>& plans, int timeoutOve
     CloudService* service = makeService(site, harness.context(), nam);
     configure(site, service);
     service->setRequestTimeoutOverrideMs(timeoutOverrideMs);
+    if (cancelToken)
+        service->setCancelToken(*cancelToken);
 
     // The apparatus watchdog. Generously later than any bound a row uses, so it
     // only ever fires when PRODUCTION failed to end its own wait.
@@ -1506,12 +1531,25 @@ class TestCloudProviderWatchdog : public QObject
     void shapeBC_timeoutBreaksTheListing_data();
     void shapeBC_timeoutBreaksTheListing();
 
-    // --- TEST-146 (PARTIAL: rows 1, 2, 3, 5, 6-timeout; NOT 4, NOT 6-cancel) -
+    // --- TEST-147 (Stage 2 piece 3: the Cancelled-mid-listing counterpart) -
+    void shapeBC_cancellationBreaksTheListing_data();
+    void shapeBC_cancellationBreaksTheListing();
+
+    // --- TEST-148 (Stage 2 piece 3b: the default-token GUI-thread sites) ---
+    void guiThread_defaultTokenNeverCancels_data();
+    void guiThread_defaultTokenNeverCancels();
+
+    // --- TEST-146 (BUILT IN FULL: all seven rows, including 4 and 6-cancel) ---
     void table_row1_naturalFinishNoError();
     void table_row2_naturalFinishWithError();
     void table_row3_timeoutNoFinish();
+    void table_row4_cancellationNoFinishObserved();
     void table_row5_timerAndFinishTogether();
     void table_row6_abortInducedFinishLeavesOutcomeUnchanged();
+    void table_row6_cancelInducedFinishLeavesOutcomeUnchanged();
+
+    // --- TEST-149 (Stage 2 cancellation genericity / lifetime / interval) -----
+    void cancel_observationIntervalWithinBound();
 
     // --- TEST-152 ----------------------------------------------------------
     void strava_completionIsExactlyOne_data();
@@ -1818,11 +1856,12 @@ void TestCloudProviderWatchdog::site_respondingEndpointSucceeds()
 }
 
 // ---------------------------------------------------------------------------
-// TEST-147 (PARTIAL) - the TIMEOUT rows over the shape-B/C set.
+// TEST-147 - the TIMEOUT rows over the shape-B/C set.
 //
 // The set is {2, 4, 5, 7, 10, 16, 17}, re-derived by reading each enclosing
 // function - see the shape census at the top of this file. The Cancelled-
-// mid-listing rows are Stage 2 and are NOT built.
+// mid-listing counterpart (Stage 2 piece 3) is
+// shapeBC_cancellationBreaksTheListing_data()/() immediately below this test.
 //
 // The rule: a non-Finished outcome mid-listing must BREAK the loop and
 // propagate. Never continue. So a listing whose SECOND page times out must come
@@ -1942,18 +1981,266 @@ void TestCloudProviderWatchdog::shapeBC_timeoutBreaksTheListing()
 }
 
 // ---------------------------------------------------------------------------
-// TEST-146 (PARTIAL) - the transition table, at the helper.
+// TEST-147 (Stage 2 piece 3) - the Cancelled counterpart of the row above.
+//
+// Same rule, different terminator: a listing whose second page is cancelled
+// mid-wait (rather than timing out) must ALSO break the loop and propagate,
+// never continue. The mechanism that actually reaches RequestOutcome::Cancelled
+// is table_row4_cancellationNoFinishObserved's: a shared_ptr<atomic_bool> flag
+// flipped ~50ms in from a zero-delay QTimer::singleShot, observed by
+// blockingRequest's own cancelPoll timer (250ms cadence) well inside the
+// generous 5000ms timeout override - so a real timeout cannot be what ends the
+// wait, only cancellation can. driveSite's own CancelToken parameter (added
+// alongside this test) plumbs the token onto the real provider object before
+// the site-level call runs, the same way setRequestTimeoutOverrideMs already
+// did for the timeout row above.
+//
+// The first-page fixture bodies, per-site expected item counts and
+// canPropagate values are intentionally COPIED from
+// shapeBC_timeoutBreaksTheListing_data/() rather than shared through a common
+// helper, with ONE deliberate exception: site 10 (Xert::readActivityDetail's
+// per-activity for loop). See the comment on that case below for why a single-
+// activity fixture - which is what the timeout row uses - cannot distinguish
+// `return` from `continue` at that site, and therefore cannot be reused
+// as-is for a real mutation-proof here.
+// ---------------------------------------------------------------------------
+void TestCloudProviderWatchdog::shapeBC_cancellationBreaksTheListing_data()
+{
+    QTest::addColumn<int>("site");
+    QTest::addColumn<int>("silentIndex");   // which request goes quiet, then cancelled
+    QTest::addColumn<int>("expectedItems"); // what the earlier pages produced
+    QTest::addColumn<bool>("canPropagate"); // does this site HAVE a failure channel?
+
+    QTest::newRow("02 Dropbox::readdir") << int(Site_Dropbox_readdir) << 1 << 1 << true;
+    QTest::newRow("04 Azum::readdir") << int(Site_Azum_readdir) << 1 << 1 << true;
+    // *** RESIDUAL, DECLARED - identical gap to the timeout row's, for the
+    // *** identical reason: Azum::listAthletes returns QList<CloudServiceAthlete>
+    // *** and nothing else, so a listing that broke after page one reads exactly
+    // *** like a complete one-page listing. What IS assertable is that the loop
+    // *** BROKE rather than paging on, which is what this row asserts.
+    QTest::newRow("05 Azum::listAthletes") << int(Site_Azum_listAthletes) << 1 << 1 << false;
+    QTest::newRow("07 SportTracks::readdir") << int(Site_SportTracks_readdir) << 1 << 25 << true;
+    // Site 10 uses a TWO-activity first page (the timeout row's fixture has
+    // only one) - see the test body's switch for why.
+    QTest::newRow("10 Xert::readActivityDetail") << int(Site_Xert_readActivityDetail) << 1 << 0 << true;
+    QTest::newRow("16 Strava::readdir") << int(Site_Strava_readdir) << 1 << 30 << true;
+}
+
+void TestCloudProviderWatchdog::shapeBC_cancellationBreaksTheListing()
+{
+    QFETCH(int, site);
+    QFETCH(int, silentIndex);
+    QFETCH(int, expectedItems);
+    QFETCH(bool, canPropagate);
+    const SiteId id = static_cast<SiteId>(site);
+
+    QList<net::Plan> plans;
+    net::Plan first;
+    switch (id) {
+    case Site_Dropbox_readdir:
+        first.body = "{\"entries\":[{\".tag\":\"file\",\"path_display\":\"/gc/2020_01_01_10_00_00.json\","
+                     "\"bytes\":10}],\"has_more\":true,\"cursor\":\"CURSOR\"}";
+        break;
+    case Site_Azum_readdir:
+        first.body = "{\"next\":\"https://training.azum.com/next\",\"results\":[{\"id\":\"7\","
+                     "\"export_name\":\"a.fit\",\"start\":\"2020-01-01T10:00:00\",\"distance\":1000,"
+                     "\"timer_time\":\"P0DT00H25M57S\"}]}";
+        break;
+    case Site_Azum_listAthletes:
+        first.body = "{\"next\":\"https://training.azum.com/next\",\"results\":[{\"user\":7,"
+                     "\"full_name\":\"A Rider\"}]}";
+        break;
+    case Site_SportTracks_readdir: {
+        // SportTracks only asks for another page when it received a FULL page of
+        // 25, so the fixture has to hand it 25 - identical to the timeout row.
+        QString items;
+        for (int i = 0; i < 25; i++) {
+            if (i)
+                items += ",";
+            items += QStringLiteral("{\"duration\":\"600.00\",\"name\":\"Cycling\","
+                                    "\"start_time\":\"2020-01-01T10:%1:00+00:00\","
+                                    "\"total_distance\":\"1000\","
+                                    "\"uri\":\"https://api.sporttracks.mobi/api/v2/fitnessActivities/%2\","
+                                    "\"user_id\":\"1\"}")
+                         .arg(i, 2, 10, QChar('0'))
+                         .arg(i);
+        }
+        first.body = QStringLiteral("{\"items\":[%1]}").arg(items).toUtf8();
+        break;
+    }
+    case Site_Xert_readActivityDetail:
+        // TWO activities, not xertDir's one. With a single activity the for
+        // loop's own iteration count is 1 regardless of `return` vs `continue`
+        // on the failed detail fetch (there is no second activity left to skip
+        // to), so out.requests and out.items are IDENTICAL under both the
+        // correct code and a `continue` mutation - the mutation would be
+        // invisible to this row's assertions. With two activities, a `continue`
+        // mutation lets the loop go on to fetch activity #2's detail too (an
+        // extra, unwanted third request), which shows up as out.requests == 3
+        // instead of the correct code's out.requests == 2. out.items stays 0
+        // either way (neither activity's detail ever succeeds), which is why
+        // the request count, not the item count, is this row's killing
+        // assertion for site 10.
+        first.body = "{\"activities\":["
+                     "{\"name\":\"n1\",\"start_date\":{\"date\":\"2020-01-01 10:00:00.000000\"},"
+                     "\"path\":\"P1\",\"activity_type\":\"Cycling\"},"
+                     "{\"name\":\"n2\",\"start_date\":{\"date\":\"2020-01-01 11:00:00.000000\"},"
+                     "\"path\":\"P2\",\"activity_type\":\"Cycling\"}]}";
+        break;
+    case Site_Strava_readdir: {
+        QString items;
+        for (int i = 0; i < 30; i++) {
+            if (i)
+                items += ",";
+            items += QStringLiteral("{\"id\":%1,\"name\":\"n\",\"distance\":1000,"
+                                    "\"elapsed_time\":600,"
+                                    "\"start_date_local\":\"2020-01-01T10:%2:00\"}")
+                         .arg(i)
+                         .arg(i, 2, 10, QChar('0'));
+        }
+        first.body = QStringLiteral("[%1]").arg(items).toUtf8();
+        break;
+    }
+    default:
+        QFAIL("unhandled shape-B/C row");
+    }
+    plans << first;
+    for (int i = 1; i <= silentIndex; i++) {
+        net::Plan silent;
+        silent.behaviour = net::Silent;
+        plans << silent;
+    }
+
+    // The cancellation mechanism - mirrors table_row4_cancellationNoFinishObserved
+    // exactly: flip a shared flag ~50ms in, well inside the silent second
+    // request's wait, and let blockingRequest's own cancelPoll timer (250ms
+    // cadence) observe it. The 5000ms override on driveSite makes sure a real
+    // timeout cannot be what ends the wait.
+    auto flag = std::make_shared<std::atomic_bool>(false);
+    QTimer::singleShot(50, [flag] { flag->store(true, std::memory_order_release); });
+
+    QElapsedTimer elapsed;
+    elapsed.start();
+    const SiteOutcome out = fixture::driveSite(id, plans, 5000, CancelToken(flag));
+    const qint64 took = elapsed.elapsed();
+
+    QVERIFY(!net::rescueFired);
+    // Bounded by cancelPoll's cadence, not the 5000ms override or driveSite's
+    // own 3000ms apparatus rescue: the flag flips at ~50ms and cancelPoll
+    // checks every 250ms, so a correctly-broken listing returns in well under
+    // a second even after the extra per-site JSON parsing work.
+    QVERIFY2(took < 1500, qPrintable(QStringLiteral("%1 took %2ms").arg(siteName(id)).arg(took)));
+
+    // IT BROKE OUT. If the loop had CONTINUED it would have asked for another
+    // page (or, at site 10, another activity's detail), so the request count
+    // pins the break.
+    QCOMPARE(out.requests, silentIndex + 1);
+
+    // AND IT PROPAGATED. The pages that did arrive are still returned - that is
+    // deliberate, they are real - but the caller is told the listing is
+    // incomplete rather than being handed a short directory that reads as whole.
+    QCOMPARE(out.items, expectedItems);
+    if (canPropagate) {
+        QVERIFY2(!out.errors.isEmpty(),
+                 qPrintable(QStringLiteral("%1 ended its listing SILENTLY after cancellation").arg(siteName(id))));
+        QVERIFY(!out.callerSuccess);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TEST-148 - GUI-thread caller bound with the DEFAULT (never-cancelling) token.
+//
+// The three GUI-thread call sites named in the DEC-040 Stage 2 C6 census -
+// Dropbox::createFolder (site 1), Azum::listAthletes (site 5) and
+// Nolio::listAthletes (site 13) - never call setCancelToken() themselves.
+// They rely entirely on CloudService's own member default and CancelToken's
+// default constructor to make cancellation a no-op. This is a DIFFERENT
+// property from TEST-150's site_respondingEndpointSucceeds: that test proves
+// the harness is non-vacuous (a responding endpoint gets all the way through)
+// at all 22 sites; THIS test exists so there is a targeted, commented,
+// specifically-named row per C6 site whose sole job is to catch a regression
+// in the default itself - e.g. CancelToken() or CloudService's own
+// cancelToken_ member initialisation silently flipping from "no flag = never
+// cancels" to "no flag = always cancelled". driveSite() is called WITHOUT a
+// cancelToken argument on every row here, so the 4th (defaulted) parameter is
+// exercised deliberately, not incidentally.
+//
+// Each row uses a plan that would succeed if - and only if - cancellation is
+// correctly inert for a default-constructed token; the shared okPlans()/
+// okItems() helpers already encode exactly that "one responding page" shape
+// for these three sites, so this test reuses their bodies rather than
+// inventing new fixture JSON.
+//
+// DELAY IS LOAD-BEARING. cancelSnapshot.cancelled() is only ever consulted
+// from inside cancelPoll's OWN timeout lambda (CloudService.cpp), which fires
+// on a 250ms (kCancelPollMs) cadence - never at loop.exec() entry. okPlans()'s
+// replies deliver with delayMs == 0, i.e. on the very first event-loop
+// dispatch, which beats cancelPoll's first tick by a wide margin: the wait
+// ends via naturalFinish_ before cancelled() is ever called at all, and a
+// "make CancelToken() default to cancelled" mutation would then be INVISIBLE
+// to this row - the mutated cancelled() is simply never asked. Each plan here
+// is therefore reused from okPlans() but stamped with a delayMs comfortably
+// PAST one cancelPoll tick (400ms > 250ms) and comfortably BEFORE the 5000ms
+// watchdog override, so cancelPoll fires at least once while the request is
+// still outstanding and the mutation has something to bite on.
+// ---------------------------------------------------------------------------
+void TestCloudProviderWatchdog::guiThread_defaultTokenNeverCancels_data()
+{
+    QTest::addColumn<int>("site");
+
+    QTest::newRow("01 Dropbox::createFolder") << int(Site_Dropbox_createFolder);
+    QTest::newRow("05 Azum::listAthletes") << int(Site_Azum_listAthletes);
+    QTest::newRow("13 Nolio::listAthletes") << int(Site_Nolio_listAthletes);
+}
+
+void TestCloudProviderWatchdog::guiThread_defaultTokenNeverCancels()
+{
+    QFETCH(int, site);
+    const SiteId id = static_cast<SiteId>(site);
+
+    QList<net::Plan> plans = okPlans(id);
+    for (net::Plan& p : plans)
+        p.delayMs = 400; // past cancelPoll's 250ms cadence - see comment above
+
+    // No CancelToken argument passed - driveSite's 4th parameter takes its
+    // default, std::nullopt, so setCancelToken() is never called at all and
+    // `service` is left running on CloudService's own construction-time
+    // default for cancelToken_, exactly as every real GUI-thread caller of
+    // these three sites does today (ORCH-055: this genuinely exercises the
+    // member's own default, not a freshly-constructed CancelToken() standing
+    // in for it).
+    const SiteOutcome out = fixture::driveSite(id, plans, 5000);
+
+    QVERIFY(!net::rescueFired);
+    QVERIFY2(out.callerSuccess, qPrintable(QStringLiteral("%1 failed against a RESPONDING endpoint under the default "
+                                                          "(never-cancelling) token; errors: %2")
+                                               .arg(siteName(id))
+                                               .arg(out.errors.join("; "))));
+    if (out.hasErrorsChannel)
+        QVERIFY2(out.errors.isEmpty(),
+                 qPrintable(
+                     QStringLiteral("%1 reported errors on success: %2").arg(siteName(id)).arg(out.errors.join("; "))));
+
+    const int expectedItems = okItems(id);
+    if (expectedItems >= 0)
+        QCOMPARE(out.items, expectedItems);
+}
+
+// ---------------------------------------------------------------------------
+// TEST-146 (BUILT IN FULL) - the transition table, at the helper.
 //
 // These rows are ABOUT blockingRequest's own state machine (naturalFinish_,
 // pending_, abortIssued_) and there is no site-level projection of, for example,
 // "the timer and the natural finish landed in the same dispatch". ProbeService is
 // a real CloudService subclass using the real base implementation.
 //
-// ROW 4 (cancellation) and ROW 6's Cancelled arm are NOT BUILT. Stage 1
-// introduces no CancelToken and constructs no cancellation, so there is nothing
-// honest to assert about them; RequestOutcome::Cancelled is declared and
-// unreachable and this file neither asserts it is reachable nor asserts it never
-// will be.
+// ROW 4 (cancellation) and ROW 6's Cancelled arm are NOW BUILT. DEC-040 Stage 2
+// member-plumbed CancelToken onto CloudService (setCancelToken) and wired a
+// repeating cancelPoll timer into blockingRequest's wait loop, so
+// RequestOutcome::Cancelled is reachable via the same first-writer-wins
+// pending_ slot the watchdog already used for TimedOut - no other code path
+// changed. See CloudService.cpp's cancelPoll comment for the declaration-order
+// reasoning shared with watchdog.
 // ---------------------------------------------------------------------------
 void TestCloudProviderWatchdog::table_row1_naturalFinishNoError()
 {
@@ -2028,6 +2315,50 @@ void TestCloudProviderWatchdog::table_row3_timeoutNoFinish()
     QCOMPARE(net::abortCalls, 1);
 }
 
+void TestCloudProviderWatchdog::table_row4_cancellationNoFinishObserved()
+{
+    // ROW 4: cancellation, no finish ever observed. Mirrors row 3
+    // (table_row3_timeoutNoFinish) exactly in shape - net::Silent so the fake
+    // reply never answers - except that what ends the wait is a cancellation
+    // flag flipping true, not the watchdog. The timeout override is set
+    // generously (5000ms) so a real timeout genuinely cannot be what ends the
+    // wait; cancelPoll's 250ms cadence must get there first.
+    fixture::Harness harness;
+    net::reset();
+    net::FakeNam* nam = new net::FakeNam();
+    ProbeService service(harness.context(), nam);
+    service.setRequestTimeoutOverrideMs(5000);
+
+    auto flag = std::make_shared<std::atomic_bool>(false);
+    service.setCancelToken(CancelToken(flag));
+
+    net::Plan plan;
+    plan.behaviour = net::Silent;
+    net::plans << plan;
+
+    // Injected asynchronously, the same way row 5 injects its busy-wait: a
+    // zero-delay singleShot queued before blockingRequest's own nested
+    // loop.exec() runs, so it fires from inside that loop rather than before it.
+    QTimer::singleShot(50, [flag] { flag->store(true, std::memory_order_release); });
+
+    net::Rescue rescue(3000);
+    QElapsedTimer elapsed;
+    elapsed.start();
+    const RequestResult result = service.blockingRequest(nam->get(QNetworkRequest(QUrl("http://x/"))), 60);
+    const qint64 took = elapsed.elapsed();
+
+    QVERIFY(!net::rescueFired);
+    QCOMPARE(result.outcome, RequestOutcome::Cancelled);
+    QVERIFY(result.body.isEmpty());
+    // Bounded by the cancel poll cadence, not the 5000ms timeout override: the
+    // flag flips at ~50ms and cancelPoll checks every 250ms, so this returns
+    // long before either the override or the harness rescue could matter.
+    QVERIFY2(took < 800, qPrintable(QStringLiteral("took %1ms").arg(took)));
+    // And the reply WAS aborted, which is what makes row 6's Cancelled arm
+    // reachable at all - same disposal mechanism as the timeout path.
+    QCOMPARE(net::abortCalls, 1);
+}
+
 void TestCloudProviderWatchdog::table_row5_timerAndFinishTogether()
 {
     // ROW 5: the watchdog fires FIRST (so pending_ holds TimedOut) and a natural
@@ -2069,7 +2400,8 @@ void TestCloudProviderWatchdog::table_row6_abortInducedFinishLeavesOutcomeUnchan
 {
     // ROW 6, TIMEOUT ARM. Disposal aborts the reply, the abort synthesises a
     // finished(), and that synthetic finish must NOT be able to promote the
-    // timeout into a success. The Cancelled arm is Stage 2 and is not built.
+    // timeout into a success. See table_row6_cancelInducedFinishLeavesOutcomeUnchanged
+    // immediately below for the sibling Cancelled arm, now built alongside this one.
     //
     // WHAT THIS ROW USED TO PROVE: nothing. It asserted the outcome was still
     // TimedOut, which was true by construction - the outcome is reconciled and
@@ -2124,25 +2456,128 @@ void TestCloudProviderWatchdog::table_row6_abortInducedFinishLeavesOutcomeUnchan
     // fixed state survived disposal intact.
 }
 
+void TestCloudProviderWatchdog::table_row6_cancelInducedFinishLeavesOutcomeUnchanged()
+{
+    // ROW 6, CANCELLED ARM (Stage 2's own row 6 sibling). Same mechanism as the
+    // timeout arm immediately above, but disposal is triggered by cancellation
+    // rather than the watchdog: cancelPoll observes the flag, sets
+    // pending_ = Cancelled, quits the loop, disposal aborts the reply, the abort
+    // synthesises a finished(), and that synthetic finish must NOT be able to
+    // promote Cancelled into a success. Uses the same QSignalSpy-on-finished()
+    // technique to prove the abort's echo was really delivered and really
+    // neutralised, not merely that nothing happened to fire it.
+    fixture::Harness harness;
+    net::reset();
+    net::FakeNam* nam = new net::FakeNam();
+    ProbeService service(harness.context(), nam);
+    service.setRequestTimeoutOverrideMs(5000);
+
+    auto flag = std::make_shared<std::atomic_bool>(false);
+    service.setCancelToken(CancelToken(flag));
+
+    net::Plan plan;
+    plan.behaviour = net::Silent;
+    plan.body = "THIS MUST NEVER REACH THE CALLER";
+    net::plans << plan;
+
+    QNetworkReply* reply = nam->get(QNetworkRequest(QUrl("http://x/")));
+
+    QSignalSpy finishedSpy(reply, &QNetworkReply::finished);
+    QVERIFY(finishedSpy.isValid());
+
+    QTimer::singleShot(50, [flag] { flag->store(true, std::memory_order_release); });
+
+    net::Rescue rescue(3000);
+    const RequestResult result = service.blockingRequest(reply, 60);
+
+    QVERIFY(!net::rescueFired);
+
+    // The abort happened...
+    QCOMPARE(net::abortCalls, 1);
+    // ...and it really did emit finished(), exactly once, to a live receiver.
+    QCOMPARE(finishedSpy.count(), 1);
+
+    // ...and the outcome it could have corrupted is unchanged: still Cancelled,
+    // not promoted to Finished or NetworkError by the abort's synthetic finish.
+    QCOMPARE(result.outcome, RequestOutcome::Cancelled);
+    QVERIFY(result.body.isEmpty());
+
+    // Same post-disposal invariant as the timeout arm: reaching this line at
+    // all means the fixed state survived disposal intact.
+}
+
+// ---------------------------------------------------------------------------
+// TEST-149 - Stage 2 cancellation genericity + lifetime safety. The
+// observation interval must be <= 500 ms with the timeout override at 5000 ms,
+// so a real timeout cannot be what ends the wait - only cancelPoll's
+// kCancelPollMs cadence can. Killing mutation: raise kCancelPollMs from 250 to
+// 2000, which pushes the observed interval past 500 ms.
+// ---------------------------------------------------------------------------
+void TestCloudProviderWatchdog::cancel_observationIntervalWithinBound()
+{
+    fixture::Harness harness;
+    net::reset();
+    net::FakeNam* nam = new net::FakeNam();
+    ProbeService service(harness.context(), nam);
+    service.setRequestTimeoutOverrideMs(5000);
+
+    auto flag = std::make_shared<std::atomic_bool>(false);
+    service.setCancelToken(CancelToken(flag));
+
+    net::Plan plan;
+    plan.behaviour = net::Silent;
+    net::plans << plan;
+
+    // Elapsed measured from roughly when the cancel flag flips, not from the
+    // call's start, so the assertion is purely about the poll's own cadence and
+    // dispatch margin - not diluted by the singleShot's own delay.
+    QElapsedTimer elapsed;
+    QTimer::singleShot(50, [flag, &elapsed] {
+        elapsed.start();
+        flag->store(true, std::memory_order_release);
+    });
+
+    net::Rescue rescue(3000);
+    const RequestResult result = service.blockingRequest(nam->get(QNetworkRequest(QUrl("http://x/"))), 60);
+    const qint64 observed = elapsed.elapsed();
+
+    QVERIFY(!net::rescueFired);
+    QCOMPARE(result.outcome, RequestOutcome::Cancelled);
+    QVERIFY2(observed <= 500, qPrintable(QStringLiteral("observed %1ms").arg(observed)));
+}
+
 // ---------------------------------------------------------------------------
 // TEST-152 - Strava's site 17: exactly one completion, buffer freed once, no
 // readComplete after a failure, and a partial ride neither staged nor reported
 // successful.
+//
+// The "streams cancelled" row is ALSO TEST-147's site-17 counterpart (Stage 2
+// piece 3): site 17 has no internal pagination loop (it is a single
+// blockingRequest call, not a while/do-while/for), so what T-147 asserts here
+// is that a Cancelled outcome propagates as a failure exactly like a timeout
+// already does above it - not an internal continue-vs-break choice, because
+// there is no loop to break out of.
 // ---------------------------------------------------------------------------
 void TestCloudProviderWatchdog::strava_completionIsExactlyOne_data()
 {
     QTest::addColumn<int>("streamsBehaviour"); // net::Behaviour for the SECOND request
     QTest::addColumn<bool>("expectComplete");
+    QTest::addColumn<bool>("useCancelToken"); // T-147: cancel instead of letting it time out
 
-    QTest::newRow("streams answer") << int(net::Ok) << true;
-    QTest::newRow("streams time out") << int(net::Silent) << false;
-    QTest::newRow("streams error") << int(net::Failed) << false;
+    QTest::newRow("streams answer") << int(net::Ok) << true << false;
+    QTest::newRow("streams time out") << int(net::Silent) << false << false;
+    QTest::newRow("streams error") << int(net::Failed) << false << false;
+    // Same net::Silent shape as "streams time out", but ended by a cancellation
+    // flag rather than the timeout override - mirrors
+    // table_row4_cancellationNoFinishObserved's mechanism at the site level.
+    QTest::newRow("streams cancelled") << int(net::Silent) << false << true;
 }
 
 void TestCloudProviderWatchdog::strava_completionIsExactlyOne()
 {
     QFETCH(int, streamsBehaviour);
     QFETCH(bool, expectComplete);
+    QFETCH(bool, useCancelToken);
 
     gcStubClearSettings();
     net::reset();
@@ -2161,7 +2596,17 @@ void TestCloudProviderWatchdog::strava_completionIsExactlyOne()
     net::FakeNam* nam = new net::FakeNam();
     Strava* strava = new Strava(harness.context(), nam);
     strava->setSetting(GC_STRAVA_TOKEN, "TOKEN");
-    strava->setRequestTimeoutOverrideMs(60);
+    // The cancelled row needs a generous override so a real timeout cannot be
+    // what ends the wait - only the cancellation flag can. The other rows keep
+    // the tight 60ms bound they always had.
+    strava->setRequestTimeoutOverrideMs(useCancelToken ? 5000 : 60);
+
+    std::shared_ptr<std::atomic_bool> cancelFlag;
+    if (useCancelToken) {
+        cancelFlag = std::make_shared<std::atomic_bool>(false);
+        strava->setCancelToken(CancelToken(cancelFlag));
+        QTimer::singleShot(50, [cancelFlag] { cancelFlag->store(true, std::memory_order_release); });
+    }
 
     fixture::StravaCompletionWatcher watcher(strava);
     net::Rescue rescue(3000);

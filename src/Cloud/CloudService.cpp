@@ -246,6 +246,34 @@ CloudService::blockingRequest(QNetworkReply *reply, int timeoutMs)
     QTimer watchdog;
     watchdog.setSingleShot(true);
 
+    // DEC-040 Stage 2 (W3) - THE CANCELLATION POLL.
+    //
+    // Same context-object rule as watchdog below, and for the same reason: this
+    // connects to &loop, so it must be destroyed before `loop` on every exit
+    // path, which is why it is declared here - after `loop`, before `disposer` -
+    // rather than sunk lower in the function where it would read more naturally.
+    //
+    // Repeating, not single-shot: unlike the watchdog, which only ever needs to
+    // fire once, cancellation may never be requested at all, and if it is not
+    // this timer must keep re-arming itself every kCancelPollMs until something
+    // else (a natural finish, or the watchdog) ends the wait.
+    //
+    // The token is snapshotted into a local BEFORE the loop starts, rather than
+    // read as `this->cancelToken_` from inside the lambda. Either is safe here -
+    // blockingRequest is a synchronous member call, so `this` is guaranteed alive
+    // for the function's whole duration, the same trust level
+    // requestTimeoutOverrideMs_ already gets a few lines below as a bare member
+    // read - but every other lambda in this function captures only locals
+    // (`state`, `loop`), never `this`, and the snapshot keeps that shape rather
+    // than introducing a new kind of capture into code whose declaration order is
+    // already this load-bearing. A CancelToken copy is a shared_ptr copy: cheap,
+    // and it observes whatever setCancelToken() had written before this call
+    // began, which is the only sensible timing - the token is not meant to be
+    // reassigned mid-wait by another thread reaching into this object.
+    const CancelToken cancelSnapshot = cancelToken_;
+    QTimer cancelPoll;
+    cancelPoll.setSingleShot(false);
+
     ReplyDisposer disposer(reply, &state);
 
     QObject::connect(reply, &QNetworkReply::finished, &loop, [&state, &loop]() {
@@ -270,6 +298,15 @@ CloudService::blockingRequest(QNetworkReply *reply, int timeoutMs)
         loop.quit();
     });
 
+    QObject::connect(&cancelPoll, &QTimer::timeout, &loop, [&state, &loop, &cancelSnapshot]() {
+        if (!cancelSnapshot.cancelled()) return;
+        if (!state.pendingSet_) {
+            state.pendingSet_ = true;
+            state.pending_ = RequestOutcome::Cancelled;
+        }
+        loop.quit();
+    });
+
     // THE WATCHDOG IS ARMED BEFORE exec(), NOT AFTER.
     //
     // This is the entire point of the helper and it is not a stylistic detail.
@@ -282,6 +319,14 @@ CloudService::blockingRequest(QNetworkReply *reply, int timeoutMs)
     // it exists.
     const int t = (requestTimeoutOverrideMs_ >= 0) ? requestTimeoutOverrideMs_ : timeoutMs;
     watchdog.start(t);
+
+    // Armed unconditionally, whether or not a real token was ever supplied. A
+    // default-constructed CancelToken's cancelled() is always false, so this
+    // costs one no-op wakeup every kCancelPollMs on the (common) call sites that
+    // never call setCancelToken - negligible next to the request itself - and
+    // gains not having a second, token-conditional code path to keep in sync with
+    // the first.
+    cancelPoll.start(kCancelPollMs);
 
     loop.exec();
 

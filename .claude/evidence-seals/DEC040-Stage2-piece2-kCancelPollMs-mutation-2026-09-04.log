@@ -1,0 +1,90 @@
+=== DEC-040 Stage 2 piece 2 / T-149 mutation-proof, orchestrator-executed 2026-09-04T23:07:23+10:00 ===
+
+--- snapshot ---
+'src/Cloud/CloudService.h' -> 'src/Cloud/CloudService.h.orig'
+
+--- pre-mutation: git diff --stat src/Cloud/CloudService.h (expect the piece-2 diff, unmutated) ---
+ src/Cloud/CloudService.h | 55 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 55 insertions(+)
+
+--- mutation applied: exact diff ---
++        // test is raising this to 2000, which pushes the observed interval past
++        // 500 ms.
++        static const int kCancelPollMs = 2000;
++
+         // DEC-040 Stage 1 (S-1) - test-facing timeout override.
+
+--- rebuild under mutation ---
+[0/2] Re-checking globbed directories...
+[1/19] Automatic MOC and UIC for target testCloudProviderWatchdog
+[2/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/testCloudProviderWatchdog_autogen/mocs_compilation.cpp.o
+[3/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/__/__/__/src/Cloud/PolarFlow.cpp.o
+[4/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/__/__/__/src/Cloud/Dropbox.cpp.o
+[5/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/__/__/__/src/Cloud/Azum.cpp.o
+[6/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/__/__/__/src/Cloud/Xert.cpp.o
+[7/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/__/__/__/src/Cloud/Nolio.cpp.o
+[8/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/__/__/__/src/Cloud/SportTracks.cpp.o
+[9/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/__/__/__/src/Cloud/Strava.cpp.o
+[10/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/__/__/__/src/Cloud/TrainingsTageBuch.cpp.o
+[11/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/__/__/__/src/Cloud/Selfloops.cpp.o
+[12/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/__/__/__/src/Cloud/CyclingAnalytics.cpp.o
+[13/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/__/__/__/src/Cloud/SixCycle.cpp.o
+[14/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/testCloudProviderWatchdog.cpp.o
+[15/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/__/__/__/src/Cloud/RideWithGPS.cpp.o
+[16/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/__/__/__/src/Cloud/CloudService.cpp.o
+[17/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/__/__/__/src/Cloud/SportsPlusHealth.cpp.o
+[18/19] Linking CXX executable unittests/Core/garminconnect/testCloudProviderWatchdog
+
+--- run under mutation: offscreen, T-149 only ---
+********* Start testing of TestCloudProviderWatchdog *********
+Config: Using QtTest library 6.8.2, Qt 6.8.2 (x86_64-little_endian-lp64 shared (dynamic) release build; by GCC 14.2.0), debian 13
+PASS   : TestCloudProviderWatchdog::initTestCase()
+FAIL!  : TestCloudProviderWatchdog::cancel_observationIntervalWithinBound() 'observed <= 500' returned FALSE. (observed 1852ms)
+   Loc: [/media/andy/TOSHIBA EXT/Backup2/Documents/GoldenCheetah/unittests/Core/garminconnect/testCloudProviderWatchdog.cpp(2274)]
+PASS   : TestCloudProviderWatchdog::cleanupTestCase()
+Totals: 2 passed, 1 failed, 0 skipped, 0 blacklisted, 1909ms
+********* Finished testing of TestCloudProviderWatchdog *********
+binary exit=1
+
+--- restore from snapshot ---
+'src/Cloud/CloudService.h.orig' -> 'src/Cloud/CloudService.h'
+
+--- restore verification: cmp (expect exit 0) ---
+cmp exit=0
+
+--- restore verification: git diff --stat (expect the unmutated piece-2 diff) ---
+ src/Cloud/CloudService.h | 55 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 55 insertions(+)
+
+--- post-restore rebuild ---
+[0/2] Re-checking globbed directories...
+[1/19] Automatic MOC and UIC for target testCloudProviderWatchdog
+[2/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/__/__/__/src/Cloud/PolarFlow.cpp.o
+[3/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/testCloudProviderWatchdog_autogen/mocs_compilation.cpp.o
+[4/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/__/__/__/src/Cloud/Dropbox.cpp.o
+[5/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/__/__/__/src/Cloud/Azum.cpp.o
+[6/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/__/__/__/src/Cloud/Xert.cpp.o
+[7/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/__/__/__/src/Cloud/Nolio.cpp.o
+[8/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/__/__/__/src/Cloud/SportTracks.cpp.o
+[9/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/__/__/__/src/Cloud/TrainingsTageBuch.cpp.o
+[10/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/__/__/__/src/Cloud/Strava.cpp.o
+[11/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/__/__/__/src/Cloud/CyclingAnalytics.cpp.o
+[12/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/testCloudProviderWatchdog.cpp.o
+[13/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/__/__/__/src/Cloud/SixCycle.cpp.o
+[14/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/__/__/__/src/Cloud/SportsPlusHealth.cpp.o
+[15/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/__/__/__/src/Cloud/RideWithGPS.cpp.o
+[16/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/__/__/__/src/Cloud/Selfloops.cpp.o
+[17/19] Building CXX object unittests/Core/garminconnect/CMakeFiles/testCloudProviderWatchdog.dir/__/__/__/src/Cloud/CloudService.cpp.o
+[18/19] Linking CXX executable unittests/Core/garminconnect/testCloudProviderWatchdog
+
+--- post-restore run: offscreen, T-149 only (expect PASS) ---
+********* Start testing of TestCloudProviderWatchdog *********
+Config: Using QtTest library 6.8.2, Qt 6.8.2 (x86_64-little_endian-lp64 shared (dynamic) release build; by GCC 14.2.0), debian 13
+PASS   : TestCloudProviderWatchdog::initTestCase()
+PASS   : TestCloudProviderWatchdog::cancel_observationIntervalWithinBound()
+PASS   : TestCloudProviderWatchdog::cleanupTestCase()
+Totals: 3 passed, 0 failed, 0 skipped, 0 blacklisted, 242ms
+********* Finished testing of TestCloudProviderWatchdog *********
+binary exit=0
+
+=== END EVIDENCE LOG ===

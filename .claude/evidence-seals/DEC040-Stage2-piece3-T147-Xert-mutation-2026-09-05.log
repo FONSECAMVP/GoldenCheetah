@@ -1,0 +1,24 @@
+=== Orchestrator-independent mutation proof, T-147 piece 3, site 10 (Xert::readActivityDetail) ===
+Date: 2026-09-05
+Mutation: src/Cloud/Xert.cpp:277, 'return returning;' -> 'continue;' inside the per-activity detail-fetch failure branch
+
+--- RED: shapeBC_cancellationBreaksTheListing (the new piece-3 test) under the mutation ---
+********* Start testing of TestCloudProviderWatchdog *********
+Config: Using QtTest library 6.8.2, Qt 6.8.2 (x86_64-little_endian-lp64 shared (dynamic) release build; by GCC 14.2.0), debian 13
+PASS   : TestCloudProviderWatchdog::initTestCase()
+FAIL!  : TestCloudProviderWatchdog::shapeBC_cancellationBreaksTheListing(10 Xert::readActivityDetail) Compared values are not the same
+   Actual   (out.requests)   : 3
+   Expected (silentIndex + 1): 2
+   Loc: [/media/andy/TOSHIBA EXT/Backup2/Documents/GoldenCheetah/unittests/Core/garminconnect/testCloudProviderWatchdog.cpp(2125)]
+PASS   : TestCloudProviderWatchdog::cleanupTestCase()
+Totals: 2 passed, 1 failed, 0 skipped, 0 blacklisted, 530ms
+********* Finished testing of TestCloudProviderWatchdog *********
+
+--- BLIND SPOT CONFIRMED: pre-existing shapeBC_timeoutBreaksTheListing under the SAME mutation stays GREEN ---
+********* Start testing of TestCloudProviderWatchdog *********
+Config: Using QtTest library 6.8.2, Qt 6.8.2 (x86_64-little_endian-lp64 shared (dynamic) release build; by GCC 14.2.0), debian 13
+PASS   : TestCloudProviderWatchdog::initTestCase()
+PASS   : TestCloudProviderWatchdog::shapeBC_timeoutBreaksTheListing(10 Xert::readActivityDetail)
+PASS   : TestCloudProviderWatchdog::cleanupTestCase()
+Totals: 3 passed, 0 failed, 0 skipped, 0 blacklisted, 64ms
+********* Finished testing of TestCloudProviderWatchdog *********

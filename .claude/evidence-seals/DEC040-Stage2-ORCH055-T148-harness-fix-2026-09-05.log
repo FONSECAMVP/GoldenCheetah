@@ -1,0 +1,80 @@
+=== ORCH-055 fix: driveSite() no longer calls setCancelToken() unconditionally, orchestrator-executed 2026-09-05 ===
+
+Defect (ORCH-055): fixture::driveSite()'s 4th parameter was `CancelToken cancelToken =
+CancelToken()`, and the callee called `service->setCancelToken(cancelToken)` UNCONDITIONALLY,
+whether the caller supplied an argument or fell through to the default. T-148's
+guiThread_defaultTokenNeverCancels() rows therefore never left CloudService::cancelToken_ at its
+own construction-time default -- they overwrote it with a freshly-constructed CancelToken() every
+row, which is behaviourally identical to a correct member default ONLY if that default is itself
+correct. A broken member initializer for cancelToken_ would have been silently papered over.
+
+Fix (unittests/Core/garminconnect/testCloudProviderWatchdog.cpp):
+  - #include <optional> added.
+  - driveSite()'s 4th parameter changed from `CancelToken cancelToken = CancelToken()` to
+    `std::optional<CancelToken> cancelToken = std::nullopt`.
+  - Body changed from unconditional `service->setCancelToken(cancelToken);` to
+    `if (cancelToken) service->setCancelToken(*cancelToken);` -- "no token supplied" now
+    genuinely skips the setter call.
+  - The one explicit-token caller (shapeBC_cancellationBreaksTheListing,
+    `driveSite(id, plans, 5000, CancelToken(flag))`) needed NO change: std::optional converts
+    implicitly from its value type.
+  - guiThread_defaultTokenNeverCancels()'s own comment updated to state it now exercises
+    CloudService's own default, not a substitute.
+
+--- build after the fix ---
+ninja unittests/Core/garminconnect/testCloudProviderWatchdog: EXIT=0
+
+--- targeted T-148 rows, offscreen (expect PASS, now genuinely exercising the member default) ---
+PASS   : guiThread_defaultTokenNeverCancels(01 Dropbox::createFolder)
+PASS   : guiThread_defaultTokenNeverCancels(05 Azum::listAthletes)
+PASS   : guiThread_defaultTokenNeverCancels(13 Nolio::listAthletes)
+Totals: 5 passed, 0 failed, 0 skipped, 0 blacklisted, 1210ms -- exit=0
+
+--- full suite, both backends (expect 168/0, no regressions from the signature change) ---
+offscreen: Totals: 168 passed, 0 failed, 0 skipped, 0 blacklisted, 28719ms
+minimal:   Totals: 168 passed, 0 failed, 0 skipped, 0 blacklisted, 28585ms
+
+--- MUTATION PROOF that the fix actually closes the coverage gap ---
+Snapshot: cp src/Cloud/CloudService.h src/Cloud/CloudService.h.orig
+Mutation: the exact defect class ORCH-055 named -- CloudService's own construction-time default
+for cancelToken_ broken to start ALREADY CANCELLED:
+  `CancelToken cancelToken_;` -> `CancelToken cancelToken_ = CancelToken(std::make_shared<std::atomic_bool>(true));`
+Rebuild: EXIT=0
+
+RED, offscreen, guiThread_defaultTokenNeverCancels (all 3 T-148 rows -- PROVES the fixed harness
+now catches a broken member default, which the old unconditional-setCancelToken() harness could
+NOT have caught, since it always overwrote cancelToken_ with a fresh working CancelToken() before
+the site method ran):
+  FAIL!  : guiThread_defaultTokenNeverCancels(01 Dropbox::createFolder) 'out.callerSuccess' returned FALSE.
+  FAIL!  : guiThread_defaultTokenNeverCancels(05 Azum::listAthletes) 'out.callerSuccess' returned FALSE.
+  FAIL!  : guiThread_defaultTokenNeverCancels(13 Nolio::listAthletes) 'out.callerSuccess' returned FALSE.
+  Totals: 2 passed, 3 failed, 0 skipped, 0 blacklisted, 722ms -- exit=3
+
+ISOLATION under the SAME mutation, offscreen (explicit-token cancellation tests must stay green --
+they overwrite cancelToken_ themselves every row, so the broken member default never reaches them):
+  table_row4_cancellationNoFinishObserved, shapeBC_cancellationBreaksTheListing (6 rows),
+  table_row6_cancelInducedFinishLeavesOutcomeUnchanged, cancel_observationIntervalWithinBound
+  Totals: 11 passed, 0 failed, 0 skipped, 0 blacklisted, 2237ms -- exit=0
+
+Restore: cp src/Cloud/CloudService.h.orig src/Cloud/CloudService.h; cmp exit=0;
+git diff --stat unchanged (45 insertions(+)); rm src/Cloud/CloudService.h.orig
+
+--- post-restore rebuild (full ninja) ---
+EXIT=0
+
+--- post-restore full suite, both backends ---
+offscreen: Totals: 168 passed, 0 failed, 0 skipped, 0 blacklisted, 28829ms
+minimal:   Totals: 168 passed, 0 failed, 0 skipped, 0 blacklisted, 28536ms
+
+--- post-restore full regression ---
+ctest -L garmin-fast --output-on-failure --timeout 480
+  100% tests passed, 0 tests failed out of 27
+  garmin-fast = 230.42 sec*proc
+  [exited with code 0]
+
+=== VERDICT: ORCH-055 CLOSED. driveSite() no longer calls setCancelToken() for an unsupplied
+token; T-148's 3 rows now genuinely exercise CloudService's own construction-time default, proven
+by a real mutation of that exact default (member-initializer-starts-cancelled) turning RED under
+the fixed harness while every explicit-token cancellation test stayed correctly isolated (green).
+Full 168/0 both backends and 27/27 ctest -L garmin-fast, both re-confirmed on the restored,
+unmutated bytes. ===

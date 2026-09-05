@@ -28,6 +28,10 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 
+// DEC-040 Stage 2 (W3) - the ONLY two non-Qt includes CancelToken needs.
+#include <atomic>
+#include <memory>
+
 #include <QDialog>
 #include <QCheckBox>
 #include <QTreeWidget>
@@ -91,6 +95,27 @@ struct RequestResult {
     QByteArray body;
 
     bool ok() const { return outcome == RequestOutcome::Finished; }
+};
+
+// DEC-040 Stage 2 (W3) - GENERIC COOPERATIVE CANCELLATION.
+//
+// A CancelToken is a read-only view onto a flag some other owner controls -
+// this class never sets the flag itself, only observes it. Copying a
+// CancelToken copies the shared_ptr, not the bool, so every copy (including
+// the snapshot blockingRequest takes before it waits) observes the SAME
+// underlying flag; whoever flips it does so through their own retained
+// std::shared_ptr<std::atomic_bool>, which is why the member here is
+// const-qualified. A default-constructed token holds no flag at all and
+// therefore never cancels - this is the safe default every CloudService
+// starts with, and every GUI-thread call site that never calls
+// setCancelToken() relies on exactly this property (see TEST-148).
+class CancelToken {
+public:
+    CancelToken() = default;              // never cancels
+    explicit CancelToken(std::shared_ptr<const std::atomic_bool> f) : flag_(std::move(f)) {}
+    bool cancelled() const { return flag_ && flag_->load(std::memory_order_acquire); }
+private:
+    std::shared_ptr<const std::atomic_bool> flag_;
 };
 
 // Representing an Athlete when the service allows for
@@ -186,6 +211,13 @@ class CloudService : public QObject {
         static const int kOpenTimeoutMs = 30000;    // open / auth / one-shot calls
         static const int kListTimeoutMs = 60000;    // directory listings
 
+        // DEC-040 Stage 2 (W3) - cancellation-observation cadence. blockingRequest
+        // polls the cancel token on this interval; the maximum observation delay
+        // is this plus dispatch margin, and TEST-149 asserts the total stays
+        // <= 500ms with the timeout override generously wide (5000ms) so a real
+        // timeout cannot be what ends the wait.
+        static const int kCancelPollMs = 250;
+
         // DEC-040 Stage 1 (S-1) - test-facing timeout override.
         //
         // A watchdog test cannot afford to spend the real 30s or 60s, and a suite
@@ -196,6 +228,13 @@ class CloudService : public QObject {
         // bound the call site asked for", which is what every production caller
         // gets.
         void setRequestTimeoutOverrideMs(int ms) { requestTimeoutOverrideMs_ = ms; }
+
+        // DEC-040 Stage 2 (W3) - member-plumbed, not a blockingRequest parameter,
+        // so open()/readdir()'s virtual signatures stay unchanged. A CloudService
+        // that never calls this keeps the default CancelToken(), which never
+        // cancels - exactly the property every GUI-thread call site that never
+        // sets one depends on (TEST-148).
+        void setCancelToken(CancelToken token) { cancelToken_ = token; }
 
         // The following must be reimplemented
         virtual bool initialize() { return true; }
@@ -536,6 +575,12 @@ class CloudService : public QObject {
         // DEC-040 Stage 1 (S-1) - see setRequestTimeoutOverrideMs. Consumed at
         // exactly one point, inside blockingRequest.
         int requestTimeoutOverrideMs_ = -1;
+
+        // DEC-040 Stage 2 (W3) - see setCancelToken. Default-constructed, so a
+        // CloudService that never calls setCancelToken() carries a token that
+        // never cancels. blockingRequest snapshots this into a local before it
+        // waits; see the snapshot's own comment in CloudService.cpp for why.
+        CancelToken cancelToken_;
 };
 
 // REQ-017 (b)/(e) - teardown of a store that an owner opened.
