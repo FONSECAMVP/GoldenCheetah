@@ -135,6 +135,15 @@ volatile quintptr saveSilentArgTouch = 0;
 // does not arm it can behave differently. The counter is write-only.
 std::function<void()> autoProcessAction; // null unless a test arms it
 int autoProcessCalls = 0;                // was the seam reached at all?
+
+// TEST-158 (B-R028-17, DEC-042) — did saveRide reach past its own suspension
+// to the member reads DEC-042 guards? JsonFileReader::writeRideFile and
+// Athlete::addRide are both link stubs already (do nothing, touch no disk);
+// these just publish whether either was called, so a test can assert the
+// accepted trade-off (a parent-teardown mid-autoProcess skips the save
+// entirely) rather than merely "no crash".
+int writeRideFileCalls = 0;
+int addRideCalls = 0;
 } // namespace gcstub
 
 namespace {
@@ -238,6 +247,7 @@ void Athlete::addRide(QString name, bool dosignal, bool select, bool useTempActi
     Q_UNUSED(select);
     Q_UNUSED(useTempActivities);
     Q_UNUSED(planned);
+    ++gcstub::addRideCalls; // TEST-158 (DEC-042)
 }
 
 double Athlete::getWeight(QDate date, RideFile* ride)
@@ -535,6 +545,7 @@ bool JsonFileReader::writeRideFile(Context* context, const RideFile* ride, QFile
     Q_UNUSED(context);
     Q_UNUSED(ride);
     Q_UNUSED(file);
+    ++gcstub::writeRideFileCalls; // TEST-158 (DEC-042)
     return false;
 }
 

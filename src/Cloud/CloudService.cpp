@@ -3996,11 +3996,23 @@ CloudServiceSyncDialog::saveRide(RideFile *ride, QStringList &errors)
     // process linked defaults
     GlobalContext::context()->rideMetadata->setLinkedDefaults(ride);
 
+    // DEC-042 (B-R028-17): either autoProcess call below can nest a QEventLoop
+    // (e.g. FixElevation::postProcess) and suspend this frame; a parent
+    // teardown (Qt destroying this dialog directly via
+    // QObjectPrivate::deleteChildren() on athlete-tab close) delivered into
+    // that loop frees `this` while saveRide is still on the stack. Held
+    // before the first call because it can suspend too; one check after the
+    // second suffices, since only ride->recalculateDerivedSeries() runs
+    // between them and it touches `ride`, not `this`.
+    QPointer<CloudServiceSyncDialog> self(this);
+
     // run the processor first... import
     DataProcessorFactory::instance().autoProcess(ride, "Auto", "Import");
     ride->recalculateDerivedSeries();
     // now metrics have been calculated
     DataProcessorFactory::instance().autoProcess(ride, "Save", "ADD");
+    // DEC-042: self-bail after saveRide's own suspension, not just at the call site
+    if (self.isNull()) return false;
 
     JsonFileReader reader;
     QFile file(filename);
@@ -4101,6 +4113,13 @@ CloudServiceAutoDownload::run()
 
             // instantiate
             CloudService *service = CloudServiceFactory::instance().newService(worklist[i], context);
+
+            // DEC-043 - extends DEC-040 Stage 2's CancelToken onto auto-
+            // download's own worklist services, so Athlete::close()'s
+            // requestStop() can interrupt an in-flight open()/readdir()
+            // blockingRequest instead of leaving athlete-tab close waiting on
+            // the old, much longer provider timeout (TEST-160).
+            service->setCancelToken(CancelToken(stopRequested_));
 
             // we want to trap received files
             connect(service, SIGNAL(readComplete(QByteArray*,QString,QString)), this, SLOT(readComplete(QByteArray*,QString,QString)));
@@ -4346,6 +4365,16 @@ CloudServiceAutoDownload::readFailed(QByteArray*data,QString name,QString reason
 void
 CloudServiceAutoDownload::readComplete(QByteArray*data,QString name,QString)
 {
+    // DEC-043 (A3-R028e-F1) - this is a QUEUED, cross-thread slot: it can be
+    // dispatched after Athlete::close() has already flipped requestStop() and
+    // started tearing down context/athlete. Bail before any of the
+    // context->athlete dereferences below, which would otherwise race a
+    // freed owner (TEST-159).
+    if (stopRequested_->load(std::memory_order_acquire)) {
+        delete data;
+        return;
+    }
+
     // find the entry I belong too
     CloudServiceDownloadEntry entry;
     bool found=false;

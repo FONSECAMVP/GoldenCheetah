@@ -155,6 +155,11 @@ extern volatile quintptr saveSilentArgTouch;
 // unaffected (LSN-056).
 extern std::function<void()> autoProcessAction;
 extern int autoProcessCalls;
+
+// TEST-158 (B-R028-17, DEC-042) — did saveRide's own tail run past the
+// suspension? See the block comment beside these in ImportSeamStubs.cpp.
+extern int writeRideFileCalls;
+extern int addRideCalls;
 } // namespace gcstub
 
 // ---------------------------------------------------------------------------
@@ -11193,6 +11198,101 @@ class TestGarminConnectSyncDialogClose : public QObject
                                         .arg(out.buttonTextAtEnd)));
     }
 
+    // -- TEST-157 (REQ-028 (c), B-R028-01, DEC-garmin-034/036) -----------
+    // THE ABORT+RESTART ROUTE, LANDING INSIDE saveRide/autoProcess.
+    //
+    // WHAT THIS SLOT CLOSES, AND WHY NEITHER EXISTING SLOT DOES. TEST-121
+    // (aRefreshInsideSaveRideMustNotLeaveTheSlotHoldingThatRow) drives
+    // InSaveRideAutoProcess but only ever delivers a plain Refresh — no batch
+    // ever restarts, so the row it proves clean of is a row nobody else is
+    // fighting over. TEST-129
+    // (aRestartInsideAParseableOpenMustStandTheOldDriverDown) drives the
+    // abort+restart burst, but only into the two DRIVER opens
+    // (InSyncNextOpen/InUploadNextOpen) — never into the one seam that sits
+    // INSIDE the write itself (CloudService.cpp:3396, DataProcessorFactory::
+    // autoProcess, reached through completedRead's ride-bearing branch and
+    // saveRide's own suspension). B-R028-01 names exactly this combination as
+    // undriven: "a parseable ride reaches saveRide() and writes an activity
+    // into the athlete's folder on behalf of a batch that no longer exists".
+    //
+    // WHAT THE GUARD ACTUALLY CLOSES HERE, PER THE GOVERNING DEC TEXT itself
+    // (decisions.md:1726-1728, the DEC-034/036 amendment, 2026-08-21): "there
+    // is no aborted/batchGeneration re-read between saveRide (:2966) and
+    // successful++ (:2978), so an abort+restart delivered inside autoProcess
+    // increments the NEW batch's counter on the old batch's behalf. Same
+    // mechanism, same fix." That is the batchGeneration/listGeneration
+    // compare at CloudService.cpp:3473 (and its twin at :3492, guarding the
+    // re-drive into syncNext()/downloadNext()) — it stops the LABEL, the
+    // `successful` count and the re-drive. It does NOT, and does not claim
+    // to, stop the file write itself: CloudService.cpp:3454-3461 documents
+    // that trade-off in so many words ("By the time we can ask the question
+    // the activity is already in the athlete's folder - and that is the
+    // right trade"). This target's own JsonFileReader::writeRideFile /
+    // Athlete::addRide are hard no-op stubs (stubs/ImportSeamStubs.cpp) with
+    // no counter of their own, so a literal per-file write count is not
+    // observable here — see the NOTES this slot's author filed alongside it.
+    // What IS observable, and is exactly what the amendment above targets, is
+    // the label/count/re-drive triple below.
+    //
+    // HOW THIS WAS VERIFIED NOT TO BE A VACUOUS ASSERTION (no source file was
+    // changed to do this - verified locally, then reverted, `git diff
+    // --stat src/Cloud/CloudService.cpp` empty before this slot was
+    // committed): with the CloudService.cpp:3473 AND :3492 compares both
+    // suppressed, this exact run's outcome changes from
+    // ("Processed 2 of 2 successfully", "Synchronize", ["Saved","Saved"]) to
+    // ("Downloaded 3 of 2 successfully", "Download", ["Saved","Saved"]) - the
+    // destroyed generation re-drives into the WRONG driver entirely and
+    // inflates the count past the list size. That is the failure this slot
+    // stands between the user and.
+    //
+    // sawAbortLabel/abortTookTheAbortBranch stand in for restartDelivered
+    // here (unlike TEST-129): on this route nothing the restarted generation
+    // does blocks, so its ENTIRE batch — both rows, including their own
+    // saveRide/autoProcess passes and its own completion tail — runs to
+    // completion inside syncNext()'s own processEvents(), synchronously
+    // within the second downloadClicked() call; by the time that call
+    // returns the button has already gone back to "Synchronize" and
+    // restartDelivered (which samples the button immediately after that
+    // call) reads false. Measured, not assumed - see this slot's NOTES.
+    void aRestartInsideSaveRideAutoProcessMustStandTheOldGenerationDown()
+    {
+        RebuildSpec spec;
+        spec.where = InSaveRideAutoProcess;
+        spec.restartInsteadOfRefresh = true;
+        const RebuildOutcome out = runListRebuild(spec);
+        const QString where = QStringLiteral("completedRead/saveRide (restart): ");
+
+        // ---- PREMISES: the run reached the situation it claims to.
+        QVERIFY2(!out.timedOut, qPrintable(where + QStringLiteral("the run never came back")));
+        QCOMPARE(out.listCount, 2);
+        QCOMPARE(out.checkedRows, 2);
+        QVERIFY2(out.sawAbortLabel && out.abortTookTheAbortBranch,
+                 qPrintable(where + QStringLiteral("the nested loop did not deliver a real Abort before the "
+                                                   "restart - this run proves nothing about the restart route")));
+        QVERIFY2(out.rideOpens >= 2,
+                 qPrintable(where + QStringLiteral("only %1 ride open(s) - the stale generation and the restarted "
+                                                   "one did not both reach openRideFile, so this run never combined "
+                                                   "the abort+restart burst with the saveRide seam")
+                                        .arg(out.rideOpens)));
+        QVERIFY2(out.autoProcessCalls >= 4,
+                 qPrintable(where + QStringLiteral("only %1 autoProcess call(s) - not enough for the stale "
+                                                   "generation's own saveRide to run to completion AND the "
+                                                   "restarted generation to reach the same seam again, so this run "
+                                                   "does not prove the guard was tested against a live collision")
+                                        .arg(out.autoProcessCalls)));
+
+        // ---- THE VERDICT. The restarted generation's own batch - and ONLY
+        //      that batch - is what the dialog reports: no row carries a
+        //      status the destroyed generation gave it (REQ-028 (b)'s
+        //      concern), the count is neither inflated nor short by the
+        //      destroyed generation's own successful++ (the amendment's own
+        //      named fix), and the dialog ends idle rather than wedged on
+        //      "Abort" forever.
+        QCOMPARE(out.statuses, QStringList({QStringLiteral("Saved"), QStringLiteral("Saved")}));
+        QCOMPARE(out.progressText, QStringLiteral("Processed 2 of 2 successfully"));
+        QCOMPARE(out.buttonTextAtEnd, QStringLiteral("Synchronize"));
+    }
+
     // -- TEST-110 (REQ-028 (d), DEC-garmin-034) --------------------------
     // THE DIALOG REMAINS USABLE — THE POSITIVE CONTROL.
     //
@@ -16416,6 +16516,266 @@ class TestGarminConnectSyncDialogClose : public QObject
                                                        "refusal branch anyway - the out-param was not read")));
             QCOMPARE(s, QStringLiteral("service refused"));
         }
+    }
+
+    // =====================================================================
+    // TEST-158 (B-R028-17, DEC-042, REQ-028 (e)) — A PARENT TEARDOWN LANDED
+    // INSIDE saveRide's SECOND autoProcess CALL, NOT JUST ITS FIRST.
+    // =====================================================================
+    //
+    // THE GAP TEST-140 DOCUMENTS BUT DOES NOT COVER. TEST-140's own comment
+    // block (above, T-141 probe) already measured that the deferral guard at
+    // completedRead's own BlockingCall (CloudService.cpp ~3509) cannot reach
+    // this: it fires one statement AFTER saveRide has already returned, while
+    // saveRide itself dereferences `this` (`context`, `rideFiles`,
+    // `context->athlete`) TWICE below its own suspension, with NO guard of
+    // its own. DEC-042 places that guard where the T-141 probe proved the
+    // hazard actually is: inside saveRide, after its SECOND
+    // DataProcessorFactory::autoProcess call (mode "Save"/"ADD") and before
+    // reader.writeRideFile/rideFiles<</context->athlete->addRide.
+    //
+    // WHY THE SECOND CALL SPECIFICALLY. saveRide makes autoProcess calls in
+    // strict sequence - "Auto"/"Import" then "Save"/"ADD" - with only
+    // ride->recalculateDerivedSeries() (touches `ride`, not `this`) between
+    // them. A teardown landed in the FIRST call would resume through the
+    // second call's own suspension before ever reaching the unguarded reads;
+    // only a teardown inside the SECOND call precedes them directly. The
+    // seam's self-rearming action below (arm nothing on call 1, arm the
+    // teardown on call 2) is what makes this precise rather than "somewhere
+    // in saveRide".
+    //
+    // WHY NO EVENT LOOP OR QUEUED DELIVERY IS NEEDED HERE, UNLIKE TEST-140.
+    // TEST-140's close has to be delivered BY the seam's own nested loop so
+    // it lands one scopeLevel deeper (see that block comment). This run
+    // instead reproduces the OTHER route DEC-042's problem statement names:
+    // Qt destroying a PARENT directly (QObjectPrivate::deleteChildren(), on
+    // athlete-tab teardown) - unconditional, no event dispatch, no veto. The
+    // seam already calls its armed action SYNCHRONOUSLY from inside
+    // autoProcess (ImportSeamStubs.cpp), so `delete owner` there reproduces
+    // that route with no extra machinery: saveRide's frame is still on the
+    // stack when `this` is freed, exactly as TEST-136's TeardownInsideBatch
+    // case reproduces the same class of teardown at a different suspension.
+    //
+    // RED, by construction (guard not yet added): saveRide resumes past the
+    // second autoProcess call and reads `this->context` at
+    // reader.writeRideFile(context, ...) - a heap-use-after-free READ, the
+    // same signature TEST-140's own comment block records for the T-141
+    // probe. This target halts on the first ASan report (halt_on_error=1),
+    // so a crash here ends the binary before any QVERIFY below runs; that
+    // abrupt end IS the RED failure.
+    //
+    // THE CRITERION, GREEN: no ASan report, AND saveRide returns having
+    // called neither writeRideFile nor addRide - the accepted trade-off
+    // (DEC-042: the file is silently never written on this rare path, not a
+    // crash) asserted directly rather than inferred from "did not crash".
+    // rideFiles<<targetnosuffix sits, in source order, strictly between those
+    // two calls, so zero on both brackets it without needing to reach into a
+    // freed dialog's private member to prove it.
+  private:
+    struct ParentTeardownOutcome
+    {
+        bool timedOut = false;
+
+        // -- premises
+        int listCount = 0;
+        int checkedRows = 0;
+        QString row0Action;
+        int rideOpens = 0;
+        bool teardownDelivered = false;
+        int autoProcessCallsAtTeardown = -1; // must be 2: landed in the SECOND call
+        bool dialogAliveAtTeardown = false;  // `this` was still there right up to the delete
+
+        // -- the verdict
+        bool dialogGoneAfterTheBatch = false;
+        int writeRideFileCalls = -1; // must be 0: the accepted trade-off, not merely "no crash"
+        int addRideCalls = -1;       // must be 0, for the same reason
+    };
+
+    // One run:
+    //
+    //   QEventLoop (stands in for QApplication::exec())
+    //     -> queued call [event delivery]
+    //          -> owner QWidget                     [stands in for the athlete tab]
+    //          -> CloudServiceSyncDialog, a child of it
+    //          -> Sync tab / Select all / Synchronize
+    //               -> syncNext -> store->readFile -> queued completion
+    //                    -> completedRead -> saveRide
+    //                         -> autoProcess #1 ("Auto"/"Import") - arms #2, does nothing else
+    //                         -> autoProcess #2 ("Save"/"ADD") -> delete owner
+    //                              [the parent-teardown route DEC-042 guards]
+    //                         -> saveRide resumes (or, pre-fix, does not)
+    ParentTeardownOutcome runParentTeardownInsideSecondAutoProcess()
+    {
+        obs::reset();
+        rideopen::reset();
+        ridefail::reset();
+        rideopen::blockingMs = 5; // must not block: the delivery has to land inside
+                                  // saveRide's autoProcess, not inside uncompressRide
+        gcstub::autoProcessAction = nullptr;
+        gcstub::autoProcessCalls = 0;
+        gcstub::writeRideFileCalls = 0;
+        gcstub::addRideCalls = 0;
+
+        ParentTeardownOutcome out;
+        QEventLoop appLoop;
+        QPointer<CloudServiceSyncDialog> dialogGuard;
+        QPointer<CloudService> storeGuard;
+
+        QMetaObject::invokeMethod(
+            this,
+            [&]() {
+                QWidget* owner = new QWidget;
+
+                BlockingStore* store = new BlockingStore(context);
+                store->entryNames = QStringList() << rebuildRemoteActivity(0);
+                store->blockingMs = 5;
+                store->closeActionContext = qApp;
+                store->downloadCompression = CloudService::none;
+
+                CloudServiceSyncDialog* dialog = new CloudServiceSyncDialog(context, store);
+                dialog->setParent(owner, Qt::Dialog);
+                // VERBATIM the production line (MainWindow.cpp:2605): irrelevant to
+                // THIS route (a parent teardown bypasses closeEvent entirely, which
+                // is DEC-042's whole point), kept for fidelity to production.
+                dialog->setAttribute(Qt::WA_DeleteOnClose);
+                dialog->start();
+                dialog->open();
+                store->dialog = dialog;
+                store->dialogGuard = dialog;
+                dialogGuard = dialog;
+                storeGuard = store;
+
+                if (QTabWidget* tabs = dialog->findChild<QTabWidget*>())
+                    tabs->setCurrentIndex(2);
+                dialog->selectAllSyncChanged(Qt::Checked);
+                QPointer<QTreeWidget> list(rideListWithHeader(dialog, QStringLiteral("Source")));
+
+                if (!list.isNull()) {
+                    QTreeWidgetItem* root = list->invisibleRootItem();
+                    out.listCount = root->childCount();
+                    for (int i = 0; i < out.listCount; i++) {
+                        QCheckBox* check = qobject_cast<QCheckBox*>(list->itemWidget(root->child(i), 0));
+                        if (check != nullptr && check->isChecked())
+                            out.checkedRows++;
+                    }
+                    if (out.listCount > 0)
+                        out.row0Action = root->child(0)->text(6);
+                }
+
+                // saveRide refuses before it ever reaches autoProcess when the
+                // target .json already exists and this box is clear
+                // (CloudService.cpp, the "exists?" guard); ticked defensively as
+                // TEST-140 does, so this run cannot false-negative on a leftover
+                // file from an earlier slot in this same process.
+                for (QCheckBox* box : dialog->findChildren<QCheckBox*>())
+                    if (box->text().contains(QStringLiteral("Overwrite")))
+                        box->setChecked(true);
+
+                gcstub::autoProcessAction = [&, owner]() {
+                    // Call #1 ("Auto"/"Import"). Arm ONLY the second call - see
+                    // the block comment above for why the first call is not the
+                    // one this test targets.
+                    gcstub::autoProcessAction = [&, owner]() {
+                        // Call #2 ("Save"/"ADD") - the proven hazard site.
+                        out.autoProcessCallsAtTeardown = gcstub::autoProcessCalls;
+                        out.dialogAliveAtTeardown = !dialogGuard.isNull();
+                        // DEC-042 (B-R028-17): the parent-teardown route -
+                        // synchronous, direct, no event loop or queued delivery
+                        // needed to land it here (unlike TEST-140's own close).
+                        delete owner;
+                        out.teardownDelivered = true;
+                    };
+                };
+
+                dialog->downloadClicked(); // -> syncNext() -> ... -> saveRide
+
+                out.dialogGoneAfterTheBatch = dialogGuard.isNull();
+                out.rideOpens = rideopen::opens;
+                out.writeRideFileCalls = gcstub::writeRideFileCalls;
+                out.addRideCalls = gcstub::addRideCalls;
+
+                QTimer::singleShot(50, &appLoop, &QEventLoop::quit);
+                bool* timedOutp = &out.timedOut;
+                QTimer::singleShot(20000, &appLoop, [timedOutp]() {
+                    *timedOutp = true;
+                    QCoreApplication::exit(1);
+                });
+            },
+            Qt::QueuedConnection);
+
+        appLoop.exec();
+        for (int i = 0; i < 50; ++i)
+            QApplication::processEvents(QEventLoop::AllEvents, 5);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+        gcstub::autoProcessAction = nullptr;
+        return out;
+    }
+
+  private slots:
+    // -- TEST-158 (B-R028-17, DEC-042, REQ-028 (e)) -----------------------
+    // ACCEPTANCE CRITERION, quoted from the DEC-042 alignment probe: a parent
+    // teardown landed inside saveRide's SECOND autoProcess call must not free
+    // `this` under a still-suspended saveRide - the guard must sit AFTER that
+    // call and BEFORE writeRideFile/rideFiles/addRide, not merely at the
+    // BlockingCall call site one frame up.
+    void aParentTeardownInsideSaveRidesSecondAutoProcessMustNotFreeItUnderThat()
+    {
+        const ParentTeardownOutcome out = runParentTeardownInsideSecondAutoProcess();
+        const QString where = QStringLiteral("TEST-158 parent teardown in saveRide's 2nd autoProcess: ");
+        qInfo("TEST-158 [%s] rows=%d checked=%d row0=\"%s\" opens=%d teardownDelivered=%d "
+              "autoProcessCallsAtTeardown=%d aliveAtTeardown=%d goneAfterBatch=%d writeRideFileCalls=%d "
+              "addRideCalls=%d",
+              qPrintable(QString::fromLatin1(qgetenv("QT_QPA_PLATFORM"))), out.listCount, out.checkedRows,
+              qPrintable(out.row0Action), out.rideOpens, int(out.teardownDelivered), out.autoProcessCallsAtTeardown,
+              int(out.dialogAliveAtTeardown), int(out.dialogGoneAfterTheBatch), out.writeRideFileCalls,
+              out.addRideCalls);
+
+        // ---- PREMISES. A run that never reached the situation it claims to
+        //      test must fail loudly rather than pass on nothing (LSN-047/050).
+        QVERIFY2(!out.timedOut, qPrintable(where + QStringLiteral("the run never came back - the dialog wedged")));
+        QVERIFY2(out.listCount == 1,
+                 qPrintable(where + QStringLiteral("the sync list held %1 row(s), not 1").arg(out.listCount)));
+        QVERIFY2(out.checkedRows == 1,
+                 qPrintable(where + QStringLiteral("%1 row(s) were checked, not 1").arg(out.checkedRows)));
+        QVERIFY2(out.row0Action == QStringLiteral("Download"),
+                 qPrintable(where + QStringLiteral("row[0] is a \"%1\" row, not a Download - completedRead is only "
+                                                   "reached through the download side")
+                                        .arg(out.row0Action)));
+        QVERIFY2(out.rideOpens >= 1,
+                 qPrintable(where + QStringLiteral("uncompressRide never parsed a ride, so saveRide was never "
+                                                   "reached at all")));
+        QVERIFY2(out.dialogAliveAtTeardown,
+                 qPrintable(where + QStringLiteral("the dialog was already gone before this run tried to tear it "
+                                                   "down - the premise the criterion below depends on is false")));
+        QVERIFY2(out.teardownDelivered,
+                 qPrintable(where + QStringLiteral("the seam's second action never ran - the teardown was not "
+                                                   "delivered at all")));
+
+        // ---- PRECISION: the whole point of this test over TEST-140's is
+        //      landing on the SECOND autoProcess call specifically, not the
+        //      first - only the second precedes the unguarded reads.
+        QVERIFY2(out.autoProcessCallsAtTeardown == 2,
+                 qPrintable(where + QStringLiteral("the teardown fired at autoProcess call #%1, not #2 - this run "
+                                                   "does not test the site DEC-042 actually guards")
+                                        .arg(out.autoProcessCallsAtTeardown)));
+
+        // ---- THE CRITERION, first half: `this` did not survive as anything
+        //      other than gone - saveRide must not have resumed on freed
+        //      memory. Under ASan with halt_on_error=1 the process would
+        //      already be dead here if it had (see TEST-140's own comment
+        //      block for the exact signature this run reproduces pre-fix).
+        QVERIFY2(out.dialogGoneAfterTheBatch,
+                 qPrintable(where + QStringLiteral("the dialog was not destroyed by the end of the batch - the "
+                                                   "fixture's own teardown did not take, so this proves nothing")));
+
+        // ---- THE CRITERION, second half: the accepted trade-off (DEC-042),
+        //      asserted directly. writeRideFile and addRide sit AFTER the
+        //      guarded bail; rideFiles<<targetnosuffix sits between them in
+        //      source order, so zero on both brackets it without touching a
+        //      freed dialog's private member.
+        QCOMPARE(out.writeRideFileCalls, 0);
+        QCOMPARE(out.addRideCalls, 0);
     }
 
     // =====================================================================

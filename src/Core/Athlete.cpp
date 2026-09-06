@@ -222,6 +222,21 @@ Athlete::close()
     backup->backupOnClose();
     delete backup;
 
+    // DEC-043 (A3-R028e-F1) - cloudAutoDownload is a worker QThread reading
+    // this athlete/context that nothing previously joined or freed. Cancel its
+    // in-flight worklist services cooperatively (CancelToken, DEC-040 Stage 2)
+    // and block until run() has genuinely exited BEFORE deleting it - this is
+    // also what makes the delete safe, closing the pre-existing leak (the
+    // constructor's `new` at Athlete::Athlete() had no matching delete
+    // anywhere). MainWindow::closeTabClicked calls this before `delete
+    // athlete; delete context;`, so by the time this returns no queued
+    // readComplete/readFailed metacall for it can still be in flight either.
+    if (cloudAutoDownload) {
+        cloudAutoDownload->requestStop();
+        cloudAutoDownload->wait();
+        delete cloudAutoDownload;
+        cloudAutoDownload = nullptr;
+    }
 }
 void
 Athlete::loadCharts()

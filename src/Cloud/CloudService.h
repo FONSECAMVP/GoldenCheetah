@@ -1315,7 +1315,20 @@ class CloudServiceAutoDownload : public QThread {
     public:
 
         // automatically downloads from cloud services
-        CloudServiceAutoDownload(Context *context) : context(context), initial(true) {}
+        //
+        // DEC-043 - `stopRequested_` is the SAME "has teardown started" flag
+        // Piece 1 (readComplete, below) and Piece 2 (run()'s worklist loop,
+        // CloudService.cpp) both observe; a shared_ptr so it can also be
+        // wrapped in a CancelToken (DEC-040 Stage 2) without a second flag.
+        CloudServiceAutoDownload(Context *context) : context(context), initial(true),
+            stopRequested_(std::make_shared<std::atomic_bool>(false)) {}
+
+        // DEC-043 - Athlete::close() calls this BEFORE wait()-ing on the
+        // thread: it marks "the owning Athlete/Context teardown has started"
+        // for readComplete's guard, and cancels any worklist service's
+        // in-flight blockingRequest via CancelToken. Idempotent; safe before
+        // start() or after the thread has already finished.
+        void requestStop() { stopRequested_->store(true, std::memory_order_release); }
 
         // re-run after inital
         void checkDownload();
@@ -1373,6 +1386,11 @@ class CloudServiceAutoDownload : public QThread {
 
         // list of providers - so we can clean up
         QList<CloudService*> providers;
+
+        // DEC-043 - see requestStop() above. Never reassigned after
+        // construction, so copies (e.g. into a CancelToken) always observe
+        // the one flag this instance's requestStop() flips.
+        std::shared_ptr<std::atomic_bool> stopRequested_;
 };
 
 // all cloud services register at startup and can be accessed by name

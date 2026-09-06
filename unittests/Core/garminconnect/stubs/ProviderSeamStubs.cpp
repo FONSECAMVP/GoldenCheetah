@@ -37,6 +37,7 @@
 // by value in a QList, so the container instantiation needs the complete type
 // (the app gets it transitively; this TU must ask for it).
 #include "Athlete.h"
+#include "CloudService.h" // DEC-043 (TEST-160): completes CloudServiceAutoDownload for Athlete::close()
 #include "Colors.h"
 #include "CompareDateRange.h"
 #include "CompareInterval.h"
@@ -267,6 +268,24 @@ Athlete::Athlete(Context* context, const QDir& homeDir) : QObject(nullptr)
 Athlete::~Athlete()
 {
     delete home;
+}
+
+// DEC-043 (TEST-160) - a MINIMAL mirror of the DEC-043 tail this project's
+// production Athlete::close() (src/Core/Athlete.cpp) adds: requestStop() the
+// download thread, wait() for it to genuinely exit, THEN delete it and null
+// the pointer - safe only because wait() has already returned. This stub
+// deliberately does NOT reproduce close()'s other production behaviour
+// (autobackup, notifyAthleteClose, version settings): those are unrelated to
+// the cloudAutoDownload lifetime bug this finding is about. Keep this in
+// lockstep with Athlete::close()'s own DEC-043 lines if either changes.
+void Athlete::close()
+{
+    if (cloudAutoDownload) {
+        cloudAutoDownload->requestStop();
+        cloudAutoDownload->wait();
+        delete cloudAutoDownload;
+        cloudAutoDownload = nullptr;
+    }
 }
 
 void Athlete::addRide(QString name, bool dosignal, bool select, bool useTempActivities, bool planned)

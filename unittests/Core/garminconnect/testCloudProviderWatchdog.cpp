@@ -1559,6 +1559,12 @@ class TestCloudProviderWatchdog : public QObject
     // --- TEST-151 ----------------------------------------------------------
     void autoDownload_distinguishesEmptyWithErrors();
 
+    // --- TEST-159 (DEC-043 Piece 1) -----------------------------------------
+    void readComplete_afterOwnerTornDownMustNotDereferenceFreedMemory();
+
+    // --- TEST-160 (DEC-043 Piece 2) -----------------------------------------
+    void athleteClose_cancelsAndJoinsAutoDownloadThenDeletesIt();
+
     // --- TEST-153 (b)-(e) --------------------------------------------------
     void manager_notBuiltUntilFirstUse_data();
     void manager_notBuiltUntilFirstUse();
@@ -3042,6 +3048,264 @@ void TestCloudProviderWatchdog::autoDownload_distinguishesEmptyWithErrors()
              qPrintable(QStringLiteral("reason lost: %1").arg(openFailedWithErrors.join("; "))));
     QVERIFY2(openFailedWithErrors.first().contains(QStringLiteral("Empty Listing")),
              "the report does not say WHICH service failed");
+}
+
+// ---------------------------------------------------------------------------
+// TEST-159 (DEC-043 Piece 1) - readComplete's GUI-thread completion-slot guard.
+// ---------------------------------------------------------------------------
+// A REAL registered service whose readdir() answers with ONE syntactically
+// valid entry and whose readFile() emits readComplete SYNCHRONOUSLY. run() is
+// invoked DIRECTLY (not via start()), exactly as TEST-151 already does, so
+// every connection this test touches is same-thread/direct: readComplete
+// executes nested inside this readFile() call, with `downloadlist` (private
+// to CloudServiceAutoDownload) still holding the matching entry - the "not
+// found, ignore it" early return in readComplete cannot mask the guard here.
+class TearDownDuringReadFileService : public CloudService
+{
+    Q_OBJECT
+
+  public:
+    static int readFileCalls;
+    // Set by the test, called from inside readFile() BEFORE emitting
+    // readComplete - stands in for "the athlete tab closed while this
+    // download was in flight", DEC-043's exact race.
+    static std::function<void()> onReadFile;
+
+    explicit TearDownDuringReadFileService(Context* context) : CloudService(context)
+    {
+        // uncompressRide's FIRST line rejects an uncompressed name unless told
+        // not to expect compression - without this, readComplete returns
+        // before ever reaching the context->athlete dereference this test
+        // targets (a fixture bug, not a guard).
+        downloadCompression = none;
+    }
+    CloudService* clone(Context* context) override { return new TearDownDuringReadFileService(context); }
+    QString id() const override { return QStringLiteral("TearDownDuringReadFile"); }
+    QString uiName() const override { return QStringLiteral("Teardown During ReadFile"); }
+    QImage logo() const override { return QImage(); }
+    int capabilities() const override { return Download | Query; }
+
+    bool open(QStringList&) override { return true; }
+    bool close() override { return true; }
+    QString home() override { return QString(); }
+
+    QList<CloudServiceEntry*> readdir(QString, QStringList&, QDateTime, QDateTime) override
+    {
+        CloudServiceEntry* e = newCloudServiceEntry();
+        e->name = QDateTime::currentDateTime().addDays(-1).toString(QStringLiteral("yyyy_MM_dd_HH_mm_ss")) + ".json";
+        e->id = QStringLiteral("teardown-entry-1");
+        e->isDir = false;
+        e->size = 1;
+        return {e};
+    }
+
+    bool readFile(QByteArray* data, QString remotename, QString remoteid, ReadFileArmed* = nullptr) override
+    {
+        readFileCalls++;
+        if (onReadFile)
+            onReadFile();
+        // SYNCHRONOUS: run() was called directly (same thread as the test),
+        // so this is a direct connection - readComplete executes right here,
+        // nested inside this call, with `downloadlist` still populated.
+        emit readComplete(data, remotename, remoteid);
+        return true;
+    }
+};
+
+int TearDownDuringReadFileService::readFileCalls = 0;
+std::function<void()> TearDownDuringReadFileService::onReadFile = nullptr;
+
+void TestCloudProviderWatchdog::readComplete_afterOwnerTornDownMustNotDereferenceFreedMemory()
+{
+    // A3-R028e-F1 / DEC-043: readComplete dereferences `context->athlete->home`
+    // with no lifetime guard at all. "Owner torn down" is simulated by freeing
+    // the HEAP-ALLOCATED `Athlete` itself (not `context`): the very first
+    // touch on the hazard path, `context->athlete->home` inside
+    // uncompressRide, is then a PLAIN POINTER FIELD READ compiled directly
+    // into CloudService.cpp - no detour through Qt library internals
+    // (QDir::absolutePath() et al, which this test's prebuilt, non-ASan Qt
+    // cannot instrument) - so the read is reliably caught. `context` itself
+    // stays alive, so run()'s OWN remaining lines (notifyAutoDownloadProgress/
+    // End, both `context`-only, never `athlete`) do not also fault - freeing
+    // the whole Context too would race run()'s own separate, explicitly
+    // out-of-scope worker-thread reads ([[ORCH-057]]), contaminating this
+    // test's verdict with a different, unfixed defect.
+    CloudServiceFactory::instance().addService(new TearDownDuringReadFileService(nullptr));
+    TearDownDuringReadFileService::readFileCalls = 0;
+    TearDownDuringReadFileService::onReadFile = nullptr;
+
+    QTemporaryDir home;
+    QWidget window;
+    Context context(reinterpret_cast<MainWindow*>(&window));
+    Athlete* athlete = new Athlete(&context, QDir(home.path()));
+    athlete->cyclist = QStringLiteral("TearDownRider");
+    context.athlete = athlete;
+    RideCache rideCache(&context);
+    athlete->rideCache = &rideCache;
+
+    const CloudService* registered = CloudServiceFactory::instance().service(QStringLiteral("TearDownDuringReadFile"));
+    QVERIFY(registered != nullptr);
+    appsettings->setCValue(athlete->cyclist, registered->syncOnStartupSettingName(), QStringLiteral("true"));
+
+    CloudServiceAutoDownload autoDownload(&context);
+
+    // DEC-043 Piece 1's guard mechanism IS requestStop()'s flag - the same one
+    // Athlete::close() flips (Piece 2, TEST-160). Flip it, THEN free
+    // `athlete`, both from inside readFile() so the sequence lands exactly
+    // where a real athlete-tab close races an in-flight async download's
+    // completion. `downloadlist`'s matching entry (private to
+    // CloudServiceAutoDownload, populated by run() before this call) is what
+    // makes readComplete's own "not found, ignore it" early return unable to
+    // mask the guard here.
+    TearDownDuringReadFileService::onReadFile = [&]() {
+        autoDownload.requestStop();
+        delete athlete; // context->athlete now dangles - the UAF this test proves is guarded
+    };
+
+    // RED (guard not yet added to readComplete): reading `context->athlete`
+    // (still valid) then `->home` off the just-freed Athlete is a real
+    // heap-use-after-free, not a fixture artefact. This target halts on the
+    // first ASan report (halt_on_error=1), so a crash here ends the binary
+    // before the QCOMPARE below ever runs; that abrupt end IS the RED
+    // failure.
+    autoDownload.run();
+
+    // GREEN: reaching here at all is the criterion - readComplete bailed
+    // before touching the dangling `athlete`, so run() itself never touched
+    // it again either (nothing else in run()'s remaining lines does).
+    QCOMPARE(TearDownDuringReadFileService::readFileCalls, 1);
+
+    context.athlete = nullptr; // avoid a double free at scope exit
+    TearDownDuringReadFileService::onReadFile = nullptr;
+}
+
+// ---------------------------------------------------------------------------
+// TEST-160 (DEC-043 Piece 2) - Athlete::close() cooperatively cancels and
+// joins cloudAutoDownload before deleting it (also closes the pre-existing
+// leak: the constructor's `new` had no matching delete anywhere).
+// ---------------------------------------------------------------------------
+// A REAL registered service whose open() polls the SAME CancelToken
+// blockingRequest polls (DEC-040 Stage 2), standing in for an in-flight
+// network open() a real provider would be doing when Athlete::close() runs.
+class BoundedWaitOpenService : public CloudService
+{
+    Q_OBJECT
+
+  public:
+    static QAtomicInt openCalls;
+    static QAtomicInt cancelledObserved;
+    // Backstop only - should never be hit once DEC-043's setCancelToken wiring
+    // is in place. Keeps a broken fix from hanging the test forever.
+    static const int kHardCapMs = 10000;
+
+    explicit BoundedWaitOpenService(Context* context) : CloudService(context) {}
+    CloudService* clone(Context* context) override { return new BoundedWaitOpenService(context); }
+    QString id() const override { return QStringLiteral("BoundedWaitOpen"); }
+    QString uiName() const override { return QStringLiteral("Bounded Wait Open"); }
+    QImage logo() const override { return QImage(); }
+    int capabilities() const override { return Download | Query; }
+
+    bool open(QStringList&) override
+    {
+        openCalls.fetchAndAddOrdered(1);
+        QElapsedTimer t;
+        t.start();
+        while (!cancelToken_.cancelled() && t.elapsed() < kHardCapMs)
+            QTest::qSleep(CloudService::kCancelPollMs / 5); // QThread::msleep is protected; this isn't a QThread
+        cancelledObserved.storeRelease(cancelToken_.cancelled() ? 1 : 0);
+        return false; // never actually opens - only the bounded wait is under test
+    }
+    bool close() override { return true; }
+    QString home() override { return QString(); }
+    QList<CloudServiceEntry*> readdir(QString, QStringList&, QDateTime, QDateTime) override { return {}; }
+};
+
+QAtomicInt BoundedWaitOpenService::openCalls(0);
+QAtomicInt BoundedWaitOpenService::cancelledObserved(0);
+
+void TestCloudProviderWatchdog::athleteClose_cancelsAndJoinsAutoDownloadThenDeletesIt()
+{
+    CloudServiceFactory::instance().addService(new BoundedWaitOpenService(nullptr));
+    BoundedWaitOpenService::openCalls.storeRelease(0);
+    BoundedWaitOpenService::cancelledObserved.storeRelease(0);
+
+    QTemporaryDir home;
+    QWidget window;
+    Context context(reinterpret_cast<MainWindow*>(&window));
+    Athlete athlete(&context, QDir(home.path()));
+    athlete.cyclist = QStringLiteral("BoundedWaitRider");
+    context.athlete = &athlete;
+    RideCache rideCache(&context);
+    athlete.rideCache = &rideCache;
+
+    const CloudService* registered = CloudServiceFactory::instance().service(QStringLiteral("BoundedWaitOpen"));
+    QVERIFY(registered != nullptr);
+    appsettings->setCValue(athlete.cyclist, registered->syncOnStartupSettingName(), QStringLiteral("true"));
+
+    // The stub Athlete::Athlete() (ProviderSeamStubs.cpp) leaves this null;
+    // production's real Athlete::Athlete() (Athlete.cpp:168) always
+    // constructs one. Building it here for real is what makes this "drive
+    // Athlete::close()" rather than "drive an empty no-op".
+    athlete.cloudAutoDownload = new CloudServiceAutoDownload(&context);
+
+    // Safety net: whatever this run proves or fails to prove, never leave a
+    // real OS thread running past this test - force it down unconditionally.
+    struct ForceStop
+    {
+        Athlete* a;
+        ~ForceStop()
+        {
+            if (a->cloudAutoDownload) {
+                a->cloudAutoDownload->requestStop();
+                a->cloudAutoDownload->wait();
+                delete a->cloudAutoDownload;
+                a->cloudAutoDownload = nullptr;
+            }
+        }
+    } forceStop{&athlete};
+
+    athlete.cloudAutoDownload->start();
+
+    // Bounded wait for run() to actually reach the blocked open() - not a
+    // sleep, so this does not itself pad the bound assertion below.
+    QElapsedTimer arming;
+    arming.start();
+    while (BoundedWaitOpenService::openCalls.loadAcquire() < 1 && arming.elapsed() < 5000)
+        QTest::qSleep(2);
+    QVERIFY2(BoundedWaitOpenService::openCalls.loadAcquire() >= 1,
+             "run() never reached the blocked open() - nothing for close() to interrupt");
+    QVERIFY2(athlete.cloudAutoDownload->isRunning(), "the download thread was not actually running before close()");
+
+    QElapsedTimer closeTimer;
+    closeTimer.start();
+    athlete.close(); // DEC-043 - the ACTUAL teardown hook (MainWindow.cpp:2171)
+    const qint64 elapsedMs = closeTimer.elapsed();
+
+    qInfo("TEST-160 athlete.close() elapsed=%lldms openCalls=%d cancelledObserved=%d",
+          static_cast<long long>(elapsedMs), int(BoundedWaitOpenService::openCalls.loadAcquire()),
+          int(BoundedWaitOpenService::cancelledObserved.loadAcquire()));
+
+    // (a) BOUNDED - a few multiples of kCancelPollMs PLUS run()'s own fixed,
+    // pre-existing `sleep(3)` after the worklist loop (CloudService.cpp,
+    // unconditional, unrelated to DEC-043 and out of scope to change here) -
+    // not the old provider timeout (kOpenTimeoutMs=30000, or an outright hang
+    // with no CancelToken at all) and nowhere near BoundedWaitOpenService's
+    // own 10s backstop. Measured ~3.0s dominated entirely by that sleep(3);
+    // 6s leaves generous headroom without hiding a regression back toward the
+    // old unbounded wait.
+    QVERIFY2(elapsedMs < 6000,
+             qPrintable(
+                 QStringLiteral("Athlete::close() took %1ms, not bounded by kCancelPollMs=%2 (+ run()'s own sleep(3))")
+                     .arg(elapsedMs)
+                     .arg(CloudService::kCancelPollMs)));
+    // (b) the thread has actually stopped, and the leak fix deleted it.
+    QVERIFY2(athlete.cloudAutoDownload == nullptr, "cloudAutoDownload was not deleted/nulled by close()");
+    // (c) it stopped BECAUSE of cancellation, not because BoundedWaitOpenService's
+    // own backstop happened to expire first (which would make (a) meaningless).
+    QVERIFY2(BoundedWaitOpenService::cancelledObserved.loadAcquire() == 1,
+             "open() gave up on its own backstop, not on the CancelToken - the bound is not proven");
+
+    athlete.rideCache = nullptr;
 }
 
 // ---------------------------------------------------------------------------
