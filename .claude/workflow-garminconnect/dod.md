@@ -18,8 +18,11 @@ A requirement is not "done" until **every** item below is true:
       (convention, not hook-enforced — see `.pre-commit-config.yaml` rationale).
 - [ ] All hooks in `.pre-commit-config.yaml` pass on the staged files
       (clang-format, ruff, ruff-format, mypy --strict).
-- [ ] The default build (`GC_WANT_GARMINCONNECT=OFF`) still builds clean —
+- [x] The default build (`GC_WANT_GARMINCONNECT=OFF`) still builds clean —
       Garmin code is gated and must not regress the baseline.
+      **EXECUTED 2026-08-30 at `37710370e`** on a clean worktree: configure EXIT=0, build EXIT=0,
+      `src/GoldenCheetah` linked (581 targets). This is an executed MEASUREMENT, not a regression
+      guard — nothing re-runs it automatically. The guard is owed (STATE.md Stage 8).
 
 ## Must-have requirements (`must`)
 
@@ -59,9 +62,9 @@ NF requirements rarely have a single acceptance check; each gets its own bar:
 | `REQ-NF-Reliab-001..002` | Retry test uses fake clock to assert exponential schedule; resumable test crashes mid-backfill and asserts state on restart. |
 | `REQ-NF-Obs-001` | A structured-log unit test asserts the JSON shape of one event from each category. |
 | `REQ-NF-i18n-001` | Lupdate-equivalent extraction test (or grep for bare `QString("…")` in user-facing strings) returns zero. |
-| `REQ-NF-Build-001` | CI builds with `GC_WANT_GARMINCONNECT=OFF` and `=ON`; both must pass. |
+| `REQ-NF-Build-001` | CI builds with `GC_WANT_GARMINCONNECT=OFF` and `=ON`; both must pass. **Both values were BUILT BY HAND 2026-08-30 and both linked** — but there is no CI job and no test asserting it, so the bar as written ("CI builds") is NOT met. Not waived; owed at Stage 8. |
 | `REQ-NF-Pkg-001` | Installer-manifest test asserts the Python wheels list contains `garminconnect` and `curl_cffi`. |
-| `REQ-NF-Compat-001` | Documented in `docs/garminconnect-known-limits.md`; no automated test. |
+| `REQ-NF-Compat-001` | Documented in `docs/garminconnect-known-limits.md`; no automated test. **NOT SATISFIED as of 2026-08-30 — that file DOES NOT EXIST.** The criterion is unchanged and is not waived; it is simply unmet. Status → `traceability.md`. |
 
 ---
 

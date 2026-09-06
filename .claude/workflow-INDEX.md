@@ -14,6 +14,13 @@ hold that ledger's spine).
 - **`.claude/workflow-garminconnect/`** — Garmin Connect integration
   (python-garminconnect). Current phase and next gate live in the root `STATE.md`
   (per-id status → this ledger's `traceability.md`). This is the active ledger.
+  **Layout note (2026-08-30):** `cycles/` and `validations/` now contain ONLY an
+  `archive/` subdirectory. The `active/` directories were removed because every run
+  in them had closed — 3 REQ-002 cycles (2026-05/07) and VAL-004…012 (2026-05…07).
+  Each archived file carries a HISTORICAL SNAPSHOT header; **their original verdicts
+  are unedited**. A future in-flight run re-creates `active/` for that run only.
+  "Which user journeys actually work" is answered by `traceability.md`'s
+  `## Phase-1 capability matrix`, not by this index and not by `STATE.md`.
 
 ## Historical / shipped ledgers (provenance only)
 - **`.claude/workflow-aicoach/`** — AI Coach tool-use feature. Shipped

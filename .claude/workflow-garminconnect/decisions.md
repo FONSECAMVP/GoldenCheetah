@@ -2,7 +2,82 @@
 
 > Decision IDs in this project start at DEC-001. Independent of the prior `workflow/decisions.md` (AI Coach project). Cross-project refs use `coach:DEC-NNN`.
 
-Compact schema per `references/formats.md` § `decisions.md`. The `state.md ## decs` table is the recap source; this file is drilled only when creating, editing, or cascading from a specific DEC. Detailed deliberation notes from the original v1 ledger are preserved verbatim in `decisions-history-archive.md`.
+Compact schema per `references/formats.md` § `decisions.md`. **The recap source is the `## Decision index` immediately below** — the Tier-1 head every session reads instead of scrolling the entries. (It used to say "the `state.md ## decs` table is the recap source"; DEC-015 DELETED that table on 2026-07-12 and no replacement head was ever built, so this file opened straight into DEC-001's full entry for thirteen months of work. Built 2026-08-23, librarian Job 3.) Full entries below are drilled only when creating, editing, or cascading from a specific DEC. Detailed deliberation notes from the original v1 ledger are preserved verbatim in `decisions-history-archive.md`.
+
+---
+
+## Decision index
+
+> **PRECEDENCE (this index is a duplication risk — LSN-014/LSN-035 — so the rule is stated, not assumed).**
+> DEC status is single-homed in `decisions.md` = THIS file, so the index sits inside its own canonical home.
+> **On conflict the entry's `Status:` field wins and the index row is the drift.** A status change is not done
+> until BOTH carry it. One line per DEC, every id, no gaps (VAL-017's failure was an index stopping at DEC-019).
+> REQ/DES/TEST/VAL status is NOT here — that is `traceability.md`.
+>
+> **Split rule (auditable, applied 2026-08-23):** **Dormant** iff superseded by a later DEC, OR a fully-executed
+> one-shot (toolchain / rollout / recording-only / build-repair) with no open dependent. Everything else is
+> **Active**. Dormancy is ordering, not closure — a dormant DEC still binds, it just cannot change.
+
+### Active index
+
+| DEC | Question → chosen option | Status | Date |
+|-----|--------------------------|--------|------|
+| DEC-001 | Delivery sequence for bidirectional sync → B staged ship (download → upload → schedule) | accepted | 2026-05-17 |
+| DEC-002 | C++ → embedded Python integration mechanism → B worker thread + mailbox | accepted | 2026-05-17 |
+| DEC-003 | Token + sidecar on-disk layout → B per-athlete config dir | accepted | 2026-05-17 |
+| DEC-004 | Credentials + MFA dialog UX shape → B `AddCloudWizard` pages | accepted | 2026-05-17 |
+| DEC-006 | Activity file format + staging path → FIT default | accepted (recording-only) | 2026-05-17 |
+| DEC-007 | Rate-limit + retry placement → B Python-side decorator inside the worker thread | accepted | 2026-05-17 |
+| DEC-012 | Auth-dispatcher seam, page ↔ SSO layer → A inject `IGarminAuthClient` | accepted | 2026-05-24 |
+| DEC-013 | Worker ↔ Python adapter seam → A inject `IGarminPyAdapter` | accepted | 2026-05-24 |
+| DEC-014 | Token persistence write-ownership → B adapter exports the blob, C++ owns the atomic 0600 write | accepted | 2026-07-11 |
+| DEC-015 | Ledger status drift → C one canonical home per id-class + absence-check lint; local `state.md` deleted | accepted · MECHANISM | 2026-07-12 |
+| DEC-016 | FIT→TCX fallback trigger for `readFile` → C kind-aware retry + content-sniff backstop | accepted | 2026-07-14 |
+| DEC-017 | REQ-008 sidecar-persistence shape → A dedicated `GarminSidecarStore` | accepted | 2026-07-19 |
+| DEC-018 | Where `garmin_user_id` persists → B separate account-agnostic `active-account.json` | accepted | 2026-07-19 |
+| DEC-019 | Connect/disconnect persist trigger → C `CloudService::disconnect()` virtual + wizard `finished()` capture | accepted | 2026-07-20 |
+| DEC-020 | A live session outliving Disconnect → C fail-closed re-check + cheap hardening, lifecycle work → REQ-017 | accepted · implemented `f001c7d20` | 2026-08-02 |
+| DEC-021 | How Disconnect invalidates a LIVE session → B account-epoch latched at `open()`, compared in memory | accepted | 2026-08-03 |
+| DEC-022 | How a fail-closed `readFile` reports itself → A labelled completion | **PARTIALLY IMPLEMENTED** — GarminConnect half green; SHARED half BLOCKED + un-decided (original premise FALSE), superseded by DEC-023 | 2026-08-03 |
+| DEC-023 | Carry read FAILURE explicitly → option 3, an explicit `readFailed` channel, not a `message` heuristic | accepted | 2026-08-04 |
+| DEC-024 | Making the modeless sync dialog's self-deletion safe → A `done(int)` gate + BlockingCall depth counter | accepted (amended post-build: `closeEvent()` alone was insufficient) | 2026-08-05 |
+| DEC-026 | No nested event loop under construction → B two-phase init, ctor builds the shell, `start()` does the work | accepted | 2026-08-06 |
+| DEC-027 | Unify sync-dialog lifetime → A heap + `WA_DeleteOnClose` + modeless `open()` for BOTH callers | accepted | 2026-08-06 |
+| DEC-029 | Upload-dialog UAF fix shape → B two-phase `start()` + heap/`WA_DeleteOnClose`, `exec()`/modal PRESERVED | accepted | 2026-08-07 |
+| DEC-030 | Collaborator-lifetime UAF fix shape → B reparent both dialogs to `context->tab`, probe-first, QPointer rider | accepted | 2026-08-10 |
+| DEC-031 | Reopening DEC-025 → B frame-counted DEFERRED REAPER replaces the deliberate store leak, probe-first | accepted | 2026-08-11 |
+| DEC-032 | Closing the silent stall → A in-loop `continue` in the branch that arms nothing, adopting `uploadNext`'s shape | accepted | 2026-08-13 |
+| DEC-033 | The `readFile` bool contract — `false` does NOT mean "armed nothing" | accepted — Option A, defaulted out-param; BUILT + execution-verified, COMMITTED `2e26106c1` 2026-09-04 (routed out of DEC-032; closes B-R027-01/02/03/09) | decided 2026-09-03 |
+| DEC-034 | Who owns a `QTreeWidgetItem` across a nested event loop → C a `listGeneration` counter bumped by `refreshClicked` | accepted · NOT reopened | 2026-08-14 |
+| DEC-034/036 AMENDMENT | Completion slots never got the drivers' guard (A3-R028c-F2) → snapshot `batchGeneration` there | accepted, folded into DEC-036's Option C build | 2026-08-21 |
+| DEC-035 | Where the abort guard lives, `processEvents()` being no guaranteed drain → B co-locate it with the irreversible call | accepted | 2026-08-15 |
+| DEC-036 | Correlating a completion with the transfer that asked for it → **C explicit per-operation write identity**, dispatch→completion | accepted + BUILT on formal reopen · `e48f7d123`, gate `98df50535` · closes REQ-028 (c) | 2026-08-18; re-decided 2026-08-22 |
+| DEC-038 | The third list mutator, SORTING → A sorting is OFF for the batch's duration, as a DEC-034 AMENDMENT | accepted · BUILT + committed `514d8e88f` | 2026-08-22 |
+| DEC-039 | libusb dependency wiring (ORCH-036) → B complete `find_path`/`find_library` for BOTH APIs | accepted · built on isolated branch `build/orch036-libusb-wiring` (`ae7655985`), **deliberately UNMERGED** | 2026-08-23 |
+| DEC-040 | Bounding the 22 unbounded provider waits (S-R028f-F1/F3, C1–C6) → **W3: shared bounded-request outcome contract, then generic cooperative cancellation**, one release unit, with S-1 base-owned injectable QNAM | accepted · **STAGE 1 BUILT, VERIFICATION-GATE-PASSED and COMMITTED as `37710370e` (2026-08-30) — NOT PUSHED, NOT MERGED; DEC-040 NOT COMPLETE — Stage 2 cooperative cancellation NOT STARTED.** *(Cursor corrected 2026-08-30: this row read "on working-tree bytes, UNCOMMITTED", which was true at the Stage-1 gate and became stale when the slice landed.)* 10 providers / 22 bounded-request sites; 13 providers on base manager ownership (RideWithGPS, Selfloops, SportsPlusHealth manager-only, no watchdog rows); S-1 amended to LAZY null-or-valid; 5 legitimate `delete nam` remain in OpenData.cpp (zero is retired); no CancelToken/poll/reachable Cancelled in Stage 1. See **## DEC-040 STAGE-1 AMENDMENT & STATUS — 2026-08-30** | 2026-08-26 · amended 2026-08-30 |
+| DEC-041 | File-IO layer Context UAF at `RideFile.cpp:999` (B-R025-01/A3-R021b-F2) → **Option B, hoist-and-capture: read the needed Context values before the suspending reader call, don't guard the read after it** | accepted · NOT BUILT — briefing not yet dispatched | 2026-09-03 |
+| DEC-042 | `saveRide`'s post-`autoProcess` member dereferences vs. parent-teardown UAF (B-R028-17) → **Option A, in-function `QPointer` self-bail placed after the SECOND `autoProcess` call, at the proven hazard site, not the call site** | accepted · **BUILT + execution-verified 2026-09-05 (TEST-158, `99/99` both backends, `ctest -L garmin-fast` 27/27) — closes B-R028-17** | 2026-09-05 |
+| DEC-043 | `CloudServiceAutoDownload` cross-thread lifetime UAF, `readComplete`/`readFailed` vs. athlete-tab teardown (A3-R028e-F1) → **Option C, guards in the completion slots PLUS cooperative cancel-and-`wait()` at teardown (extends DEC-040's `CancelToken`)** | accepted · **BUILT + execution-verified 2026-09-05 (TEST-159/TEST-160; watchdog 170/170 + syncdialog 99/99 both backends, `ctest -L garmin-fast` 27/27, app target linked) — closes A3-R028e-F1** | 2026-09-05 |
+
+### Dormant index
+
+*Superseded, or a fully-executed one-shot with no open dependent. Still binding; still one line per DEC.*
+
+| DEC | Question → chosen option | Status | Date |
+|-----|--------------------------|--------|------|
+| DEC-005 | Phase-1 CloudService capabilities (Query\|Download) | accepted (recording-only; any other value contradicts REQ-011) | 2026-05-17 |
+| DEC-008 | Testing toolchain → A extend the incumbent (QTest+CTest C++ / pytest+coverage.py Python) | accepted · one-shot, executed | 2026-05-17 |
+| DEC-009 | Style/quality toolchain → A existing clang-format/clang-tidy + `ruff` + `mypy --strict` on new Python | accepted · one-shot, executed | 2026-05-17 |
+| DEC-010 | Pre-commit automation → A the `pre-commit` framework, scoped to new Garmin paths | accepted · one-shot, executed | 2026-05-17 |
+| DEC-011 | Phase-1 rollout strategy (CMake flag `GC_WANT_GARMINCONNECT`, default OFF) | accepted (recording-only) | 2026-05-17 |
+| DEC-025 | Surviving PARENT TEARDOWN → A destructor declines to delete the store while busy (a deliberate leak) | **SUPERSEDED by DEC-031** — the DEC-030 reparent falsified its one load-bearing premise | 2026-08-05 |
+| DEC-028 | Clean-checkout build repair → B commit the missing CMake wiring rather than guard around it (ORCH-001) | accepted · one-shot, executed; cited since as the precedent (DEC-039) | 2026-08-07 |
+| DEC-037 | Separating an abandoned write from the live one → A a retired-ticket set | **SUPERSEDED 2026-08-22 by DEC-036 Option C** — not production behaviour. Its DISPROOF survives and is load-bearing | 2026-08-19 |
+
+**Index measurements 2026-08-23 (librarian Job 3).** 39 ids, 39 rows, 0 gaps · Active 31 + 1 amendment row,
+Dormant 8. The skill's split trigger is ~20 active lines; 31 exceeds it and the surplus was NOT forced into
+Dormant — the remainder is the Garmin dialog-lifetime family and every one still governs live
+`src/Cloud/CloudService.cpp` behaviour. A false dormant is worse than a long active list.
 
 ---
 
@@ -985,7 +1060,7 @@ grep -n 'storeDestroyed\|storeClosed' unittests/Core/garminconnect/testGarminCon
 - Status: accepted (A — in-loop `continue`, adopting `uploadNext`'s already-shipped shape)
 - Reversibility: cheap (3 lines in one branch + 2 read-side checks; revert is a diff)
 - Decided / last-reviewed: 2026-08-13
-- Serves: REQ-027; closes B-R026-01, O-R027-01, S-R027-01, S-R027-04; constrained by DEC-024 (BlockingCall depth), DEC-025/026 (guard placement), DEC-030 (synchronous parenting), DEC-031 (reaper drains on last counted frame), and REQ-026's abort invariant
+- Serves: REQ-027; closes B-R026-01, S-R027-01, S-R027-04; constrained by DEC-024 (BlockingCall depth), DEC-025/026 (guard placement), DEC-030 (synchronous parenting), DEC-031 (reaper drains on last counted frame), and REQ-026's abort invariant  **SUPERSEDED CLOSURE CLAIM — repaired 2026-09-01.** This line formerly read *"closes B-R026-01, O-R027-01, S-R027-01, S-R027-04"*. **`O-R027-01` is NOT closed by DEC-032.** This decision's own `### AMENDMENT 2026-08-13 — scope item 3 REMOVED from DEC-032, routed to DEC-033 (B-R027-01)` withdrew exactly that scope, and `traceability.md:132` records that O-R027-01's stall route cannot be closed at the call site. `O-R027-01` is routed to **DEC-033 / Stage 2**. **The other three closures stand.** A header field that outlived its own amendment — the [[ORCH-026]] shape.
 - Dependents: TEST-095..100; B-R025-03 stays queued and is NOT resolved here
 
 ### The question
@@ -1086,6 +1161,97 @@ Scope item 4 is UNBLOCKED by this amendment: with item 3 gone, the `continue` si
 finite, so the generation guard's coverage is fully specified. The builder additionally argued from
 the code (not measured) that the double-click IS deliverable in the existing harness, so TEST-100 is
 writable and must NOT be recorded as a dead guard without a measurement.
+
+---
+
+## DEC-033 — The `readFile` bool contract: `false` does not mean "armed nothing" (REQ-027 (e))
+- Status: accepted (Option A — widen the contract via a defaulted out-param)
+- Decided / last-reviewed: 2026-09-03
+- Serves: REQ-027 clause (e); closes B-R027-01 (double-drive), B-R027-02 (buffer leak), B-R027-03
+  (fixture-honesty gap); constrained by DEC-022/023 (writeFile double-drive precedent), DEC-024 (BlockingCall
+  depth), DEC-025/026 (guard placement), DEC-030 (synchronous parenting), DEC-031 (reaper drains on last
+  counted frame), DEC-035 (guard ordering), DEC-036 (buffer-identity contract)
+
+**Problem, as scoped by DEC-032's 2026-08-13 AMENDMENT (above):** `GarminConnect::readFile` has eight
+`return false` sites (`GarminConnect.cpp:452,474,493,519,540,557,572,588`); seven post a completion via
+`Qt::QueuedConnection` (`postReadComplete`/`postReadFailed`, `:765-770`/`:780-785`) on the line above before
+returning `false` — only `:452` is genuinely silent. `syncNext` (`CloudService.cpp:1996`) and `downloadNext`
+(`:2135`) both DISCARD the bool, so a caller branch treating every `false` as "armed nothing" double-drives
+the loop on ~11 majority-shape integrations. Also folded in: B-R027-02 (the caller-allocated `QByteArray`
+leaks on a naive branch) and B-R027-03 (a test fixture must return `false` AFTER queueing a completion, or a
+green slot proves nothing about production).
+
+**Research — `qgdw-scout`, 2026-09-03, grounded (spot-checked by the orchestrator: base virtual signature at
+`CloudService.h:263-265` and all 10 non-GarminConnect override sites confirmed by `grep -rn '::readFile'
+src/Cloud/*.cpp`; TEST-022's exact assertion text confirmed in `testGarminConnectReadFile.cpp`):**
+
+**Option A — Widen the contract: defaulted out-param on the base virtual.** R:5 S:5 M:4 BP:5. Only
+`GarminConnect.cpp` gains real branching logic (its 7 "return false after arming" sites); the other 10
+overrides (`LocalFileStore.cpp:129`, `PolarFlow.cpp:184`, `Strava.cpp:281`, `SportTracks.cpp:275`,
+`Xert.cpp:371`, `SixCycle.cpp:349`, `Azum.cpp:266`, `CyclingAnalytics.cpp:283`, `Dropbox.cpp:232`,
+`Nolio.cpp:221`) are mechanical signature edits with no behavior change, since the param defaults to their
+existing "false=silent" shape. `syncNext`/`downloadNext` each gain one branch reading the out-param instead
+of discarding the bool (closes B-R027-01), which also deletes the buffer before advancing (closes B-R027-02).
+Zero existing TEST assertions change value (TEST-020..026, TEST-065(a)/(b), all 6 `driveRefusal()` sites).
+Cheap to reverse (additive; drop the param + 2 branches).
+
+**Option B — Normalize GarminConnect: flip the 7 "armed" sites to return `true`.** R:3 S:4 M:2 BP:3.
+Cheapest by line count but inverts a deliberately-designed test doctrine ("Reporting is not permission",
+`testGarminConnectReadFailure.cpp:227-236`) across 6 call sites plus TEST-022 and TEST-065(a)/(b) — a live
+behavior-contract reversal, and possibly non-compliant with REQ-017(a)'s "readFile fails" wording (ambiguous
+bool-vs-signal). Expensive to reverse post-ship.
+
+**Option C — Deferred watchdog timer.** R:2 S:3 M:2 BP:2. Solves a problem dormant everywhere except one
+already-unreachable base-class path (`Withings`, whose `readdir` is unimplemented); races a queued signal
+that's already delivered deterministically on the caller's own `processEvents()`. Reintroduces the
+timing-sensitive failure class DEC-035's own research characterized as "best-effort by construction" and
+that cost a full stop-and-report cycle elsewhere (A3-R027b-F1/ORCH-017). Cannot close B-R027-01 standing
+alone — needs A or B's branch-level fix underneath it. One-way door in practice once woven into the
+DEC-024/025/030/031 guard stack.
+
+**Chosen: Option A**, by user decision 2026-09-03 (Three Options Doctrine, presented by the orchestrator).
+Narrowest logic footprint, zero existing-test churn, and makes the third state visible in the caller's data
+instead of trusting the same convention class whose silent breakage (B-R027-01) is why this DEC exists.
+
+**BUILT + execution-verified 2026-09-04 (uncommitted). Build scope, as implemented:**
+- `CloudService.h:263-265` — base virtual `readFile` gains a defaulted out-param (richer small enum
+  `ArmedNothing | ArmedCompletion`, preferred over a narrow bool per the scout's open question, so a future
+  12th override that needs the same split does not force widening the signature again).
+- 10 overrides (listed above) — signature-only edits, default value, no logic change.
+- `GarminConnect.cpp` — the 7 "armed" `return false` sites (`:474,493,519,540,557,572,588`) set the out-param
+  to `ArmedCompletion`; `:452` stays `ArmedNothing` (default).
+- `CloudService.cpp` `syncNext`/`downloadNext` — read the out-param instead of discarding the bool; on
+  `ArmedNothing`, label+advance+continue and `delete data` (closes B-R027-02); on `ArmedCompletion`, do
+  nothing (the queued completion will drive the loop, as today).
+- `testGarminConnectSyncDialogClose.cpp:1077-1131` (the fake store's `readFile`) — **CORRECTED 2026-09-03,
+  reviewer catch (Codex) before any build landed: the bullet below previously named only ONE fixture mode and
+  conflated it with the wrong shape.** The fake store currently has NO refusal mode at all — its only
+  `return false` (`:1103`) is an unrelated UAF canary marker, per the scout's own verification. **Two
+  distinguishable new modes are required, not one:**
+  - **Mode 1 (clause (e), `ArmedNothing`)** — returns `false`, emits nothing. This is the genuinely-silent
+    shape the O-R027-01 clause itself is testing (only `GarminConnect.cpp`'s one silent site, `:452`,
+    behaves this way; most services' base-default shape also matches it).
+  - **Mode 2 (B-R027-03, `ArmedCompletion`)** — returns `false` **AFTER queueing a completion** (a real
+    `readComplete`/`readFailed` emission, delivered the same way GarminConnect's own 7 "armed" sites do via
+    `Qt::QueuedConnection`). **This is the mode that actually matters for B-R027-03 and for proving
+    `syncNext`/`downloadNext`'s new branches are correct**: it is the majority-shape scenario the original
+    (withdrawn) DEC-032 scope item 3 would have mishandled as a double-drive, and a fixture that only offers
+    Mode 1 would let a test go green without ever exercising that path — exactly the concealment B-R027-03
+    names. **Do not build Mode 2 as "false + emits nothing" — that is Mode 1 again, and would silently retest
+    clause (e) instead of covering the real bug.**
+- `CloudServiceAutoDownload::run` (`CloudService.cpp:4147-4164`) — confirmed OUT of scope: it blocks on both
+  signals with its own watchdog and never branches on the bool; structurally immune to B-R027-01.
+
+**Alignment probe (run before any verdict is recorded as built, per [[LSN-045]]):**
+```
+grep -c 'ArmedNothing\|ArmedCompletion' src/Cloud/CloudService.h    # expect 0 before, >=2 after
+grep -n 'readFile' src/Cloud/CloudService.cpp | grep -c 'ArmedCompletion\|ArmedNothing'  # expect 0 before, >=2 after (syncNext + downloadNext branches)
+grep -c 'ArmedCompletion' src/Cloud/GarminConnect.cpp                # expect 0 before, 7 after
+```
+
+**Open questions, deferred to the builder briefing, not blocking the decision itself:** the exact enum name
+and member spelling; whether `CloudServiceAutoDownload::run`'s exclusion needs a code comment citing this DEC
+so a future editor does not "fix" it into scope by mistake.
 
 ---
 
@@ -1383,6 +1549,16 @@ shared fake and both registered QPA backends. The separately known sort-route dr
 following stable-worklist slice. That sequencing accepts no residual: REQ-028 clause (c) remains
 explicitly partial until the sort slice also lands.
 
+**AMENDMENT 2026-08-23 (VAL-018 finding 1) — THE ANTECEDENT OF THE SENTENCE ABOVE HAS BEEN MET, so the
+sentence no longer describes the present.** "Until the sort slice also lands" was written on 2026-08-22
+while the sort slice was still a following item. It landed the next day: DEC-038 (Option A, sorting off
+for the batch's duration), committed `514d8e88f`, orchestrator-mutation-proven, 89/0/0 on both QPA
+backends, adversarially cleared by the DEC-038 A3 (findings, none blocking). **REQ-028 clause (c) is
+therefore CLOSED, not partial**, and `prd.md:154` plus the REQ-028 row in traceability.md — both of which
+already said so — are the SSOT. The original sentence is retained above rather than rewritten because it
+was true when written; this amendment is what makes the entry readable in order. VAL-018 caught it as a
+same-day cascade that was resolved in narrative but never reconciled in the dependent decision's own text.
+
 ---
 
 ## DEC-037 — Separating an abandoned write from the live one when the wire carries no identity (REQ-028 (c), A3-R028b-F3)
@@ -1525,6 +1701,10 @@ for service-level evidence. Driving a real service needs a fixture layer that do
 ---
 
 ## DEC-034 / DEC-036 AMENDMENT 2026-08-21 (A3-R028c-F2, BLOCKING) — the completion slots never got the guard the drivers have
+- Status: accepted; folded into DEC-036's Option C build and verified with it (`e48f7d123`, gate `98df50535`)
+- Decided / last-reviewed: 2026-08-21
+<!-- Status/Decided fields BACKFILLED 2026-08-23 (librarian Job 3): this amendment section carried NEITHER,
+     so DEC-015's canonical home was empty for it while the WIKI hub and STATE both narrated its status. -->
 `CloudService.h:783-789` states the invariant the single-slot ticket rests on: *"At most one transfer is
 outstanding per LIVE batch: each of the four dispatch sites returns immediately after its store call, and
 the only thing that re-drives a loop is a completion slot's tail, which has consumed the ticket first.
@@ -1548,3 +1728,443 @@ here would put a second driver on the same list"*); the slots were not. Not a ne
 **Also folded in:** there is no `aborted`/`batchGeneration` re-read between `saveRide` (`:2966`) and
 `successful++` (`:2978`), so an abort+restart delivered inside `autoProcess` increments the NEW batch's
 counter on the old batch's behalf. Same mechanism, same fix.
+
+## DEC-038 = DEC-034 AMENDMENT 2026-08-22 (S-R028-01 / S-R028-02) — the sort route: sorting is OFF for the batch's duration
+- Status: accepted (A — sorting disabled for the batch's duration); BUILT + committed `514d8e88f`
+- Decided / last-reviewed: 2026-08-22
+<!-- Status/Decided fields BACKFILLED 2026-08-23 (librarian Job 3): this entry carried NEITHER, so DEC-015's
+     canonical home was empty for it while the WIKI hub and STATE both narrated its status. -->
+
+**Question.** How is the third list mutator — SORTING — closed, and in what vehicle? A re-sort frees
+nothing and bumps no counter, so it passes DEC-034's `listGeneration` guard and DEC-036's ticket **by
+construction**; DEC-036 closed only the LABELLING half (completions address through a stored row POINTER,
+which survives a permutation), leaving the DRIVER half — the positional `for (int i=listindex; …)
+child(i)` walk in all three drivers — open.
+
+**VEHICLE: an AMENDMENT to DEC-034, not a new REQ.** The user's rule of 2026-08-17 was *"if it reorders,
+DEC-034 reopens with executed evidence"*. Both halves of that antecedent are now met: the reorder was
+executed by TEST-112 (2026-08-18) and the TRIGGER — the half that was missing — was executed by TEST-131
+(2026-08-22). REQ-028 is NOT reopened: `prd.md:154` has said since 2026-08-16 that the sort route is out
+of its scope, and it closed on clauses (a)–(e) on 2026-08-22. Precedent for amending without touching the
+parent REQ: the DEC-034/DEC-036 amendment of 2026-08-21, immediately above.
+
+**CHOSEN: Option A — disable sorting on all three lists for the batch's duration.** Scored 5/5/5/5
+(reliability: removes the mutator rather than tolerating it, adding no new lifetime state; scalability:
+strictly cheaper than today, since it also avoids Qt's resort-per-`setText` during the batch;
+maintainability: no new members, and it widens an idiom the file already runs at four sites; best
+practices: Qt's own documented pattern for bulk-mutating a sorted view).
+Rejected — **Option B, pointer-snapshot dispatch** (snapshot the checked rows at batch start; `listindex`
+becomes a cursor into that): architecturally the cleaner end state and the one DEC-036's research already
+named as *"the deliberate end-state when the sort route is scheduled"*, and the ONLY option that would let
+a user re-sort **during** a live batch — but nothing asks for that, it adds a second per-item collection
+beside the existing generation/ticket apparatus, and it is fully additive on top of A if that need ever
+appears. Rejected — **Option C, per-item dispatched marker with linear rescan**: invents a state shape the
+file does not use, is O(n²), and re-runs the stale-marker-across-restart bug class DEC-037 already paid to
+learn once.
+
+**WHAT THE PROBE (TEST-131) CHANGED, and why this entry is evidence-led rather than argued.**
+1. **The route is LIVE with no click at all.** The scout's suspected self-trigger is CONFIRMED on Qt 6.8.2,
+   both backends: a `setText` on the SORT column reorders (a write to a non-sort column does not — Q1c is
+   the specificity control). End-to-end (Q5c): the user sorts by Status BEFORE pressing Synchronize — an
+   INVISIBLE sort, because every Status cell is empty at that moment (`userSortChangedOrder=0`) — and then
+   `syncNext`'s own `setText(7,"Uploading")` reorders the list underneath its own loop at
+   `writeFileCalls==0`, giving `writeNames=[…10_00.json.zip , …10_00.json.zip]` (**the same row uploaded
+   twice**) and `statuses=["" , "Completed."]` (the other row never transferred). **So B-R028-05's
+   unreproducible synthetic `QTest::mouseClick` was never the load-bearing question**, and S-R028-01 is a
+   live defect on an ordinary user route rather than a dormant hazard.
+2. **The mechanism in the source claim was WRONG, in the unhelpful direction.** The resort is **not lazy**:
+   `layoutChanged` is emitted INSIDE `setText` (`at write=1`; a later read adds none). There is no
+   scheduled-but-unapplied window. `QTreeWidgetItem::child(int)`'s `executePendingSort()`
+   (`qtreewidget.h:145-150`, verified verbatim on disk) is real but does NOT deliver this route — **so any
+   design premised on catching the reorder at the addressing call is dead on arrival.**
+3. **The orchestrator's own objection to this option was REFUTED by measurement.** The concern was that
+   `setSortingEnabled(false)` might sever only the data-change vector and leave the header clickable.
+   Measured: `clickable=0`, `indicatorShown=0`, `indicatorReorders=0`. **It closes both vectors.**
+4. **There is no pending-sort residual** (Q3): because writes sort immediately, a disable arriving after a
+   write cannot undo the move that write already made, and nothing is ever left pending.
+
+**THE ONE HARD CONSTRAINT THE MEASUREMENT IMPOSES.** The disable must be in place **BEFORE the batch's
+first `setText`** — placement, not existence, is what makes this guard load-bearing. This is DEC-035's
+principle applied to a new mutator.
+
+**THE INVALIDATION-SITE ENUMERATION, made a condition of this decision rather than left to the build
+([[LSN-068]]).** Sorting disabled at batch start must be restored on **every** termination path, not only
+the three completion tails (`:2511-2513`, `:2644-2645`, `:3257-3258`) and the abort branch (`:1924-1925`)
+the draft named. A starting census of early returns inside the three drivers, orchestrator-grepped
+2026-08-22 and **explicitly NOT closed** ([[LSN-073]] — the builder re-derives it by grepping, and a census
+written as closed is the defect): `syncNext` `:2148` (stale-generation), `:2278` / `:2431` (`self.isNull()`),
+`:2456` (`aborted`), `:2463` (`batchGeneration`), `:2497` (`listGeneration != listgen`), plus `:2244`,
+`:2321`, `:2355`, `:2365`, `:2388`, `:2406`, `:2504`, `:2531`; `downloadNext` `:2546`, `:2606`, `:2633`,
+`:2637`, `:2662`; `uploadNext` `:3081`, `:3134`, `:3145`, `:3153`, `:3167`, `:3183`, `:3271`. **A path that
+exits without restoring leaves the user's lists permanently unsortable until the dialog is reopened** —
+a silent, shipped UX regression that no memory-safety test would ever catch.
+**Corollary, and the obvious wrong answer:** a batch is **not one stack frame**. These loops are
+"process one row, return, let the completion re-drive me", so an RAII scope guard around a driver call
+would re-enable sorting BETWEEN ROWS and reinstate the defect while looking correct. The disable must
+persist across the whole batch and be released only at true batch termination.
+**On the `self.isNull()` exits specifically:** the dialog is already gone, so there is nothing to restore
+and the restore must be structured so it cannot touch a dead dialog.
+
+**ALSO REQUIRED BY THE USER (2026-08-22), and part of the accepted option:** the restore must **preserve
+the user's selected sort column and order** — `setSortingEnabled(true)` re-applies the current indicator,
+so the pre-batch column/order must survive the round trip rather than silently resetting to Qt's default
+(measured at Q1a: `setSortingEnabled(true)` alone establishes section 0, DESCENDING).
+
+**Cascade.** `CloudService.h:733-742` and `:795-803` currently state, in production comments, that the sort
+route is NOT closed — both become stale on this build and must be rewritten, not left. S-R028-01 and
+S-R028-02 close. B-R028-05's DRIVER half closes; its LABELLING half stays closed by DEC-036. DEC-036/037
+mechanisms are untouched — this amendment lives in the sorting toggles and the driver exits, adjacent to
+but not overlapping the ticket's arm/consume sites. TEST-112 stays as the historical pre-fix measurement;
+TEST-131's Q5c pins are MEASURED-NOT-DESIRED and **will go RED when this fix lands — that is the marker
+the fix worked**, and whoever builds it must rewrite that block and say so.
+
+**Accepted residual.** This is PREVENTION, not TOLERANCE: a future caller that re-enables sorting mid-batch
+reintroduces the defect with no architectural guard to catch it (Option B is what would make the drivers
+intrinsically reorder-tolerant). Accepted because no such caller exists today (grep-confirmed) and B
+remains additive later. Second residual: the header is genuinely inert during a batch — a deliberate UX
+cost, not a defect.
+
+---
+
+## DEC-039 — libusb dependency wiring: complete find_path/find_library for BOTH APIs, on an isolated unmerged branch (ORCH-036)
+- Status: accepted (B — complete `find_path`/`find_library` include+link wiring for both the libusb-1.0 and legacy libusb-0.1 branches, implemented on an isolated branch and deliberately NOT merged)
+- Reversibility: high (build-definition only; one file, one diff, no product code changed — and it is not merged, so reverting is deleting a branch)
+- Decided / last-reviewed: 2026-08-23
+- Serves: ORCH-036 (raised at the DEC-038 commit-safety gate — the only gate in this project that runs outside the developer's working tree)
+- Dependents: branch `build/orch036-libusb-wiring`; ORCH-036 stays ADVISORY and OPEN until a reconciled change lands
+
+**Problem.** With `GC_HAVE_LIBUSB=ON`, the CMake build offers no complete supported dependency wiring for either libusb API. It has no detection to choose a branch, no include-directory wiring, and no link wiring — zero libusb references across all nine `target_link_libraries` in `src/CMakeLists.txt`.
+
+**Two earlier formulations of this problem were WRONG and are recorded as such** (see [[LSN-080]]), because the corrected statement is what this decision is scoped to:
+- *"HEAD does not build from a clean checkout under either option value."* FALSE — an artifact of reconfiguring a build directory that still held moc output from a previous `ON` configure. HEAD's default configuration builds end to end (`[217/218] Linking CXX executable src/GoldenCheetah`, EXIT=0).
+- *"HEAD cannot select the libusb-1.0 API under any configuration."* FALSE — `if(NOT LIBUSB_V_1)` reads an ordinary variable and an external `-DLIBUSB_V_1=ON` satisfies it. MEASURED: 426 compile entries carried `-DLIBUSB_V_1`, `EzUsb-1.0.c` compiled, legacy `EzUsb.c` not.
+
+**The accurate defect, measured at `514d8e88f`:** selection PASSES, compilation PASSES, **linking FAILS** — `undefined reference to libusb_exit / libusb_free_config_descriptor / libusb_unref_device` from `LibUsb.cpp.o` and `libusb_error_name` from `EzUsb-1.0.c.o`. Compilation passes because this tree deliberately includes `<libusb-1.0/libusb.h>`, which resolves through the default `/usr/include` search root on a default-prefix Linux install. That resolution does NOT hold for a nonstandard prefix, macOS/Homebrew, or vcpkg, which is why include wiring is a requirement of the repair and not an optional extra.
+
+**Options considered (scored R/S/M/BP 1-5).**
+- **B — CHOSEN — complete `find_path`/`find_library` wiring for both branches, isolated and unmerged.** R4 S4 M3 BP4. Fixes both defects; one code path serves Linux, macOS and Windows because `find_path`/`find_library` search the CMake prefix path, which the vcpkg toolchain file populates automatically. M is 3 rather than 4 **because of the ownership constraint, not the code**: `src/CMakeLists.txt` is already dirty under another owner in the main worktree, so implementation there is forbidden and the deliverable is a tested but unmerged branch.
+- **A — adopt the uncommitted `pkg_check_modules` auto-detection.** R3 S2 M2 BP2. **Rejected:** cannot be implemented at all without absorbing another owner's uncommitted work, which the user explicitly forbade; pkg-config needs an executable on PATH that MSVC toolchains do not ship, leaving Windows/vcpkg unserved; and its `pkg_check_modules(LIBUSB0 REQUIRED libusb)` fallback hard-fails configure on a legacy package distributions are actively retiring. Revisitable once ownership is reconciled — it is the nicer long-term UX and can supersede B.
+- **C — do nothing; the default is OFF and the feature is opt-in.** R2 S1 M3 BP2. **Rejected:** this is the exact trade DEC-028 already refused — it leaves TRACKED source (Fortius/Imagic) unbuildable from clean, and `vcpkg.json:50-55` already declares a `libusb` feature and `INSTALL-CMAKE:44` already advertises libusb as a supported optional library, both of which C leaves false.
+
+**Ownership boundary (a first-class term of this decision, not a footnote).** Implemented on branch `build/orch036-libusb-wiring` in a separate worktree created from `514d8e88f`. The main worktree and the `cleanhead` evidence worktree were not modified. **The result must NOT be merged or cherry-picked until the existing owner of the uncommitted `src/CMakeLists.txt` changes has reconciled the overlap** — both diffs edit the same block, and that reconciliation is theirs to make, not this decision's to pre-empt. A likely resolution is that they drop their now-redundant detection in favour of this wiring, or that this branch is rebased onto their landed work; either is their call.
+
+**Evidence bar — EXECUTED, fresh build directory per configuration (never a re-configure, per [[LSN-080]]).**
+- v1-ON (`-DGC_HAVE_LIBUSB=ON -DLIBUSB_V_1=ON`): configure EXIT=0, discovered `/usr/include/libusb-1.0` + `/usr/lib/x86_64-linux-gnu/libusb-1.0.so`; build **EXIT=0**, zero FAILED, zero undefined references; **`ldd` shows `libusb-1.0.so.0 => /lib/x86_64-linux-gnu/libusb-1.0.so.0`**, which is what distinguishes "compiles" from "linked against the intended API"; `EzUsb-1.0.c` compiled (3 entries), legacy `EzUsb.c` not (0).
+- Legacy branch with the dependency absent (`-DGC_HAVE_LIBUSB=ON`, no `LIBUSB_V_1`, and this machine has no `usb.h`): configure **EXIT=1** with a diagnostic naming both missing artefacts and the remedy (`-DLIBUSB_V_1=ON`, install `libusb-dev`, or `-DGC_HAVE_LIBUSB=OFF`). This discharges the requirement that a missing dependency fails at CONFIGURE time rather than several minutes into a link.
+- OFF default: configure EXIT=0, `GC_HAVE_LIBUSB:BOOL=OFF`; build result recorded in traceability.
+
+**Accepted residuals — UNEXECUTED, and labelled so deliberately. Code inspection is NOT verification and must not be described as multi-platform testing.**
+1. **Legacy libusb-0.1 SUCCESSFUL build: NOT EXECUTED.** Only its failure path is executed. This machine has no libusb-0.1 headers, so a successful legacy configure+build+link was never observed. Requires a container/VM with `libusb-dev` present and `libusb-1.0-0-dev` absent.
+2. **macOS / Homebrew: NOT EXECUTED.** No macOS host available in this session. The prefix layout (`/opt/homebrew` on Apple Silicon vs `/usr/local` on Intel) is precisely the case the include wiring exists for, and it is exactly the case not yet proven.
+3. **Windows / vcpkg: NOT EXECUTED.** The reasoning that `find_path`/`find_library` resolve through the vcpkg toolchain's prefix path is sound and is why B was chosen over A, but it is REASONED, not measured.
+4. The `GC_LIBUSB_*` variables are set inside the `if(GC_HAVE_LIBUSB)` block and consumed under the same guard in the link section — correct, but it is a convention a future edit could break silently.
+
+### Alignment probe
+grep -n 'find_path(LIBUSB1_INCLUDE_DIR\|find_library(LIBUSB1_LIBRARY' src/CMakeLists.txt   # expect both present (v1 detection)
+grep -n 'find_path(LIBUSB0_INCLUDE_DIR\|find_library(LIBUSB0_LIBRARY' src/CMakeLists.txt   # expect both present (legacy detection)
+grep -n 'GC_LIBUSB_INCLUDE_DIRS\|GC_LIBUSB_LIBRARIES' src/CMakeLists.txt                    # expect set in both branches + consumed once in the link section
+git branch --list build/orch036-libusb-wiring                                               # expect the branch to EXIST and be UNMERGED
+git log --oneline master..build/orch036-libusb-wiring                                       # expect commits present, i.e. not merged
+
+## DEC-040 — Bounding every blocking provider wait: a shared bounded-request outcome contract, then generic cooperative cancellation (W3), on an S-1 base-owned injectable QNetworkAccessManager
+
+**Status:** accepted 2026-08-26. **NOT BUILT.** Briefing prepared; no builder dispatched. Supersedes nothing; amends DES-001 invariant 3.
+
+**ID NOTE — READ THIS BEFORE CITING.** Through the 2026-08-26 design gate the *parked auto-downloader teardown draft* was styled "DEC-040" in session narrative. It was never allocated. This id belongs to the PROVIDER-WATCHDOG decision. The parked teardown draft carries **NO id** and is BLOCKED-BY this DEC; it takes the next free number when approved. Cite the teardown work as "the parked auto-downloader teardown draft (A3-R028e-F1)", never as DEC-040.
+
+### Question
+Nine providers block in a `QEventLoop` with no watchdog; a tenth arms correctly but never checks whether the reply finished. How are all of them bounded, and how does a bounded wait become cancellable, without manufacturing false-success results?
+
+### Options considered
+- **W1 — per-provider in-place repair.** Fix arming order and add a finish check at each of the 22 sites independently. Reliability 3 · Scalability 2 · Maintainability 2 · Best Practices 2. Rejected: writes the same safety-critical idiom 22 times, and nothing structural stops the 23rd site being wrong — which is exactly how CyclingAnalytics (ordering) and SixCycle (missing check) arose.
+- **W2 — shared bounded-request helper, no cancellation.** Reliability 4 · Scalability 4 · Maintainability 5 · Best Practices 4. Not rejected — adopted as Stage 1 of W3.
+- **W3 — W2 plus generic cooperative cancellation. CHOSEN.** Reliability 5 · Scalability 5 · Maintainability 4 · Best Practices 4.
+
+### Decision
+W3, sequenced W2 then W3, as **one decision and one release unit**. Stage 1 establishes the outcome contract and migrates every site; Stage 2 adds cancellation. The parked teardown draft is NOT unblocked when Stage 1 lands — only completed W3 releases it, because Stage 1 alone leaves close latency at one full provider timeout, which is not the property that draft depends on.
+
+### Helper contract
+```cpp
+enum class RequestOutcome { Finished, TimedOut, Cancelled, NetworkError };
+struct RequestResult {
+    RequestOutcome outcome = RequestOutcome::NetworkError;
+    int httpStatus = -1;
+    QNetworkReply::NetworkError error = QNetworkReply::NoError;
+    QString errorString;
+    QByteArray body;                       // ONLY when outcome == Finished
+    bool ok() const { return outcome == RequestOutcome::Finished; }
+};
+RequestResult CloudService::blockingRequest(QNetworkReply* reply,   // ownership TRANSFERRED
+                                            int timeoutMs,
+                                            const CancelToken& cancel = CancelToken());
+```
+
+**Wait-state:** `naturalFinish_` (set ONLY by the `finished()` slot, ONLY while `!abortIssued_`), `abortIssued_` (set immediately before `abort()`), `pending_` (first writer wins among finished/timer/cancel-poll).
+
+**Strict ordering: reconcile outcome -> snapshot fields -> dispose.** `abort()` is never called before the outcome is fixed, so an abort-induced `finished()` cannot reach reconciliation. `reply->isFinished()` is NEVER consulted for outcome determination; only `naturalFinish_` is.
+
+**Transition table (normative):**
+
+| # | Scenario | naturalFinish_ | pending_ | reply->error() | Outcome | body |
+|---|---|---|---|---|---|---|
+| 1 | natural finish, no error | true | Finished | NoError | **Finished** | yes |
+| 2 | natural finish, network error | true | Finished | != NoError | **NetworkError** | no |
+| 3 | timeout, no finish observed | false | TimedOut | not read | **TimedOut** | no |
+| 4 | cancellation, no finish observed | false | Cancelled | not read | **Cancelled** | no |
+| 5 | simultaneous timer + natural finish | true | TimedOut | per reply | **Finished** / **NetworkError** per rows 1/2 | per row |
+| 6 | abort-induced finished() | false (abort guard) | TimedOut/Cancelled | not read | **unchanged** | no |
+| 7 | spurious exec() return | false | unset | not read | **NetworkError** ("event loop returned without an outcome") | no |
+
+Row 5 is NOT a promotion: the outcome follows from the natural `finished()` having been observed before any abort, and its error state then decides rows 1 vs 2. A natural finish carrying an error is NetworkError, never Finished. Only row 1 populates `body`; `readAll()` is called in exactly one place.
+
+**Disposal.** Snapshot `httpStatus`/`error`/`errorString`/`body` BEFORE disposal. Then `abortIssued_ = true; if (!reply->isFinished()) reply->abort(); reply->deleteLater();` — exactly once on every path, RAII-guarded. **Acceptance criterion is ACTUAL destruction exactly once** (`QSignalSpy` on `QObject::destroyed` count == 1 AND a `QPointer` guard null after drain). The "call `deleteLater()` twice" mutation is REJECTED as unreliable — Qt coalesces repeated `deleteLater()` once the `DeferredDelete` event is posted, so the mutant is inert. Killing mutations are **M-D1** drop disposal (destruction count 0), **M-D2** transfer ownership back to the caller (count 0 in-window), **M-D3** `delete` instead of `deleteLater` (ASan UAF).
+
+**Cancellation.** `kCancelPollMs = 250`; **maximum cancellation-observation interval <= 300 ms** (250 poll + 50 dispatch margin). Test acceptance: observed <= 500 ms with the timeout override at 5000 ms so a timeout cannot cause the exit. Killing mutation: raise `kCancelPollMs` to 2000 -> observed exceeds 500 ms.
+
+```cpp
+class CancelToken {                       // CloudService.h includes <atomic>, <memory> ONLY
+public:
+    CancelToken() = default;              // never cancels
+    explicit CancelToken(std::shared_ptr<const std::atomic_bool> f) : flag_(std::move(f)) {}
+    bool cancelled() const { return flag_ && flag_->load(std::memory_order_acquire); }
+private:
+    std::shared_ptr<const std::atomic_bool> flag_;
+};
+```
+Lifetime-safe by `shared_ptr`; default token never cancels; **`CloudService.h` carries no include, forward declaration or friendship of `CloudServiceAutoDownload`.** No lock-freedom is claimed or required. Plumbed as a member (`setCancelToken`), NOT as a parameter, so `open()`/`readdir()` virtual signatures are unchanged.
+
+### S-1 — base-owned injectable QNetworkAccessManager
+- `CloudService` initializes the manager on **every** construction path. No indeterminate pointer is possible. This repairs a latent UB: all ten providers currently create `nam` only `if (context)` and never list it in the initializer list, so null-`Context` construction leaves it indeterminate.
+- **Explicit constructor injection / default construction — NOT a virtual factory.** A virtual factory called from a base constructor would not dispatch to the derived override, which is precisely the trap this clause exists to avoid.
+- Production callers keep their existing `Provider(Context*)` path unchanged.
+- Tests inject a fake manager created on the same thread.
+- **Ownership:** `CloudService` owns and destroys both default and injected managers exactly once, parented to the `CloudService` with matching thread affinity. All ten `~Provider()` bodies (`if (context) delete nam;`) are REMOVED; the base becomes the sole owner.
+- **Timeout override and manager injection compile in the SAME production code version under test.** No test-only preprocessor branch. `int requestTimeoutOverrideMs_ = -1;` consumed inside `blockingRequest` as `const int t = (requestTimeoutOverrideMs_ >= 0) ? requestTimeoutOverrideMs_ : timeoutMs;` — one line, no per-call-site change.
+
+**Ten-constructor audit (orchestrator-run 2026-08-26, no incompatible behavior found).** Nine of ten connect `nam::sslErrors` to their own `onSslErrors` slot. **Dropbox is the sole exception and has NO `onSslErrors` slot at all** (`grep -c onSslErrors src/Cloud/Dropbox.{cpp,h}` -> 0/0). That asymmetry is PRESERVED: the base creates and owns the manager, each provider keeps its own `sslErrors` connect, and Dropbox keeps none. No proxy, cache, cookie jar, redirect policy or other manager configuration exists in any of the ten. **One declared deviation:** the `sslErrors` connect becomes unconditional rather than `if (context)`-guarded, because the manager now always exists; this changes behavior only on the null-`Context` path, which is currently undefined behavior.
+
+### Timeout policy
+Generic **30 s** open/auth and **60 s** listing, calibrated on GarminConnect (30/60/60). **SixCycle KEEPS its provider-specific 5 s open and 10 s readdir** — not loosened without provider-specific evidence; its stale "10000 seconds" comment (C5) is corrected and the finish check (C1) added. Accepted residual: a legitimate response slower than its cap becomes a reported failure instead of waiting indefinitely.
+
+### Cascade
+Closes S-R028f-F1, S-R028f-F3, C1, C2, C3, C4, C6 on completion; C5 corrected in the SixCycle changeset. Amends DES-001 invariant 3 from one provider to all. Corrects `CloudService.h:305`'s flat "never terminate()" (ORCH-042 item 2). Unblocks the parked auto-downloader teardown draft only on completed W3. TESTs T-143..T-151. Untouched: B-R028-17 and its DEC-030 amendment changeset, ORCH-036, ORCH-042 items 1 and 3, S-R028f-F2.
+
+### Alignment probe
+grep -c "onSslErrors" src/Cloud/Dropbox.cpp src/Cloud/Dropbox.h        # expect 0 and 0 (asymmetry preserved)
+grep -rn "delete nam" src/Cloud/                                        # expect ZERO after Stage 1 (base is sole owner)
+grep -rn "CloudServiceAutoDownload" src/Cloud/CloudService.h            # expect ZERO inside the CancelToken/helper region
+grep -c "loop.exec()" src/Cloud/*.cpp                                   # expect 0 for the ten migrated providers
+grep -rn "abort()" src/Cloud/CloudService.cpp                           # expect the helper's single disposal site
+
+## DEC-040 STAGE-1 AMENDMENT & STATUS — 2026-08-30 (reconciled against repository truth)
+
+**THE ACCEPTED TEXT ABOVE IS PRESERVED VERBATIM AS PROVENANCE. Nothing in it was edited.** This block records
+what Stage 1 ACTUALLY built, where the implementation deviates from the accepted design, and which acceptance
+conditions changed. Where the two disagree, THIS BLOCK is repository truth and the text above is history.
+
+### STATUS
+- **Stage 1 is BUILT, its Verification Gate PASSED, and it is COMMITTED as `37710370e` (2026-08-30) —
+  NOT PUSHED and NOT MERGED.** Branch `garmin/req028-row-lifetime`, parent `05ac6bc29`, 31 paths,
+  +5780/-381 (re-derived from git 2026-08-30). The gate evidence is orchestrator-re-executed, not accepted
+  from a report (seal `rt8-20260830-095658`, plus the post-commit seal
+  `post-commit-20260830-112228`, both in `../GoldenCheetah-recovery/DEC-040/`). **Two of the 31 committed
+  blobs are the pre-commit `clang-format` content version and therefore DIVERGE from rt8; the 29 production
+  blobs still match it.**
+  *(STATUS CORRECTED 2026-08-30 by the documentation-reconciliation pass. This bullet read "on the CURRENT
+  WORKING-TREE BYTES — and it is UNCOMMITTED … @ `05ac6bc29`, 31 uncommitted paths, nothing staged". That
+  was accurate at the Stage-1 verification gate and went stale the moment the slice was committed; `src/`
+  and `unittests/` are clean against HEAD. Nothing about the slice's VERDICTS changed — only its provenance.)*
+- **DEC-040 IS NOT COMPLETE.** Stage 2 (generic cooperative cancellation) is UNBUILT. A green Stage-1 gate is an
+  INTERMEDIATE implementation checkpoint inside one release unit — it is NOT the provider-watchdog checkpoint, it
+  does NOT discharge C1/C2/C3/C4/C6, and it does NOT release the parked auto-downloader teardown draft, which only
+  COMPLETED W3 releases.
+
+### SCOPE AS BUILT
+- **TEN providers carry the 22 migrated bounded-request sites** — Azum 3, Dropbox 2, PolarFlow 1, CyclingAnalytics 1,
+  Xert 3, Strava 3, SportTracks 2, TrainingsTageBuch 2, Nolio 3, SixCycle 2 = **22**.
+- **THIRTEEN providers participate in base manager ownership.** `RideWithGPS`, `Selfloops` and `SportsPlusHealth`
+  are **manager-only siblings**: they take the injected manager but have NO blocking wait, so they carry **NO
+  watchdog rows** in T-143/144/145/147/150 and appear in T-153 only.
+
+### S-1 AMENDED — LAZY, "NULL-OR-VALID", NOT EAGER
+The accepted text says the base constructs the manager on every construction path. **That is superseded.** As built:
+- **No manager exists before `QCoreApplication`** — factory-template construction is INERT.
+- **First real use creates exactly one**, IN THE PROVIDER'S OWN AFFINITY THREAD. `nam()` REFUSES to initialise
+  off-affinity (it diagnoses rather than silently `moveToThread`-ing); the invariant is **"never indeterminate"**,
+  not "initialised on every construction path".
+- **An injected manager is adopted EXACTLY AS SUPPLIED** — adoption is conditional on affinity; no cross-thread
+  `setParent()`, no relocation, and no default is ever built alongside it.
+- **Provider `sslErrors` wiring runs EXACTLY ONCE**, when the manager first comes into being — it cannot stay in the
+  constructor, because at construction time there is no manager to connect to. Dropbox's documented absence of an
+  `onSslErrors` slot is still PRESERVED.
+
+### ACCEPTANCE CONDITION CHANGED — `delete nam` IS NOT ZERO
+The accepted alignment probe expected **ZERO** `delete nam` after Stage 1. **That is UNSATISFIABLE and is retired.**
+**FIVE live `delete nam` statements remain LEGITIMATELY in `OpenData.cpp`** (`:135`, `:152`, `:204`, `:332`, `:352`)
+— they delete LOCAL managers, not the base-owned one, and `OpenData.cpp` is outside this slice. The thirteen migrated
+providers retain the idiom only inside explanatory COMMENTS. **Five, not zero, is the acceptance condition.**
+
+### STAGE 1 HAS NO CANCELLATION, DELIBERATELY
+- **No `CancelToken` type exists** (`0` live occurrences in `src/Cloud/`), **no cancellation poll**, and **no
+  reachable `Cancelled` outcome.** `RequestOutcome::Cancelled` is DECLARED but unreachable, RESERVED for Stage 2 so
+  that Stage 2 adds no enum churn. `kCancelPollMs`, the <=300 ms observation interval and their killing mutation in
+  the accepted text are **STAGE-2 acceptance criteria and are NOT Stage-1 conditions**.
+- **W3 INTERFACE CORRECTION.** The accepted text's signature block shows
+  `blockingRequest(QNetworkReply*, int timeoutMs, const CancelToken& cancel = CancelToken())`. **That is WRONG as
+  the final interface, and it contradicts the accepted text's own prose two paragraphs later.** The correct
+  description — and the as-built Stage-1 working-tree code — is:
+  **`RequestResult CloudService::blockingRequest(QNetworkReply *reply, int timeoutMs);`** (`CloudService.h:436`),
+  **UNCHANGED**, taking NO token parameter. **Cancellation is MEMBER-PLUMBED via `setCancelToken`**, which is why
+  `open()`/`readdir()` virtual signatures are untouched. Stage 2 adds the member, not a parameter.
+
+### TEST ACCOUNTING AS BUILT
+| TEST | Stage-1 state |
+|---|---|
+| T-143 · T-144 · T-145 · T-150 · T-151 · T-152 · T-153 | **BUILT IN FULL** |
+| T-146 · T-147 | **Stage-1 portions BUILT; cancellation portions DEFERRED to Stage 2** |
+| T-148 · T-149 | **ALLOCATED-UNBUILT** — no `CancelToken` exists in Stage 1, so neither is drivable |
+
+### ALIGNMENT PROBES — REPLACED (the accepted set is retired; it counted comments as code)
+```sh
+# P1  live `delete nam` STATEMENTS, comments excluded -> expect 5, ALL in OpenData.cpp
+grep -rnE '^[^/]*\bdelete +nam\b' src/Cloud/*.cpp src/Cloud/*.h | grep -vE '^[^:]+:[0-9]+:\s*//'
+# P2  live blockingRequest CALL sites across the TEN watchdog providers -> expect 22
+#     (Azum 3 · Dropbox 2 · PolarFlow 1 · CyclingAnalytics 1 · Xert 3 · Strava 3 ·
+#      SportTracks 2 · TrainingsTageBuch 2 · Nolio 3 · SixCycle 2)
+grep -cE '^[^/]*blockingRequest *\(' src/Cloud/{Azum,Dropbox,PolarFlow,CyclingAnalytics,Xert,Strava,SportTracks,TrainingsTageBuch,Nolio,SixCycle}.cpp
+# P3  providers accepting an injected manager -> expect 14 headers = 13 PROVIDERS + CloudService.h (the base)
+grep -lE 'QNetworkAccessManager *\*[a-zA-Z]* *= *(NULL|nullptr)' src/Cloud/*.h
+# P4  manager-only siblings must carry NO blocking wait -> expect 0, 0, 0
+grep -cE '^[^/]*blockingRequest *\(' src/Cloud/{RideWithGPS,Selfloops,SportsPlusHealth}.cpp
+# P5  Stage 1 carries no cancellation type -> expect NO live occurrence
+grep -rcE '^[^/]*\bCancelToken\b' src/Cloud/*.cpp src/Cloud/*.h | grep -v ':0'
+# P6  Dropbox's sslErrors asymmetry is preserved -> expect 0 and 0 (LIVE code only; see the note below)
+grep -cE '^[^/]*\bonSslErrors\b' src/Cloud/Dropbox.cpp src/Cloud/Dropbox.h
+```
+**P1-P5 were RUN on 2026-08-30 against the current bytes and returned exactly these values, and were
+INDEPENDENTLY RE-RUN on 2026-08-30 by the documentation-reconciliation pass with the same results
+(P1=5 · P2=22 · P3=14 · P4=0,0,0 · P5=0).**
+**P6 WAS CORRECTED, NOT DROPPED — it was the one probe that counted a COMMENT as code.** As originally
+written (`grep -c "onSslErrors"`) it returns `Dropbox.h:0` but `Dropbox.cpp:1`, because the Stage-1 commit
+added an explanatory comment naming `onSslErrors` at `Dropbox.cpp:33`. That is precisely the defect this
+block criticises in the probes it retired, reproduced inside the replacement set. **The BEHAVIOUR it tests is
+REAL and still holds:** the comment-blind form above returns 0 and 0 for Dropbox while siblings return
+non-zero (Strava 2/1, Nolio 2, Azum 3), so the probe discriminates. The decision is unchanged; only the
+probe text was wrong. P1/P2/P4/P5 are
+written to distinguish LIVE STATEMENTS from COMMENTS, which is precisely what the retired probes did not do — the
+old `grep -rn "delete nam" src/Cloud/` counted 13 explanatory comments as if they were code and made a satisfiable
+condition look unsatisfiable.
+
+---
+
+## DEC-041 — File-IO layer Context UAF at RideFile.cpp:999: hoist-and-capture, not guard-and-decline
+
+- Status: accepted (B — hoist-and-capture)
+- Reversibility: cheap (single-function diff inside `RideFile.cpp`; swappable with Option A without touching any call site)
+- Decided / last-reviewed: 2026-09-03
+- Serves: REQ-029 (new, allocated this decision); raised by `B-R025-01` (Builder/REQ-025, 2026-08-12) and independently re-raised by `A3-R021b-F2` (A3/REQ-021 re-clear, 2026-08-12) — the same defect, same cite, two rows
+- Dependents: REQ-029's acceptance criteria (to elaborate when the REQ starts); a new FileIO-layer teardown test category (today all Context-teardown tests live under `unittests/Core/garminconnect/`, Cloud-specific)
+- Research: qgdw-scout 2026-09-03 (read-only source research; three options drafted, no external research needed — the trade space is fully internal to this codebase's own prior 6 DECs in the same bug family)
+
+### The problem
+`RideFileFactory::openRideFile` (`src/FileIO/RideFile.cpp:847-1002`) is handed a raw `Context*` and, after calling a format reader that for `.fit` payloads runs its own nested `QEventLoop` with a 5s timeout (`FitRideFile.cpp:172-184`), reads it again at `RideFile.cpp:999`: `if (context) result->setTag("Athlete", context->athlete->cyclist);`. The null check guards the pointer value, never the object's lifetime — `context` is a raw pointer, not a `QPointer`. An athlete-tab close delivered during that suspension frees the Context, and the fault lands **inside `RideFile.cpp`, before any of REQ-021's dialog guards, REQ-025's frame counting, or DEC-031's reaper can run** — this is a fourth, deeper layer of the same UAF class those three REQs already closed at the dialog/store/frame layers. `openRideFile` has exactly two `context` touches: `:906` (pre-suspension, safe) and `:999` (post-suspension, the hazard) — confirmed by direct read.
+
+### Alternatives
+| Opt | Rel | Scal | Maint | BP |
+|---|---|---|---|---|
+| A guard-and-decline (`QPointer<Context> self`-bail at :999) | 4 — closes the crash at the deref point using the pattern already mutation-proven 6+ times in this ledger (REQ-021/024/025/026/028); residual is a silently-missing "Athlete" tag on the rare race, not a crash | 5 — O(1) pointer check | 4 — smallest diff, instantly pattern-matches every other guard in this file family, but adds one more entry to an already-large guard inventory this ledger's own findings (B-R025-03, A3-R026-F2) flag as an audit burden | 4 — consistent with this ledger's 8-DEC consensus; not the objectively cleaner fix |
+| **B hoist-and-capture — CHOSEN** | 5 — strictly closes the race window; nothing reads `context` after the suspension returns, so there is no guard to omit and no partial-tag residual | 5 — same negligible cost, marginally cheaper (no `QPointer` indirection) | 4 — same single-function diff, but a fix SHAPE this ledger has never used for this bug class — a future reader has to recognize a genuinely different pattern in this one function rather than pattern-match a dozen others | 5 — "eliminate the race, don't detect it" is the stronger general engineering practice at the same diff size |
+| C decouple FileIO from Context (signature change) | 5 — closes the entire class permanently at this boundary | 5 — no runtime difference; structurally safer against any future field added to the tail | 2 — touches ~15 call sites across Cloud/Core/Gui/Train; solo-dev review/regression surface an order of magnitude larger than the 2 defective lines require | 3 — architecturally "right" long-term, but LSN-041 ("sibling-scan work belongs in its own DEC, not folded into the triggering fix") argues directly against folding a project-wide refactor into a 3-row Gate-1B unblock |
+
+### Cascade impact
+- A: adds one more entry to the guard-liveness inventory this ledger's own findings already flag as growing; trivially reusable for the other ~14 non-Cloud callers of `openRideFile` at near-zero marginal cost, but does not itself make those callers' USE of a possibly-tag-incomplete `RideFile*` safe (REQ-022's OpenData thread axis stays open regardless).
+- B (chosen): no new guard-liveness entry — a concrete reduction in future audit surface. The acceptance test is a STRONGER criterion than A's ("no crash") — it must also assert the Athlete tag is CORRECTLY set even when the Context dies mid-parse, a slightly bigger one-time test-writing cost for a permanently smaller one. Sets a precedent the next sibling-layer fix, if any, may be expected to follow.
+- C: forces compile-and-smoke re-verification of all 15 call sites in one changeset — by far the largest PR of the three for a defect whose only PROVEN-reachable trigger today is two Cloud dialogs. Opens a new hosting/test topology (FileIO unit-testable with zero Context/Athlete fixture construction) that nothing today allows, but is a one-way door in both directions: reverting is itself a 15-site diff.
+
+### Chosen
+B — wins on Reliability (5) and Best Practices (5) at the same Maintainability cost as A (4) and a fraction of C's (2); eliminates the hazard rather than detecting it, stays a single-function diff, and still honours DEC-030's "guard sits at the unsafe layer" constraint. A is a legitimate fallback if idiom-consistency with the other 8 guard-shaped DECs in this ledger is weighted above the marginal reliability gain — recorded here as the reversibility path, not chosen.
+
+**REQ scope, decided alongside:** REQ-029, a new id, rather than folding into the still-stub REQ-023. REQ-023 is scoped explicitly to the cloud STORE layer (`CloudService::uncompressRide`); this ledger's `DEC-030` convention has consistently kept STORE and FILE-IO as separate axes (REQ-022 thread axis, REQ-023 store axis already split this way), and file-IO is a fourth, distinct axis in the same UAF family (dialog=021 → store-uncounted-frame=024/025 → abort=026 → row-lifetime=028 → **file-IO=029, this**).
+
+**`B-R021-10` reconciled alongside, not part of this decision's live trade space.** The scout's research measurement found it already discharged: both `store->writeFile` sites it named are lexically inside a `BlockingCall` scope as of `37710370e`, per REQ-025's commit `6dc794caf` (`traceability.md:664`, TEST-091/TEST-092) — orchestrator-confirmed by direct source read 2026-09-03. Recorded as its own finding disposition in `findings.md`, not folded into DEC-041.
+
+### Alignment probe
+grep -n "context->athlete->cyclist" src/FileIO/RideFile.cpp                       # expect the read moved BEFORE reader->openRideFile(...), not after
+grep -c "if (context) result->setTag" src/FileIO/RideFile.cpp                     # expect 0 once the hoist lands (the guard-and-decline shape is gone, not merely widened)
+grep -n "REQ-029" .claude/workflow-garminconnect/prd.md .claude/workflow-garminconnect/traceability.md   # expect both to name it once built
+
+## DEC-042 — `saveRide`'s post-`autoProcess` member dereferences vs. parent-teardown UAF: guard the proven hazard site, not the call site
+
+- Status: accepted (A — in-function `QPointer` self-bail after `saveRide`'s own second suspension point). **BUILT + execution-verified 2026-09-05.**
+- Reversibility: cheap (single-function diff inside `CloudService.cpp`; swappable with either rejected option without touching any call site)
+- Decided / last-reviewed: 2026-09-05
+- **Build:** `qgdw-builder`, TEST-158 (`aParentTeardownInsideSaveRidesSecondAutoProcessMustNotFreeItUnderThat`, `testGarminConnectSyncDialogClose.cpp`). RED: orchestrator-independently reproduced the exact `heap-use-after-free` at `saveRide` (freed by `QObjectPrivate::deleteChildren()`) by mutating the guard to `if (false && self.isNull())`, snapshot/restore via `cp`+`cmp` (never `git checkout`, per `[[LSN-084]]` — the restore half hit `[[ORCH-057]]`'s sibling tooling gap, `[[ORCH-058]]`, worked around via the Edit tool). GREEN: 99/99 on BOTH `offscreen`/`minimal`, `autoProcessCallsAtTeardown=2` confirming the teardown landed precisely in the SECOND `autoProcess` call, `writeRideFileCalls=0`/`addRideCalls=0` confirming the accepted trade-off. Full `ctest -L garmin-fast` 27/27, EXIT=0. Durable log: `.claude/evidence-seals/DEC042-TEST158-saveRide-mutation-2026-09-05.log`. **Closes `B-R028-17`.**
+- Serves: REQ-028 clause (e) hardening; raised by `B-R028-17` (Builder/REQ-028 clause-(e) slice, 2026-08-23; classified by A3-R028e, 2026-08-24) while building TEST-141 — pre-existing in shipped code, not introduced by that (test-only) changeset
+- Dependents: a new ASan regression slot in the existing `testGarminConnectSyncDialogClose` target, driven through the already-built `gcstub::autoProcessAction` seam; the TEST-140 comment block's T-141-probe narrative (documents the call-site guard's insufficiency this decision closes)
+- Research: qgdw-scout 2026-09-05 (read-only source + test-infrastructure research; three options drafted; found the seam needed to reproduce the hazard already exists, so none of the three options need new build targets)
+
+### The problem
+`CloudServiceSyncDialog::saveRide(RideFile*, QStringList&)` (`src/Cloud/CloudService.cpp`, currently ~3974-4014) calls `DataProcessorFactory::instance().autoProcess(ride, "Auto", "Import")` and, two statements later, `...autoProcess(ride, "Save", "ADD")` — either can nest a `QEventLoop` (e.g. `FixElevation::postProcess`, `FixElevation.cpp` ~283-313, an UNTIMED wait, reachable when the "Fix Elevation Data" processor's automation mode is "Auto"; default is "Manual", opt-in but supported, and the master `autoprocess` switch defaults TRUE). After the second call, with ZERO lifetime check anywhere in between or after, `saveRide` dereferences `this`'s members: `reader.writeRideFile(context, ride, file)`, `rideFiles<<targetnosuffix`, `context->athlete->addRide(...)`. The caller (`completedRead`, ~3507-3517) already does `{ BlockingCall blocking(this); saved = saveRide(ride, errors); } delete ride; if (self.isNull()) return;` — the SAME idiom `DEC-garmin-025` established elsewhere in this file — but that check fires one statement too late: it runs AFTER `saveRide` has already returned, while the hazard is INSIDE `saveRide`, between its own suspension and its own subsequent member reads. `BlockingCall`'s deferral mechanism only intercepts a *self-initiated* close (`deferCloseIfBusy`); it cannot and does not stop Qt destroying this dialog directly as a side effect of the PARENT (athlete tab) being torn down (`QObjectPrivate::deleteChildren()` is unconditional, no virtual dispatch, no veto) — exactly the class of gap `DEC-garmin-025` was written to close everywhere else in this file.
+
+**Confirmed by direct read, not by trusting the finding's (now-stale) line citations**, and independently corroborated by test infrastructure already in the tree: the TEST-140 comment block in `testGarminConnectSyncDialogClose.cpp` documents a T-141 probe that already drove a seam-injected close from inside `saveRide`'s suspension and captured an ASan `heap-use-after-free` at exactly the post-`autoProcess` member reads — i.e. this project's own prior work already proved the call-site guard is insufficient, before this decision was drafted.
+
+### Alternatives
+| Opt | Rel | Scal | Maint | BP |
+|---|---|---|---|---|
+| **A in-function `QPointer` self-bail — CHOSEN** | 4 — eliminates the UAF; the only residual is a silently-skipped save on a rare parent-teardown mid-`autoProcess`, never a crash | 3 — O(1) per ride, a wash at 10x/100x batch size against the other two | 4 — ~4-line diff, reuses the `QPointer`/`isNull()` idiom already used 15+ times in this file, instantly recognizable later | 5 — matches this project's own more-recent, more-specific precedent (`DEC-garmin-025`) verbatim, placed at the site this project's OWN probe proved is the real hazard |
+| B restructure — hoist the suspending calls out of any `this`-touching frame | 4 — structurally closes the bug class for any future processor added to `autoProcess` | 4 — same O(1) runtime, automatically covers future processors with no `saveRide`-side guard maintenance | 2 — splits `saveRide`'s contract across two call points, touches `completedRead` too, and invalidates ~100 lines of TEST-140's structural narrative (line-number citations, stack-trace framing) in the most fixture-dependent file in the suite | 4 — matches `DEC-garmin-026`'s "eliminate the frame, don't patch it" precedent, but applied where per-site guarding has NOT yet been tried-and-failed the way it had in the constructor case DEC-026 addressed |
+| C snapshot escape + single tail guard (capture `context` locally as `ctx`, guard only the `rideFiles` write) | 3 — fixes today's known hazard but leaves a `ctx`/`context` dual-name trap: any future statement added after the suspension that reads `context` instead of `ctx` silently reopens the same UAF class | 3 — same wash | 3 — small diff, but a second name for the same pointer inside one function raises cognitive load and is exactly the miss-shape `DEC-garmin-026` warned against | 3 — a legitimate but idiosyncratic pattern, not established elsewhere in this codebase for this problem class |
+
+### Cascade impact
+- A (chosen): ~4-line change — hold `QPointer<CloudServiceSyncDialog> self(this)` before the first `autoProcess` call, `if (self.isNull()) return false;` immediately after the second (the only statement between the two, `ride->recalculateDerivedSeries()`, touches `ride`, not `this`, so one check suffices). New ASan test slot arms `gcstub::autoProcessAction` to deliver a close from inside the second `autoProcess` call; asserts no ASan report AND that `saveRide` returns without touching `context`/`rideFiles`; reverting the guard must reproduce the exact `heap-use-after-free` stack the T-141 probe already captured — satisfying this ledger's standing evidence bar (fails one way, passes the other). **Named trade-off, deliberately accepted:** on the rare teardown-mid-`autoProcess` path the ride's JSON file is now never written at all, which sits in tension with `completedRead`'s own nearby comment preferring "the write survives, only the label/bookkeeping stands down" for OTHER guards in the same function — this decision accepts that inconsistency for THIS specific window in exchange for the smallest, most reviewable diff; if that trade is judged unacceptable later, Option C is the documented fallback (see Chosen, below).
+- B: forces a rewrite of TEST-140's structural narrative and splits `saveRide`'s contract across `completedRead` and a new helper — real six-month maintenance cost in the most fixture-heavy file in the suite, for a bug class that (unlike DEC-026's constructor case) has not actually been shown to keep recurring at new call sites.
+- C: preserves the "file survives dialog death" property but plants a same-file dual-name pointer (`context` vs `ctx`) that depends on a durable comment fence to stay safe — a maintenance hazard of a different, subtler shape than A's.
+
+### Chosen
+A — wins on Best Practices (5, at the project's own proven hazard site) and Maintainability (4) at Reliability parity with B, for a fraction of B's six-month upkeep cost; C is the documented fallback if the "file survives dialog death mid-save" property (which A gives up) is later judged to matter more than diff size and idiom-consistency.
+
+### Alignment probe
+grep -n "QPointer<CloudServiceSyncDialog> self" src/Cloud/CloudService.cpp   # expect a NEW occurrence inside saveRide, in addition to the existing ones in completedRead/failedRead
+grep -n "autoProcess(ride" src/Cloud/CloudService.cpp                       # expect both calls still in saveRide, with the guard between the second call and the writeRideFile/rideFiles/addRide reads below it
+grep -n "self.isNull()" unittests/Core/garminconnect/testGarminConnectSyncDialogClose.cpp   # expect a new T-141-closing slot asserting no ASan report under a seam-injected teardown mid-autoProcess
+
+## DEC-043 — `CloudServiceAutoDownload` cross-thread lifetime UAF: guard the completion slots AND cooperatively cancel-and-wait the thread at teardown
+
+- Status: accepted (C — Option A's guards plus Option B's cooperative cancel-and-`wait()`, combined). **BUILT + execution-verified 2026-09-05** — orchestrator-independently re-verified including its own killing mutation; durable log `.claude/evidence-seals/DEC043-TEST159-TEST160-CloudServiceAutoDownload-mutation-2026-09-05.log`; closes `A3-R028e-F1` (see findings.md). One build deviation from the decided wording (readFailed left UNGUARDED — see Alignment probe correction) and one residual ([[ORCH-059]], the stub-mirror sync gap), both recorded below/at the probe.
+- Reversibility: expensive, not one-way (touches `CloudService.h`/`.cpp`'s public surface and `Athlete::close()`/tab-teardown's ordering; the two mechanisms are structurally independent, so either could later be reverted without unwinding the other)
+- Decided / last-reviewed: 2026-09-05
+- Serves: REQ-028 clause (e) hardening; raised by `A3-R028e-F1` (A3/REQ-028 clause-(e) slice, 2026-08-24) — pre-existing in shipped code, deliberately NOT folded into `B-R028-17`/DEC-042 (different class: cross-thread ownership, not same-thread reentrancy; different owner; different trigger; no nested loop or processor configuration required to reach it)
+- Dependents: `CloudService.h`'s `CancelToken`/`kCancelPollMs` (DEC-040 Stage 2, `fd7639f7a`) — extended, not replaced; `Athlete::close()`/`~Athlete()`; `MainWindow`'s athlete-tab-close teardown sequence; a new test category (explicitly, per the finding, "not covered by any existing TEST id")
+- Research: qgdw-scout 2026-09-05 (read-only source research over `CloudService.h/.cpp`, `Athlete.h/.cpp`, `MainWindow.cpp`, `RideCache.cpp`; three options drafted)
+- **Explicitly out of scope, by user decision 2026-09-05:** `CloudServiceAutoDownload::run()`'s own WORKER-THREAD read of `context->athlete->rideCache->rides()` (`CloudService.cpp:4188`) is a different surface (concurrent worker-thread access, not GUI-thread queued-delivery timing), found while scouting this decision, and is tracked separately as `[[ORCH-057]]`, not fixed here. Whether this decision's `requestStop()+wait()` mechanism happens to also close it as a side effect (by ensuring `run()` has fully returned before `delete athlete`/`delete context`) is left for whoever next scopes `ORCH-057`'s own fix, not assumed here.
+
+### The problem
+`CloudServiceAutoDownload` (`src/Cloud/CloudService.h` ~1311, `: public QThread`) is constructed with a raw `Context*` and no QObject parent (`CloudServiceAutoDownload(Context *context) : context(context), initial(true) {}`), owned by `Athlete` as `cloudAutoDownload` (`Athlete.h:100`), created via `new CloudServiceAutoDownload(context)` at `Athlete.cpp:168` and wired to `refreshEnd()` at `:169`. The only other reference anywhere in the codebase is `MainWindow.cpp:2533`'s `checkDownload()` call — nothing ever calls `quit()`, `wait()`, or deletes it. Its `run()` (`CloudService.cpp` ~4073) executes on the worker thread; its `readComplete`/`readFailed` slots (currently ~4347-4431) are QUEUED cross-thread connections that therefore EXECUTE on the GUI thread whenever Qt dispatches them, and carry ZERO lifetime guards — confirmed by direct read — dereferencing `context->athlete->home->activities()` and `context->athlete->addRide(...)`. Confirmed independently by reading `Athlete.cpp` myself: `~Athlete()` (~235-263) explicitly deletes `rideCache`, `calendarDownload`, `namedSearches`, `routes`, `seasons`, `measures`, all zones, `autoImportConfig`, `autoImport` — but `cloudAutoDownload` appears nowhere in it, and `Athlete::close()` (~211-225) does not touch it either. So an athlete-tab-close teardown that synchronously deletes `athlete`/`context` can run while a queued `readComplete` metacall for this exact instance is still sitting in the GUI event queue; when Qt later dispatches it, the slot dereferences freed memory. Gated in practice by the opt-in "sync on startup" setting (default `false`), but once enabled the trigger is an ordinary user action, not a timing artifice.
+
+This is a genuinely different shape from DEC-042: a cross-THREAD ownership problem (a worker thread outliving the GUI-thread object graph it reads from), not same-thread reentrancy into a suspended stack frame — so `DEC-garmin-025`'s `QPointer` self-bail idiom alone is a candidate, but not automatically sufficient, unlike at DEC-042's site.
+
+**Existing project precedent, both directions:** `RideCacheRefreshThread` (`RideCache.h:237`) IS a worker `QThread` this codebase already knows how to retire safely — `RideCache::cancel()` (`RideCache.cpp:566`) calls `thread->wait()` on every tracked thread before discarding it. `CloudServiceAutoDownload` has no equivalent handling at all today, despite being the same class of problem (an owner with a worker QThread it must not outlive).
+
+### Alternatives
+| Opt | Rel | Scal | Maint | BP |
+|---|---|---|---|---|
+| A guard-only (`QPointer`/self-validity checks in `readComplete`/`readFailed`) | 3 — race-free by construction (teardown and dispatch both run on the GUI thread, so the check is deterministic, not probabilistic) but leaves `run()`'s own worker-thread read AND the `cloudAutoDownload` leak open | 4 — O(1) per completion, flat cost regardless of volume | 5 — smallest diff, mirrors `DEC-garmin-025`'s idiom exactly | 4 — textbook Qt idiom for "receiver may already be destroyed when a queued call is dispatched," but treats the symptom at the delivery site, not the underlying "nobody owns this thread's lifetime" defect |
+| B cooperative cancel + bounded `wait()` (extend `CancelToken` onto this thread; mirror `RideCache::cancel()`) | 2 — `CancelToken` today only interrupts SYNCHRONOUS `blockingRequest` calls inside `open()`/`readdir()`; the async `readFile`/`readComplete` path is untouched, so a download already dispatched still completes and still races freed `context`/`athlete` — does NOT close the exact hole this finding names | 4 — bounded by `kCancelPollMs` (~250ms) × remaining calls | 3 — new member + `requestStop()` API, new ordering dependency in an already order-sensitive teardown sequence | 3 — matches in-house precedent strongly, but stalling the GUI thread in `wait()` at tab-close, even bounded, is a UX cost at exactly the moment a user expects instant feedback |
+| **C both, combined — CHOSEN** | 5 — closes both surfaces at once; the only option with no unaddressed residual within this finding's scope (and incidentally also closes `run()`'s own worker-thread read, since `run()` is joined before the object graph is freed — though that read is tracked separately as `[[ORCH-057]]`, not claimed as fixed by this decision alone) | 4 — inherits B's bound; A's guard overhead is O(1) on top | 3 — heaviest: two mechanisms to understand, and the sync/async asymmetry from B is WHY A can't be dropped once B ships — needs an explicit comment fence or a future "cleanup" silently reopens the hole | 5 — the textbook combination for "an async worker feeding a GUI-thread object that may be torn down": cancel what you can, guard what you can't; matches both in-house precedents (`DEC-garmin-025`, `RideCache`/`DEC-040`) simultaneously |
+
+### Cascade impact
+- A alone: cheap, deterministic, unit-testable with no thread start or network stub — but ships a release-blocking fix with two named, concrete residuals still open (the worker-thread read, the leak), inviting a future reader to assume the class is fully guarded when it is not.
+- B alone: reuses `CancelToken` (one commit old, `fd7639f7a`) but does not close the literal hazard this finding names — an in-flight async download's queued completion still races. Adds a new ordering contract to `Athlete::close()`/tab-teardown that MUST run before `delete athlete`/`delete context`.
+- C (chosen): same two call-site additions as B (worklist-loop `setCancelToken`, teardown `requestStop()+wait()`) plus A's two guard checks. Requires an explicit comment explaining WHY both mechanisms are needed — deleting either one later silently reopens the hole the other was covering. Two independently-cheap new test categories rather than one (a pure-slot unit test for A's guard; an `Athlete`/`Context`-fixture-driven teardown-ordering test for B's cancel+wait), neither requiring new CI infrastructure beyond what `CloudService`'s existing test target already has. Makes the teardown ordering contract load-bearing for two independent reasons at once — raises the cost of ever reverting to just one mechanism later without re-deriving both, which is the named reason Reversibility above is "expensive, not one-way" rather than "cheap".
+- The pre-existing `cloudAutoDownload` leak (constructed at `Athlete.cpp:168`, never deleted anywhere) becomes a TRIVIAL one-line fix once C's `wait()` lands: after `wait()` returns, `run()` is guaranteed to have exited, so `delete cloudAutoDownload;` in `~Athlete()` is safe by construction — judged genuinely trivial (not requiring its own decision or its own finding) and folded into this same build, per explicit user instruction 2026-09-05. Before C's `wait()` exists, deleting it while `run()` might still be executing would itself be unsafe — this is why the leak was not fixed ahead of this decision.
+
+### Chosen
+C — both A and B individually leave a named, concrete residual on a release-blocking UAF (A: the worker-thread read and the leak; B: the exact in-flight-async-download race this finding names). The only stated constraint (solo-dev project) argues for keeping each piece of C simple — which both already are, since neither is novel, each extends a pattern already present in this exact codebase — rather than shipping a known-incomplete fix to save effort on a release blocker. Do this before REQ-028(e) hardening ships more code on top of the current teardown sequence, since the ordering contract only gets more expensive to change the more later code assumes it.
+
+**Scope, decided alongside (user 2026-09-05):** `ORCH-057` (the `run()` worker-thread read) stays its own finding, not folded in — see the "Explicitly out of scope" note above. The `cloudAutoDownload` leak IS folded in, as a trivial one-line consequence of C's own `wait()` — see Cascade impact above. The ~250ms-per-remaining-call bound on athlete-tab-close latency that C's `wait()` implies is accepted as-is, no stricter SLA required (user 2026-09-05).
+
+### Alignment probe
+grep -n "requestStop\|setCancelToken" src/Cloud/CloudService.h                          # expect a new requestStop() (or equivalent) API on CloudServiceAutoDownload, and a setCancelToken call in run()'s worklist loop
+grep -n "cloudAutoDownload" src/Core/Athlete.cpp                                        # expect a wait()+delete sequence in ~Athlete()/close(), not just the constructor line
+grep -n "self.isNull()\|QPointer" src/Cloud/CloudService.cpp                            # probe line written at decision time said "inside readComplete/readFailed"; the BUILD landed the guard in readComplete ONLY, deliberately: readFailed touches no context/athlete state (logging only), a guard there would be dead code. Built guard is the stopRequested_->load(acquire) check at the head of readComplete, which frees the buffer (delete data) and returns
+grep -n "context->athlete->rideCache->rides()" src/Cloud/CloudService.cpp              # ORCH-057's own site — expect it UNCHANGED by this decision's build (tracked separately)

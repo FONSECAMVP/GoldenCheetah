@@ -1,3 +1,9 @@
+> **HISTORICAL SNAPSHOT — archived 2026-08-30.** This cycle closed when REQ-002 shipped; its commits
+> are in git. It sat in `cycles/active/` long after that and was moved here by the documentation
+> reconciliation pass. **Its original findings and verdict below are UNEDITED** — including any
+> "remains active" wording, which describes the state at the run date, not today. Per-id lifecycle
+> status lives only in `traceability.md` (DEC-015).
+
 # A3 — Test Hardening — REQ-002 PyEmbeddedAdapter + tile-routing slice
 
 - **Cycle:** A3 (test hardening)

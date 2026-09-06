@@ -7,16 +7,29 @@ subagents (live)     → .claude/agents/qgdw-{scout,builder,adversary,validator,
 hook wiring          → .claude/settings.json (PreToolUse) + .claude/hooks/anti_duplication_guard.py
 ledger index         → .claude/workflow-INDEX.md — always read this before assuming "the" ledger; this
                         project has TWO ledgers, one active one closed (see below)
-live cursor          → root STATE.md — the SOLE cursor (DEC-015; no per-ledger state.md)
+live cursor          → root STATE.md — the SOLE cursor (DEC-015; no per-ledger state.md). Keep it to the LIVE
+                        head only; superseded CURRENT/NEXT_GATE narrative goes to the ledger's
+                        archive/state-history.md, appended as a new dated section (never rewritten in place)
+wiki spokes          → wiki/{architecture,conventions,glossary}.md + the two Tier-1 rollup spokes:
+                        wiki/map-detail.md      (per-file MAP detail rolled up out of the WIKI hub)
+                        wiki/registry-detail.md (dated allocation provenance rolled up out of REGISTRIES)
+                        Both are DATED PROVENANCE, never a status source. Compaction appends; it never edits
+                        the relocated text (2026-08-23, librarian Job 3).
 active feature ledger → .claude/workflow-garminconnect/ (Garmin Connect integration, Phase 2.2)
-  - per-id status    → traceability.md   - decisions            → decisions.md (+ index head)
+  - per-id status    → traceability.md   - decisions            → decisions.md (## Decision index, then entries)
+  - superseded cursor→ archive/state-history.md (relocated STATE narrative; excluded from the drift lint)
   - requirements     → prd.md            - design                → design.md
   - traceability     → traceability.md   - findings register     → findings.md
   - ambiguities      → ambiguities.md    - definition of done    → dod.md
   - original ask     → intake.md         - reusable options table→ options-catalog.md
   - cycle logs       → cycles/active/*.md (open) → cycles/archive/*.md (closed)
   - validations      → validations/active/val-NNN.md (recent) → validations/archive/ (older)
-  - helper scripts   → scripts/clv-lite.sh
+  - helper scripts   → scripts/clv-lite.sh (the CLV runner)
+                       scripts/clv_findings.py (THE canonical CLV Check 5 — clv-lite.sh RUNS it and
+                       findings.md POINTS at it; there is no second copy of the algorithm anywhere)
+                       scripts/test_clv_findings.py (its 18 synthetic self-tests)
+                     NOTE: these are relative to the LEDGER root, not the repo root — the repo also
+                     has a top-level scripts/ for project-wide mechanisms (ORCH-004). Always qualify.
 closed ledger        → .claude/workflow-aicoach/ (AI Coach, SHIPPED) — provenance only, flat
                         cycles/cycle-aN.md + validations/validation-NNN.md layout, no state.md
                         by design. NEVER rebuild an active state.md from this ledger.
