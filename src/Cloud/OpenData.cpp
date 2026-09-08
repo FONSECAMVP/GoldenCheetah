@@ -59,9 +59,30 @@
 
 static int OpenDataVersion = 1;
 
-OpenData::OpenData(Context *context) : context(context) {}
+OpenData::OpenData(Context *context) : context(context)
+{
+    // REQ-022: Athlete::close() emits athleteClose as its FIRST act, before
+    // anything is freed (MainWindow::removeAthleteTab deletes athlete/context
+    // only after that close returns), so this direct GUI-thread delivery
+    // outruns every free below it. Pointer-compare only, never a deref.
+    connect(context, SIGNAL(athleteClose(QString,Context*)), this, SLOT(onAthleteClosing(QString,Context*)));
+}
 OpenData::~OpenData() {}
-void OpenData::onSslErrors(QNetworkReply *reply, const QList<QSslError>&errors) { CloudService::sslErrors(context->mainWindow, reply, errors); }
+
+// REQ-022: another tab's close must not stop this worker.
+void
+OpenData::onAthleteClosing(QString, Context *closing)
+{
+    if (closing == context) requestStop();
+}
+
+// REQ-022: queued to the GUI thread, so it can run after our Context is gone.
+void
+OpenData::onSslErrors(QNetworkReply *reply, const QList<QSslError>&errors)
+{
+    if (stopRequested()) return;
+    CloudService::sslErrors(context->mainWindow, reply, errors);
+}
 
 // check if its time to ask or send data
 void
@@ -109,6 +130,12 @@ OpenData::run()
     int step=0, last=5;
     printd("posting thread started\n");
 
+    // REQ-022 (DEC-043 shape, reduced): teardown may have raced ahead of the
+    // thread actually starting. This object deliberately outlives its Context
+    // (nothing deletes it while run() can still be executing — see ~OpenData),
+    // which is what makes reading the flag here safe.
+    if (stopRequested()) return;
+
     QNetworkAccessManager *nam = new QNetworkAccessManager(NULL);
     connect(nam, SIGNAL(sslErrors(QNetworkReply*, const QList<QSslError> & )), this, SLOT(onSslErrors(QNetworkReply*, const QList<QSslError> & )));
 
@@ -128,6 +155,14 @@ OpenData::run()
     QEventLoop loop;
     connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
     loop.exec();
+
+    // REQ-022: resumed after a suspension — bail before any context deref if
+    // our Context has begun closing (same resume-point shape as DEC-043).
+    if (stopRequested()) {
+        emit progress(step, 0, tr("Cancelled, athlete is closing."));
+        delete nam;
+        return;
+    }
 
     if (reply->error() != QNetworkReply::NoError) {
         // how did it go?
@@ -183,6 +218,13 @@ OpenData::run()
             connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
             loop.exec();
 
+            // REQ-022: resumed after a suspension — see the first bail above.
+            if (stopRequested()) {
+                emit progress(step, 0, tr("Cancelled, athlete is closing."));
+                delete nam;
+                return;
+            }
+
             // responded?
             if (reply->error() == QNetworkReply::NoError) {
                 server = trying;
@@ -236,6 +278,14 @@ OpenData::run()
 
     // now add every activity as a CSV file
     foreach(RideItem *item, context->athlete->rideCache->rides()) {
+
+        // REQ-022: this phase reads every ride file on disk — the widest
+        // non-suspension window, so it cooperates per ride.
+        if (stopRequested()) {
+            emit progress(step, 0, tr("Cancelled, athlete is closing."));
+            delete nam;
+            return;
+        }
 
         // we open directly, in another thread so no conflicts with main threads
         QFile file(item->path + "/" + item->fileName);
@@ -321,6 +371,13 @@ OpenData::run()
     connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
     loop.exec();
 
+    // REQ-022: resumed after a suspension — see the first bail above.
+    if (stopRequested()) {
+        emit progress(step, 0, tr("Cancelled, athlete is closing."));
+        delete nam;
+        return;
+    }
+
     // success?
     if (reply->error() == QNetworkReply::NoError) {
         QByteArray r = reply->readAll();
@@ -341,6 +398,13 @@ OpenData::run()
     printd("cleanup\n");
 
     // record the fact we sent some stuff
+    // REQ-022: last deref cluster (the setCValue tail below) — a close that
+    // landed during the upload-confirmation handling must not reach it.
+    if (stopRequested()) {
+        emit progress(step, 0, tr("Cancelled, athlete is closing."));
+        delete nam;
+        return;
+    }
     appsettings->setCValue(context->athlete->cyclist, GC_OPENDATA_LASTPOSTED, QDate::currentDate());
     appsettings->setCValue(context->athlete->cyclist, GC_OPENDATA_LASTPOSTCOUNT,  context->athlete->rideCache->count());
     appsettings->setCValue(context->athlete->cyclist, GC_OPENDATA_LASTPOSTVERSION,  OpenDataVersion);

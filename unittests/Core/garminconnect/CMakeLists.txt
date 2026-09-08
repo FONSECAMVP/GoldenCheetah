@@ -1727,3 +1727,574 @@ set_tests_properties(testCloudProviderWatchdog_minimal PROPERTIES
     LABELS "garmin-fast"
     TIMEOUT 180
     ENVIRONMENT "QT_QPA_PLATFORM=minimal;ASAN_OPTIONS=detect_leaks=0:abort_on_error=0:halt_on_error=1;QT_FATAL_CRITICALS=0")
+
+# --- T-161..T-163 — REQ-020 (S-R021-03): AddCloudWizard lifetime -------------
+# The OAuth "Add Cloud Account" wizard must not use-after-free while the user
+# completes browser OAuth. Compiles the REAL src/Cloud/AddCloudWizard.cpp via
+# the force-included stubs/WizardLifetimeStubPreamble.h (a sibling of the
+# routing target's WizardStubPreamble that adds the lifetime seams: QObject
+# Context, scriptable OAuthDialog/CloudServiceDialog exec loops, call
+# counters). Like testGarminConnectSyncDialogClose, this is a LIFETIME test
+# whose RED half is an ASan heap-use-after-free abort, so -fsanitize=address
+# is applied to compilation AND linking and the build fails outright without
+# a sanitizer-capable compiler.
+#
+# ORCH-061 fixture choice, stated explicitly: a NEW small target rather than
+# growing testGarminConnectSyncDialogClose (91 slots, 420 s TIMEOUT; QTest
+# cannot exclude one function from a target, so additions are permanent suite
+# cost) or testGarminConnectWizardRouting (whose preamble's OAuthDialog stub
+# never reaches exec() and whose Context is not trackable — changing either
+# in place would put this suite's scripting seams into that suite's build).
+#
+# GC_WANT_GARMINCONNECT is deliberately NOT defined: the three frames under
+# test (AddAuth::doAuth / AddSettings::browseFolder / AddFinish::validatePage)
+# sit outside every #ifdef in AddCloudWizard.cpp, so the Garmin compile of the
+# TU remains covered by testGarminConnectWizardRouting and this target needs
+# no Python-free Garmin worker stack. Python-free -> `garmin-fast`.
+add_executable(testGarminConnectWizardLifetime
+    testGarminConnectWizardLifetime.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AddCloudWizard.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AddCloudWizard.h
+)
+
+set_target_properties(testGarminConnectWizardLifetime PROPERTIES AUTOMOC ON)
+
+target_include_directories(testGarminConnectWizardLifetime PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+)
+
+target_compile_options(testGarminConnectWizardLifetime PRIVATE
+    "-include${CMAKE_CURRENT_SOURCE_DIR}/stubs/WizardLifetimeStubPreamble.h"
+)
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(testGarminConnectWizardLifetime PRIVATE
+        -fsanitize=address -fno-omit-frame-pointer -g)
+    target_link_options(testGarminConnectWizardLifetime PRIVATE -fsanitize=address)
+else()
+    message(FATAL_ERROR
+        "testGarminConnectWizardLifetime (T-161..163) is a lifetime test and requires "
+        "AddressSanitizer; no -fsanitize=address for compiler ${CMAKE_CXX_COMPILER_ID}.")
+endif()
+
+target_link_libraries(testGarminConnectWizardLifetime PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Gui
+    Qt${QT_VERSION_MAJOR}::Widgets
+    Qt${QT_VERSION_MAJOR}::Core5Compat
+    Qt${QT_VERSION_MAJOR}::Test
+)
+target_compile_features(testGarminConnectWizardLifetime PRIVATE cxx_std_17)
+
+# TIMEOUT: measured well under 1 s on both backends (three slots, six short
+# nested loops); 60 s is policy headroom only, not a measured need.
+add_test(NAME testGarminConnectWizardLifetime COMMAND testGarminConnectWizardLifetime)
+set_tests_properties(testGarminConnectWizardLifetime PROPERTIES
+    LABELS "garmin-fast"
+    TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;ASAN_OPTIONS=detect_leaks=0:abort_on_error=0:halt_on_error=1")
+
+# The same executable under the second QPA backend (see the note on
+# testGarminConnectSyncDialogClose_minimal for why the backend is a dimension
+# of this gate, not a constant).
+add_test(NAME testGarminConnectWizardLifetime_minimal COMMAND testGarminConnectWizardLifetime)
+set_tests_properties(testGarminConnectWizardLifetime_minimal PROPERTIES
+    LABELS "garmin-fast"
+    TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=minimal;ASAN_OPTIONS=detect_leaks=0:abort_on_error=0:halt_on_error=1")
+
+# --- T-164..T-166 — REQ-022 (S-R021-04): OpenData worker-thread lifetime -----
+# OpenData is a QThread dereferencing its Context across three blocking
+# QEventLoop suspensions; a tab close frees that Context on the GUI thread
+# while the worker is mid-flight. Compiles the REAL src/Cloud/OpenData.cpp
+# via the force-included stubs/OpenDataLifetimeStubPreamble.h (sibling of
+# the wizard targets' preambles). The Q_OBJECT Context stand-in lives in
+# stubs/OpenDataLifetimeStubContext.h, listed as a SOURCE here so AUTOMOC
+# mocs its metaobject — the production connect is string-based and needs a
+# real sender metaobject, and the preamble itself must stay moc-free.
+#
+# NETWORK SEAM: run() creates its own QNetworkAccessManager, so the tests
+# steer it with QNetworkProxy::setApplicationProxy pointed at an in-process
+# FakeProxyServer that holds the server-list GET until released — that parks
+# the worker inside the first loop.exec() deterministically. No test-only
+# branch exists in the production code.
+#
+# ORCH-061 fixture choice: a NEW small target rather than growing
+# testCloudProviderWatchdog.cpp (155 slots) or testGarminConnectSyncDialogClose
+# (91 slots, 420 s TIMEOUT; QTest cannot exclude one function from a target).
+#
+# Like testGarminConnectSyncDialogClose this is a LIFETIME test whose RED half
+# is an ASan heap-use-after-free, so -fsanitize=address is applied to
+# compilation AND linking and the build fails outright without one. Python-free
+# -> `garmin-fast`. Secrets.h is included REAL (pure macros) and contrib/qzip
+# is linked REAL (zip.cpp + ZLIB) so STEP THREE zips with the shipping code.
+add_executable(testGarminConnectOpenDataLifetime
+    testGarminConnectOpenDataLifetime.cpp
+    stubs/OpenDataLifetimeStubContext.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/OpenData.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/OpenData.h
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zip.cpp
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipreader.h
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipwriter.h
+)
+
+set_target_properties(testGarminConnectOpenDataLifetime PROPERTIES AUTOMOC ON)
+
+target_include_directories(testGarminConnectOpenDataLifetime PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+    ${CMAKE_SOURCE_DIR}/src/Core
+    ${CMAKE_SOURCE_DIR}/src/Gui
+    ${CMAKE_SOURCE_DIR}/contrib/qzip
+)
+
+target_compile_options(testGarminConnectOpenDataLifetime PRIVATE
+    "-include${CMAKE_CURRENT_SOURCE_DIR}/stubs/OpenDataLifetimeStubPreamble.h"
+)
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(testGarminConnectOpenDataLifetime PRIVATE
+        -fsanitize=address -fno-omit-frame-pointer -g)
+    target_link_options(testGarminConnectOpenDataLifetime PRIVATE -fsanitize=address)
+else()
+    message(FATAL_ERROR
+        "testGarminConnectOpenDataLifetime (T-164..T-166) is a lifetime test and requires "
+        "AddressSanitizer; no -fsanitize=address for compiler ${CMAKE_CXX_COMPILER_ID}.")
+endif()
+
+find_package(ZLIB REQUIRED)
+target_link_libraries(testGarminConnectOpenDataLifetime PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Gui
+    Qt${QT_VERSION_MAJOR}::Widgets
+    Qt${QT_VERSION_MAJOR}::Network
+    Qt${QT_VERSION_MAJOR}::Test
+    ZLIB::ZLIB
+)
+target_compile_features(testGarminConnectOpenDataLifetime PRIVATE cxx_std_17)
+
+# TIMEOUT: three slots of localhost-socket round trips under ASan, measured
+# in single-digit seconds; 120 s is policy headroom only, not a measured need.
+add_test(NAME testGarminConnectOpenDataLifetime COMMAND testGarminConnectOpenDataLifetime)
+set_tests_properties(testGarminConnectOpenDataLifetime PROPERTIES
+    LABELS "garmin-fast"
+    TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;ASAN_OPTIONS=detect_leaks=0:abort_on_error=0:halt_on_error=1")
+
+# The same executable under the second QPA backend (see the note on
+# testGarminConnectSyncDialogClose_minimal for why the backend is a dimension
+# of this gate, not a constant of it).
+add_test(NAME testGarminConnectOpenDataLifetime_minimal COMMAND testGarminConnectOpenDataLifetime)
+set_tests_properties(testGarminConnectOpenDataLifetime_minimal PROPERTIES
+    LABELS "garmin-fast"
+    TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=minimal;ASAN_OPTIONS=detect_leaks=0:abort_on_error=0:halt_on_error=1")
+
+# --- T-167..T-169 — REQ-023 (S-R021-05): uncompressRide STORE-layer lifetime -
+# The finding's deref (context->athlete->home->temp() inside
+# CloudService::uncompressRide, old cite :301) is in the STORE's own frame, so
+# the class under test is the REAL src/Cloud/CloudService.cpp and the guard
+# these slots prove must sit inside it — not in the dialog. Same seam as
+# testGarminConnectReadFailedConsumer (stubs/ImportSeamStubs.cpp +
+# stubs/SyncDialogSeamStubs.cpp) so the dialog route in T-168 drives the REAL
+# CloudServiceSyncDialog; the REAL FileIO readers + contrib/qzip make T-169's
+# positive control a REAL end-to-end decompress+parse. Python-free ->
+# `garmin-fast`.
+#
+# ORCH-061 fixture choice, stated explicitly: a NEW small target rather than
+# growing testGarminConnectSyncDialogClose.cpp (91 slots, 420 s TIMEOUT) or
+# testCloudProviderWatchdog.cpp (155 slots) — QTest cannot exclude one slot
+# from a target, so additions there are permanent suite cost.
+#
+# A LIFETIME test whose RED half is an ASan heap-use-after-free at the
+# context->athlete read in uncompressRide, so -fsanitize=address is applied to
+# compilation AND linking and the build fails outright without a
+# sanitizer-capable compiler.
+add_executable(testGarminConnectUncompressLifetime
+    testGarminConnectUncompressLifetime.cpp
+    stubs/ImportSeamStubs.cpp
+    stubs/SyncDialogSeamStubs.cpp
+    # The store layer under test.
+    ${CMAKE_SOURCE_DIR}/src/Cloud/CloudService.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/CloudService.h
+    # The REAL parsers, so T-169's positive control parses a REAL ride.
+    ${CMAKE_SOURCE_DIR}/src/FileIO/RideFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/FileIO/RideFile.h
+    ${CMAKE_SOURCE_DIR}/src/FileIO/FitRideFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/FileIO/TcxRideFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/FileIO/TcxParser.cpp
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zip.cpp
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipreader.h
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipwriter.h
+)
+
+set_target_properties(testGarminConnectUncompressLifetime PROPERTIES AUTOMOC ON)
+
+target_include_directories(testGarminConnectUncompressLifetime PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/ANT
+    ${CMAKE_SOURCE_DIR}/src/Train
+    ${CMAKE_SOURCE_DIR}/src/FileIO
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+    ${CMAKE_SOURCE_DIR}/src/Charts
+    ${CMAKE_SOURCE_DIR}/src/Metrics
+    ${CMAKE_SOURCE_DIR}/src/Gui
+    ${CMAKE_SOURCE_DIR}/src/Core
+    ${CMAKE_SOURCE_DIR}/src/Planning
+    ${CMAKE_SOURCE_DIR}/src/Coach
+    ${CMAKE_SOURCE_DIR}/qwt/src
+    ${CMAKE_SOURCE_DIR}/contrib/qxt/src
+    ${CMAKE_SOURCE_DIR}/contrib/qtsolutions/json
+    ${CMAKE_SOURCE_DIR}/contrib/qtsolutions/qwtcurve
+    ${CMAKE_SOURCE_DIR}/contrib/qtsolutions/flowlayout
+    ${CMAKE_SOURCE_DIR}/contrib/qtsolutions/codeeditor
+    ${CMAKE_SOURCE_DIR}/contrib/lmfit
+    ${CMAKE_SOURCE_DIR}/contrib/boost
+    ${CMAKE_SOURCE_DIR}/contrib/kmeans
+    ${CMAKE_SOURCE_DIR}/contrib/voronoi
+    ${CMAKE_SOURCE_DIR}/contrib/httpserver
+    ${CMAKE_SOURCE_DIR}/contrib/qzip
+    ${CMAKE_BINARY_DIR}
+)
+
+target_compile_definitions(testGarminConnectUncompressLifetime PRIVATE
+    GC_WANT_GARMINCONNECT
+    "GARMIN_PY_MODULE_DIR=\"${CMAKE_SOURCE_DIR}/src/Python/garminconnect\""
+    "GC_TEST_RIDES_DIR=\"${CMAKE_SOURCE_DIR}/test/rides\""
+)
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(testGarminConnectUncompressLifetime PRIVATE
+        -fsanitize=address -fno-omit-frame-pointer -g)
+    target_link_options(testGarminConnectUncompressLifetime PRIVATE -fsanitize=address)
+else()
+    message(FATAL_ERROR
+        "testGarminConnectUncompressLifetime (T-167..T-169) is a lifetime test and requires "
+        "AddressSanitizer; no -fsanitize=address for compiler ${CMAKE_CXX_COMPILER_ID}.")
+endif()
+
+find_package(ZLIB REQUIRED)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS
+    Sql Concurrent SerialPort Multimedia MultimediaWidgets PrintSupport Svg
+    Bluetooth DBus Charts OpenGL OpenGLWidgets WebEngineCore WebEngineWidgets
+    WebEngineQuick WebChannel Positioning Qml Quick)
+target_link_libraries(testGarminConnectUncompressLifetime PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Gui
+    Qt${QT_VERSION_MAJOR}::Widgets
+    Qt${QT_VERSION_MAJOR}::Network
+    Qt${QT_VERSION_MAJOR}::Xml
+    Qt${QT_VERSION_MAJOR}::Sql
+    Qt${QT_VERSION_MAJOR}::Concurrent
+    Qt${QT_VERSION_MAJOR}::SerialPort
+    Qt${QT_VERSION_MAJOR}::Multimedia
+    Qt${QT_VERSION_MAJOR}::MultimediaWidgets
+    Qt${QT_VERSION_MAJOR}::PrintSupport
+    Qt${QT_VERSION_MAJOR}::Svg
+    Qt${QT_VERSION_MAJOR}::Bluetooth
+    Qt${QT_VERSION_MAJOR}::DBus
+    Qt${QT_VERSION_MAJOR}::Charts
+    Qt${QT_VERSION_MAJOR}::OpenGL
+    Qt${QT_VERSION_MAJOR}::OpenGLWidgets
+    Qt${QT_VERSION_MAJOR}::WebEngineCore
+    Qt${QT_VERSION_MAJOR}::WebEngineWidgets
+    Qt${QT_VERSION_MAJOR}::WebEngineQuick
+    Qt${QT_VERSION_MAJOR}::WebChannel
+    Qt${QT_VERSION_MAJOR}::Positioning
+    Qt${QT_VERSION_MAJOR}::Qml
+    Qt${QT_VERSION_MAJOR}::Quick
+    Qt${QT_VERSION_MAJOR}::Core5Compat
+    Qt${QT_VERSION_MAJOR}::Test
+    ZLIB::ZLIB
+    qwt
+)
+target_compile_features(testGarminConnectUncompressLifetime PRIVATE cxx_std_17)
+
+# TIMEOUT: three short slots under ASan; 120 s is policy headroom, not a
+# measured need.
+add_test(NAME testGarminConnectUncompressLifetime COMMAND testGarminConnectUncompressLifetime)
+set_tests_properties(testGarminConnectUncompressLifetime PROPERTIES
+    LABELS "garmin-fast"
+    TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;ASAN_OPTIONS=detect_leaks=0:abort_on_error=0:halt_on_error=1")
+
+# The same executable under the second QPA backend (see the note on
+# testGarminConnectSyncDialogClose_minimal for why the backend is a dimension
+# of this gate, not a constant of it).
+add_test(NAME testGarminConnectUncompressLifetime_minimal COMMAND testGarminConnectUncompressLifetime)
+set_tests_properties(testGarminConnectUncompressLifetime_minimal PROPERTIES
+    LABELS "garmin-fast"
+    TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=minimal;ASAN_OPTIONS=detect_leaks=0:abort_on_error=0:halt_on_error=1")
+
+# ---------------------------------------------------------------------------
+# REQ-024 (S-R031-01) - TEST IDs T-170/T-171/T-172. The store freed under its
+# OWN suspended frame: Strava::readFileCompleted runs from network delivery,
+# outside any dialog BlockingCall, so blockingCallDepth == 0 while
+# addSamples -> blockingRequest sits in a nested QEventLoop; an athlete-tab
+# close delivered in that loop reached ~CloudServiceSyncDialog with no dialog
+# frame live, took closeAndDeleteStore, and freed the store under the frame
+# executing on it.
+#
+# The chain under test is the REAL one: REAL src/Cloud/Strava.cpp (readFile ->
+# finished delivery -> readFileCompleted via sender() -> prepareResponse ->
+# addSamples) and REAL src/Cloud/CloudService.cpp (blockingRequest's nested
+# loop, and the dialog whose destructor carries the decline branch). Only the
+# NETWORK is faked (injectedNam, the DEC-040 S-1 seam testCloudProviderWatchdog
+# already drives), plus JsonFileReader::toByteArray stubbed in the test file
+# itself (ImportSeamStubs leaves it undefined; Strava stages through it).
+# Tab/context/athlete teardown follows the established sibling fixture order
+# (testGarminConnectSyncDialogClose.cpp's FakeAthleteWindow), driven from the
+# streams reply's deliver() so the destructor runs INSIDE the nested loop.
+#
+# ORCH-061 fixture choice, stated explicitly: a NEW small target rather than
+# growing testGarminConnectSyncDialogClose.cpp or testCloudProviderWatchdog.cpp.
+#
+# A LIFETIME test whose RED half is an ASan heap-use-after-free on the freed
+# store in the resumed frame, so -fsanitize=address is applied to compilation
+# AND linking and the build fails outright without a sanitizer-capable
+# compiler. Python-free -> `garmin-fast`.
+# ---------------------------------------------------------------------------
+add_executable(testGarminConnectStravaLoopLifetime
+    testGarminConnectStravaLoopLifetime.cpp
+    stubs/ImportSeamStubs.cpp
+    stubs/SyncDialogSeamStubs.cpp
+    # The store layer under test: the base (dialog + blockingRequest) and the
+    # provider whose async completion frame the finding names.
+    ${CMAKE_SOURCE_DIR}/src/Cloud/CloudService.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/CloudService.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/Strava.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/Strava.h
+    # The REAL ride model the provider builds into, and the json reader the
+    # provider's upload-completion path parses with (same set the watchdog
+    # target links for this provider).
+    ${CMAKE_SOURCE_DIR}/src/FileIO/RideFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/FileIO/RideFile.h
+    ${CMAKE_SOURCE_DIR}/contrib/qtsolutions/json/mvjson.cpp
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zip.cpp
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipreader.h
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipwriter.h
+)
+
+set_target_properties(testGarminConnectStravaLoopLifetime PROPERTIES AUTOMOC ON)
+
+target_include_directories(testGarminConnectStravaLoopLifetime PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/ANT
+    ${CMAKE_SOURCE_DIR}/src/Train
+    ${CMAKE_SOURCE_DIR}/src/FileIO
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+    ${CMAKE_SOURCE_DIR}/src/Charts
+    ${CMAKE_SOURCE_DIR}/src/Metrics
+    ${CMAKE_SOURCE_DIR}/src/Gui
+    ${CMAKE_SOURCE_DIR}/src/Core
+    ${CMAKE_SOURCE_DIR}/src/Planning
+    ${CMAKE_SOURCE_DIR}/src/Coach
+    ${CMAKE_SOURCE_DIR}/qwt/src
+    ${CMAKE_SOURCE_DIR}/contrib/qxt/src
+    ${CMAKE_SOURCE_DIR}/contrib/qtsolutions/json
+    ${CMAKE_SOURCE_DIR}/contrib/qtsolutions/qwtcurve
+    ${CMAKE_SOURCE_DIR}/contrib/qtsolutions/flowlayout
+    ${CMAKE_SOURCE_DIR}/contrib/qtsolutions/codeeditor
+    ${CMAKE_SOURCE_DIR}/contrib/lmfit
+    ${CMAKE_SOURCE_DIR}/contrib/boost
+    ${CMAKE_SOURCE_DIR}/contrib/kmeans
+    ${CMAKE_SOURCE_DIR}/contrib/voronoi
+    ${CMAKE_SOURCE_DIR}/contrib/httpserver
+    ${CMAKE_SOURCE_DIR}/contrib/qzip
+    ${CMAKE_BINARY_DIR}
+)
+
+target_compile_definitions(testGarminConnectStravaLoopLifetime PRIVATE
+    GC_WANT_GARMINCONNECT
+    "GARMIN_PY_MODULE_DIR=\"${CMAKE_SOURCE_DIR}/src/Python/garminconnect\""
+)
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(testGarminConnectStravaLoopLifetime PRIVATE
+        -fsanitize=address -fno-omit-frame-pointer -g)
+    target_link_options(testGarminConnectStravaLoopLifetime PRIVATE -fsanitize=address)
+else()
+    message(FATAL_ERROR
+        "testGarminConnectStravaLoopLifetime (T-170..T-172) is a lifetime test and requires "
+        "AddressSanitizer; no -fsanitize=address for compiler ${CMAKE_CXX_COMPILER_ID}.")
+endif()
+
+find_package(ZLIB REQUIRED)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS
+    Sql Concurrent SerialPort Multimedia MultimediaWidgets PrintSupport Svg
+    Bluetooth DBus Charts OpenGL OpenGLWidgets WebEngineCore WebEngineWidgets
+    WebEngineQuick WebChannel Positioning Qml Quick)
+target_link_libraries(testGarminConnectStravaLoopLifetime PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Gui
+    Qt${QT_VERSION_MAJOR}::Widgets
+    Qt${QT_VERSION_MAJOR}::Network
+    Qt${QT_VERSION_MAJOR}::Xml
+    Qt${QT_VERSION_MAJOR}::Sql
+    Qt${QT_VERSION_MAJOR}::Concurrent
+    Qt${QT_VERSION_MAJOR}::SerialPort
+    Qt${QT_VERSION_MAJOR}::Multimedia
+    Qt${QT_VERSION_MAJOR}::MultimediaWidgets
+    Qt${QT_VERSION_MAJOR}::PrintSupport
+    Qt${QT_VERSION_MAJOR}::Svg
+    Qt${QT_VERSION_MAJOR}::Bluetooth
+    Qt${QT_VERSION_MAJOR}::DBus
+    Qt${QT_VERSION_MAJOR}::Charts
+    Qt${QT_VERSION_MAJOR}::OpenGL
+    Qt${QT_VERSION_MAJOR}::OpenGLWidgets
+    Qt${QT_VERSION_MAJOR}::WebEngineCore
+    Qt${QT_VERSION_MAJOR}::WebEngineWidgets
+    Qt${QT_VERSION_MAJOR}::WebEngineQuick
+    Qt${QT_VERSION_MAJOR}::WebChannel
+    Qt${QT_VERSION_MAJOR}::Positioning
+    Qt${QT_VERSION_MAJOR}::Qml
+    Qt${QT_VERSION_MAJOR}::Quick
+    Qt${QT_VERSION_MAJOR}::Core5Compat
+    Qt${QT_VERSION_MAJOR}::Test
+    ZLIB::ZLIB
+    qwt
+)
+target_compile_features(testGarminConnectStravaLoopLifetime PRIVATE cxx_std_17)
+
+# TIMEOUT: three short slots under ASan; 120 s is policy headroom, not a
+# measured need.
+add_test(NAME testGarminConnectStravaLoopLifetime COMMAND testGarminConnectStravaLoopLifetime)
+set_tests_properties(testGarminConnectStravaLoopLifetime PROPERTIES
+    LABELS "garmin-fast"
+    TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;ASAN_OPTIONS=detect_leaks=0:abort_on_error=0:halt_on_error=1")
+
+# The same executable under the second QPA backend (see the note on
+# testGarminConnectSyncDialogClose_minimal for why the backend is a dimension
+# of this gate, not a constant of it).
+add_test(NAME testGarminConnectStravaLoopLifetime_minimal COMMAND testGarminConnectStravaLoopLifetime)
+set_tests_properties(testGarminConnectStravaLoopLifetime_minimal PROPERTIES
+    LABELS "garmin-fast"
+    TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=minimal;ASAN_OPTIONS=detect_leaks=0:abort_on_error=0:halt_on_error=1")
+
+# ---------------------------------------------------------------------------
+# REQ-029 (B-R025-01 + A3-R021b-F2) - TEST IDs T-173/T-174/T-175. The FILE-IO
+# layer Context UAF: RideFileFactory::openRideFile reads `context` at :999 and
+# :1055 AFTER calling a format reader that, for .fit, suspends on its own
+# nested QEventLoop (FitRideFile.cpp:172-184, loadMetadata's metadata fetch).
+# Same TU set as testGarminConnectUncompressLifetime, for the same reason: the
+# REAL RideFile/FitRideFile/Tcx chain must be under test, and
+# stubs/ImportSeamStubs.cpp is what stands in for the app objects those TUs
+# reference from paths this contract never executes.
+# ---------------------------------------------------------------------------
+add_executable(testGarminConnectFileIOLifetime
+    testGarminConnectFileIOLifetime.cpp
+    stubs/ImportSeamStubs.cpp
+    stubs/SyncDialogSeamStubs.cpp
+    # The FILE-IO layer under test, plus the real parsers (FIT is the
+    # suspending reader; TCX is the non-suspending control).
+    ${CMAKE_SOURCE_DIR}/src/FileIO/RideFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/FileIO/RideFile.h
+    ${CMAKE_SOURCE_DIR}/src/FileIO/FitRideFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/FileIO/TcxRideFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/FileIO/TcxParser.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/CloudService.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/CloudService.h
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zip.cpp
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipreader.h
+    ${CMAKE_SOURCE_DIR}/contrib/qzip/zipwriter.h
+)
+
+set_target_properties(testGarminConnectFileIOLifetime PROPERTIES AUTOMOC ON)
+
+target_include_directories(testGarminConnectFileIOLifetime PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/ANT
+    ${CMAKE_SOURCE_DIR}/src/Train
+    ${CMAKE_SOURCE_DIR}/src/FileIO
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+    ${CMAKE_SOURCE_DIR}/src/Charts
+    ${CMAKE_SOURCE_DIR}/src/Metrics
+    ${CMAKE_SOURCE_DIR}/src/Gui
+    ${CMAKE_SOURCE_DIR}/src/Core
+    ${CMAKE_SOURCE_DIR}/src/Planning
+    ${CMAKE_SOURCE_DIR}/src/Coach
+    ${CMAKE_SOURCE_DIR}/qwt/src
+    ${CMAKE_SOURCE_DIR}/contrib/qxt/src
+    ${CMAKE_SOURCE_DIR}/contrib/qtsolutions/json
+    ${CMAKE_SOURCE_DIR}/contrib/qtsolutions/qwtcurve
+    ${CMAKE_SOURCE_DIR}/contrib/qtsolutions/flowlayout
+    ${CMAKE_SOURCE_DIR}/contrib/qtsolutions/codeeditor
+    ${CMAKE_SOURCE_DIR}/contrib/lmfit
+    ${CMAKE_SOURCE_DIR}/contrib/boost
+    ${CMAKE_SOURCE_DIR}/contrib/kmeans
+    ${CMAKE_SOURCE_DIR}/contrib/voronoi
+    ${CMAKE_SOURCE_DIR}/contrib/httpserver
+    ${CMAKE_SOURCE_DIR}/contrib/qzip
+    ${CMAKE_BINARY_DIR}
+)
+
+target_compile_definitions(testGarminConnectFileIOLifetime PRIVATE
+    GC_WANT_GARMINCONNECT
+    "GARMIN_PY_MODULE_DIR=\"${CMAKE_SOURCE_DIR}/src/Python/garminconnect\""
+    "GC_TEST_RIDES_DIR=\"${CMAKE_SOURCE_DIR}/test/rides\""
+)
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(testGarminConnectFileIOLifetime PRIVATE
+        -fsanitize=address -fno-omit-frame-pointer -g)
+    target_link_options(testGarminConnectFileIOLifetime PRIVATE -fsanitize=address)
+else()
+    message(FATAL_ERROR
+        "testGarminConnectFileIOLifetime (T-173..T-175) is a lifetime test and requires "
+        "AddressSanitizer; no -fsanitize=address for compiler ${CMAKE_CXX_COMPILER_ID}.")
+endif()
+
+find_package(ZLIB REQUIRED)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS
+    Sql Concurrent SerialPort Multimedia MultimediaWidgets PrintSupport Svg
+    Bluetooth DBus Charts OpenGL OpenGLWidgets WebEngineCore WebEngineWidgets
+    WebEngineQuick WebChannel Positioning Qml Quick)
+target_link_libraries(testGarminConnectFileIOLifetime PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Gui
+    Qt${QT_VERSION_MAJOR}::Widgets
+    Qt${QT_VERSION_MAJOR}::Network
+    Qt${QT_VERSION_MAJOR}::Xml
+    Qt${QT_VERSION_MAJOR}::Sql
+    Qt${QT_VERSION_MAJOR}::Concurrent
+    Qt${QT_VERSION_MAJOR}::SerialPort
+    Qt${QT_VERSION_MAJOR}::Multimedia
+    Qt${QT_VERSION_MAJOR}::MultimediaWidgets
+    Qt${QT_VERSION_MAJOR}::PrintSupport
+    Qt${QT_VERSION_MAJOR}::Svg
+    Qt${QT_VERSION_MAJOR}::Bluetooth
+    Qt${QT_VERSION_MAJOR}::DBus
+    Qt${QT_VERSION_MAJOR}::Charts
+    Qt${QT_VERSION_MAJOR}::OpenGL
+    Qt${QT_VERSION_MAJOR}::OpenGLWidgets
+    Qt${QT_VERSION_MAJOR}::WebEngineCore
+    Qt${QT_VERSION_MAJOR}::WebEngineWidgets
+    Qt${QT_VERSION_MAJOR}::WebEngineQuick
+    Qt${QT_VERSION_MAJOR}::WebChannel
+    Qt${QT_VERSION_MAJOR}::Positioning
+    Qt${QT_VERSION_MAJOR}::Qml
+    Qt${QT_VERSION_MAJOR}::Quick
+    Qt${QT_VERSION_MAJOR}::Core5Compat
+    Qt${QT_VERSION_MAJOR}::Test
+    ZLIB::ZLIB
+    qwt
+)
+target_compile_features(testGarminConnectFileIOLifetime PRIVATE cxx_std_17)
+
+# TIMEOUT: T-173 sits inside loadMetadata()'s 5s network wait; the rest is
+# parse work. 120 s is policy headroom, not a measured need.
+add_test(NAME testGarminConnectFileIOLifetime COMMAND testGarminConnectFileIOLifetime)
+set_tests_properties(testGarminConnectFileIOLifetime PROPERTIES
+    LABELS "garmin-fast"
+    TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;ASAN_OPTIONS=detect_leaks=0:abort_on_error=0:halt_on_error=1")
+
+add_test(NAME testGarminConnectFileIOLifetime_minimal COMMAND testGarminConnectFileIOLifetime)
+set_tests_properties(testGarminConnectFileIOLifetime_minimal PROPERTIES
+    LABELS "garmin-fast"
+    TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=minimal;ASAN_OPTIONS=detect_leaks=0:abort_on_error=0:halt_on_error=1")

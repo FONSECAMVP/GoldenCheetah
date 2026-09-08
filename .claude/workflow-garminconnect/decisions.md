@@ -55,9 +55,10 @@ Compact schema per `references/formats.md` § `decisions.md`. **The recap source
 | DEC-038 | The third list mutator, SORTING → A sorting is OFF for the batch's duration, as a DEC-034 AMENDMENT | accepted · BUILT + committed `514d8e88f` | 2026-08-22 |
 | DEC-039 | libusb dependency wiring (ORCH-036) → B complete `find_path`/`find_library` for BOTH APIs | accepted · built on isolated branch `build/orch036-libusb-wiring` (`ae7655985`), **deliberately UNMERGED** | 2026-08-23 |
 | DEC-040 | Bounding the 22 unbounded provider waits (S-R028f-F1/F3, C1–C6) → **W3: shared bounded-request outcome contract, then generic cooperative cancellation**, one release unit, with S-1 base-owned injectable QNAM | accepted · **STAGE 1 BUILT, VERIFICATION-GATE-PASSED and COMMITTED as `37710370e` (2026-08-30) — NOT PUSHED, NOT MERGED; DEC-040 NOT COMPLETE — Stage 2 cooperative cancellation NOT STARTED.** *(Cursor corrected 2026-08-30: this row read "on working-tree bytes, UNCOMMITTED", which was true at the Stage-1 gate and became stale when the slice landed.)* 10 providers / 22 bounded-request sites; 13 providers on base manager ownership (RideWithGPS, Selfloops, SportsPlusHealth manager-only, no watchdog rows); S-1 amended to LAZY null-or-valid; 5 legitimate `delete nam` remain in OpenData.cpp (zero is retired); no CancelToken/poll/reachable Cancelled in Stage 1. See **## DEC-040 STAGE-1 AMENDMENT & STATUS — 2026-08-30** | 2026-08-26 · amended 2026-08-30 |
-| DEC-041 | File-IO layer Context UAF at `RideFile.cpp:999` (B-R025-01/A3-R021b-F2) → **Option B, hoist-and-capture: read the needed Context values before the suspending reader call, don't guard the read after it** | accepted · NOT BUILT — briefing not yet dispatched | 2026-09-03 |
+| DEC-041 | File-IO layer Context UAF at `RideFile.cpp:999` (B-R025-01/A3-R021b-F2) → **Option B, hoist-and-capture: read the needed Context values before the suspending reader call, don't guard the read after it** — AMENDED 2026-09-08: census corrected (4 context touches, tail to :1133; a second post-suspension deref at :1055) and mechanism extended with a factory-entry-QPointer liveness bail at :1055 (user decision) | accepted · amendment accepted · **BUILT + mutation-verified 2026-09-08 (T-173/174/175, `testGarminConnectFileIOLifetime` 5/5 both backends, zero ASan reports, orchestrator-independently-rerun) — closes B-R025-01/A3-R021b-F2** | 2026-09-03 · amended 2026-09-08 |
 | DEC-042 | `saveRide`'s post-`autoProcess` member dereferences vs. parent-teardown UAF (B-R028-17) → **Option A, in-function `QPointer` self-bail placed after the SECOND `autoProcess` call, at the proven hazard site, not the call site** | accepted · **BUILT + execution-verified 2026-09-05 (TEST-158, `99/99` both backends, `ctest -L garmin-fast` 27/27) — closes B-R028-17** | 2026-09-05 |
 | DEC-043 | `CloudServiceAutoDownload` cross-thread lifetime UAF, `readComplete`/`readFailed` vs. athlete-tab teardown (A3-R028e-F1) → **Option C, guards in the completion slots PLUS cooperative cancel-and-`wait()` at teardown (extends DEC-040's `CancelToken`)** | accepted · **BUILT + execution-verified 2026-09-05 (TEST-159/TEST-160; watchdog 170/170 + syncdialog 99/99 both backends, `ctest -L garmin-fast` 27/27, app target linked) — closes A3-R028e-F1** | 2026-09-05 |
+| DEC-044 | `RideFile::appendOrUpdatePoint` reads a deleted `RideFilePoint*` (`RideFile.cpp:1658` delete vs. `:1709-1711` unconditional read) (B-R029-01) → **Option A, alias the surviving point: track whichever pointer is still valid after the branch and pass that to `updateMin`/`updateMax`/`updateAvg`, not the possibly-deleted `point`** | accepted · **BUILT + mutation-verified 2026-09-08 (T-173, `testGarminConnectFileIOLifetime` 5/5 both backends, zero ASan reports, orchestrator-independently-rerun) — closes B-R029-01** | 2026-09-08 |
 
 ### Dormant index
 
@@ -2093,6 +2094,39 @@ grep -n "context->athlete->cyclist" src/FileIO/RideFile.cpp                     
 grep -c "if (context) result->setTag" src/FileIO/RideFile.cpp                     # expect 0 once the hoist lands (the guard-and-decline shape is gone, not merely widened)
 grep -n "REQ-029" .claude/workflow-garminconnect/prd.md .claude/workflow-garminconnect/traceability.md   # expect both to name it once built
 
+### AMENDMENT 2026-09-08 — census corrected; mechanism EXTENDED with a :1055 liveness bail (user decision)
+**The Problem's recorded census was FALSE when written.** `openRideFile` spans :847-**:1133** (not -1002)
+and has **FOUR** handed-in-`Context` touches, not two: `:906` (pre-suspension, safe), `:928`
+(`result->context = context;` — a pointer STORE that implants the pointer into the returned ride; latent,
+outside this decision), `:999` (the named hazard), and **`:1055` — `if (context) result->recalculateDerivedSeries();` — a second post-suspension deref this entry did not name** (plus `:943`
+`GlobalContext::context()`, a different object, distinguished not feared). `RideFile.cpp` carries zero
+uncommitted diff, so "exactly two context touches — confirmed by direct read" was wrong of the same bytes it
+was written against: the [[O-R021-03]] class.
+
+**Consequence:** Option B is exactly expressible for `:999` but structurally NOT for `:1055` —
+`recalculateDerivedSeries` needs the parsed ride (cannot run pre-suspension) and reads `context->athlete`
+through an algorithm (`:2545` zones chain, `:2557` cvalue) whose staleness gate cannot fire on a fresh parse
+(`dstale` born true `:108`, set true by every `appendPoint`, cleared only `:3045` inside the function itself).
+No `return` exists between `:999` and `:1055`. The builder hatched on this; the orchestrator independently
+verified all five load-bearing claims by direct read 2026-09-08.
+
+**Amended choice (user-picked 2026-09-08 from three scored options): B + a supplementary liveness bail at
+:1055.** A `QPointer<Context>` captured at factory entry — where the pointer is known alive, the sound
+capture-point adaptation this ledger already accepted for REQ-023's `contextGuard_` — consulted before the
+`:1055` call; on a dead Context the derived-series recalculation is SKIPPED (residual: a ride opened during
+that rare window ships with stale derived data — parallel to the accepted trade space, and strictly better
+than a crash). **Why this does not reopen Option A:** A's QPointer-bail was rejected as the REPLACEMENT for
+the hoist at `:999`; as a supplement for one call that provably cannot be hoisted, it is the only mechanism
+that keeps REQ-029's whole acceptance ("no longer faults at the tail") true without a scope change.
+Alternatives rejected this pass: narrowing REQ-029 to `:999` (leaves a blocking-class UAF open past Stage 6)
+and shipping as-is (fails the acceptance's own first half). Amendment is additive: the `:999` hoist stands
+exactly as decided 2026-09-03.
+
+**Alignment probe additions:** `grep -n "recalculateDerivedSeries" src/FileIO/RideFile.cpp` — expect the
+`:1055` call now gated by the factory-entry QPointer; the `:999` hoist unchanged; test target asserts BOTH
+(no fault at either tail site with a mid-loop Context death; tag AND derived series correct when the Context
+survives).
+
 ## DEC-042 — `saveRide`'s post-`autoProcess` member dereferences vs. parent-teardown UAF: guard the proven hazard site, not the call site
 
 - Status: accepted (A — in-function `QPointer` self-bail after `saveRide`'s own second suspension point). **BUILT + execution-verified 2026-09-05.**
@@ -2168,3 +2202,47 @@ grep -n "requestStop\|setCancelToken" src/Cloud/CloudService.h                  
 grep -n "cloudAutoDownload" src/Core/Athlete.cpp                                        # expect a wait()+delete sequence in ~Athlete()/close(), not just the constructor line
 grep -n "self.isNull()\|QPointer" src/Cloud/CloudService.cpp                            # probe line written at decision time said "inside readComplete/readFailed"; the BUILD landed the guard in readComplete ONLY, deliberately: readFailed touches no context/athlete state (logging only), a guard there would be dead code. Built guard is the stopRequested_->load(acquire) check at the head of readComplete, which frees the buffer (delete data) and returns
 grep -n "context->athlete->rideCache->rides()" src/Cloud/CloudService.cpp              # ORCH-057's own site — expect it UNCHANGED by this decision's build (tracked separately)
+
+## DEC-044 — `RideFile::appendOrUpdatePoint` reads a deleted point: alias the survivor, don't detect the fault
+
+- Status: accepted (A — alias the surviving point)
+- Reversibility: cheap (single-function diff inside `RideFile.cpp`, one new local variable, no signature or call-site change)
+- Decided / last-reviewed: 2026-09-08
+- Serves: REQ-030 (new, allocated this decision); raised by `B-R029-01` (Builder/REQ-029, 2026-09-08), found while confirming RED for `testGarminConnectFileIOLifetime`'s T-173 slot
+- Dependents: REQ-029/DEC-041's own build — T-173 cannot be observed RED-for-the-intended-reason (a Context UAF at `:999`) or reach GREEN until this lands first, since the process currently aborts here on ANY `.fit` parse with a duplicate-`secs` record, live Context or not
+- Research: orchestrator direct read 2026-09-08 (no external research needed — single function, trade space fully internal; user waived scout dispatch given the mechanical size of the fix)
+
+### The problem
+`RideFile::appendOrUpdatePoint` (`RideFile.cpp:1616-1712`) takes ownership of a heap-allocated `RideFilePoint *point`. On the duplicate-timestamp branch (`:1651-1667`, taken when `dataPoints_.at(idx)->secs == secs`), it copies `point`'s fields into the existing slot and frees `point`:
+```
+updatePoint(point, dataPoints_.at(idx));
+*dataPoints_.at(idx) = *point;
+delete point;                                    // :1658
+```
+The other two branches (`:1660-1663` insert, `:1669-1671` forceAppend) instead retain `point` — inserted into or appended onto `dataPoints_`, never freed. All three branches then fall through to:
+```
+updateMin(point);                                  // :1709
+updateMax(point);                                  // :1710
+updateAvg(point);                                  // :1711
+```
+`updateMin` dereferences `point->secs` at its first line (`:1249`). On the duplicate-timestamp branch this reads freed memory — confirmed live under ASan by REQ-029's builder, then independently confirmed by the orchestrator by direct read (`grep -n "void RideFile::updateMin" ...`, `git blame -L 1656,1659`). `git blame` places the surrounding branch structure at `c023572932` (2016-08-13) and the `delete point;` line itself at `3b17371687` (2022-07-23) — pre-existing in shipped code, not introduced by any UAF-family DEC in this ledger, and structurally unrelated to Context/suspension lifetime: it fires on ANY duplicate-`secs` record, single-threaded, no suspending call required. Deterministic for the FIT sample REQ-029's own fixture drives (`2012_01_11_11_51_01.fit` — it contains at least one duplicate-`secs` record).
+
+### Alternatives
+| Opt | Rel | Scal | Maint | BP |
+|---|---|---|---|---|
+| **A alias the surviving point — CHOSEN** | 5 — closes the race by never reading the freed object; the values are provably identical to pre-fix (`*dataPoints_.at(idx) = *point` already copied everything before the delete), so min/max/avg accumulate the same numbers, just from a live address | 5 — O(1), no new allocation | 5 — one new local (`RideFilePoint *newest = point;`, reassigned to `dataPoints_.at(idx)` on the delete branch), three call sites at the tail changed from `point` to `newest`, nothing else moves | 5 — mirrors this ledger's own "eliminate the race, don't detect it" precedent (DEC-041's hoist-and-capture reasoning) at a fraction of that decision's size |
+| B inline the update calls per-branch (duplicate `updateMin/Max/Avg(point)` before the `delete`, leave the existing tail calls for the other two branches) | 5 — same correctness | 5 — same cost | 2 — triplicates a 3-line block across 3 branches; a future 4th accumulator (or a change to what "update" means) has to be added in three places and silently drifts if one is missed — the exact multi-copy risk this ledger already flagged once for CLV Check 5's old awk/shell duplication | 3 — works, but trades a one-line diff for a structural DRY violation for no reliability gain over A |
+| C restructure ownership: don't delete on the match branch; defer the single delete to the very end of the function, gated by which branch ran | 4 — correct if the gating flag is right, but adds a new failure mode (double-free or leak if the flag logic is ever touched later) that A and B don't have | 5 — same cost | 2 — the most invasive of the three for a mechanical bug: reshapes control flow around `forceAppend` (which currently owns whether `point` is freed at all), the highest regression surface of the three options | 3 — architecturally tidier in the abstract, but LSN-041 ("sibling-scan work belongs in its own DEC, not folded into the triggering fix") argues against restructuring more than the fault requires |
+
+### Cascade impact
+- A (chosen): the only production-code change is inside `appendOrUpdatePoint` itself; no caller, header, or signature changes. Nothing else in this ledger's UAF family depends on this function's internals, so there is no cascade beyond REQ-029/T-173 becoming observable.
+- B: same runtime behavior as A, but the triplicated block is a standing maintenance liability the next editor of this function inherits for free with A instead.
+- C: touches the same lines B and A do, plus the branch-selection logic itself — the largest surface for a fix whose entire job is "don't read a pointer after freeing it."
+
+### Chosen
+A — strictly dominates B and C on maintainability at identical reliability/scalability, and is the smallest diff that eliminates (not merely detects) the hazard, consistent with this ledger's established preference (DEC-041) for closing a race at its source rather than adding a defensive check. Fix this before resuming REQ-029/DEC-041's build — T-173 cannot exercise its own intended assertions while this unrelated fault aborts the process first (user decision 2026-09-08).
+
+### Alignment probe
+grep -n "RideFilePoint \*newest" src/FileIO/RideFile.cpp        # expect the new alias local inside appendOrUpdatePoint
+grep -n "updateMin(point)\|updateMax(point)\|updateAvg(point)" src/FileIO/RideFile.cpp   # expect 0 once the fix lands — the tail calls take the alias, not `point`
+grep -n "REQ-030" .claude/workflow-garminconnect/traceability.md   # expect it to name a built DES/TEST once closed

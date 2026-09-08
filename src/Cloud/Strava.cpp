@@ -552,6 +552,15 @@ Strava::readFileCompleted()
 {
     printd("Strava::readFileCompleted\n");
 
+    // REQ-024 (S-R031-01) - this whole slot invocation is one of the store's
+    // own frames: prepareResponse -> addSamples -> blockingRequest suspends in
+    // a nested event loop below, and the slot arrives via QObject::sender(),
+    // outside any dialog BlockingCall, so nothing on the DIALOG's stack counts
+    // it. The marker makes the frame visible to the owner's decline branch and
+    // is the unwind point at which an orphaned store reaps itself. See
+    // CloudService::AsyncCompletionFrame.
+    AsyncCompletionFrame asyncFrame(this);
+
     QNetworkReply *reply = static_cast<QNetworkReply*>(QObject::sender());
 
     QByteArray *buffer = buffers.value(reply, NULL);

@@ -29,6 +29,8 @@
 #include <QScrollArea>
 #include <QPushButton>
 
+#include <atomic>
+
 // we maintain a list of receiving servers here:
 #define OPENDATA_SERVERSURL "http://www.goldencheetah.org/opendata.json"
 
@@ -48,6 +50,11 @@ class OpenData : public QThread {
         void postData() { start(); }
         void run();
 
+        // REQ-022 (DEC-043 shape, reduced): marks this worker's Context as
+        // closing; run()'s cooperative bails observe it. Wired to Context's
+        // athleteClose signal — the FIRST act of Athlete::close().
+        void requestStop() { stopRequested_.store(true, std::memory_order_release); }
+
     signals:
 
         // Progress indicator with end user message
@@ -62,6 +69,12 @@ class OpenData : public QThread {
 
     private slots:
         void onSslErrors(QNetworkReply *reply, const QList<QSslError>&error);
+        void onAthleteClosing(QString folder, Context *closing);
+
+    private:
+
+        std::atomic<bool> stopRequested_{false};
+        bool stopRequested() const { return stopRequested_.load(std::memory_order_acquire); }
 };
 
 class OpenDataDialog : public QDialog

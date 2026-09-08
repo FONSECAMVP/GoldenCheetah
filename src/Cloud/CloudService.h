@@ -236,6 +236,21 @@ class CloudService : public QObject {
         // sets one depends on (TEST-148).
         void setCancelToken(CancelToken token) { cancelToken_ = token; }
 
+        // REQ-024 (S-R031-01) - true while one of this store's OWN frames is
+        // suspended in a nested event loop it entered itself (see
+        // AsyncCompletionFrame). The sync dialog's destructor consults this
+        // before deleting the store: its blockingCallDepth counts DIALOG
+        // frames only, and an async completion slot (e.g. Strava::
+        // readFileCompleted via QObject::sender()) suspends with none of
+        // those on the stack.
+        bool hasSuspendedFrames() const { return suspendedFrameDepth_ > 0; }
+
+        // REQ-024 - an owner whose destructor declined to delete this store
+        // while it was suspended hands ownership over here; the store reaps
+        // itself when its last suspended frame unwinds. See
+        // CloudService::AsyncCompletionFrame.
+        void orphanByOwner() { orphanedByOwner_ = true; }
+
         // The following must be reimplemented
         virtual bool initialize() { return true; }
 
@@ -565,6 +580,13 @@ class CloudService : public QObject {
 
         Context *context;
 
+        // REQ-023 (S-R021-05, DEC-030 constraint 2) - liveness oracle for the
+        // `context` member above, captured at CONSTRUCTION because that is the
+        // only point in this service's life the Context is KNOWN alive: building
+        // a QPointer inside uncompressRide, from the raw member, would read
+        // through the very freed Context it is asking about.
+        QPointer<Context> contextGuard_;
+
         // DEC-040 Stage 1 (S-1) - NULL until nam() materialises it, valid
         // afterwards, never indeterminate. Owned by this service (parented to it)
         // on both the default and the injected path, so it is destroyed exactly
@@ -581,6 +603,61 @@ class CloudService : public QObject {
         // never cancels. blockingRequest snapshots this into a local before it
         // waits; see the snapshot's own comment in CloudService.cpp for why.
         CancelToken cancelToken_;
+
+        // REQ-024 (S-R031-01) - the store's own suspended frames, counted by
+        // AsyncCompletionFrame below and consulted by the sync dialog's
+        // destructor via hasSuspendedFrames(). Kept on the STORE, not the
+        // dialog, because only the store knows which of its slots suspend -
+        // the dialog's blockingCallDepth is structurally blind to frames the
+        // event loop, not the dialog, put on the stack.
+        int suspendedFrameDepth_ = 0;
+
+        // REQ-024 - set through orphanByOwner() by an owner that declined to
+        // delete this store while suspended; read by the AsyncCompletionFrame
+        // unwind.
+        bool orphanedByOwner_ = false;
+
+        // REQ-024 (S-R031-01) - RAII marker for one of the store's own async
+        // completion frames. A provider places one at the TOP of a completion
+        // slot whose call tree suspends (Strava does in readFileCompleted, so
+        // the marker spans prepareResponse -> addSamples -> blockingRequest's
+        // nested loop), which makes that whole frame visible to the owner's
+        // decline branch. On the LAST unwind it reaps an orphaned store - the
+        // DEC-031 reap transposed to the layer that owns the frame - and the
+        // reap must be DEFERRED, not synchronous: the unwind still sits inside
+        // the reply's finished() emission, where a synchronous delete would
+        // destroy the manager (and any reply it parents) mid-emission, the
+        // hazard ReplyDisposer documents in CloudService.cpp. This is not the
+        // deleteLater TEST-089 rejected: that was posted from INSIDE the
+        // suspended loop and delivered BY it; this is posted after every store
+        // frame has unwound.
+        class AsyncCompletionFrame
+        {
+            public:
+                explicit AsyncCompletionFrame(CloudService *store) : store_(store)
+                {
+                    ++store_->suspendedFrameDepth_;
+                }
+
+                ~AsyncCompletionFrame()
+                {
+                    if (--store_->suspendedFrameDepth_ == 0 && store_->orphanedByOwner_)
+                        store_->reapOrphanedStore();
+                }
+
+            private:
+                AsyncCompletionFrame(const AsyncCompletionFrame &);            // not copyable
+                AsyncCompletionFrame &operator=(const AsyncCompletionFrame &); // not assignable
+
+                // Raw on purpose: this destructor runs inside a member frame of
+                // a fully constructed store, and the reap it may trigger is
+                // deferred, so the store provably outlives it.
+                CloudService *store_;
+        };
+
+        // REQ-024 - the reap AsyncCompletionFrame's last unwind triggers for
+        // an orphaned store. Defined in CloudService.cpp.
+        void reapOrphanedStore();
 };
 
 // REQ-017 (b)/(e) - teardown of a store that an owner opened.

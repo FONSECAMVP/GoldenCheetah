@@ -20,7 +20,10 @@ wiki/                    5 spokes → PAGES
                          from the absence of a directory.
                          scripts/ = clv-lite.sh (runner) + clv_findings.py (THE canonical CLV Check 5) +
                          test_clv_findings.py (its 18 synthetic self-tests)
-                         archive/state-history.md = ALL superseded STATE narrative (§ 9 = the pre-2026-08-30 cursor)
+                         archive/state-history.md = ALL superseded STATE narrative (§ 9 = the pre-2026-08-30 cursor,
+                         § 11 = the full pre-2026-09-06 STATE.md, § 12 = that pass's BUDGETS breach detail)
+                         archive/findings-detail.md = full pre-compaction cell content for any findings.md row
+                         capped 2026-09-06 (addressed by `<ID> (line n, cycle)` — an id is not unique alone, ORCH-022)
 .claude/workflow-aicoach/   CLOSED ledger (AI Coach) — provenance only, OWN DEC/REQ/TEST numbering
 .claude/agents/ hooks/ settings.json   5 qgdw agent defs · installed guard + drift-lint copies · hook wiring
 .claude/skills/          VENDOR TERRITORY, replaced wholesale on update — never put project files here (ORCH-004)
@@ -67,7 +70,7 @@ DEC  garmin:001–043                 decisions.md ## Decision index  next:garmi
      (Option A / Option C respectively) and BOTH BUILT + execution-verified 2026-09-05 (TEST-158;
      TEST-159+160) — both findings closed on executed evidence; see decisions.md entries for trade space.
 DES  garmin:001–014 (+001a,003a)    design.md                       next:garmin-015
-TEST garmin:T-001–T-160 (T-143–T-153 = DEC-040; per-id Stage-1/2 build state → traceability.md)   next:garmin-T-161
+TEST garmin:T-001–T-172 (T-143–T-153 = DEC-040; T-161–T-163 = REQ-020 wizard; T-164–T-166 = REQ-022 OpenData; T-167–T-169 = REQ-023 store/uncompress; T-170–T-172 = REQ-024 Strava loop — four new targets; per-id build state → traceability.md)   next:garmin-T-173
      T-154–T-156 BUILT 2026-09-04 (DEC-033: out-param correctness + syncNext/downloadNext clause-(e)
      coverage, all passing). TEST-076 (pre-existing id, allocated long before this session, previously
      unused/dead-code-pinned) also BUILT 2026-09-04 — closes B-R027-09. T-157 BUILT 2026-09-04 (B-R028-01
@@ -78,12 +81,26 @@ TEST garmin:T-001–T-160 (T-143–T-153 = DEC-040; per-id Stage-1/2 build state
      readComplete-after-owner-teardown + athleteClose cancel/join/delete, watchdog 170/170 both backends,
      orchestrator-independently mutation-proven) — closes A3-R028e-F1, the second and last one.
 VAL  garmin:001–018                 traceability.md ## Validations run · validations/archive/   next:garmin-019
-LSN  001–084  (contiguous; LSN-048 has an index line AND a cold entry — that is the file's two-tier
-     shape, not a duplicate)   lessons.md                          next:085
+LSN  001–085  (contiguous; LSN-048 has an index line AND a cold entry — that is the file's two-tier
+     shape, not a duplicate)   lessons.md                          next:086
      081 = caller-owned test budget · 082 = an unreadable input reported as non-blocking is failing
      open · 083 = a gate whose actions cannot change its own pass criteria · 084 = `git checkout --`
-     on a file with PRIOR uncommitted changes discards all of them, not just the intended one
-F    no F-### namespace — findings are `<cycle>-<seq>`; process series ORCH-001–059   next:ORCH-060
+     on a file with PRIOR uncommitted changes discards all of them, not just the intended one ·
+     085 = a fixture-growth-cap / split-by-mechanism rule is a SKILL-level gap, not yet a rule — see
+     ORCH-061; lesson-miss, owed upstream to whoever maintains .claude/skills/quality-gated-dev-workflow/
+     lessons.md itself was compacted 2026-09-06 (librarian Job-3): hot index rows capped, full narrative
+     moved to each id's own `## LSN-NNN` cold entry — nothing deleted, see archive/state-history.md § 12.
+F    no F-### namespace — findings are `<cycle>-<seq>`; process series ORCH-001–061   next:ORCH-062
+     060 = informational, accept-with-note: 18 full `ctest -L garmin-fast` reruns logged across this
+     branch vs orchestration.md's one-run-per-final-content-version rule — lean-evidence protocol
+     adopted going forward (targeted test + 1 mutation per mechanism; full suite once per commit-ready
+     handoff; both Qt backends only for changed async/lifecycle targets)
+     061 = informational, deferred: a single QTest binary grew to ~8,874 lines / 87+ slots / a 512-seed
+     fuzzer, split declined (QTest can select functions but not exclude one) — proposed skill-level
+     fixture-growth-cap rule, NOT a project fix; see LSN-085
+     findings.md was compacted 2026-09-06 (librarian Job-3): 319 of 373 pre-existing rows had an
+     oversized cell, all capped to a pointer into archive/findings-detail.md — nothing deleted, bucket
+     membership verified identical by clv_findings.py before/after. Row count 373 → 375 (+ORCH-060/061).
      052 = a real _minimal-QPA test-harness hang (kdialog config-write race), reproduction attempted and
      NOT reproduced via ctest — non-blocking, does not affect the DEC-033/TEST-076 commit's own evidence
      053 = shapeBC_timeoutBreaksTheListing's site-10 row is mutation-blind (single-activity fixture cannot

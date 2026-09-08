@@ -847,6 +847,10 @@ static QByteArray gUncompress(const QByteArray &data)
 RideFile *RideFileFactory::openRideFile(Context *context, QFile &file,
                                            QStringList &errors, QList<RideFile*> *rideList) const
 {
+    // DEC-041/REQ-029: hoist-and-capture across FIT's nested QEventLoop suspension (see decisions.md)
+    QPointer<Context> contextGuard(context);
+    const bool haveContext = (context != nullptr);
+    const QString capturedAthleteCyclist = haveContext ? context->athlete->cyclist : QString();
 
     // since some file names contain "." as separator, not only for suffixes
     // find the file-type suffix and the compression type in a 2 step approach
@@ -996,7 +1000,7 @@ RideFile *RideFileFactory::openRideFile(Context *context, QFile &file,
         // set other "special" fields
         result->setTag("Filename", QFileInfo(file.fileName()).fileName());
         result->setTag("File Format", result->fileFormat());
-        if (context) result->setTag("Athlete", context->athlete->cyclist);
+        if (haveContext) result->setTag("Athlete", capturedAthleteCyclist);
         result->setTag("Year", result->startTime().toString("yyyy"));
         result->setTag("Month", result->startTime().toString("MMMM"));
         result->setTag("Weekday", result->startTime().toString("ddd"));
@@ -1052,7 +1056,7 @@ RideFile *RideFileFactory::openRideFile(Context *context, QFile &file,
         }
 
         // calculate derived data series -- after data fixers applied above
-        if (context) result->recalculateDerivedSeries();
+        if (!contextGuard.isNull()) result->recalculateDerivedSeries();
 
         // what data is present - after processor in case 'derived' or adjusted
         result->updateDataTag();
@@ -1647,6 +1651,8 @@ void RideFile::appendOrUpdatePoint(double secs, double cad, double hr, double km
                                              rvert, rcad, rcontact, tcore,
                                              interval);
 
+    // DEC-044/REQ-030: newest tracks whichever point is still valid after this branch (see decisions.md)
+    RideFilePoint *newest = point;
 
     if (!forceAppend) {
 
@@ -1656,6 +1662,7 @@ void RideFile::appendOrUpdatePoint(double secs, double cad, double hr, double km
                 updatePoint(point, dataPoints_.at(idx));
                 *dataPoints_.at(idx) = *point;
                 delete point;
+                newest = dataPoints_.at(idx);
             } else {
                 if (dataPoints_.at(idx)->secs > secs)
                     dataPoints_.insert(idx, point);
@@ -1706,9 +1713,9 @@ void RideFile::appendOrUpdatePoint(double secs, double cad, double hr, double km
     dataPresent.tcore    |= (tcore != 0);
     dataPresent.interval |= (interval != 0);
 
-    updateMin(point);
-    updateMax(point);
-    updateAvg(point);
+    updateMin(newest);
+    updateMax(newest);
+    updateAvg(newest);
 }
 
 void RideFile::appendPoint(const RideFilePoint &point)

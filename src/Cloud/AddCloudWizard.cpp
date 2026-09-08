@@ -35,6 +35,7 @@
 
 #include <QMessageBox>
 #include <QPixmap>
+#include <QPointer>
 #include <QRegExp>
 
 // WIZARD FLOW
@@ -474,6 +475,13 @@ AddAuth::AddAuth(AddCloudWizard *parent) : QWizardPage(parent), wizard(parent)
 void
 AddAuth::doAuth()
 {
+    // DEC-030 rider (REQ-020, NOTES#3 closure): the NON-MODAL wizard survives
+    // the athlete-tab close that frees the Context, so doAuth() can be ENTERED
+    // with wizard->context dangling — bail before handing that pointer to the
+    // OAuthDialog, which derefs it inside its own exec().
+    QPointer<Context> ctx(wizard->context);
+    if (ctx.isNull()) return;
+
     QString cname=wizard->cloudService->settings.value(CloudService::CloudServiceSetting::OAuthToken, "");
 
     // no config for token !?
@@ -489,7 +497,12 @@ AddAuth::doAuth()
             delete oauthDialog;
         } else {
             oauthDialog->setWindowModality(Qt::ApplicationModal);
+            // DEC-030 rider (REQ-020): browser OAuth is arbitrarily long and
+            // the parentless oauthDialog SURVIVES a wizard teardown, so exec()
+            // returns normally onto a frame whose page/wizard may be gone.
+            QPointer<AddAuth> self(this);
             oauthDialog->exec();
+            if (self.isNull()) return;
             token->setText(wizard->cloudService->getSetting(cname, "").toString());
 
             QString msg = wizard->cloudService->message;
@@ -784,22 +797,38 @@ AddSettings::validatePage()
 void
 AddSettings::browseFolder()
 {
+    // DEC-030 rider (REQ-020): this frame blocks in open() (a nested loop in
+    // the provider waits) and in two exec()s (the Connection Failed err box
+    // and the folder picker), and the NON-MODAL wizard can lose either
+    // lifetime axis inside them — itself (window/parent teardown) or its
+    // Context (athlete tab close; the wizard is QWizard(context->mainWindow)
+    // and lives on).
+    QPointer<AddSettings> self(this);
+    QPointer<Context> ctx(wizard->context);
+    if (ctx.isNull()) return;
+
     // get current edit..
     QString path = folder->text();
     QStringList errors;
 
-    // open the connection using the current token
-    if (!wizard->cloudService->open(errors)) {
+    // open the connection using the current token. Land the bool in a local:
+    // if a teardown landed inside open(), only the local survives.
+    bool opened = wizard->cloudService->open(errors);
+    if (self.isNull() || ctx.isNull()) return;
+
+    if (!opened) {
         QMessageBox err;
         err.setText(tr("Connection Failed"));
         err.setDetailedText(errors.join("\n\n"));
         err.setIcon(QMessageBox::Warning);
         err.exec();
+        if (self.isNull() || ctx.isNull()) return;
     }
 
     // find the folder using the current settings
     CloudServiceDialog dialog(this, wizard->cloudService, tr("Choose Athlete Directory"), path, true);
     int ret = dialog.exec();
+    if (self.isNull() || ctx.isNull()) return;
 
     // did we actually select something?
     if (ret == QDialog::Accepted) {
@@ -879,6 +908,14 @@ AddFinish::initializePage()
 bool
 AddFinish::validatePage()
 {
+    // DEC-030 rider (REQ-020, S-R021-03): the wizard is non-modal and
+    // window-parented, so it can outlive its Context; saveSettings and the
+    // deref chain below (wizard->context->athlete->cyclist) read that freed
+    // Context if the athlete tab closed mid-flow. Context is a QObject
+    // (Context.h:106), so QPointer tracks it for real.
+    QPointer<Context> ctx(wizard->context);
+    if (ctx.isNull()) return false;
+
     // save settings away
     CloudServiceFactory::instance().saveSettings(wizard->cloudService, wizard->context);
 

@@ -57,6 +57,7 @@ CloudServiceFactory *CloudServiceFactory::instance_;
 CloudService::CloudService(Context *context, QNetworkAccessManager *injectedNam) :
     uploadCompression(zip), downloadCompression(zip),
     filetype(JSON), useMetric(false), useEndDate(false), context(context),
+    contextGuard_(context),
     nam_(injectedNam), namWired_(false)
 {
     // NOTHING IS CREATED HERE. This constructor runs pre-main for every
@@ -706,6 +707,15 @@ CloudService::uncompressRide(QByteArray *data, QString name, QStringList &errors
         name = name.mid(0, name.length()-3);
     } else {
         jsonData = *data;
+    }
+
+    // REQ-023 (S-R021-05, DEC-030 constraint 2) - the STORE's own frame bails
+    // on a dead Context rather than trusting its callers' teardown order; no
+    // suspension exists between entry and this deref, and the openRideFile
+    // nested loop below runs after it with no further context deref.
+    if (contextGuard_.isNull()) {
+        errors << tr("athlete context destroyed before the activity could be processed");
+        return NULL;
     }
 
     // uncompress and write to tmp preserviing the file extension
@@ -1732,6 +1742,22 @@ CloudServiceSyncDialog::~CloudServiceSyncDialog()
         return;
     }
 
+    // REQ-024 (S-R031-01) - THE STORE'S OWN FRAME, NOT ONE OF OURS.
+    //
+    // blockingCallDepth counts DIALOG frames. A completion slot like Strava::
+    // readFileCompleted runs from network delivery (QObject::sender()), outside
+    // any BlockingCall, so a teardown delivered inside addSamples' nested loop
+    // reaches this destructor with depth 0 - and used to free the store under
+    // the frame executing on it (T-170). The store is handed back to itself
+    // instead: it survives the suspended frame and reaps once that frame has
+    // unwound (CloudService::AsyncCompletionFrame), so this is not a leak, and
+    // a store with no suspended frame still takes the synchronous delete below.
+    if (store && store->hasSuspendedFrames()) {
+        store->orphanByOwner();
+        store = NULL;
+        return;
+    }
+
     closeAndDeleteStore(store);
 }
 
@@ -1749,6 +1775,20 @@ CloudServiceSyncDialog::StoreReaper::release()
     // re-entrant path through this record cannot see a dangling store.
     closeAndDeleteStore(orphan);
     delete this;
+}
+
+// REQ-024 (S-R031-01) - the store-side twin of StoreReaper::release above: the
+// owner's destructor declined to delete an orphaned store while one of the
+// store's OWN frames was suspended, and this runs from that last frame's unwind
+// (CloudService::AsyncCompletionFrame), when nothing is executing on the store
+// any more. close() first, exactly as closeAndDeleteStore does (REQ-017 (b)/(e));
+// the delete is DEFERRED because the unwind still sits inside the reply's
+// finished() emission - see AsyncCompletionFrame in CloudService.h.
+void
+CloudService::reapOrphanedStore()
+{
+    close();
+    deleteLater();
 }
 
 //

@@ -180,13 +180,18 @@ class RideMetadata
 #endif
 
 // ===========================================================================
-// Context.h (guard: _GC_Context_h) — Context + GlobalContext singleton
+// Context.h (guard: _GC_Context_h) — Context + GlobalContext singleton.
+// A QObject (no Q_OBJECT of its own — nothing connects to it and moc must not
+// run on a force-included preamble) because REQ-020's QPointer<Context> guards
+// in AddCloudWizard.cpp must compile AND track destruction against this stub,
+// exactly as against the real Context.h:106 QObject in the application build.
 // ===========================================================================
 #ifndef _GC_Context_h
 #    define _GC_Context_h
-class Context
+class Context : public QObject
 {
   public:
+    Context() = default;
     QWidget* mainWindow = nullptr;
     Athlete* athlete = nullptr;
 };
