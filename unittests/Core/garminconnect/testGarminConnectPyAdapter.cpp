@@ -253,10 +253,12 @@ class TestGarminConnectPyAdapter : public QObject
         QCOMPARE(out.rawMessage, QStringLiteral("stub: connection refused"));
     }
 
-    // (d) GarminError with a kind this slice does not own (rate_limit) ->
-    // Unknown — and asserted NOT AuthFailed (A3-R002-M6 heritage: an
-    // unrecognized kind must never be reported as bad credentials).
-    void rateLimitKindMapsToUnknownNotAuthFailed()
+    // (d) REQ-014 — GarminError kind='rate_limit' -> PyAuthOutcome::RateLimit,
+    // a DISTINCT kind (no longer folded into Unknown — that was REQ-002's
+    // narrower bar before this slice added the branch). Still asserted NOT
+    // AuthFailed (A3-R002-M6 heritage: an unrecognized/transient kind must
+    // never be reported as bad credentials).
+    void rateLimitKindMapsToRateLimitNotAuthFailed()
     {
         setScenario("rate_limit_error");
 
@@ -264,7 +266,8 @@ class TestGarminConnectPyAdapter : public QObject
         const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
         QVERIFY2(out.kind != PyAuthOutcome::AuthFailed, "kind='rate_limit' must NOT be classified as AuthFailed");
-        QCOMPARE(out.kind, PyAuthOutcome::Unknown);
+        QVERIFY2(out.kind != PyAuthOutcome::Unknown, "REQ-014: rate_limit must be its own kind, not Unknown");
+        QCOMPARE(out.kind, PyAuthOutcome::RateLimit);
         QCOMPARE(out.rawMessage, QStringLiteral("stub: too many requests"));
     }
 

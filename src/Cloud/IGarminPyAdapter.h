@@ -28,17 +28,21 @@
 // PyAuthOutcome — value type returned by IGarminPyAdapter::authenticate() and
 // IGarminPyAdapter::submitMfa(). The worker maps each Kind to either
 // GarminAuthSuccess (Success) or a GarminAuthFailure with a matching Kind
-// (AuthFailed → Auth, Network → Network, Unknown → Unknown). MfaRequired is the
-// REQ-003 outcome: authenticate() returns it (instead of Success/AuthFailed)
-// when Garmin needs a 6-digit OTP — the worker emits a distinct mfaRequired
-// signal for it, and a later submitMfa() resumes the SAME session. CAPTCHA /
-// RateLimit / TokenPermissions outcomes arrive in later slices (REQ-015) and
-// extend this enum additively without re-shaping existing call sites.
+// (AuthFailed → Auth, Network → Network, Unknown → Unknown, RateLimit →
+// RateLimit). MfaRequired is the REQ-003 outcome: authenticate() returns it
+// (instead of Success/AuthFailed) when Garmin needs a 6-digit OTP — the
+// worker emits a distinct mfaRequired signal for it, and a later submitMfa()
+// resumes the SAME session. CAPTCHA / TokenPermissions outcomes arrive in
+// later slices (REQ-015) and extend this enum additively without re-shaping
+// existing call sites.
 // ---------------------------------------------------------------------------
 
 struct PyAuthOutcome
 {
-    enum Kind { Success, AuthFailed, Network, Unknown, MfaRequired };
+    // REQ-014: RateLimit is an additive Kind (DEC-013 Option A) — mirrors
+    // PyDownloadOutcome/PyListOutcome's existing RateLimited; the worker maps
+    // it to GarminAuthFailure::RateLimit.
+    enum Kind { Success, AuthFailed, Network, Unknown, MfaRequired, RateLimit };
     Kind kind = Unknown;
 
     // Populated only when kind == Success.

@@ -32,6 +32,7 @@
 // fails at the #include "GarminMfaPage.h" line (right-reason RED: the missing
 // contract under test, not a wiring artifact).
 
+#include "GarminErrors.h"
 #include "GarminMfaPage.h" // <-- intentionally missing in RED phase
 #include "IGarminAuthClient.h"
 
@@ -141,6 +142,13 @@ class TestGarminConnectMfaPage : public QObject
     }
 
     // T-033 — the 3-attempts rule.
+    //
+    // REQ-014 (page-layer translation): the re-prompt message (attempts 1-2)
+    // is produced by GarminErrors::translate(kind) at the page, NOT trusted
+    // verbatim from GarminAuthFailure::translatedMessage (which carries the
+    // raw library text — see GarminErrors.h). `bad.translatedMessage` below
+    // is deliberately a distinct raw-looking string to prove it is NOT what
+    // gets displayed.
     void thirdInvalidCodeAbortsExactlyOnceAndStopsDispatching()
     {
         FakeAuthClient fake;
@@ -149,7 +157,7 @@ class TestGarminConnectMfaPage : public QObject
 
         GarminAuthFailure bad;
         bad.kind = GarminAuthFailure::Auth;
-        bad.translatedMessage = QStringLiteral("That code was not correct. Please try again.");
+        bad.translatedMessage = QStringLiteral("GarminError(kind=auth): raw library text");
 
         // Attempt 1 — dispatch then fail: re-promptable Error, field cleared.
         enterCode(page, QStringLiteral("111111"));
@@ -159,8 +167,11 @@ class TestGarminConnectMfaPage : public QObject
         QCOMPARE(abortedSpy.count(), 0);
         QVERIFY2(codeField(page)->text().isEmpty(), "After an invalid code the field must be cleared for re-entry");
         QVERIFY2(!page.isComplete(), "After a failure with the field cleared, the page must be gated on a fresh code");
-        QVERIFY2(messageField(page)->text() == bad.translatedMessage,
-                 "The re-prompt message must surface the translated failure verbatim");
+        QVERIFY2(messageField(page)->text() == GarminErrors::translate(bad.kind),
+                 "The re-prompt message must be produced by GarminErrors::translate(kind), not the raw "
+                 "GarminAuthFailure::translatedMessage");
+        QVERIFY2(messageField(page)->text() != bad.translatedMessage,
+                 "REQ-014: the page must never leak the raw library message verbatim");
 
         // Attempt 2 — dispatch then fail: still re-promptable, still no abort.
         enterCode(page, QStringLiteral("222222"));
@@ -260,6 +271,50 @@ class TestGarminConnectMfaPage : public QObject
         QCOMPARE(abortedSpy.count(), 1);   // A3-R003-06: must NOT abort twice
         QCOMPARE(page.attemptCount(), 3);  // must NOT exceed the 3-strike budget
         QCOMPARE(fake.mfaCalls.size(), 3); // no fresh dispatch
+    }
+
+    // T-042 — REQ-014 delta-fix: a NON-Auth kind (Network/RateLimit/Unknown)
+    // failing on the 3rd/terminal attempt must still show GarminErrors::
+    // translate(kind), not the hard-coded wrong-OTP text (that text is only
+    // correct when the terminal failure really was Auth).
+    void thirdAttemptNonAuthKindShowsTranslatedMessageNotWrongOtpText()
+    {
+        FakeAuthClient fake;
+        GarminMfaPage page(&fake);
+        QSignalSpy abortedSpy(&page, &GarminMfaPage::aborted);
+
+        GarminAuthFailure authFail;
+        authFail.kind = GarminAuthFailure::Auth;
+        authFail.translatedMessage = QStringLiteral("GarminError(kind=auth): raw library text");
+
+        // Attempts 1-2: ordinary wrong-OTP failures, re-promptable.
+        for (int i = 0; i < 2; ++i) {
+            enterCode(page, QStringLiteral("111111"));
+            QVERIFY(!page.validatePage());
+            fake.synthFailed(fake.mfaCalls.at(i).requestId, authFail);
+        }
+        QCOMPARE(abortedSpy.count(), 0);
+
+        // Attempt 3 (terminal): the connection drops instead of a wrong code.
+        GarminAuthFailure networkFail;
+        networkFail.kind = GarminAuthFailure::Network;
+        networkFail.translatedMessage = QStringLiteral("GarminError(kind=connection): raw library text");
+        enterCode(page, QStringLiteral("333333"));
+        QVERIFY(!page.validatePage());
+        QCOMPARE(fake.mfaCalls.size(), 3);
+        fake.synthFailed(fake.mfaCalls.at(2).requestId, networkFail);
+
+        // The abort still happens exactly once...
+        QCOMPARE(abortedSpy.count(), 1);
+        QVERIFY(page.isAborted());
+        // ...but the message must be the Network translation, not the
+        // hard-coded "Too many incorrect codes" wrong-OTP text.
+        QVERIFY2(messageField(page)->text() == GarminErrors::translate(GarminAuthFailure::Network),
+                 "A non-Auth terminal failure must show GarminErrors::translate(kind), not the wrong-OTP message");
+        QVERIFY2(!messageField(page)->text().contains(QStringLiteral("incorrect codes")),
+                 "REQ-014: the wrong-OTP text must not be shown for a Network/RateLimit/Unknown terminal failure");
+        QVERIFY2(messageField(page)->text() != networkFail.translatedMessage,
+                 "REQ-014: the raw library text must never be shown verbatim, even on the terminal attempt");
     }
 
     // T-039 — A3-R003-05: initializePage() (Back-then-Next re-entry) resets the

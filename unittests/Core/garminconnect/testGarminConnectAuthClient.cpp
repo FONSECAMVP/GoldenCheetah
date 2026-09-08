@@ -210,6 +210,26 @@ class TestGarminConnectAuthClient : public QObject
         QCOMPARE(emitted.translatedMessage, QStringLiteral("DNS lookup failed"));
     }
 
+    // REQ-014 — RateLimit outcome maps to GarminAuthFailure::RateLimit (a NEW
+    // branch; does not disturb the AuthFailed/Network/Unknown mappings above).
+    // The worker stays raw here too — translatedMessage still forwards
+    // rawMessage verbatim; page-layer translation is GarminErrors' job.
+    void rateLimitOutcomeMapsToFailedWithRateLimitKind()
+    {
+        FakePyAdapter fake;
+        fake.scriptedOutcome.kind = PyAuthOutcome::RateLimit;
+        fake.scriptedOutcome.rawMessage = QStringLiteral("too many requests");
+        GarminWorker worker(&fake);
+        QSignalSpy failedSpy(&worker, &GarminWorker::failed);
+
+        worker.authenticate(QStringLiteral("e@x"), QStringLiteral("p"), QUuid::createUuid());
+
+        QCOMPARE(failedSpy.size(), 1);
+        const GarminAuthFailure emitted = failedSpy.first().at(1).value<GarminAuthFailure>();
+        QCOMPARE(emitted.kind, GarminAuthFailure::RateLimit);
+        QCOMPARE(emitted.translatedMessage, QStringLiteral("too many requests"));
+    }
+
     // Unknown outcome maps to GarminAuthFailure::Unknown — catches a default-
     // case mutant that collapses Unknown into Auth (or vice versa).
     void unknownOutcomeMapsToFailedWithUnknownKind()

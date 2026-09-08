@@ -35,7 +35,8 @@
 //   public surface this test locks in.
 
 #include "GarminCredentialsPage.h" // <-- intentionally missing in RED phase
-#include "IGarminAuthClient.h"     // <-- intentionally missing in RED phase
+#include "GarminErrors.h"
+#include "IGarminAuthClient.h" // <-- intentionally missing in RED phase
 
 #include <QLabel>
 #include <QLineEdit>
@@ -217,11 +218,13 @@ class TestGarminConnectCredentialsPage : public QObject
     // and branded enough that the test can distinguish it from a default
     // fallback. The page must NOT advance on error.
     //
-    // The error payload is already DES-008-translated by the time it
-    // reaches the page (the adapter / worker translate at the seam). This
-    // test asserts the page surfaces the translated string verbatim — it
-    // does NOT re-translate, double-translate, or fall back to the raw
-    // exception class name.
+    // REQ-014 (page-layer translation, superseding this test's former "the
+    // error payload is already DES-008-translated" assumption): the worker/
+    // adapter stay raw (GarminAuthFailure::translatedMessage carries the raw
+    // library message, untrusted here); the PAGE translates by calling
+    // GarminErrors::translate(kind). This test asserts the displayed text is
+    // whatever translate() produces for the failure's kind — not an
+    // arbitrary hand-picked string and never the raw exception text.
     void errorResponseShowsLabeledInlineMessage()
     {
         FakeAuthClient fake;
@@ -232,18 +235,22 @@ class TestGarminConnectCredentialsPage : public QObject
 
         GarminAuthFailure err;
         err.kind = GarminAuthFailure::Auth;
-        err.translatedMessage =
-            QStringLiteral("Garmin Connect rejected your email or password. Please check and try again.");
+        // The raw library message the worker would forward — deliberately
+        // distinct from any translated copy, to prove the page does NOT
+        // display it (REQ-014: never show the raw exception text).
+        err.translatedMessage = QStringLiteral("GarminConnectAuthenticationError: 403 raw library text");
         fake.synthFailed(fake.calls.first().requestId, err);
 
         QLabel* msg = messageField(page);
         QVERIFY2(msg != nullptr, "Page must expose a QLabel named 'garminAuthMessage' for inline errors");
         QVERIFY2(!msg->text().isEmpty(),
                  "REQ-002 negative path: an error response must populate the inline message label");
-        QVERIFY2(msg->text() == err.translatedMessage,
-                 "Page must surface the translated message verbatim — never raw exception names "
-                 "and never a re-translated string (A3 mutant kill: catches a missing assignment "
-                 "that falls back to a hard-coded placeholder).");
+        QVERIFY2(msg->text() == GarminErrors::translate(err.kind),
+                 "Page must surface GarminErrors::translate(kind) — never the raw "
+                 "GarminAuthFailure::translatedMessage / exception text (A3 mutant kill: catches a "
+                 "missing translation call that falls back to raw passthrough or a hard-coded placeholder).");
+        QVERIFY2(msg->text() != err.translatedMessage,
+                 "REQ-014: the page must never leak the raw library message verbatim");
         QVERIFY2(!page.validatePage(), "After an error, validatePage() must remain false so the user is forced to "
                                        "edit the credentials and resubmit before the wizard advances");
     }

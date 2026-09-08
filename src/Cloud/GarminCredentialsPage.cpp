@@ -9,6 +9,8 @@
 
 #include "GarminCredentialsPage.h"
 
+#include "GarminErrors.h"
+
 #include <QLabel>
 #include <QLineEdit>
 #include <QVBoxLayout>
@@ -113,7 +115,10 @@ void GarminCredentialsPage::onAuthFailed(QUuid id, GarminAuthFailure error)
     if (m_state != InFlight)
         return; // A3-R003-06 — ignore a duplicate/late failure once terminal.
     m_state = Error;
-    m_message->setText(error.translatedMessage);
+    // REQ-014: translation happens HERE (page layer), not at the worker —
+    // error.translatedMessage carries the raw library text and must not be
+    // shown directly (see GarminErrors.h).
+    m_message->setText(GarminErrors::translate(error.kind));
     emit completeChanged();
 }
 

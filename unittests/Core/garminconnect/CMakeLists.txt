@@ -104,6 +104,9 @@ add_executable(testGarminConnectCredentialsPage
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminCredentialsPage.cpp
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminCredentialsPage.h
     ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminAuthClient.h
+    # REQ-014 — the page's onAuthFailed() calls GarminErrors::translate().
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminErrors.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminErrors.h
 )
 
 set_target_properties(testGarminConnectCredentialsPage PROPERTIES
@@ -142,6 +145,9 @@ add_executable(testGarminConnectMfaPage
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminMfaPage.cpp
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminMfaPage.h
     ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminAuthClient.h
+    # REQ-014 — the page's onAuthFailed() calls GarminErrors::translate().
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminErrors.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminErrors.h
 )
 
 set_target_properties(testGarminConnectMfaPage PROPERTIES
@@ -163,6 +169,35 @@ target_compile_features(testGarminConnectMfaPage PRIVATE cxx_std_17)
 
 add_test(NAME testGarminConnectMfaPage COMMAND testGarminConnectMfaPage)
 set_tests_properties(testGarminConnectMfaPage PROPERTIES LABELS "garmin-fast")
+
+# --- REQ-014 — GarminErrors::translate() (page-layer error translation) -----
+# Pure-Qt (no Python.h, no widgets) unit test of the DES-008-adapted switch
+# table. Pairs with the call-site coverage in testGarminConnectCredentialsPage
+# / testGarminConnectMfaPage.
+#
+# RED phase: src/Cloud/GarminErrors.h does not exist yet — the compile fails
+# at the test's #include "GarminErrors.h" line (right-reason RED). GREEN adds
+# the module AND keeps it in this add_executable() so the link resolves.
+add_executable(testGarminConnectErrors
+    testGarminConnectErrors.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminErrors.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminErrors.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminAuthClient.h
+)
+
+target_include_directories(testGarminConnectErrors PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+)
+
+target_link_libraries(testGarminConnectErrors PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Test
+)
+target_compile_features(testGarminConnectErrors PRIVATE cxx_std_17)
+
+add_test(NAME testGarminConnectErrors COMMAND testGarminConnectErrors)
+set_tests_properties(testGarminConnectErrors PROPERTIES LABELS "garmin-fast")
 
 # --- TEST-004 — REQ-002 end-to-end (worker + WorkerAuthClient) --------------
 # REQ-002 closure slice: GarminWorker on a dedicated QThread + WorkerAuthClient
@@ -284,6 +319,9 @@ add_executable(testGarminConnectWizardRouting
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminCredentialsPage.h
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminMfaPage.cpp
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminMfaPage.h
+    # REQ-014 — both pages' onAuthFailed() call GarminErrors::translate().
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminErrors.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminErrors.h
     # REQ-008 (T-051) — the REAL connect-success producer + atomic writer, so the
     # wizard's persist trigger writes real tokens.json/active-account.json under the
     # stubbed CloudService (LSN-018 — a test target linking a production .cpp it

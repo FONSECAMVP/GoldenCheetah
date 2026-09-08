@@ -40,6 +40,14 @@ class _FakeAuthError(Exception):
     """Stand-in for garminconnect.exceptions.GarminConnectAuthenticationError."""
 
 
+class _FakeConnError(Exception):
+    """Stand-in for garminconnect.exceptions.GarminConnectConnectionError."""
+
+
+class _FakeRateError(Exception):
+    """Stand-in for garminconnect.exceptions.GarminConnectTooManyRequestsError."""
+
+
 class _FakeGarminBase:
     """Minimal fake of garminconnect.Garmin. Tests subclass to inject behaviour."""
 
@@ -66,6 +74,10 @@ def _install_fake_gc(monkeypatch: pytest.MonkeyPatch, garmin_cls: type) -> None:
     fake_mod.Garmin = garmin_cls  # type: ignore[attr-defined]
     fake_exceptions = types.SimpleNamespace(
         GarminConnectAuthenticationError=_FakeAuthError,
+        # REQ-014 — login() also classifies connection/rate_limit failures,
+        # mirroring download_activity()/list_activities_since()'s existing pattern.
+        GarminConnectConnectionError=_FakeConnError,
+        GarminConnectTooManyRequestsError=_FakeRateError,
     )
     fake_mod.exceptions = fake_exceptions  # type: ignore[attr-defined]
     monkeypatch.setattr(garmin_client, "_gc", fake_mod)
@@ -157,6 +169,45 @@ def test_login_bad_credentials_raises_GarminError_kind_auth(tmp_path: Any, monke
     assert not tokenstore.exists(), "REQ-002 acceptance: failed auth must not leave a token file on disk"
 
 
+def test_login_connection_error_maps_to_kind_connection(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """REQ-014 — a library connection error during login() must surface as
+    GC-stable kind='connection' (mirrors download_activity()'s existing
+    translation), so DES-008 routes the "couldn't reach Garmin" copy."""
+
+    class _ConnGarmin(_FakeGarminBase):
+        def login(self) -> None:
+            raise _FakeConnError("stub: connection refused")
+
+    _install_fake_gc(monkeypatch, _ConnGarmin)
+
+    client = GarminClient("u@x.com", "p")
+    with pytest.raises(GarminError) as excinfo:
+        client.login()
+
+    assert excinfo.value.kind == "connection"
+    assert excinfo.value.message, "message must be non-empty for UI display"
+    assert excinfo.value.original is not None, "original library exception must be retained for diagnostics"
+
+
+def test_login_rate_limit_error_maps_to_kind_rate_limit(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """REQ-014 — Garmin 429 during login() must surface as kind='rate_limit'
+    (mirrors download_activity()'s existing translation), never as a generic
+    or auth error."""
+
+    class _RateGarmin(_FakeGarminBase):
+        def login(self) -> None:
+            raise _FakeRateError("stub: 429 too many requests")
+
+    _install_fake_gc(monkeypatch, _RateGarmin)
+
+    client = GarminClient("u@x.com", "p")
+    with pytest.raises(GarminError) as excinfo:
+        client.login()
+
+    assert excinfo.value.kind == "rate_limit"
+    assert excinfo.value.original is not None
+
+
 def test_non_auth_exception_is_not_misclassified_as_auth(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """A3/REQ-002 — mutant M6 kill.
 
@@ -166,10 +217,11 @@ def test_non_auth_exception_is_not_misclassified_as_auth(tmp_path: Any, monkeypa
     exception) tagged 'auth' would route the wizard to "wrong password" copy
     for what is actually a connection/library error.
 
-    REQ-002's GREEN slice only specs the `auth` branch — the wider
-    `_EXCEPTION_MAP` (rate_limit, connection, captcha, ...) lands with
-    REQ-014. Until then, non-auth exceptions propagate unchanged; what they
-    must not do is silently inherit 'auth'.
+    REQ-002/REQ-014's GREEN slices only spec the auth/connection/rate_limit
+    branches — the wider `_EXCEPTION_MAP` (captcha, mfa_required,
+    token_permissions, ...) lands with later slices (A2-005, REQ-003,
+    REQ-015). Until then, non-auth/foreign exceptions propagate unchanged;
+    what they must not do is silently inherit 'auth'.
     """
 
     class _BoomGarmin(_FakeGarminBase):

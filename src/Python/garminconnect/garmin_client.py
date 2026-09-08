@@ -8,11 +8,12 @@ a community fork is a one-file change here.
 Phase 2.2 status (REQ-by-REQ):
   - REQ-002 login / GarminError(kind='auth') translation: GREEN.
   - REQ-007 download_activity (fmt map + connection/rate_limit translation): GREEN.
+  - REQ-014 login connection/rate_limit translation: GREEN.
   - REQ-003 / REQ-008 / REQ-012 / REQ-013: still raise
     NotImplementedError until their owning slice reaches GREEN.
 
-The wider `_EXCEPTION_MAP` (rate_limit, connection, captcha, mfa_required,
-token_permissions) lands with REQ-014 — REQ-002's bar is the auth path only.
+The wider `_EXCEPTION_MAP` (captcha, mfa_required, token_permissions) lands
+with later slices (A2-005, REQ-003, REQ-015) — not this module's scope yet.
 """
 
 from __future__ import annotations
@@ -78,10 +79,16 @@ class GarminClient:
         self._pending_mfa: Any = None
 
     def login(self) -> dict[str, Any]:
+        # REQ-014 — connection/rate_limit classified by exception TYPE (LSN-006),
+        # mirroring download_activity()/list_activities_since()'s existing pattern.
         try:
             result = self._garmin.login()
         except _gc.exceptions.GarminConnectAuthenticationError as e:
             raise GarminError("auth", str(e) or "Authentication failed", e) from e
+        except _gc.exceptions.GarminConnectConnectionError as e:
+            raise GarminError("connection", str(e) or "Could not reach Garmin Connect", e) from e
+        except _gc.exceptions.GarminConnectTooManyRequestsError as e:
+            raise GarminError("rate_limit", str(e) or "Garmin Connect is rate-limiting sign-in", e) from e
         # REQ-003 — MFA-required signal. python-garminconnect/garth's login()
         # returns a ("needs_mfa", client_state) sentinel (instead of raising)
         # when the account needs a 6-digit OTP. Detect it by SHAPE, never by

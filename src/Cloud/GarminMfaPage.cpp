@@ -9,6 +9,8 @@
 
 #include "GarminMfaPage.h"
 
+#include "GarminErrors.h"
+
 #include <QLabel>
 #include <QLineEdit>
 #include <QVBoxLayout>
@@ -128,15 +130,24 @@ void GarminMfaPage::onAuthFailed(QUuid id, GarminAuthFailure error)
         // non-retry error: latch Aborted, show the terminal message, and signal
         // the wizard to end the attempt. No further submits are accepted.
         m_state = Aborted;
-        m_message->setText(tr("Too many incorrect codes. Garmin Connect sign-in has been cancelled. "
-                              "Please start the connection again."));
+        // Reviewer delta-fix (REQ-014): the wrong-OTP text is only correct when
+        // the terminal failure really was Auth; Network/RateLimit/Unknown on the
+        // 3rd attempt must still get the kind-translated message.
+        if (error.kind == GarminAuthFailure::Auth) {
+            m_message->setText(tr("Too many incorrect codes. Garmin Connect sign-in has been cancelled. "
+                                  "Please start the connection again."));
+        } else {
+            m_message->setText(GarminErrors::translate(error.kind));
+        }
         emit aborted();
         return;
     }
 
     // Attempts remain: show the error and re-prompt with a cleared field.
     m_state = Error;
-    m_message->setText(error.translatedMessage);
+    // REQ-014: translation happens HERE (page layer) — error.translatedMessage
+    // carries the raw library text and must not be shown directly (GarminErrors.h).
+    m_message->setText(GarminErrors::translate(error.kind));
     m_code->clear();
     emit completeChanged();
 }

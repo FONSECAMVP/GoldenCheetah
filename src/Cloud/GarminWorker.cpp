@@ -80,6 +80,15 @@ void GarminWorker::emitAuthOutcome(const PyAuthOutcome& outcome, QUuid requestId
         emit failed(requestId, err);
         return;
     }
+    // REQ-014 — new branch, added without disturbing the Auth/Network/Unknown
+    // mappings above (locked by TEST-004/testGarminConnectAuthClient.cpp).
+    case PyAuthOutcome::RateLimit: {
+        GarminAuthFailure err;
+        err.kind = GarminAuthFailure::RateLimit;
+        err.translatedMessage = outcome.rawMessage;
+        emit failed(requestId, err);
+        return;
+    }
     case PyAuthOutcome::Unknown:
     case PyAuthOutcome::MfaRequired:
     default: {

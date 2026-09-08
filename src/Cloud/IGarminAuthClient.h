@@ -44,7 +44,9 @@ struct GarminAuthSuccess
 
 struct GarminAuthFailure
 {
-    enum Kind { Auth, Network, Unknown };
+    // REQ-014: RateLimit is additive (DEC-013 Option A pattern) — mirrors
+    // PyAuthOutcome::RateLimit one seam up; GarminWorker maps it 1:1.
+    enum Kind { Auth, Network, Unknown, RateLimit };
     Kind kind = Unknown;
     QString translatedMessage;
 };

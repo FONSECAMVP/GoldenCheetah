@@ -165,7 +165,8 @@ RaisedExc takeRaisedException(PyObject* module)
 }
 
 // authenticate() classification (spec step 6): auth -> AuthFailed,
-// connection -> Network, anything else / foreign -> Unknown (NEVER AuthFailed).
+// connection -> Network, rate_limit -> RateLimit (REQ-014), anything else /
+// foreign -> Unknown (NEVER AuthFailed).
 PyAuthOutcome classifyPendingException(PyObject* module)
 {
     const RaisedExc e = takeRaisedException(module);
@@ -175,8 +176,10 @@ PyAuthOutcome classifyPendingException(PyObject* module)
         out.kind = PyAuthOutcome::AuthFailed;
     else if (e.isGarminError && e.kind == QStringLiteral("connection"))
         out.kind = PyAuthOutcome::Network;
+    else if (e.isGarminError && e.kind == QStringLiteral("rate_limit"))
+        out.kind = PyAuthOutcome::RateLimit;
     else
-        out.kind = PyAuthOutcome::Unknown; // rate_limit / captcha / foreign …
+        out.kind = PyAuthOutcome::Unknown; // captcha / foreign …
     return out;
 }
 

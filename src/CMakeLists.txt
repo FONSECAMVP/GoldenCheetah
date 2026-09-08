@@ -1408,6 +1408,10 @@ if(GC_WANT_GARMINCONNECT)
         Cloud/GarminAccountEpoch.h
         Cloud/GarminCredentialsPage.cpp
         Cloud/GarminCredentialsPage.h
+        # REQ-014 — page-layer error translation (DES-008, adapted). Both
+        # GarminCredentialsPage and GarminMfaPage call GarminErrors::translate().
+        Cloud/GarminErrors.cpp
+        Cloud/GarminErrors.h
         # REQ-003 (MFA) Slice B: AddCloudWizard constructs GarminMfaPage (page 22),
         # so the main binary needs this .cpp or the link fails with an undefined
         # reference to GarminMfaPage's ctor/vtable/aborted() (LSN-018).
