@@ -124,14 +124,29 @@ inline double dpiYFactor = 1.0;
 #endif
 
 // ===========================================================================
-// Settings.h (guard: _GC_Settings_h) — appsettings global (never-executed path)
+// Settings.h (guard: _GC_Settings_h) — appsettings global. REQ-009 needs a
+// real (if in-memory) global-settings round-trip for the one-time ToS-ack
+// flag, so this is no longer a pure never-executed stand-in.
 // ===========================================================================
 #ifndef _GC_Settings_h
 #    define _GC_Settings_h
+// Mirrors src/Core/Settings.h's define — this stub fully shadows that header
+// (same include guard), so the real macro never reaches this TU.
+#    define GC_GARMIN_CONNECT_TOS_ACK "<global-general>garminConnectTosAck"
 class Configuration
 {
   public:
     void setCValue(const QString&, const QString&, const QVariant&) {}
+    QVariant value(const QObject*, const QString& key, const QVariant& def = QVariant())
+    {
+        return m_values.value(key, def);
+    }
+    void setValue(const QString& key, const QVariant& v) { m_values.insert(key, v); }
+    // Test-only — resets the in-memory store between test slots.
+    void clearForTest() { m_values.clear(); }
+
+  private:
+    QHash<QString, QVariant> m_values;
 };
 inline Configuration* appsettings = new Configuration();
 #endif

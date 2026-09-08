@@ -41,12 +41,17 @@
 #include "IGarminPyAdapter.h"
 #include "WorkerAuthClient.h"
 
+#include <QAbstractButton>
+#include <QApplication>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLineEdit>
+#include <QMessageBox>
+#include <QPointer>
 #include <QSignalSpy>
+#include <QTimer>
 #include <QUuid>
 #include <QtTest/QtTest>
 
@@ -57,6 +62,11 @@
 // athlete->home->config() for the token-store path string.
 // -----------------------------------------------------------------------------
 namespace {
+// REQ-009 — count of AddCloudWizard::setGarminToSPromptForTest's scripted
+// invocations, so a test can assert the modal fired exactly once (or never,
+// for the one-time-flag-already-set case).
+int g_toSPromptCalls = 0;
+
 struct WizardFixture
 {
     AthleteDirectoryStructure home;
@@ -291,6 +301,10 @@ class TestGarminConnectWizardRouting : public QObject
     void persistTriggerFiresOnDirectAuthSuccess()
     {
         g_persistConnectSuccessCalls = 0;
+        // REQ-009: this suite tests the persist-wiring, not the ToS gate (that's
+        // Behaviour 6) — pre-acknowledge so the modal is skipped.
+        appsettings->clearForTest();
+        appsettings->setValue(GC_GARMIN_CONNECT_TOS_ACK, true);
         g_scriptedAuthenticateOutcome = successOutcome(kUid, kBlob);
 
         WizardFixture fx;
@@ -318,6 +332,8 @@ class TestGarminConnectWizardRouting : public QObject
     void persistTriggerFiresOnPostMfaSuccess()
     {
         g_persistConnectSuccessCalls = 0;
+        appsettings->clearForTest();
+        appsettings->setValue(GC_GARMIN_CONNECT_TOS_ACK, true);
         g_scriptedSubmitMfaOutcome = successOutcome(kUid2, kBlob2);
 
         WizardFixture fx;
@@ -346,6 +362,8 @@ class TestGarminConnectWizardRouting : public QObject
     void stalePersistDoesNotOverwriteFreshToken()
     {
         g_persistConnectSuccessCalls = 0;
+        appsettings->clearForTest();
+        appsettings->setValue(GC_GARMIN_CONNECT_TOS_ACK, true);
         g_scriptedAuthenticateOutcome = successOutcome(kUid, kBlob);
 
         WizardFixture fx;
@@ -376,6 +394,198 @@ class TestGarminConnectWizardRouting : public QObject
 
         QCOMPARE(g_persistConnectSuccessCalls, 1);        // still exactly one — no overwrite
         assertPersisted(tokensPath, aaPath, kUid, kBlob); // fresh uid B intact
+    }
+
+    // --- Behaviour 6: REQ-009 — one-time ToS-risk notice gates persistence ---
+    //
+    // The connect-success producer (Behaviour 5) fires unconditionally as soon
+    // as auth succeeds. REQ-009 requires a modal acknowledgement to sit in
+    // front of it on FIRST connect, and to get out of the way on every
+    // subsequent connect once acknowledged (the "one-time" half). The real
+    // QMessageBox is swapped for a scripted function pointer
+    // (AddCloudWizard::setGarminToSPromptForTest) so these run headless.
+
+    // Cancel: the prompt fires exactly once, persist is never called, and the
+    // wizard is rejected (closed) — mirrors DES-003's CAPTCHA-cancel precedent.
+    void toSNoticeCancelBlocksPersistAndClosesWizard()
+    {
+        appsettings->clearForTest();
+        g_persistConnectSuccessCalls = 0;
+        g_toSPromptCalls = 0;
+        g_scriptedAuthenticateOutcome = successOutcome(kUid, kBlob);
+        AddCloudWizard::setGarminToSPromptForTest([]() -> bool {
+            ++g_toSPromptCalls;
+            return false; // Cancel
+        });
+
+        WizardFixture fx;
+        // Heap-allocated and tracked via QPointer: the ctor sets
+        // Qt::WA_DeleteOnClose, so Cancel's reject()->close() auto-deletes the
+        // wizard through the event loop (exactly as production, which always
+        // heap-allocates it) — a stack instance here would double-free once the
+        // QTRY loops below pump the deferred-delete event.
+        QPointer<AddCloudWizard> wizard = new AddCloudWizard(&fx.ctx);
+        CloudService service;
+        service.context = &fx.ctx;
+        wizard->cloudService = &service;
+        wizard->ensureGarminAuthPage();
+
+        QSignalSpy rejectedSpy(wizard.data(), &QDialog::rejected);
+        auto* page21 = static_cast<GarminCredentialsPage*>(wizard->page(21));
+        driveCredentials(page21, QStringLiteral("rider@example.com"), QStringLiteral("secret"));
+
+        QTRY_COMPARE(g_toSPromptCalls, 1);
+        QCOMPARE(g_persistConnectSuccessCalls, 0); // Cancel — never persisted
+        QTRY_COMPARE(rejectedSpy.count(), 1);      // Cancel closes the wizard
+        QTRY_VERIFY2(wizard.isNull(), "Cancel's WA_DeleteOnClose must auto-delete the wizard");
+
+        AddCloudWizard::setGarminToSPromptForTest(nullptr);
+    }
+
+    // Acknowledge (first connect, flag unset): the prompt fires exactly once,
+    // persist fires, and the one-time flag is now set.
+    void toSNoticeAcceptPersistsAndSetsOneTimeFlag()
+    {
+        appsettings->clearForTest();
+        g_persistConnectSuccessCalls = 0;
+        g_toSPromptCalls = 0;
+        g_scriptedAuthenticateOutcome = successOutcome(kUid, kBlob);
+        AddCloudWizard::setGarminToSPromptForTest([]() -> bool {
+            ++g_toSPromptCalls;
+            return true; // "I understand — connect"
+        });
+
+        WizardFixture fx;
+        AddCloudWizard wizard(&fx.ctx);
+        CloudService service;
+        service.context = &fx.ctx;
+        wizard.cloudService = &service;
+        wizard.ensureGarminAuthPage();
+
+        auto* page21 = static_cast<GarminCredentialsPage*>(wizard.page(21));
+        driveCredentials(page21, QStringLiteral("rider@example.com"), QStringLiteral("secret"));
+
+        const QString cfg = fx.home.config().absolutePath();
+        const QString tokensPath = GarminTokenStore::tokenFilePath(cfg);
+        QTRY_VERIFY2(QFileInfo::exists(tokensPath), "acknowledging must persist tokens.json");
+        QCOMPARE(g_toSPromptCalls, 1);
+        QCOMPARE(g_persistConnectSuccessCalls, 1);
+        QVERIFY2(appsettings->value(nullptr, GC_GARMIN_CONNECT_TOS_ACK, false).toBool(),
+                 "acknowledging must persist the one-time flag");
+
+        AddCloudWizard::setGarminToSPromptForTest(nullptr);
+    }
+
+    // One-time: with the flag already set (a prior session's acknowledgement),
+    // a fresh connect must persist immediately with NO re-prompt.
+    void toSNoticeSkippedOnceAlreadyAcknowledged()
+    {
+        appsettings->clearForTest();
+        appsettings->setValue(GC_GARMIN_CONNECT_TOS_ACK, true);
+        g_persistConnectSuccessCalls = 0;
+        g_toSPromptCalls = 0;
+        g_scriptedAuthenticateOutcome = successOutcome(kUid2, kBlob2);
+        AddCloudWizard::setGarminToSPromptForTest([]() -> bool {
+            ++g_toSPromptCalls; // would cancel if this ever fired
+            return false;
+        });
+
+        WizardFixture fx;
+        AddCloudWizard wizard(&fx.ctx);
+        CloudService service;
+        service.context = &fx.ctx;
+        wizard.cloudService = &service;
+        wizard.ensureGarminAuthPage();
+
+        auto* page21 = static_cast<GarminCredentialsPage*>(wizard.page(21));
+        driveCredentials(page21, QStringLiteral("rider2@example.com"), QStringLiteral("secret"));
+
+        const QString cfg = fx.home.config().absolutePath();
+        const QString tokensPath = GarminTokenStore::tokenFilePath(cfg);
+        QTRY_VERIFY2(QFileInfo::exists(tokensPath),
+                     "an already-acknowledged flag must persist immediately, no re-prompt");
+        QCOMPARE(g_toSPromptCalls, 0); // never shown again
+        QCOMPARE(g_persistConnectSuccessCalls, 1);
+
+        AddCloudWizard::setGarminToSPromptForTest(nullptr);
+    }
+
+    // The mandated acceptance text and button labels, byte-for-byte
+    // (prd.md REQ-009), via the single source of truth the real modal also
+    // draws from — so this proves the production dialog's wording without
+    // popping a real QMessageBox in a headless test.
+    void toSNoticeTextIsExactlyTheAcceptanceText()
+    {
+        QCOMPARE(AddCloudWizard::garminToSNoticeText(),
+                 QStringLiteral("GoldenCheetah connects to Garmin Connect using the same authentication flow as "
+                                "Garmin's mobile app. Garmin does not officially endorse third-party clients, and "
+                                "aggressive use may, in rare cases, lead to a temporary account restriction. "
+                                "GoldenCheetah limits its requests to a low rate to avoid this. You can disconnect "
+                                "at any time from the Cloud Services settings."));
+        QCOMPARE(AddCloudWizard::garminToSAcceptButtonText(), QStringLiteral("I understand — connect"));
+        QCOMPARE(AddCloudWizard::garminToSCancelButtonText(), QStringLiteral("Cancel"));
+    }
+
+    // --- Behaviour 7: REQ-009 hardening — the REAL modal vs. a teardown race -
+    //
+    // showGarminToSNoticeIfNeeded()'s nested QMessageBox::exec() pumps the
+    // event loop exactly like every other blocking exec() in this file
+    // (DEC-030/REQ-020 rider: AddAuth::doAuth, AddSettings::browseFolder), and
+    // this wizard is NON-MODAL, so a MainWindow/tab teardown racing that pump
+    // is a real, reachable scenario — not hypothetical. The fix: the message
+    // box is PARENTLESS (so a wizard teardown cannot cascade-delete it via
+    // Qt's parent-child ownership) and a QPointer<AddCloudWizard> self-guard
+    // bails out immediately after exec() returns. This test forces the REAL
+    // (non-scripted) QMessageBox path and deletes the wizard WHILE it is the
+    // active modal, THEN dismisses the box — proving neither the box nor the
+    // wizard double-frees and that no persist happens on a torn-down wizard.
+    void toSNoticeRealModalSurvivesWizardTeardownDuringExec()
+    {
+        appsettings->clearForTest();
+        g_persistConnectSuccessCalls = 0;
+        AddCloudWizard::setGarminToSPromptForTest(nullptr); // force the REAL QMessageBox
+        g_scriptedAuthenticateOutcome = successOutcome(kUid, kBlob);
+
+        WizardFixture fx;
+        QPointer<AddCloudWizard> wizard = new AddCloudWizard(&fx.ctx);
+        CloudService service;
+        service.context = &fx.ctx;
+        wizard->cloudService = &service;
+        wizard->ensureGarminAuthPage();
+
+        auto* page21 = static_cast<GarminCredentialsPage*>(wizard->page(21));
+
+        // Polls (rather than a single-shot at t=0) because the REAL
+        // QMessageBox is constructed deep inside an async chain (worker
+        // thread -> queued finished() -> onAuthFinished -> succeeded() ->
+        // persist -> showGarminToSNoticeIfNeeded); this timer's own events
+        // are pumped BY box.exec()'s nested loop once that box exists, so it
+        // reliably catches the box exactly while exec() is blocking on it.
+        QTimer poller;
+        poller.setInterval(2);
+        connect(&poller, &QTimer::timeout, [&]() {
+            QWidget* modal = QApplication::activeModalWidget();
+            auto* box = qobject_cast<QMessageBox*>(modal);
+            if (!box)
+                return; // keep polling — the box isn't up yet
+            poller.stop();
+            delete wizard.data(); // simulates MainWindow/tab teardown mid-exec()
+            for (QAbstractButton* b : box->buttons()) {
+                if (box->buttonRole(b) == QMessageBox::RejectRole) {
+                    b->click(); // dismiss the (now-orphaned) box to unblock exec()
+                    break;
+                }
+            }
+        });
+        poller.start();
+
+        driveCredentials(page21, QStringLiteral("rider@example.com"), QStringLiteral("secret"));
+
+        QTRY_VERIFY2(wizard.isNull(), "the scheduled mid-modal teardown must have run");
+        QCOMPARE(g_persistConnectSuccessCalls, 0); // torn down before any persist could land
+        // Reaching here at all (no crash, no double-free) is the assertion the
+        // finding demanded — the box was parentless, so deleting the wizard
+        // did not cascade-delete it out from under the still-running exec().
     }
 
   private:

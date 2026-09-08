@@ -75,6 +75,25 @@ public:
     void ensureGarminAuthPage();
     PyEmbeddedAdapter *garminAdapter = nullptr; // owned; destroyed AFTER chain
     GarminAuthChain *garminChain = nullptr;     // owned; destroyed first
+
+    // REQ-009 — one-time ToS-risk notice, shown once before Garmin tokens
+    // ever persist. Returns true iff the user acknowledged ("I understand —
+    // connect"); a Cancel rejects the wizard (DES-003's CAPTCHA-cancel
+    // precedent) and returns false. Skipped (returns true immediately) once
+    // GC_GARMIN_CONNECT_TOS_ACK is already set from a prior session.
+    bool showGarminToSNoticeIfNeeded();
+
+    // The exact REQ-009 acceptance text/button labels — single source of
+    // truth for both the real modal and its test coverage.
+    static QString garminToSNoticeText();
+    static QString garminToSAcceptButtonText();
+    static QString garminToSCancelButtonText();
+
+    // Test seam: overrides the real modal with a scripted answer (true ==
+    // accept, false == cancel). Pass nullptr to restore the production
+    // QMessageBox.
+    static void setGarminToSPromptForTest(bool (*prompt)());
+    static bool (*s_garminToSPromptOverride)();
 #endif
 
 public slots:

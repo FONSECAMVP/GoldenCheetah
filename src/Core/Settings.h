@@ -172,6 +172,9 @@
 #define GC_GARMIN_SMARTRECORD           "<global-general>garminSmartRecord"
 #define GC_GARMIN_HWMARK                "<global-general>garminHWMark"
 
+// REQ-009 — one-time Garmin Connect ToS-risk notice acknowledgement
+#define GC_GARMIN_CONNECT_TOS_ACK       "<global-general>garminConnectTosAck"
+
 // data processor config
 #define GC_DPFG_TOLERANCE               "<global-general>dataprocess/fixgaps/tolerance"
 #define GC_DPFG_STOP                    "<global-general>dataprocess/fixgaps/stop"

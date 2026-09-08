@@ -212,12 +212,77 @@ AddCloudWizard::ensureGarminAuthPage()
     // (cloudService is the GarminConnect instance on this path — cloned by
     // AddService::clicked before routing here, or set at ctor in edit mode); the
     // service resolves the SAME athlete config dir as GarminConnect::resolveConfigDir().
+    // REQ-009 — the one-time ToS-risk notice sits directly in front of the
+    // persist call on both paths: Cancel must leave no tokens on disk.
     auto persist = [this](const GarminAuthSuccess &result) {
-        if (cloudService)
-            cloudService->persistConnectSuccess(result.garmin_user_id, result.tokenBlob);
+        if (!cloudService) return;
+        if (!showGarminToSNoticeIfNeeded()) return;
+        cloudService->persistConnectSuccess(result.garmin_user_id, result.tokenBlob);
     };
     connect(authPage, &GarminCredentialsPage::succeeded, this, persist);
     connect(mfaPage, &GarminMfaPage::succeeded, this, persist);
+}
+
+bool (*AddCloudWizard::s_garminToSPromptOverride)() = nullptr;
+
+void AddCloudWizard::setGarminToSPromptForTest(bool (*prompt)())
+{
+    s_garminToSPromptOverride = prompt;
+}
+
+QString AddCloudWizard::garminToSNoticeText()
+{
+    return tr("GoldenCheetah connects to Garmin Connect using the same authentication flow as "
+              "Garmin's mobile app. Garmin does not officially endorse third-party clients, and "
+              "aggressive use may, in rare cases, lead to a temporary account restriction. "
+              "GoldenCheetah limits its requests to a low rate to avoid this. You can disconnect "
+              "at any time from the Cloud Services settings.");
+}
+
+QString AddCloudWizard::garminToSAcceptButtonText()
+{
+    return tr("I understand — connect");
+}
+
+QString AddCloudWizard::garminToSCancelButtonText()
+{
+    return tr("Cancel");
+}
+
+bool AddCloudWizard::showGarminToSNoticeIfNeeded()
+{
+    // REQ-009: one-time — a prior session's acknowledgement skips the modal.
+    if (appsettings->value(NULL, GC_GARMIN_CONNECT_TOS_ACK, false).toBool())
+        return true;
+
+    bool accepted;
+    if (s_garminToSPromptOverride) {
+        accepted = s_garminToSPromptOverride();
+    } else {
+        // DEC-030/REQ-020 rider precedent (AddAuth::doAuth, AddSettings::
+        // browseFolder): this wizard is NON-MODAL and can be torn down
+        // (MainWindow close, athlete-tab close) while the nested exec() below
+        // pumps the event loop. The box is deliberately PARENTLESS — a
+        // `this`-parented box would cascade-delete mid-exec() the instant the
+        // wizard dies, the same UAF class Stage 6 fixed elsewhere — and `self`
+        // guards every use of `this`/wizard state once exec() returns.
+        QPointer<AddCloudWizard> self(this);
+        QMessageBox box;
+        box.setWindowTitle(tr("Garmin Connect"));
+        box.setText(garminToSNoticeText());
+        QAbstractButton *acceptButton = box.addButton(garminToSAcceptButtonText(), QMessageBox::AcceptRole);
+        box.addButton(garminToSCancelButtonText(), QMessageBox::RejectRole);
+        box.exec();
+        if (self.isNull()) return false; // wizard torn down mid-modal
+        accepted = box.clickedButton() == acceptButton;
+    }
+
+    if (!accepted) {
+        reject(); // DES-003 CAPTCHA-cancel precedent: decline closes the wizard
+        return false;
+    }
+    appsettings->setValue(GC_GARMIN_CONNECT_TOS_ACK, true);
+    return true;
 }
 #endif
 
