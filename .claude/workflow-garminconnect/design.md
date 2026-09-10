@@ -776,6 +776,21 @@ ErrorBus::emit({
 
 Structured `qDebug` mirrors the same fields for developer trace logging (REQ-NF-Obs-001).
 
+### DES-008 addendum — 2026-09-10 (build 2026-09-08, `ac1fa40ba`): keyed on `Kind`, not the raw exception class name
+
+REQ-014's build (see DEC-045) implemented the switch table above with one deliberate deviation from
+the sample: `GarminErrors::translate()` is keyed on `GarminAuthFailure::Kind` (`Auth`/`Network`/
+`RateLimit`/`Unknown`), not the raw Python exception class name (`"GarminConnectAuthenticationError"`
+etc.) shown in the sample's `kErrorMessages` map. The class-name string does not survive the pipeline
+intact — the Python adapter collapses it into a GC-stable `kind` string (`garmin_client.GarminError.kind`),
+and the C++ seam collapses that again into `PyAuthOutcome::Kind` / `GarminAuthFailure::Kind`; nothing
+downstream of the adapter retains the original exception class name to key on. The page-layer locus
+(`GarminCredentialsPage`/`GarminMfaPage` are the only call sites; worker/adapter always stay raw) is
+unchanged from the sample above. `CaptchaRequired`/`MfaRequired`/`TokenPermissionsRejected`/
+`SidecarPermissionsRejected` remain out of REQ-014's scope (A2-005, REQ-003) and have no corresponding
+`GarminAuthFailure::Kind` member today — implemented for `Auth`/`Network`/`RateLimit`/`Unknown` only,
+generic fallback (`"Connection to Garmin Connect failed (%1)"`) for anything else.
+
 ---
 
 ## DES-009 — Bulk backfill controller

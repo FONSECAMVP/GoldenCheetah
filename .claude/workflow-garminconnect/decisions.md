@@ -59,6 +59,7 @@ Compact schema per `references/formats.md` § `decisions.md`. **The recap source
 | DEC-042 | `saveRide`'s post-`autoProcess` member dereferences vs. parent-teardown UAF (B-R028-17) → **Option A, in-function `QPointer` self-bail placed after the SECOND `autoProcess` call, at the proven hazard site, not the call site** | accepted · **BUILT + execution-verified 2026-09-05 (TEST-158, `99/99` both backends, `ctest -L garmin-fast` 27/27) — closes B-R028-17** | 2026-09-05 |
 | DEC-043 | `CloudServiceAutoDownload` cross-thread lifetime UAF, `readComplete`/`readFailed` vs. athlete-tab teardown (A3-R028e-F1) → **Option C, guards in the completion slots PLUS cooperative cancel-and-`wait()` at teardown (extends DEC-040's `CancelToken`)** | accepted · **BUILT + execution-verified 2026-09-05 (TEST-159/TEST-160; watchdog 170/170 + syncdialog 99/99 both backends, `ctest -L garmin-fast` 27/27, app target linked) — closes A3-R028e-F1** | 2026-09-05 |
 | DEC-044 | `RideFile::appendOrUpdatePoint` reads a deleted `RideFilePoint*` (`RideFile.cpp:1658` delete vs. `:1709-1711` unconditional read) (B-R029-01) → **Option A, alias the surviving point: track whichever pointer is still valid after the branch and pass that to `updateMin`/`updateMax`/`updateAvg`, not the possibly-deleted `point`** | accepted · **BUILT + mutation-verified 2026-09-08 (T-173, `testGarminConnectFileIOLifetime` 5/5 both backends, zero ASan reports, orchestrator-independently-rerun) — closes B-R029-01** | 2026-09-08 |
+| DEC-045 | REQ-014 translation locus + keying (recording-only, build predates this entry) → **confirms DES-008's page-layer locus (worker/adapter stay raw); keys `GarminErrors::translate()` on `GarminAuthFailure::Kind`, not DES-008's sample (raw exception class name), which does not survive the Python→adapter→worker pipeline** | accepted · recording-only · **BUILT + committed `ac1fa40ba` (2026-09-08); T-177 (`testGarminConnectErrors`, 4/4)** | 2026-09-10 (build 2026-09-08) |
 
 ### Dormant index
 
@@ -2246,3 +2247,41 @@ A — strictly dominates B and C on maintainability at identical reliability/sca
 grep -n "RideFilePoint \*newest" src/FileIO/RideFile.cpp        # expect the new alias local inside appendOrUpdatePoint
 grep -n "updateMin(point)\|updateMax(point)\|updateAvg(point)" src/FileIO/RideFile.cpp   # expect 0 once the fix lands — the tail calls take the alias, not `point`
 grep -n "REQ-030" .claude/workflow-garminconnect/traceability.md   # expect it to name a built DES/TEST once closed
+
+## DEC-045 — REQ-014 error-translation locus + keying: confirm DES-008's page-layer design, key on `GarminAuthFailure::Kind` not the raw exception class name
+
+- Status: accepted (recording-only — the builder already implemented and committed this resolution while building REQ-014; this entry formalizes it in the ledger so the deviation from DES-008's sample has a citable DEC instead of living only in a commit message and code comment)
+- Reversibility: cheap (keying scheme only; no signature changes beyond what is already committed)
+- Decided / last-reviewed: 2026-09-10 (retroactively recorded; the build landed 2026-09-08 in `ac1fa40ba`)
+- Serves: REQ-014
+- Dependents: `GarminErrors.h`/`.cpp` (the switch table itself), `GarminCredentialsPage.cpp`, `GarminMfaPage.cpp` (the only two translation call sites)
+- Research: builder found the codebase's own `design.md` DES-008 already establishes page-layer translation (`IGarminPyAdapter.h` cites it directly in a comment); a deeper look then found the existing LOCKED test suite was self-contradictory about where translation happens (`testGarminConnectAuthClient.cpp` assumed worker-raw/page-translates; the page test files had hand-constructed pre-translated strings implying the opposite) — resolved in DES-008's favor, not re-litigated.
+
+### The problem
+Two related open questions surfaced while building REQ-014:
+1. **Where does translation happen** — worker/adapter, or page? `design.md`'s DES-008 already says page layer (`GarminCredentialsPage`/`GarminMfaPage`), and `IGarminPyAdapter.h` cites it in a comment — but the existing test suite pulled in both directions: `testGarminConnectAuthClient.cpp` assumed the worker hands back raw, untranslated text; the page-layer test files (`testGarminConnectCredentialsPage.cpp`, `testGarminConnectMfaPage.cpp`) had hand-built pre-translated message strings, implying translation had already happened before the page saw them.
+2. **What key drives the switch table** — DES-008's own sample (`design.md:723-757`) keys `kErrorMessages` on the raw Python exception class name (e.g. `"GarminConnectAuthenticationError"`). That string does not survive the pipeline: the Python adapter collapses it into a GC-stable `kind` string (`garmin_client.GarminError.kind`), and the C++ seam collapses that again into `PyAuthOutcome::Kind` / `GarminAuthFailure::Kind`. Nothing downstream of the adapter retains the original exception class name.
+
+### Resolution
+1. **Locus** — DES-008's page-layer design stands. Worker/adapter (`GarminWorker.cpp`; `PyAuthOutcome::rawMessage` and `GarminAuthFailure::translatedMessage` carry the raw library message verbatim per `IGarminPyAdapter.h`) never translates; `GarminCredentialsPage`/`GarminMfaPage` are the ONLY call sites for `GarminErrors::translate()`. The self-contradictory locked tests were the bug, not the design doc — `testGarminConnectAuthClient.cpp` was corrected to assert raw passthrough (matching the doc), not translated text.
+2. **Keying** — `GarminErrors::translate()` takes a `GarminAuthFailure::Kind` (`Auth`/`Network`/`RateLimit`/`Unknown`), not a raw exception-class-name string. This deviates from DES-008's sample but is the only keying that actually survives the pipeline intact; see the dated DES-008 addendum this DEC references.
+
+### Alternatives
+| Opt | Rel | Scal | Maint | BP |
+|---|---|---|---|---|
+| **A confirm page-layer locus + Kind-keyed switch — CHOSEN** | 5 — matches the one thing downstream of the adapter that is actually still true (the Kind), no lossy string round-trip | 5 — adding a new Kind is one enum member + one switch arm, same cost regardless of locus | 5 — one translation site, one already-locked design doc now consistent with its own tests | 5 — resolves the doc/test contradiction in the doc's favor rather than picking a side arbitrarily |
+| B move translation to the worker, key on Kind | 4 — same keying benefit | 4 — same | 2 — contradicts DES-008 outright, forces a `design.md` rewrite plus rework of every test file the locked suite already got right | 2 — no stated reason DES-008's locus choice was wrong; only the *sample's* key was |
+| C keep DES-008's raw-class-name sample literally, thread the string through the pipeline | 2 — requires plumbing a new field end-to-end (adapter → worker → `GarminAuthFailure`) whose sole purpose is a string already representable by 4 enum values | 3 — one more field to keep in sync per new failure kind | 2 — two parallel representations of "what went wrong" (Kind AND class-name string) that can drift | 2 — no benefit over Kind; strictly more surface for the same information |
+
+### Cascade impact
+- A (chosen): no cascade beyond the already-committed REQ-014 diff (`ac1fa40ba`) — this entry documents a resolution already built, not a pending change.
+- B: would require reopening REQ-014's build, moving the switch table + its tests into `GarminWorker.cpp`, and rewriting `IGarminPyAdapter.h`'s existing raw-passthrough contract.
+- C: would require a new field on `PyAuthOutcome`/`GarminAuthFailure`, threaded from `garmin_client.py` through `PyEmbeddedAdapter.cpp` and `GarminWorker.cpp`, unused by anything except a switch table already served by Kind.
+
+### Chosen
+A — strictly dominates B and C; matches DES-008's own stated locus, and keys on the only value that actually reaches the page layer intact. Recorded retroactively (build + commit predate this ledger entry by two days) so the DES-008 deviation has a citable DEC.
+
+### Alignment probe
+grep -rn "GarminErrors::translate" src/Cloud/GarminCredentialsPage.cpp src/Cloud/GarminMfaPage.cpp src/Cloud/GarminWorker.cpp   # expect hits in the two page files only, zero in GarminWorker.cpp
+grep -n "GarminAuthFailure::Kind" src/Cloud/GarminErrors.h   # expect translate()'s parameter type
+grep -n "DES-008 addendum" .claude/workflow-garminconnect/design.md   # expect the dated addendum this DEC references
