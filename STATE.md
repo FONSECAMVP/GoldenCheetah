@@ -17,9 +17,9 @@ PHASE:     2.2 · Garmin Connect integration, Stage 6 (UAF-family stubs) **CLOSE
            corrected by the Inspector, no code changed. REQ-015 (CAPTCHA path) research concluded
            2026-09-10 — DEC-046 recorded, full resolution and status only in decisions.md/
            traceability.md per DEC-015; no code exists for it. REQ-010's backfill controller +
-           DES-005's rate limiter landed in the working tree 2026-09-10, not yet committed — a
-           reviewer delta-check caught a real defect (see B-R010-01, fixed same session) and a
-           real design-vs-dependency reconciliation (DEC-047); full resolution and status only in
+           DES-005's rate limiter committed `aa6131add` 2026-09-10 — a reviewer delta-check
+           caught a real defect (see B-R010-01, fixed same session before commit) and a real
+           design-vs-dependency reconciliation (DEC-047); full resolution and status only in
            decisions.md/traceability.md/findings.md per DEC-015. Its own UI/CloudService wiring is
            a separate follow-on, not built yet (B-R010-04). Remaining Stage 7 (buildable):
            REQ-010's UI-wiring follow-on, REQ-013, REQ-NF-Pkg-001, REQ-NF-Compat-001. Stages 8-9
@@ -65,9 +65,9 @@ NEXT_GATE: **Stage 6 CLOSED + COMMITTED 2026-09-08 (`4a72d2279`)** — all six R
            message-text substring survives, which this project's LSN-006 forbids classifying on.
            User decision 2026-09-10: not buildable as scoped — see DEC-046 for the full resolution
            and alternatives considered; no code was written. REQ-010 (bulk backfill) + DES-005
-           (rate limiter) — controller + decorators landed in the working tree 2026-09-10, not yet
-           committed; a reviewer delta-check caught and the builder fixed a real defect same
-           session (B-R010-01: silently-ignored atomic-write failures) and DES-005's coverage gap
+           (rate limiter) **COMMITTED `aa6131add`** 2026-09-10; a reviewer delta-check caught and
+           the builder fixed a real defect same session, before commit
+           (B-R010-01: silently-ignored atomic-write failures) and DES-005's coverage gap
            on `login`/`submit_mfa` (B-R010-02); the pagination-model reconciliation against the
            real dependency is recorded in DEC-047 (B-R010-03, accepted residual). **Still needed
            before REQ-010's own PRD acceptance is met: UI/CloudService/AddCloudWizard wiring**
