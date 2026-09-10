@@ -2327,3 +2327,40 @@ B — the real fix (C) is legitimate but out of proportion to REQ-015 as scoped 
 grep -n "REQ-015" .claude/workflow-garminconnect/traceability.md   # expect the row to cite DEC-046
 find src/Cloud -iname "GarminCaptchaPage*"   # expect: no matches (nothing built)
 git log --oneline -- src/Cloud/GarminCaptchaPage.h src/Cloud/GarminCaptchaPage.cpp   # expect: no output
+
+## DEC-047 — REQ-010/DES-009 pagination model: per-activity pacing/checkpointing, not per-page, against the real `garminconnect` dependency
+
+- Status: accepted (recording-only — the builder already implemented and the reviewer already confirmed this resolution while building REQ-010; this entry formalizes it in the ledger so the deviation from DES-009's sample has a citable DEC instead of living only in a build report and code comment)
+- Reversibility: cheap — no signature changes beyond what is already built; a future upstream library change that exposes real page cursors would let a later REQ re-tighten pacing without touching the resumability contract
+- Decided / last-reviewed: 2026-09-10
+- Serves: REQ-010, DES-009, DES-005
+- Dependents: `GarminBackfillController.{h,cpp}`, `gc_rate.py` (the only two implementation sites), STATE.md's Stage 7/8 narrative (REQ-NF-Reliab-001/002 also depend on DES-005)
+- Research: builder confirmed against the real `garminconnect==0.3.13` wheel (not the fake/pystub) that `get_activities_by_date()` performs its own 20-per-page retrieval entirely inside one call — GC's adapter receives one aggregated result with no page cursor exposed. Reviewer delta-check independently confirmed the same reading of the dependency and traced the resulting rate-limiting gap (see B-R010-03).
+
+### The problem
+DES-009's "Paging" state (`design.md:807`) specifies 20 activities/page with a 1s inter-page delay "enforced" by DES-005, and DEC-007 formalized "pace calls through the rate limiter" as the decision. That model assumes GC's adapter drives the paging loop itself, one wire round-trip per page. The real dependency does not expose that seam: `list_activities_since()` returns only after the library has already fetched every page for the requested range internally. There is nothing for `GarminBackfillController` to pace *between pages* — the page boundary is invisible outside the library call.
+
+### Resolution
+1. **Pacing locus** — `gc_rate.py`'s `rate_limited`/`with_retry` decorators wrap `list_activities_since()` and `download_activity()` at the method-call level (one paced call per listing, one paced call per download), not a per-page loop. This is the only pacing granularity the real dependency's seam actually allows.
+2. **Checkpointing locus** — `GarminBackfillController` checkpoints (persists resume cursor + dedup record) per-activity rather than per-page. This is finer-grained than DES-009's per-page sketch, not coarser, so resumability is not weakened — a crash mid-page now loses at most one activity's progress instead of a full page's.
+3. **Accepted residual gap** — the *listing* call's internal multi-page fetch has no rate limiting applied to its own inner requests (only the outer call is paced); a large date range can still cause Garmin-side burst traffic during that one call. Tracked as B-R010-03, accepted with note, not fixed — see that finding for why (no seam exists to fix it at this layer; a real fix would require either upstream library changes or a lower-level HTTP-layer interception, out of proportion to REQ-010 as scoped).
+
+### Alternatives
+| Opt | Rel | Scal | Maint | BP |
+|---|---|---|---|---|
+| **A per-activity pacing/checkpointing, listing-call burst gap accepted — CHOSEN** | 4 — downloads fully paced; listing bursts are a real but narrow residual (one call per backfill run, not per activity) | 5 — no new seam invented; matches what the dependency actually exposes | 5 — one pacing locus (method-call), one checkpoint locus (per-activity), both simpler than a fictitious per-page loop | 4 — resolves the doc/dependency mismatch honestly rather than fabricating a page cursor that doesn't exist |
+| B fabricate a page-level seam by re-implementing `get_activities_by_date`'s HTTP calls directly in the adapter (bypass the library's own pagination) | 3 — now GC owns Garmin API pagination semantics directly, a second place they can drift from upstream | 2 — couples `garmin_client.py` to Garmin's raw REST shape instead of the maintained library's abstraction | 1 — defeats DES-012's entire purpose (a stable seam over the library specifically so GC doesn't have to track Garmin's API directly) | 2 — technically satisfies DES-009's literal number, at the cost of the adapter-seam design DES-012 already established |
+| C do not build DES-005/REQ-010 at all until upstream exposes page cursors | 5 — no risk, nothing built | 5 — nothing to maintain | 5 — no code | 1 — blocks REQ-010 and Stage 8's REQ-NF-Reliab-001/002 indefinitely on a change with no known timeline |
+
+### Cascade impact
+- A (chosen): no cascade beyond the already-built REQ-010/DES-005 diff (uncommitted, working tree) — this entry documents a resolution already built and reviewer-confirmed, not a pending change. `design.md`'s DES-009 section should get a short dated addendum (mirroring the DES-008 addendum DEC-045 references) noting the per-activity-not-per-page reality; not yet written, tracked alongside the REQ-010 ledger update.
+- B: would require reopening the REQ-010/DES-012 build, moving raw HTTP pagination logic into `garmin_client.py`, and a new set of tests mocking Garmin's REST responses directly instead of the library's Python interface.
+- C: blocks REQ-010 and, transitively, Stage 8's REQ-NF-Reliab-001/002 (both already list DES-005 as a dependency) with no forcing function to ever unblock.
+
+### Chosen
+A — strictly dominates B (which breaks DES-012's adapter-seam design for a number that isn't achievable anyway) and C (which blocks two REQs on an indefinite upstream change). The listing-call burst residual (B-R010-03) is real but narrow and accepted with note rather than fixed at disproportionate cost.
+
+### Alignment probe
+grep -n "get_activities_by_date" src/Python/garminconnect/garmin_client.py   # expect the single aggregated call site
+grep -n "rate_limited\|with_retry" src/Python/garminconnect/gc_rate.py src/Python/garminconnect/garmin_client.py   # expect decorators on list_activities_since/download_activity/login/submit_mfa only
+grep -n "B-R010-03" .claude/workflow-garminconnect/findings.md   # expect the accepted-with-note residual this DEC references

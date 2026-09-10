@@ -9,6 +9,8 @@ Phase 2.2 status (REQ-by-REQ):
   - REQ-002 login / GarminError(kind='auth') translation: GREEN.
   - REQ-007 download_activity (fmt map + connection/rate_limit translation): GREEN.
   - REQ-014 login connection/rate_limit translation: GREEN.
+  - REQ-010 (DES-005): login/submit_mfa/list_activities_since/download_activity
+    are all paced + retried via gc_rate.py.
   - REQ-003 / REQ-008 / REQ-012 / REQ-013: still raise
     NotImplementedError until their owning slice reaches GREEN.
 
@@ -20,6 +22,8 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from typing import Any
+
+from gc_rate import rate_limited, with_retry
 
 try:
     import garminconnect as _gc
@@ -78,7 +82,7 @@ class GarminClient:
         # until/unless the MFA path is entered. Holds no password (REQ-005).
         self._pending_mfa: Any = None
 
-    def login(self) -> dict[str, Any]:
+    def _login_impl(self) -> dict[str, Any]:
         # REQ-014 — connection/rate_limit classified by exception TYPE (LSN-006),
         # mirroring download_activity()/list_activities_since()'s existing pattern.
         try:
@@ -109,6 +113,16 @@ class GarminClient:
             "garmin_user_id": str(self._garmin.full_name_id),
             "display_name": self._garmin.display_name,
         }
+
+    # DES-005/DEC-007 — paced (REQ-NF-Perf-002) and retried (REQ-NF-Reliab-001)
+    # through gc_rate.py, same as list_activities_since/download_activity below.
+    # is_transient excludes kind='auth' (and the MFA-only kind='unknown') so a
+    # bad password is never auto-retried — REQ-002/REQ-003's locked
+    # immediate-failure behaviour is unchanged.
+    login = with_retry(
+        rate_limited(_login_impl),
+        is_transient=lambda e: isinstance(e, GarminError) and e.kind in ("connection", "rate_limit"),
+    )
 
     def dump_tokens(self) -> str:
         # REQ-004 / DEC-014 Option B: export the authenticated in-memory OAuth
@@ -169,7 +183,7 @@ class GarminClient:
                 e,
             ) from e
 
-    def submit_mfa(self, code: str) -> dict[str, Any]:
+    def _submit_mfa_impl(self, code: str) -> dict[str, Any]:
         # REQ-003 — resume the pending-MFA session established by a prior login()
         # that returned {"mfa_required": True}. Two-step flow: login() retained a
         # client_state; resume_login(code, client_state) completes auth on the
@@ -205,7 +219,16 @@ class GarminClient:
             "display_name": self._garmin.display_name,
         }
 
-    def list_activities_since(self, ts_gmt: str) -> Iterator[dict[str, Any]]:
+    # DES-005/DEC-007 — same pacing/retry wrapping as login. is_transient
+    # excludes kind='auth' (bad/expired OTP) and kind='unknown' (no pending
+    # session) so neither is auto-retried — REQ-003's re-prompt-on-bad-code
+    # flow (not a silent retry loop) is unchanged.
+    submit_mfa = with_retry(
+        rate_limited(_submit_mfa_impl),
+        is_transient=lambda e: isinstance(e, GarminError) and e.kind in ("connection", "rate_limit"),
+    )
+
+    def _list_activities_since_impl(self, ts_gmt: str) -> Iterator[dict[str, Any]]:
         # REQ-008 Slice A (DES-010 step 4 / DES-012). List the activities whose
         # Garmin server-side startTimeGMT is newer than ts_gmt. `ts_gmt` is
         # Garmin's SERVER-SIDE timestamp, NOT the local clock (DES-010 — protects
@@ -242,7 +265,16 @@ class GarminClient:
         summaries = [{"activityId": str(a["activityId"]), "startTimeGMT": str(a["startTimeGMT"])} for a in raw]
         return iter(summaries)
 
-    def download_activity(self, activity_id: str, fmt: str = "ORIGINAL") -> bytes:
+    # DES-005/DEC-007 — paced (REQ-NF-Perf-002) and retried (REQ-NF-Reliab-001)
+    # through gc_rate.py. Retry keys on the GC-stable kind (translation already
+    # happened above) rather than the raw library exception type design.md's
+    # `_TRANSIENT` sketch names — see gc_rate.py's module docstring for why.
+    list_activities_since = with_retry(
+        rate_limited(_list_activities_since_impl),
+        is_transient=lambda e: isinstance(e, GarminError) and e.kind in ("connection", "rate_limit"),
+    )
+
+    def _download_activity_impl(self, activity_id: str, fmt: str = "ORIGINAL") -> bytes:
         # REQ-007 / DEC-006: FIT is the default (dl_fmt=ORIGINAL); TCX is the
         # fallback the C++ readFile requests when Garmin has no FIT original
         # (DES-004 owns the fallback orchestration — this adapter is a thin,
@@ -265,6 +297,12 @@ class GarminClient:
         except _gc.exceptions.GarminConnectTooManyRequestsError as e:
             raise GarminError("rate_limit", str(e) or "Garmin Connect is rate-limiting downloads", e) from e
         return data
+
+    # DES-005/DEC-007 — same pacing/retry wrapping as list_activities_since.
+    download_activity = with_retry(
+        rate_limited(_download_activity_impl),
+        is_transient=lambda e: isinstance(e, GarminError) and e.kind in ("connection", "rate_limit"),
+    )
 
     def get_profile(self) -> dict[str, Any]:
         raise NotImplementedError("REQ-013 GREEN step not yet implemented")

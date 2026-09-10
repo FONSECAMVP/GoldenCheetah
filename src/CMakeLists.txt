@@ -1447,6 +1447,12 @@ if(GC_WANT_GARMINCONNECT)
         Cloud/IGarminAuthClient.h
         Cloud/IGarminDownloadClient.h
         Cloud/IGarminPyAdapter.h
+        # REQ-010 (DES-009): standalone bulk-backfill orchestration controller.
+        # Not yet wired into GarminConnect's own flow (that integration is a
+        # later slice) but registered here now, ahead of being called, per
+        # LSN-018 (avoid the future undefined-reference-on-wiring bug).
+        Cloud/GarminBackfillController.cpp
+        Cloud/GarminBackfillController.h
     )
     target_compile_definitions(GoldenCheetah PRIVATE GC_WANT_GARMINCONNECT)
 

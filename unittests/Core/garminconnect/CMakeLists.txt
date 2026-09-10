@@ -2336,3 +2336,46 @@ set_tests_properties(testGarminConnectFileIOLifetime_minimal PROPERTIES
     LABELS "garmin-fast"
     TIMEOUT 120
     ENVIRONMENT "QT_QPA_PLATFORM=minimal;ASAN_OPTIONS=detect_leaks=0:abort_on_error=0:halt_on_error=1")
+
+# --- T-176..T-184 — REQ-010 / DES-009: GarminBackfillController -------------
+# Bulk-backfill orchestration state machine, standalone (decoupled from
+# GarminConnect/CloudService - DES-010's incremental sync owns that
+# integration for REQ-008). Pure-Qt (no Python.h): a Python-free
+# IGarminDownloadClient fake scripts list/download; the REAL GarminSidecarStore
+# + AtomicFile back the sidecar/FIT-file I/O so resumability and torn-write
+# recovery are exercised for real.
+#
+# RED phase: src/Cloud/GarminBackfillController.{h,cpp} do not exist yet - the
+# executable's compile fails at the #include "GarminBackfillController.h" line
+# (right-reason RED). GREEN adds those files AND extends this add_executable()
+# with the controller .cpp + header so the link resolves.
+add_executable(testGarminBackfillController
+    testGarminBackfillController.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminBackfillController.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminBackfillController.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminSidecarStore.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminSidecarStore.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminDownloadClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminAuthClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminPyAdapter.h
+)
+
+set_target_properties(testGarminBackfillController PROPERTIES AUTOMOC ON)
+
+target_include_directories(testGarminBackfillController PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+)
+
+target_link_libraries(testGarminBackfillController PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Test
+)
+target_compile_features(testGarminBackfillController PRIVATE cxx_std_17)
+
+add_test(NAME testGarminBackfillController COMMAND testGarminBackfillController)
+set_tests_properties(testGarminBackfillController PROPERTIES LABELS "garmin-fast")
