@@ -2285,3 +2285,45 @@ A — strictly dominates B and C; matches DES-008's own stated locus, and keys o
 grep -rn "GarminErrors::translate" src/Cloud/GarminCredentialsPage.cpp src/Cloud/GarminMfaPage.cpp src/Cloud/GarminWorker.cpp   # expect hits in the two page files only, zero in GarminWorker.cpp
 grep -n "GarminAuthFailure::Kind" src/Cloud/GarminErrors.h   # expect translate()'s parameter type
 grep -n "DES-008 addendum" .claude/workflow-garminconnect/design.md   # expect the dated addendum this DEC references
+
+## DEC-046 — REQ-015 CAPTCHA detection: defer, no structured signal survives in the real dependency
+
+- Status: accepted (user decision 2026-09-10, option 2 of 3 presented)
+- Reversibility: cheap — nothing built, nothing to unwind; revisit if the dependency changes or a dependency-level fix is separately scoped
+- Decided / last-reviewed: 2026-09-10
+- Serves: REQ-015
+- Dependents: none (no code exists yet for this REQ; this DEC blocks a build attempt until its premise changes)
+- Research: two independent passes, both reading the actual `garminconnect==0.3.13` wheel source (not documentation) — (1) a `qgdw-builder` session, (2) a separately-dispatched fresh Codex session given only the narrow question "is there a structured, non-message-text way to detect this," with no knowledge of the first pass's conclusion. Both reached the same result independently.
+
+### The problem
+REQ-015 (prd.md) requires GC to detect a Garmin CAPTCHA challenge via "a recognisable signal or specific HTTP status" and show a dedicated dialog. This project's LSN-006 requires classifying errors by exception TYPE, never by scanning message text. The two research passes established, by reading `garminconnect/client.py` and `garminconnect/exceptions.py` directly:
+- Garmin's server signals CAPTCHA as an ordinary HTTP 200 whose JSON body contains `responseStatus.type == "CAPTCHA_REQUIRED"` — a real structured signal exists on the wire.
+- The library itself discards it: both the mobile-flow and portal-flow login paths (`client.py:696`, `client.py:1104`) see this field, then raise a bare `GarminConnectConnectionError("<string>")` — no response object, no parsed body, args is just the string. The 5-strategy retry loop (`client.py:550`) catches, retries, and on exhaustion builds a **fresh** generic exception with only sanitised text (no `raise ... from` chain preserving the original). The public `Garmin.login()` (`__init__.py:798`) wraps that once more.
+- `GarminConnectConnectionError` (`exceptions.py:4`) does declare a `.response` attribute — the one property that looked like it might carry the structured field through — but it is `None` by construction on this path; it is only ever populated by an unrelated post-auth API-call decorator, never by the SSO login code. This was the specific thing checked and ruled out, not assumed.
+- No lower-level interception point exists either: `Garmin.__init__` takes no session/client/hook injection argument and constructs its own `client.Client`; each login strategy builds its own throwaway `requests`/`curl_cffi` session internally, not retained or exposed.
+- Correction to an earlier assumption: 0.3.13 does not depend on or import `garth` — the SSO implementation is entirely the library's own code (`client.py:473`).
+
+So the only signal surviving to `garmin_client.py`'s call site, at any layer, is a free-text substring ("CAPTCHA required") inside `str(exception)` — exactly what LSN-006 forbids keying on.
+
+### Resolution
+Defer REQ-015. Do not build CAPTCHA detection now, and do not add message-substring matching to work around the gap. A CAPTCHA-triggered login continues to fall through as today's generic `Unknown`/`Auth` failure (REQ-014's existing translation) until either the dependency changes upstream, or a separately-scoped dependency-level fix (forking/patching `garminconnect` to add a real `GarminConnectCaptchaRequiredError` carrying the response) is decided and built as its own piece of work — not as part of REQ-015's original adapter-only scope.
+
+### Alternatives
+| Opt | Rel | Scal | Maint | BP |
+|---|---|---|---|---|
+| **B defer, no build — CHOSEN** | 5 — no risk introduced; today's generic-error fallback is unchanged, known behavior | 5 — nothing to maintain | 5 — no code, no LSN-006 exception to track or eventually clean up | 5 — doesn't compromise the classify-by-type rule for one feature |
+| A scoped LSN-006 exception (message-substring match, documented) | 3 — brittle by nature; a library text-string change silently breaks detection with no compile-time signal | 3 — same brittleness compounds with every future locale/library-version change | 2 — a permanent, deliberately-carved hole in an otherwise-enforced rule | 2 — matches design.md's original (pre-LSN-006) "heuristic" framing, but contradicts the rule as currently written |
+| C fix upstream (fork/patch `garminconnect` to preserve the structured signal) | 5 — the only option that actually satisfies LSN-006 | 4 — one-time dependency-level fix, but now GC carries a fork/patch maintenance burden across upstream releases | 3 — real fix, but cross-repo scope, its own tests, its own packaging path (REQ-NF-Pkg-001 territory) | 5 — correct fix, wrong size for this REQ as scoped |
+
+### Cascade impact
+- B (chosen): none — no code exists to touch. `traceability.md`'s REQ-015 row is updated to cite this DEC and record the research conclusion in place of the prior "not started" note.
+- A: would need its own DEC superseding this one, a code comment at the one detection site citing that DEC, and an explicit LSN-006 scope note.
+- C: would need a new REQ (or an amendment widening REQ-015's scope) plus its own DEC, targeting the dependency itself rather than `garmin_client.py`; likely folds into REQ-NF-Pkg-001's dependency-packaging territory.
+
+### Chosen
+B — the real fix (C) is legitimate but out of proportion to REQ-015 as scoped (an adapter-only requirement) and CAPTCHA is a rare, low-stakes path (worst case: a slightly-generic error message, not silent data loss or a security gap). A (bending LSN-006) was rejected as a standing brittleness with no compile-time guard, for a feature this narrow. Revisit if `garminconnect` ships a fix, or if a dependency-level fix is separately proposed and scoped.
+
+### Alignment probe
+grep -n "REQ-015" .claude/workflow-garminconnect/traceability.md   # expect the row to cite DEC-046
+find src/Cloud -iname "GarminCaptchaPage*"   # expect: no matches (nothing built)
+git log --oneline -- src/Cloud/GarminCaptchaPage.h src/Cloud/GarminCaptchaPage.cpp   # expect: no output

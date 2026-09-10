@@ -1,4 +1,4 @@
-# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-10 by Inspector (ledger reconciliation — see line 14 note)
+# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-10 by Inspector (ledger reconciliation + REQ-015/DEC-046 defer — see line 14 note)
 # Per-id lifecycle status lives ONLY in .claude/workflow-garminconnect/traceability.md (DEC-015 SSOT).
 # For a DEC's status read decisions.md. For a finding's severity/disposition read findings.md.
 # ALL superseded cursor narrative -> .claude/workflow-garminconnect/archive/state-history.md
@@ -14,8 +14,10 @@ PHASE:     2.2 · Garmin Connect integration, Stage 6 (UAF-family stubs) **CLOSE
            both committed (`abd1e119b`, `ac1fa40ba`, 2026-09-08 — DEC-045 + T-177; full status
            lives only in traceability.md per DEC-015). Ledger reconciled 2026-09-10 —
            traceability.md's REQ-009/014 rows plus REQ-029/030's stale "uncommitted" status, all
-           corrected by the Inspector, no code changed. Remaining Stage 7: REQ-010, REQ-013,
-           REQ-015, REQ-NF-Pkg-001, REQ-NF-Compat-001. Stages 8-9 not yet open.
+           corrected by the Inspector, no code changed. REQ-015 (CAPTCHA path) research concluded
+           2026-09-10 — DEC-046 recorded, full resolution and status only in decisions.md/
+           traceability.md per DEC-015; no code exists for it. Remaining Stage 7 (buildable):
+           REQ-010, REQ-013, REQ-NF-Pkg-001, REQ-NF-Compat-001. Stages 8-9 not yet open.
 OPEN:      **STAGE 6 CLOSED 2026-09-08, COMMITTED `4a72d2279`** — all six REQs TEST VERIFIED
            on executed evidence. REQ-020/022/023/024 TEST VERIFIED 2026-09-06..08
            (T-161..T-172); REQ-029 (DEC-041 base+amendment) + REQ-030 (new, DEC-044) TEST
@@ -49,10 +51,15 @@ NEXT_GATE: **Stage 6 CLOSED + COMMITTED 2026-09-08 (`4a72d2279`)** — all six R
            (020/022/023/024/029/030) TEST VERIFIED, all findings dispositioned, CLV PASS, full
            gate 37/37. **Stage 7 (missing Phase-1 product surface) OPEN, IN PROGRESS:**
            REQ-009 (ToS notice) **COMMITTED `abd1e119b`**; REQ-014 (friendly error
-           translation) **COMMITTED `ac1fa40ba`** (DEC-045). **Remaining, not yet
+           translation) **COMMITTED `ac1fa40ba`** (DEC-045). REQ-015 (CAPTCHA path) — two
+           independent research passes (builder + a fresh Codex session) read the real
+           `garminconnect==0.3.13` dependency's source directly and confirmed it discards
+           CAPTCHA's structured signal before any caller-visible exception attribute; only a
+           message-text substring survives, which this project's LSN-006 forbids classifying on.
+           User decision 2026-09-10: not buildable as scoped — see DEC-046 for the full resolution
+           and alternatives considered; no code was written. **Remaining, not yet
            started:** REQ-010 (bulk backfill — design DES-009 never accepted), REQ-013 (profile
-           auto-fill, nice), REQ-015 (CAPTCHA path, partial — Python side never raises it
-           either), REQ-NF-Pkg-001 (installer bundling — **`garminconnect`/`curl_cffi` are in NO
+           auto-fill, nice), REQ-NF-Pkg-001 (installer bundling — **`garminconnect`/`curl_cffi` are in NO
            requirements or installer file on any platform, so the feature cannot reach a user at
            all today**), REQ-NF-Compat-001 (`docs/garminconnect-known-limits.md` does not
            exist). Then Stage 8
@@ -76,8 +83,10 @@ BUDGETS:   WIKI ~3170tok/700 [BREACH, not in this pass's scope] · DECIDX ~2299t
            lessons hot sizes all compacted this pass — full before/after table and the three
            newly-flagged (unfixed) breaches → archive/state-history.md § 12.
 COUNTS:    REQ30 (REQ-020/022/023/024/029 built 2026-09-06..08; REQ-030 new+built 2026-09-08;
-           REQ-009/014 committed 2026-09-08, ledger-reconciled 2026-09-10) · DEC45 (DEC-045 added
-           2026-09-10, recording-only, REQ-014 translation locus+keying) · DES14(+2 lettered,
+           REQ-009/014 committed 2026-09-08, ledger-reconciled 2026-09-10; REQ-015 research
+           concluded 2026-09-10, not buildable as scoped, no code) · DEC46 (DEC-045 added
+           2026-09-10, recording-only, REQ-014 translation locus+keying; DEC-046 added 2026-09-10,
+           recording the CAPTCHA-path outcome — dependency discards the structured signal) · DES14(+2 lettered,
            +1 dated addendum under DES-008) · TEST177 (T-161..163 REQ-020; T-164..166 REQ-022;
            T-167..169 REQ-023; T-170..172 REQ-024; T-173..175 REQ-029+REQ-030; T-176 REQ-009;
            T-177 REQ-014) · LSN85 · VAL18 · findings 382 rows (381 + B-R029-01,
