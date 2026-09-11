@@ -242,6 +242,74 @@ contains(DEFINES, "GC_WANT_PYTHON") {
                 FileIO/FixPyDataProcessor.cpp
 }
 
+###================================
+### OPTIONAL => Garmin Connect
+###================================
+# REQ-NF-Pkg-001 / DEC-049 step 1: mirrors src/CMakeLists.txt's
+# if(GC_WANT_GARMINCONNECT) block so the qmake/appveyor release build carries
+# the same sources as the CMake build. PyEmbeddedAdapter.cpp is the only TU
+# that embeds CPython (DES-013), but the link dependency is target-wide once
+# the flag is ON. Independent of GC_WANT_PYTHON's embedded-Python detection
+# above (own GARMIN_PYTHONINCLUDES/GARMIN_PYTHONLIBS vars) so either feature
+# can be enabled without the other.
+
+contains(DEFINES, "GC_WANT_GARMINCONNECT") {
+    message("Enabling Garmin Connect support")
+    INCLUDEPATH += $$replace(GARMIN_PYTHONINCLUDES, ^-I, )
+    LIBS += $${GARMIN_PYTHONLIBS}
+
+    # GarminConnect.cpp includes "zipreader.h" by bare name (matching CMake's
+    # global qzip include dir); qmake's other qzip consumers use "../qzip/..."
+    # relative includes instead, so this path isn't in the default INCLUDEPATH.
+    INCLUDEPATH += ../contrib/qzip
+
+    # Dev default for the garmin_client module directory; the runtime env var
+    # GC_GARMIN_PYPATH overrides it (see AddCloudWizard::ensureGarminAuthPage).
+    # The installed/bundled location is DES-007 / REQ-NF-Pkg-001 step 2 territory.
+    # shell_quote (not a plain \\\"-escaped string) because $$PWD may contain a
+    # space (this repo's own working copy does) — a plain escape survives
+    # qmake's own value parsing but not the generated Makefile recipe line,
+    # which word-splits on the unescaped space (LSN: found verifying this
+    # block; see build report).
+    DEFINES += $$shell_quote(GARMIN_PY_MODULE_DIR=\"$$PWD/Python/garminconnect\")
+
+    HEADERS += Cloud/GarminConnect.h Cloud/GarminAccountEpoch.h \
+                Cloud/GarminCredentialsPage.h Cloud/GarminErrors.h Cloud/GarminMfaPage.h \
+                Cloud/GarminWorker.h Cloud/WorkerAuthClient.h Cloud/GarminAuthChain.h \
+                Cloud/GarminDownloadChain.h Cloud/GarminDownloadClient.h Cloud/PyEmbeddedAdapter.h \
+                Cloud/GarminTokenStore.h Cloud/GarminSidecarStore.h Cloud/AtomicFile.h \
+                Cloud/IGarminAuthClient.h Cloud/IGarminDownloadClient.h Cloud/IGarminPyAdapter.h \
+                Cloud/GarminBackfillController.h Cloud/GarminBackfillDialog.h
+
+    # Cloud/PyEmbeddedAdapter.cpp is deliberately NOT listed here — it needs
+    # to be compiled without the forced PCH include because it requires
+    # Python.h to precede any Qt header (see the NO_PCH_SOURCES branch below).
+    SOURCES += Cloud/GarminConnect.cpp Cloud/GarminAccountEpoch.cpp \
+                Cloud/GarminCredentialsPage.cpp Cloud/GarminErrors.cpp Cloud/GarminMfaPage.cpp \
+                Cloud/GarminWorker.cpp Cloud/WorkerAuthClient.cpp Cloud/GarminAuthChain.cpp \
+                Cloud/GarminDownloadChain.cpp Cloud/GarminDownloadClient.cpp \
+                Cloud/GarminTokenStore.cpp Cloud/GarminSidecarStore.cpp Cloud/AtomicFile.cpp \
+                Cloud/GarminBackfillController.cpp Cloud/GarminBackfillDialog.cpp
+
+    # Cloud/PyEmbeddedAdapter.cpp needs Python.h to precede any Qt header
+    # (Qt's `slots` keyword-macro collides with the `slots` field in CPython's
+    # object.h — see the file's own include-order comment). qmake's PCH on
+    # unix/GCC force-includes stable.h (Qt) ahead of every source file's own
+    # includes with no per-file opt-out (`<file>.CONFIG -= precompile_header`
+    # is a no-op for .cpp under the unix Makefile generator — verified via an
+    # isolated qmake repro). qmake's own precompile_header.prf ships exactly
+    # this escape hatch: NO_PCH_SOURCES, which — unlike a hand-rolled
+    # QMAKE_EXTRA_COMPILERS rule — also gets correct header-dependency
+    # tracking (TYPE_C) for free. On macOS the PCH is disabled entirely
+    # (see PRECOMPILED HEADER section below), so there's nothing to opt out
+    # of there; compile it as a normal source instead.
+    macx {
+        SOURCES += Cloud/PyEmbeddedAdapter.cpp
+    } else {
+        NO_PCH_SOURCES += Cloud/PyEmbeddedAdapter.cpp
+    }
+}
+
 ###====================
 ### OPTIONAL => Embed R
 ###====================

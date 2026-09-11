@@ -75,6 +75,11 @@ Replace-InFile $gcconfig "#DEFINES \+= GC_WANT_PYTHON" "DEFINES += GC_WANT_PYTHO
 Replace-InFile $gcconfig "#PYTHONINCLUDES =" "PYTHONINCLUDES = -ICore -I`"$(python -c "import sys; print(sys.prefix)")\include`""
 Replace-InFile $gcconfig "#PYTHONLIBS =" "PYTHONLIBS = -L`"$(python -c "import sys; print(sys.prefix)")\libs`" -lpython311"
 
+# 14a. Garmin Connect Support (own embedded-CPython vars, independent of GC_WANT_PYTHON above)
+Replace-InFile $gcconfig "#DEFINES \+= GC_WANT_GARMINCONNECT" "DEFINES += GC_WANT_GARMINCONNECT"
+Replace-InFile $gcconfig "#GARMIN_PYTHONINCLUDES =" "GARMIN_PYTHONINCLUDES = -ICore -I`"$(python -c "import sys; print(sys.prefix)")\include`""
+Replace-InFile $gcconfig "#GARMIN_PYTHONLIBS =" "GARMIN_PYTHONLIBS = -L`"$(python -c "import sys; print(sys.prefix)")\libs`" -lpython311"
+
 # 15. GSL Support
 Replace-InFile $gcconfig "#  GSL_INCLUDES = c:\\vcpkg\\installed\\x64-windows\\include" "GSL_INCLUDES = c:\tools\vcpkg\installed\x64-windows\include"
 Replace-InFile $gcconfig "#  GSL_LIBS = -LC:\\vcpkg\\installed\\x64-windows\\lib -lgsl -lgslcblas" "GSL_LIBS = -Lc:\tools\vcpkg\installed\x64-windows\lib -lgsl -lgslcblas"

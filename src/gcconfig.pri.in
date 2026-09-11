@@ -93,6 +93,54 @@ contains(DEFINES, "GC_WANT_PYTHON") {
     # entirely reused in CI, instead we set INCLUDEPATH + LIBS in the .prod files.
 }
 
+###############################################################################
+# GARMIN CONNECT CONFIGURATION
+###############################################################################
+# To enable Garmin Connect activity download support, set GC_WANT_GARMINCONNECT.
+# This embeds its own CPython interpreter (REQ-NF-Pkg-001/DEC-049 step 1,
+# mirrors src/CMakeLists.txt's GC_WANT_GARMINCONNECT block) and is independent
+# of GC_WANT_PYTHON above — either can be enabled without the other.
+#
+# REQUIRED SETTING:
+#   DEFINES += GC_WANT_GARMINCONNECT      # Enable Garmin Connect support
+#
+# OPTIONAL SETTINGS:
+#   GARMIN_PYTHONINCLUDES = <custom path>     # Override include path
+#   GARMIN_PYTHONLIBS = <custom libs>         # Override library path
+###############################################################################
+
+# Uncomment to enable Garmin Connect:
+#DEFINES += GC_WANT_GARMINCONNECT
+
+# Custom paths (optional - auto-configured if not set):
+#GARMIN_PYTHONINCLUDES =
+#GARMIN_PYTHONLIBS =
+
+###############################################################################
+# AUTOMATIC GARMIN CONNECT PYTHON CONFIGURATION (DO NOT EDIT BELOW THIS LINE)
+###############################################################################
+contains(DEFINES, "GC_WANT_GARMINCONNECT") {
+    # Auto-configure platform-specific paths if not manually set
+    isEmpty(GARMIN_PYTHONINCLUDES) {
+        GARMIN_PYTHONINCLUDES = $$system("python3-config --includes")
+    }
+    isEmpty(GARMIN_PYTHONLIBS) {
+        GARMIN_PYTHONLIBS = $$system("python3-config --ldflags --embed")
+    }
+    message("Garmin Connect Python configuration:")
+    message("  Includes: $$GARMIN_PYTHONINCLUDES")
+    message("  Libs: $$GARMIN_PYTHONLIBS")
+
+    isEmpty(GARMIN_PYTHONINCLUDES) {
+        error("Python include path not found. Please set GARMIN_PYTHONINCLUDES.")
+    }
+    isEmpty(GARMIN_PYTHONLIBS) {
+        error("Python library path not found. Please set GARMIN_PYTHONLIBS.")
+    }
+    # NOTE, we don't manipulate global configs in this file as it is not always
+    # entirely reused in CI, instead we set INCLUDEPATH + LIBS in the .prod files.
+}
+
 # put output into a separate dir
 # to keep main directory clear
 #DESTDIR = .
