@@ -2364,3 +2364,39 @@ A — strictly dominates B (which breaks DES-012's adapter-seam design for a num
 grep -n "get_activities_by_date" src/Python/garminconnect/garmin_client.py   # expect the single aggregated call site
 grep -n "rate_limited\|with_retry" src/Python/garminconnect/gc_rate.py src/Python/garminconnect/garmin_client.py   # expect decorators on list_activities_since/download_activity/login/submit_mfa only
 grep -n "B-R010-03" .claude/workflow-garminconnect/findings.md   # expect the accepted-with-note residual this DEC references
+
+## DEC-048 — B-R010-04 UI wiring: fix the new backfill-local exposure now, defer GarminConnect's own internal context-handling gap
+
+- Status: accepted (recording-only — the user decided the scope split live during the session; this entry formalizes it in the ledger)
+- Reversibility: cheap — the deferred fix is additive (making `GarminConnect`/`CloudService`'s internal context handling UAF-safe does not require undoing anything built here); no signature changes beyond what is already built
+- Decided / last-reviewed: 2026-09-11
+- Serves: REQ-010, DES-009 (B-R010-04's UI wiring)
+- Dependents: `GarminBackfillDialog.cpp` (the narrow fix site), `GarminConnect.cpp`/`CloudService.cpp` (the deferred fix's eventual site, not yet touched)
+- Research: a reviewer's final confirmation pass on the B-R010-09 fix (continuously-tracked `QPointer<Context>` in `GarminBackfillDialog`) found that the new `SessionCheck` callback (B-R010-08's fix) still reaches `GarminConnect::backfillSessionStillValid()` → `sessionSuperseded()`/`accountStillConnected()` → `resolveConfigDir()`, and that last call chain dereferences `GarminConnect`/`CloudService`'s own internal RAW context pointer — a pre-existing limitation, not introduced by this backfill work, already shared by the committed REQ-007/008/012/017 incremental-sync paths (`readdir()`/`readFile()` reach the identical call chain). The backfill work's own contribution was adding ONE MORE caller (the controller's three per-activity session-check points) to an already-fragile path.
+
+### The problem
+Two different bugs were tangled together in one finding: (1) a narrow, dialog-local gap — the `SessionCheck` lambda called into `GarminConnect` unconditionally, even when the dialog's own (by-then-already-fixed, continuously-tracked) `context` had gone null; (2) a deep, pre-existing gap — `GarminConnect`/`CloudService` itself has never made its own internal context pointer UAF-safe, for ANY of its callers, not just this new one. Fixing only (1) closes the specific NEW exposure this session's work added. Fixing (2) would require touching `GarminConnect.cpp`/`CloudService.cpp`'s foundational session/context-handling code — code shared by every already-shipped Garmin sync path (REQ-007/008/012/017), not scoped to backfill.
+
+### Resolution
+1. **Fix now (B-R010-09's final piece)** — the `SessionCheck` lambda in `GarminBackfillDialog::startClicked()` now short-circuits on `!context.isNull()` (the dialog's own continuously-tracked guard) BEFORE ever calling `backfillStore->backfillSessionStillValid()`. Entirely dialog-local; `GarminConnect.cpp`/`CloudService.cpp` untouched.
+2. **Defer, do not fix (B-R010-10)** — `GarminConnect`/`CloudService`'s own internal raw-context dereference in `resolveConfigDir()` (reached via `sessionSuperseded()`/`accountStillConnected()`) stays as-is. Recorded as a new, non-blocking finding for a future task; no REQ allocated yet.
+
+### Alternatives
+| Opt | Rel | Scal | Maint | BP |
+|---|---|---|---|---|
+| **A narrow dialog-local fix now, defer the foundational gap — CHOSEN** | 4 — closes the specific new exposure this session added; the foundational gap is real but pre-existing and no more likely to fire via backfill than via the already-shipped sync paths | 5 — no new seam invented, no scope creep into shared code | 5 — one small, self-contained fix; the deferred item is clearly tracked, not silently dropped | 4 — resolves the reviewer's finding honestly at the scope it was actually introduced at, rather than either ignoring it or overreaching |
+| B fix everything now, including `GarminConnect`/`CloudService` internals in this same session | 3 — technically the most complete fix, but expands a UI-wiring follow-on into a foundational-code change late in a long session, raising the chance of a rushed mistake in shared, heavily-relied-upon code | 2 — touches code shared by REQ-007/008/012/017, none of which are in this task's test scope, so a regression there would not be caught by this session's own test runs | 2 — conflates two independently-shippable pieces of work into one commit, making a future revert or bisect harder | 3 — more thorough, but violates the principle of matching fix scope to where a defect was actually introduced |
+| C stop here, accept the whole Context-lifetime class (including the narrow dialog-local gap) as one disclosed residual | 3 — leaves a cheap, already-diagnosed, already-understood fix un-applied for no real savings | 5 — nothing further to build | 5 — no code | 2 — leaves an easy, low-risk fix on the table for no benefit, when the harder foundational piece is genuinely the only part worth deferring |
+
+### Cascade impact
+- A (chosen): no cascade beyond `GarminBackfillDialog.cpp`'s own diff, already built, tested (T-196), and committed `2b8cedae3`. B-R010-10 sits in findings.md as a non-blocking, no-REQ-allocated item; whoever eventually resourced it would need a fresh REQ/DES slice touching `GarminConnect.cpp`/`CloudService.cpp`'s session-latch machinery directly.
+- B: would reopen `GarminConnect.cpp`/`CloudService.cpp` for edits this session had no test coverage or time budget planned for, risking a late-session regression in code four other REQs depend on.
+- C: leaves T-196's easy, already-diagnosed fix unapplied — no actual benefit over A, since the fix was already built and verified before this DEC was written.
+
+### Chosen
+A — the cheap, already-built, already-tested dialog-local fix closes the exposure this session's own work introduced; the foundational `GarminConnect`/`CloudService` context-handling gap is real but pre-existing, not scoped to backfill, and deserves its own REQ/DES treatment rather than a late-session patch.
+
+### Alignment probe
+grep -n "context.isNull()" src/Cloud/GarminBackfillDialog.cpp   # expect the SessionCheck lambda's short-circuit guard
+grep -n "B-R010-10" .claude/workflow-garminconnect/findings.md   # expect the deferred, non-blocking residual this DEC references
+git log --oneline -1 -- src/Cloud/GarminConnect.cpp src/Cloud/CloudService.cpp   # expect no commit from this session touching either file

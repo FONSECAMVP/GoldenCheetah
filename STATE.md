@@ -1,4 +1,4 @@
-# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-10 by Inspector (ledger reconciliation + REQ-015/DEC-046 defer — see line 14 note)
+# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-11 by Inspector (REQ-010 UI wiring closes B-R010-04, committed `2b8cedae3` — see line 19 note)
 # Per-id lifecycle status lives ONLY in .claude/workflow-garminconnect/traceability.md (DEC-015 SSOT).
 # For a DEC's status read decisions.md. For a finding's severity/disposition read findings.md.
 # ALL superseded cursor narrative -> .claude/workflow-garminconnect/archive/state-history.md
@@ -20,10 +20,13 @@ PHASE:     2.2 · Garmin Connect integration, Stage 6 (UAF-family stubs) **CLOSE
            DES-005's rate limiter committed `aa6131add` 2026-09-10 — a reviewer delta-check
            caught a real defect (see B-R010-01, fixed same session before commit) and a real
            design-vs-dependency reconciliation (DEC-047); full resolution and status only in
-           decisions.md/traceability.md/findings.md per DEC-015. Its own UI/CloudService wiring is
-           a separate follow-on, not built yet (B-R010-04). Remaining Stage 7 (buildable):
-           REQ-010's UI-wiring follow-on, REQ-013, REQ-NF-Pkg-001, REQ-NF-Compat-001. Stages 8-9
-           not yet open.
+           decisions.md/traceability.md/findings.md per DEC-015. **REQ-010's UI wiring committed
+           `2b8cedae3` 2026-09-11 — closes B-R010-04.** New `GarminBackfillDialog` reachable via
+           the Athlete Accounts page; two reviewer delta-check passes + one orchestrator diff read
+           found and fixed five further defects (B-R010-07..09, all FIXED; B-R010-10 deferred by
+           user decision → DEC-048; B-R010-11 informational, disclosed not fixed). Full resolution
+           only in decisions.md/traceability.md/findings.md per DEC-015. Remaining Stage 7
+           (buildable): REQ-013, REQ-NF-Pkg-001, REQ-NF-Compat-001. Stages 8-9 not yet open.
 OPEN:      **STAGE 6 CLOSED 2026-09-08, COMMITTED `4a72d2279`** — all six REQs TEST VERIFIED
            on executed evidence. REQ-020/022/023/024 TEST VERIFIED 2026-09-06..08
            (T-161..T-172); REQ-029 (DEC-041 base+amendment) + REQ-030 (new, DEC-044) TEST
@@ -47,13 +50,13 @@ OPEN:      **STAGE 6 CLOSED 2026-09-08, COMMITTED `4a72d2279`** — all six REQs
            NEXT_GATE below.**
 BLOCKING:  — (none; B-R025-01/A3-R021b-F2/B-R029-01 all closed 2026-09-08, see above)
 CASCADE:   — (DEC-015 fully propagated; ledger_drift_lint.py EXIT=0)
-LAST_CLV:  clv_findings.py 2026-09-10 (re-run post-REQ-010/DES-005 ledger update) **PASS —
-           0 OUTSTANDING / 388 OK over 388 rows** (0 MALFORMED, 0 UNKNOWN-SEVERITY,
-           0 UNKNOWN-DISPOSITION, 0 NEEDS-DISPOSITION, MISSING-EFFECT 0). Rows 382→388
-           (+B-R010-01..06: 2 fixed same-session, 1 accept-with-note → DEC-047, 1 open
-           deliberate-follow-on, 2 informational). Orchestrator ran this directly against the
-           just-edited findings.md, not carried forward from a prior pass. Prior: 2026-09-08
-           (re-run post-Stage-6-close) PASS — 0 OUTSTANDING / 382 OK over 382 rows.
+LAST_CLV:  clv_findings.py 2026-09-11 (re-run post-B-R010-04 UI-wiring ledger update) **PASS —
+           0 OUTSTANDING / 393 OK over 393 rows** (0 MALFORMED, 0 UNKNOWN-SEVERITY,
+           0 UNKNOWN-DISPOSITION, 0 NEEDS-DISPOSITION, MISSING-EFFECT 0). Rows 388→393
+           (+B-R010-07..11: disposition detail only in findings.md/decisions.md per DEC-015).
+           `ledger_drift_lint.py` also re-run clean (silent pass). Orchestrator ran both directly
+           against the just-edited files, not carried forward from a prior pass. Prior: 2026-09-10
+           (post-REQ-010/DES-005 ledger update) PASS — 0 OUTSTANDING / 388 OK over 388 rows.
 NEXT_GATE: **Stage 6 CLOSED + COMMITTED 2026-09-08 (`4a72d2279`)** — all six REQs
            (020/022/023/024/029/030) TEST VERIFIED, all findings dispositioned, CLV PASS, full
            gate 37/37. **Stage 7 (missing Phase-1 product surface) OPEN, IN PROGRESS:**
@@ -69,12 +72,18 @@ NEXT_GATE: **Stage 6 CLOSED + COMMITTED 2026-09-08 (`4a72d2279`)** — all six R
            the builder fixed a real defect same session, before commit
            (B-R010-01: silently-ignored atomic-write failures) and DES-005's coverage gap
            on `login`/`submit_mfa` (B-R010-02); the pagination-model reconciliation against the
-           real dependency is recorded in DEC-047 (B-R010-03, accepted residual). **Still needed
-           before REQ-010's own PRD acceptance is met: UI/CloudService/AddCloudWizard wiring**
-           (B-R010-04, deliberate follow-on split, not built) — no progress signal, no
-           user-reachable cancel, no real import-path handoff exist yet. Full resolution and
-           status only in decisions.md/traceability.md/findings.md per DEC-015. **Remaining, not
-           yet started:** REQ-010's UI-wiring follow-on, REQ-013 (profile
+           real dependency is recorded in DEC-047 (B-R010-03, accepted residual). **REQ-010's UI
+           wiring COMMITTED `2b8cedae3` 2026-09-11 — closes B-R010-04.** New `GarminBackfillDialog`
+           (Garmin-only, `#ifdef GC_WANT_GARMINCONNECT`-guarded) reachable via a "Backfill..."
+           button on the Athlete Accounts page; visible progress, working Cancel,
+           `RideImportWizard` hand-off. Two reviewer delta-check passes + one orchestrator diff
+           read found five further defects before commit: B-R010-07 (default-build link
+           break, no `#ifdef` guard), B-R010-08 (session-latch bypass, cross-account data-leakage
+           risk), B-R010-09 (three composed `Context*`-lifetime defects), B-R010-10 (deeper
+           pre-existing `GarminConnect`/`CloudService` internal context-handling gap, shared by
+           REQ-007/008/012/017 — see DEC-048), B-R010-11 (informational). Disposition detail for
+           each only in decisions.md/traceability.md/findings.md per DEC-015. **Remaining, not
+           yet started:** REQ-013 (profile
            auto-fill, nice), REQ-NF-Pkg-001 (installer bundling — **`garminconnect`/`curl_cffi` are in NO
            requirements or installer file on any platform, so the feature cannot reach a user at
            all today**), REQ-NF-Compat-001 (`docs/garminconnect-known-limits.md` does not
@@ -109,6 +118,13 @@ COUNTS:    REQ30 (REQ-020/022/023/024/029 built 2026-09-06..08; REQ-030 new+buil
            opened+closed same session 2026-09-08) · last commit `ac1fa40ba` (REQ-014,
            2026-09-08; REQ-009 `abd1e119b` and Stage-6-close `4a72d2279` precede it — see
            CHANGESET, which still describes the now-committed Stage 6 pass)
+COUNTS-ADDENDUM (2026-09-11, not yet folded into the block above — a full COUNTS reconciliation
+           is a separate task): REQ-010+DES-005 committed `aa6131add`/`f23e4e2bc` 2026-09-10 (DEC-047,
+           B-R010-01..06); REQ-010's UI wiring (B-R010-04) committed `2b8cedae3` 2026-09-11 (DEC-048,
+           B-R010-07..11) — last commit on this branch is now `2b8cedae3`. Tests grown to T-196
+           (testGarminBackfillController 20 slots, testGarminConnectOpen 11 slots,
+           testGarminBackfillDialogLifetime new 5 slots). DEC48. findings 393 rows (388 + 5:
+           B-R010-07/08/09 fixed, B-R010-10 deferred, B-R010-11 informational — see LAST_CLV).
 
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md
