@@ -9,6 +9,8 @@ scipy
 lmfit
 plotly
 importlib_metadata
+garminconnect
+curl_cffi
 #
 # Nice to have
 #
