@@ -64,7 +64,7 @@ NF requirements rarely have a single acceptance check; each gets its own bar:
 | `REQ-NF-i18n-001` | Lupdate-equivalent extraction test (or grep for bare `QString("…")` in user-facing strings) returns zero. |
 | `REQ-NF-Build-001` | CI builds with `GC_WANT_GARMINCONNECT=OFF` and `=ON`; both must pass. **Both values were BUILT BY HAND 2026-08-30 and both linked** — but there is no CI job and no test asserting it, so the bar as written ("CI builds") is NOT met. Not waived; owed at Stage 8. |
 | `REQ-NF-Pkg-001` | Installer-manifest test asserts the Python wheels list contains `garminconnect` and `curl_cffi`. |
-| `REQ-NF-Compat-001` | Documented in `docs/garminconnect-known-limits.md`; no automated test. **NOT SATISFIED as of 2026-08-30 — that file DOES NOT EXIST.** The criterion is unchanged and is not waived; it is simply unmet. Status → `traceability.md`. |
+| `REQ-NF-Compat-001` | Documented in `docs/garminconnect-known-limits.md`; no automated test. **SATISFIED as of 2026-09-11, commit `0f654f4a5`** — the file now exists and covers all 3 prd.md:116 points; README.md and the connect dialog also updated per prd.md's "Documented in README + connect dialog" clause. Status → `traceability.md`. |
 
 ---
 
