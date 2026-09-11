@@ -11,6 +11,7 @@ GoldenCheetah is a desktop application for cyclists and triathletes and coaches
 * Optimise aerodynamics using Virtual Elevation
 * Train indoors with ANT and BTLE trainers
 * Upload and Download with many cloud services including Strava, Withings and Todays Plan
+  * Garmin Connect support has [known limitations](docs/garminconnect-known-limits.md), including reliance on an unofficial third-party library
 * Import and export data to and from a wide range of bike computers and file formats
 * Track body measures, equipment use and setup your own metadata to track  
 

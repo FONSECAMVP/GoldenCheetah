@@ -108,6 +108,21 @@ class TestGarminConnectCredentialsPage : public QObject
 
   private slots:
 
+    // REQ-NF-Compat-001(b) — the page must carry a static, non-empty subtitle
+    // warning that Garmin can force a full re-login (session invalidation is
+    // not silently retried). This must be set unconditionally at construction
+    // (not tied to m_state), so it is visible before any auth attempt.
+    void pageHasReloginNotice()
+    {
+        FakeAuthClient fake;
+        GarminCredentialsPage page(&fake);
+        QVERIFY2(!page.title().isEmpty(), "GarminCredentialsPage should have a non-empty title");
+        QVERIFY2(!page.subTitle().isEmpty(), "REQ-NF-Compat-001(b): GarminCredentialsPage must carry a static subtitle "
+                                             "notice about possible forced re-login");
+        QVERIFY2(page.subTitle().contains(QStringLiteral("sign in"), Qt::CaseInsensitive),
+                 "the subtitle must actually communicate the re-login expectation, not just be non-empty");
+    }
+
     // The page must expose discoverable QLineEdits for email + password. The
     // wizard-tile contract test (TEST-001) locked the *service* surface; this
     // locks the *page* surface a future page-flow test or theming pass needs.

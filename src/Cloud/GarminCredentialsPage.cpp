@@ -18,6 +18,15 @@
 GarminCredentialsPage::GarminCredentialsPage(IGarminAuthClient* authClient, QWidget* parent)
     : QWizardPage(parent), m_auth(authClient)
 {
+    setTitle(tr("Connect to Garmin Connect"));
+    // REQ-NF-Compat-001(b) — static, one-time notice: a Garmin-side session
+    // invalidation (e.g. a password change) forces a full re-login rather than
+    // a silent reauth. Set once here so a user hitting that mid-flow is not
+    // surprised by it; the full three-point limitations text lives in
+    // docs/garminconnect-known-limits.md, not crammed into this page.
+    setSubTitle(tr("If Garmin ends your existing session (for example after a password change), "
+                   "you may be asked to sign in again here. This is expected."));
+
     m_email = new QLineEdit(this);
     m_email->setObjectName(QStringLiteral("garminEmail"));
 
