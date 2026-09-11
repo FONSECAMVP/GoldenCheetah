@@ -45,6 +45,8 @@
 #include <QString>
 #include <QVector>
 
+#include <functional>
+
 class GarminBackfillController
 {
   public:
@@ -57,7 +59,8 @@ class GarminBackfillController
         TransientError,     // DES-005 retry exhausted; listFailed/downloadFailed reached us
         TornWrite,          // AtomicFile::writeOver failed on the FIT file; cursor not advanced past it
         StatePersistFailed, // GarminSidecarStore::saveBackfillState/recordImported returned false
-        InvalidRange        // Outcome::Rejected only: end < start, or span > the hard cap
+        InvalidRange,       // Outcome::Rejected only: end < start, or span > the hard cap
+        SessionInvalidated  // B-R010-05: `sessionStillValid` returned false (see SessionCheck)
     };
 
     struct Result
@@ -73,13 +76,37 @@ class GarminBackfillController
     // convention as GarminSidecarStore's other callers.
     GarminBackfillController(IGarminDownloadClient* client, QString athleteConfigDir, QString garminUserId);
 
+    // B-R010-04 (UI wiring) — reported once per successfully-imported
+    // activity, in PROCESSING (oldest-first) order, carrying its id and the
+    // running Result::importedCount. A backfill dialog's progress label and
+    // its post-run RideImportWizard file-list hand-off are both built on this.
+    using ProgressCallback = std::function<void(const QString& activityId, int importedSoFar)>;
+
+    // B-R010-05 — checked at the SAME two points GarminConnect::readFile()/
+    // readdir() enforce their fail-closed pair (REQ-017 clause a + DEC-
+    // garmin-020, clause c): once before EACH network request this run
+    // issues, and again immediately after EACH nested-loop wait completes,
+    // before anything is staged/recorded. Kept a std::function (not a
+    // GarminConnect*) so this class stays decoupled from GarminConnect/
+    // CloudService, per DES-009; a caller binds it to
+    // GarminConnect::backfillSessionStillValid() at the call site instead.
+    // Defaults to always-valid so every pre-existing caller (T-176..T-189) is
+    // unaffected. false => Paused/SessionInvalidated, never Rejected: a
+    // disconnect/reconnect mid-run is an interruption, not a bad request -
+    // same class as cancel().
+    using SessionCheck = std::function<bool()>;
+
     // REQ-010 — run (or resume) the backfill for [rangeStartGmt, rangeEndGmt]
     // (Garmin server-side timestamps, "yyyy-MM-dd HH:mm:ss", verbatim strings
     // - DES-010 format). If backfill-state-<uid>.json already carries a
     // lastSuccessStartTimeGMT inside this range, resumes from there instead of
     // rangeStartGmt (DES-009 "Resume behaviour"). An empty activity list is
-    // Done, not an error (DES-009 "Empty result is success").
-    Result start(const QString& rangeStartGmt, const QString& rangeEndGmt);
+    // Done, not an error (DES-009 "Empty result is success"). `onProgress`
+    // defaults to a no-op so every pre-existing caller (T-176..T-187) is
+    // unaffected.
+    Result start(const QString& rangeStartGmt, const QString& rangeEndGmt,
+                 const ProgressCallback& onProgress = ProgressCallback(),
+                 const SessionCheck& sessionStillValid = SessionCheck());
 
     // Cooperative cancellation (DES-009) — see class comment. Safe to call
     // re-entrantly from within a slot invoked while start() is running (same

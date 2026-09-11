@@ -213,6 +213,11 @@ class CredentialsPage : public QScrollArea
         void deleteClicked();
         void editClicked();
 
+#ifdef GC_WANT_GARMINCONNECT
+        // B-R010-04 (REQ-010 UI wiring) — opens GarminBackfillDialog for the
+        // selected account (Garmin Connect only; see CredentialsPage.cpp).
+        void backfillClicked();
+#endif
 
     private:
 

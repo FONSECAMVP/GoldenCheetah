@@ -116,6 +116,33 @@ class GarminConnect : public CloudService
     // listFailed outcome surfaces via `errors` and yields an empty list.
     QList<CloudServiceEntry*> readdir(QString path, QStringList& errors, QDateTime from, QDateTime to) override;
 
+    // B-R010-04 — REQ-010's bulk-backfill dialog drives GarminBackfillController
+    // directly (DES-009 keeps it decoupled from CloudService), but it still needs
+    // the SAME authenticated seam + per-account keys open() already latches for
+    // readdir()/readFile(). These publish ensureClient()/resolveConfigDir() for a
+    // caller that has already called open() on this instance; calling
+    // backfillClient() before open() lazily constructs the production worker
+    // unauthenticated, exactly as ensureClient() would.
+    IGarminDownloadClient* backfillClient() { return ensureClient(); }
+    QString backfillConfigDir() const { return resolveConfigDir(); }
+
+    // B-R010-05 — the LATCHED uid (REQ-017 Slice A / DEC-garmin-021 B), not a
+    // live re-resolve: mirrors readdir()/readFile()'s m_openedUserId usage so a
+    // disconnect/reconnect to a DIFFERENT account mid-backfill cannot repoint
+    // which per-account sidecar this run writes into. Non-const (latches the
+    // session on first use via ensureSessionLatched() — a no-op on the normal
+    // path, since open() already forced one).
+    QString backfillGarminUserId();
+
+    // B-R010-05 — the SAME fail-closed pair readFile()/readdir() gate on
+    // (REQ-017 clause a + DEC-garmin-020), published for
+    // GarminBackfillController's SessionCheck callback (see
+    // GarminBackfillController.h) so a disconnect or reconnect-to-a-different-
+    // account mid-backfill is caught the same way, both before a request is
+    // issued and after a nested-loop wait completes. Non-const: latches the
+    // session on first use, same as backfillGarminUserId().
+    bool backfillSessionStillValid();
+
   private:
     // Lazily construct the production adapter+host on first open() (deferred so
     // the NULL-context factory template never spins a thread at static-init).

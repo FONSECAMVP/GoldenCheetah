@@ -233,6 +233,24 @@ bool GarminConnect::downloadResultStillWanted() const
     return !sessionSuperseded() && accountStillConnected();
 }
 
+QString GarminConnect::backfillGarminUserId()
+{
+    // B-R010-05 — latch first (no-op if open() already did), then answer from
+    // the LATCHED identity, never a live resolveGarminUserId() re-read (see
+    // the header comment: that was the bug — a mid-backfill account switch
+    // would repoint which sidecar this run writes into).
+    ensureSessionLatched();
+    return m_openedUserId;
+}
+
+bool GarminConnect::backfillSessionStillValid()
+{
+    // B-R010-05 — same latch-first contract as backfillGarminUserId(), then
+    // the identical fail-closed pair readFile()'s clause-(c) recheck uses.
+    ensureSessionLatched();
+    return downloadResultStillWanted();
+}
+
 bool GarminConnect::blockingRestore(const QString& tokenBlob)
 {
     IGarminDownloadClient* client = m_client;

@@ -2379,3 +2379,68 @@ target_compile_features(testGarminBackfillController PRIVATE cxx_std_17)
 
 add_test(NAME testGarminBackfillController COMMAND testGarminBackfillController)
 set_tests_properties(testGarminBackfillController PROPERTIES LABELS "garmin-fast")
+
+# --- T-194/T-195 — B-R010-06: GarminBackfillDialog::context LIFETIME --------
+# The REAL src/Cloud/GarminBackfillDialog.cpp compiled against a from-scratch
+# GarminConnect/RideImportWizard stand-in and a QObject Context stub (see
+# stubs/BackfillDialogLifetimeStubPreamble.h) - sibling of
+# testGarminConnectWizardLifetime's own preamble/target shape. The REAL
+# GarminBackfillController.{h,cpp} runs against a Python-free
+# IGarminDownloadClient fake, same as testGarminBackfillController above.
+#
+# RED phase: `context` is a raw Context* member, only re-wrapped in a fresh
+# local QPointer deep inside startClicked() - constructing that QPointer from
+# an already-dangling raw pointer (the athlete tab closed between two Start
+# clicks) is a heap-use-after-free reachable on ANY second click, hence the
+# AddressSanitizer requirement (see testGarminBackfillDialogLifetime.cpp).
+add_executable(testGarminBackfillDialogLifetime
+    testGarminBackfillDialogLifetime.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminBackfillDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminBackfillDialog.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminBackfillController.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminBackfillController.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminSidecarStore.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminSidecarStore.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/AtomicFile.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminDownloadClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminWorker.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminAuthClient.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminPyAdapter.h
+)
+
+set_target_properties(testGarminBackfillDialogLifetime PROPERTIES AUTOMOC ON)
+
+target_include_directories(testGarminBackfillDialogLifetime PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+)
+
+target_compile_options(testGarminBackfillDialogLifetime PRIVATE
+    "-include${CMAKE_CURRENT_SOURCE_DIR}/stubs/BackfillDialogLifetimeStubPreamble.h"
+)
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(testGarminBackfillDialogLifetime PRIVATE
+        -fsanitize=address -fno-omit-frame-pointer -g)
+    target_link_options(testGarminBackfillDialogLifetime PRIVATE -fsanitize=address)
+else()
+    message(FATAL_ERROR
+        "testGarminBackfillDialogLifetime (T-194/195) is a lifetime test and requires "
+        "AddressSanitizer; no -fsanitize=address for compiler ${CMAKE_CXX_COMPILER_ID}.")
+endif()
+
+target_link_libraries(testGarminBackfillDialogLifetime PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Gui
+    Qt${QT_VERSION_MAJOR}::Widgets
+    Qt${QT_VERSION_MAJOR}::Test
+)
+target_compile_features(testGarminBackfillDialogLifetime PRIVATE cxx_std_17)
+
+add_test(NAME testGarminBackfillDialogLifetime COMMAND testGarminBackfillDialogLifetime)
+set_tests_properties(testGarminBackfillDialogLifetime PROPERTIES
+    LABELS "garmin-fast"
+    TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;ASAN_OPTIONS=detect_leaks=0:abort_on_error=0:halt_on_error=1")

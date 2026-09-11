@@ -144,10 +144,16 @@ GarminBackfillController::DownloadResult GarminBackfillController::blockingDownl
 }
 
 GarminBackfillController::Result GarminBackfillController::start(const QString& rangeStartGmt,
-                                                                 const QString& rangeEndGmt)
+                                                                 const QString& rangeEndGmt,
+                                                                 const ProgressCallback& onProgress,
+                                                                 const SessionCheck& sessionStillValid)
 {
     Result result;
     m_cancelRequested = false;
+
+    // B-R010-05 — see SessionCheck's declaration; a Paused/SessionInvalidated
+    // helper so the pre-request/post-download call sites below stay one-liners.
+    auto sessionInvalidated = [&sessionStillValid]() { return sessionStillValid && !sessionStillValid(); };
 
     const QDateTime startDt = parseGarminTime(rangeStartGmt);
     const QDateTime endDt = parseGarminTime(rangeEndGmt);
@@ -194,6 +200,15 @@ GarminBackfillController::Result GarminBackfillController::start(const QString& 
         }
     }
 
+    // B-R010-05 — pre-request check, mirroring readdir()'s sessionSuperseded()/
+    // accountStillConnected() gate before ITS listing call.
+    if (sessionInvalidated()) {
+        result.outcome = Outcome::Paused;
+        result.pauseReason = PauseReason::SessionInvalidated;
+        result.message = QStringLiteral("Garmin Connect: the account session is no longer valid; backfill paused.");
+        return result;
+    }
+
     // DES-009 "Paging" - a single listActivities(cursor) call; the real
     // garminconnect library pages 20-at-a-time INSIDE that call (verified
     // against the wheel - see the REQ-010 build report), so there is no
@@ -232,6 +247,14 @@ GarminBackfillController::Result GarminBackfillController::start(const QString& 
             result.pauseReason = PauseReason::UserCancelled;
             return result;
         }
+        // B-R010-05 — pre-request check, loop head (mirrors readFile()'s entry
+        // guards): before EACH per-activity download this run issues.
+        if (sessionInvalidated()) {
+            result.outcome = Outcome::Paused;
+            result.pauseReason = PauseReason::SessionInvalidated;
+            result.message = QStringLiteral("Garmin Connect: the account session is no longer valid; backfill paused.");
+            return result;
+        }
 
         const DownloadResult dl = blockingDownload(s.activityId);
         if (!dl.ok) {
@@ -240,6 +263,19 @@ GarminBackfillController::Result GarminBackfillController::start(const QString& 
             result.outcome = Outcome::Paused;
             result.pauseReason = PauseReason::TransientError;
             result.message = QStringLiteral("Garmin Connect: could not download activity %1.").arg(s.activityId);
+            return result;
+        }
+
+        // B-R010-05 — post-download, pre-stage recheck (REQ-017 clause c
+        // mirror): blockingDownload() ran a nested QEventLoop, so a disconnect
+        // or reconnect-to-a-different-account can have landed while the
+        // request was in flight. Nothing is staged/recorded past this point.
+        if (sessionInvalidated()) {
+            result.outcome = Outcome::Paused;
+            result.pauseReason = PauseReason::SessionInvalidated;
+            result.message = QStringLiteral(
+                "Garmin Connect: the account session became invalid while this activity was downloading; "
+                "it was discarded.");
             return result;
         }
 
@@ -282,6 +318,11 @@ GarminBackfillController::Result GarminBackfillController::start(const QString& 
         }
 
         ++result.importedCount;
+        // B-R010-04: report AFTER the cursor/dedup writes above, so a caller
+        // that reacts to this (e.g. queues the staged FIT for RideImportWizard)
+        // never sees an activity this run has not yet durably recorded.
+        if (onProgress)
+            onProgress(s.activityId, result.importedCount);
     }
 
     result.outcome = Outcome::Done;

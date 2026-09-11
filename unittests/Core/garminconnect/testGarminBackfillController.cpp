@@ -580,6 +580,202 @@ class TestGarminBackfillController : public QObject
         const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
         QVERIFY(imported.contains(a1.activityId));
     }
+
+    // =====================================================================
+    // T-188 — B-R010-04 UI wiring seam: start()'s optional progress callback
+    // fires once per successfully-imported activity, in PROCESSING (oldest-
+    // first) order, with a running total. This is what the backfill dialog's
+    // progress label and RideImportWizard file-list hand-off are built on.
+    // =====================================================================
+    void progressCallbackFiresPerSuccessInOrderWithRunningCount()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        FakeBackfillClient client;
+        GarminActivitySummary a1, a2;
+        a1.activityId = QStringLiteral("8001");
+        a1.startTimeGMT = QStringLiteral("2026-09-01 00:00:00");
+        a2.activityId = QStringLiteral("8002");
+        a2.startTimeGMT = QStringLiteral("2026-09-02 00:00:00");
+        client.listResult = {a2, a1}; // newest-first, as the library returns
+        client.okBytesById.insert(a1.activityId, fitBytesFor(a1.activityId));
+        client.okBytesById.insert(a2.activityId, fitBytesFor(a2.activityId));
+
+        QStringList seenIds;
+        QVector<int> seenCounts;
+        GarminBackfillController ctrl(&client, tmp.path(), kUid);
+        const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-10-01 00:00:00"),
+                                  [&](const QString& id, int importedSoFar) {
+                                      seenIds << id;
+                                      seenCounts << importedSoFar;
+                                  });
+
+        QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Done));
+        QCOMPARE(seenIds, QStringList({a1.activityId, a2.activityId}));
+        QCOMPARE(seenCounts, (QVector<int>{1, 2}));
+    }
+
+    // =====================================================================
+    // T-189 — the callback must NOT fire for an activity whose FIT write
+    // never landed (torn write): only genuinely-imported activities are
+    // reported to the caller.
+    // =====================================================================
+    void progressCallbackNotFiredForTornWrite()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        FakeBackfillClient client;
+        GarminActivitySummary a1;
+        a1.activityId = QStringLiteral("8003");
+        a1.startTimeGMT = QStringLiteral("2026-09-03 00:00:00");
+        client.listResult = {a1};
+        client.okBytesById.insert(a1.activityId, fitBytesFor(a1.activityId));
+
+        FailingTmpWriter failing;
+        AtomicFile::setTmpWriterForTest(&failing);
+        int calls = 0;
+        GarminBackfillController ctrl(&client, tmp.path(), kUid);
+        const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-10-01 00:00:00"),
+                                  [&](const QString&, int) { ++calls; });
+        AtomicFile::setTmpWriterForTest(nullptr);
+
+        QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Paused));
+        QCOMPARE(calls, 0);
+    }
+
+    // =====================================================================
+    // T-190 — B-R010-05: a SessionCheck that is already invalid before the
+    // FIRST network op (the listing) must pause with no network call at all
+    // - mirrors readdir()'s pre-listing fail-closed gate.
+    // =====================================================================
+    void sessionCheckFalseBeforeListingPausesWithNoNetworkCall()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        FakeBackfillClient client;
+        client.listResult = {};
+
+        GarminBackfillController ctrl(&client, tmp.path(), kUid);
+        const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-02-01 00:00:00"),
+                                  GarminBackfillController::ProgressCallback(), [] { return false; });
+
+        QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Paused));
+        QCOMPARE(int(r.pauseReason), int(GarminBackfillController::PauseReason::SessionInvalidated));
+        QVERIFY(!r.message.isEmpty());
+        QCOMPARE(client.listCallsSeen.size(), 0);
+    }
+
+    // =====================================================================
+    // T-191 — B-R010-05: a SessionCheck that flips false BETWEEN two
+    // activities (a disconnect/reconnect landing mid-run) must pause at the
+    // next loop-head check, preserving the first activity's progress -
+    // exactly the shape T-178's user-cancel case exercises for cancel().
+    // =====================================================================
+    void sessionCheckFalseBetweenActivitiesPausesPreservingEarlierProgress()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        FakeBackfillClient client;
+        GarminActivitySummary a1, a2;
+        a1.activityId = QStringLiteral("9001");
+        a1.startTimeGMT = QStringLiteral("2026-09-10 00:00:00");
+        a2.activityId = QStringLiteral("9002");
+        a2.startTimeGMT = QStringLiteral("2026-09-11 00:00:00");
+        client.listResult = {a1, a2};
+        client.okBytesById.insert(a1.activityId, fitBytesFor(a1.activityId));
+        client.okBytesById.insert(a2.activityId, fitBytesFor(a2.activityId));
+
+        bool sessionValid = true;
+        GarminBackfillController ctrl(&client, tmp.path(), kUid);
+        // Flip via the progress callback, which fires only AFTER a1 is fully
+        // recorded (cursor + dedup writes already landed - see start()'s own
+        // comment on ordering) - so a1's OWN post-download recheck still sees
+        // a valid session, and only the NEXT loop-head check (before a2 is
+        // ever requested) observes the flip.
+        const auto r = ctrl.start(
+            QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-10-01 00:00:00"),
+            [&](const QString&, int) { sessionValid = false; }, [&] { return sessionValid; });
+
+        QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Paused));
+        QCOMPARE(int(r.pauseReason), int(GarminBackfillController::PauseReason::SessionInvalidated));
+        QCOMPARE(r.importedCount, 1);
+        QCOMPARE(client.downloadCallsSeen, QStringList({a1.activityId}));
+
+        const GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(bf.isOk());
+        QCOMPARE(bf.state.lastSuccessStartTimeGMT, a1.startTimeGMT);
+    }
+
+    // =====================================================================
+    // T-192 — B-R010-05 (REQ-017 clause c mirror): a SessionCheck that flips
+    // false WHILE an activity's own download is in flight (discovered right
+    // after blockingDownload() returns) must discard THAT activity - not
+    // stage it, not record it, not advance the cursor past it.
+    // =====================================================================
+    void sessionCheckFalseImmediatelyAfterADownloadDiscardsThatActivity()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        FakeBackfillClient client;
+        GarminActivitySummary a1;
+        a1.activityId = QStringLiteral("9003");
+        a1.startTimeGMT = QStringLiteral("2026-09-12 00:00:00");
+        client.listResult = {a1};
+        client.okBytesById.insert(a1.activityId, fitBytesFor(a1.activityId));
+
+        bool sessionValid = true;
+        // Fires while the controller's own blockingDownload() is still
+        // parked in its nested QEventLoop, BEFORE that call returns - the
+        // exact race REQ-017 clause (c) closes for GarminConnect::readFile.
+        QObject::connect(&client, &IGarminDownloadClient::downloaded, &client,
+                         [&](QUuid, QByteArray) { sessionValid = false; });
+
+        GarminBackfillController ctrl(&client, tmp.path(), kUid);
+        const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-10-01 00:00:00"),
+                                  GarminBackfillController::ProgressCallback(), [&] { return sessionValid; });
+
+        QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Paused));
+        QCOMPARE(int(r.pauseReason), int(GarminBackfillController::PauseReason::SessionInvalidated));
+        QCOMPARE(r.importedCount, 0);
+        QVERIFY2(!QFile(GarminBackfillController::stagedFitPath(tmp.path(), a1.activityId)).exists(),
+                 "a discarded download must never be staged to disk");
+
+        const GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(bf.isOk());
+        QVERIFY2(bf.state.lastSuccessStartTimeGMT.isEmpty(), "cursor must not advance past a discarded activity");
+        const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
+        QVERIFY2(!imported.contains(a1.activityId), "a discarded activity must not be recorded as imported");
+    }
+
+    // =====================================================================
+    // T-193 — a SessionCheck that stays valid for the whole run must not
+    // change behaviour at all relative to the no-SessionCheck default
+    // (T-176), proving the new parameter is additive.
+    // =====================================================================
+    void sessionCheckAlwaysValidBehavesExactlyLikeNoSessionCheck()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        FakeBackfillClient client;
+        GarminActivitySummary a1;
+        a1.activityId = QStringLiteral("9004");
+        a1.startTimeGMT = QStringLiteral("2026-09-13 00:00:00");
+        client.listResult = {a1};
+        client.okBytesById.insert(a1.activityId, fitBytesFor(a1.activityId));
+
+        GarminBackfillController ctrl(&client, tmp.path(), kUid);
+        const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-10-01 00:00:00"),
+                                  GarminBackfillController::ProgressCallback(), [] { return true; });
+
+        QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Done));
+        QCOMPARE(r.importedCount, 1);
+    }
 };
 
 QTEST_MAIN(TestGarminBackfillController)

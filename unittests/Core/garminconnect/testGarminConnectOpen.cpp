@@ -23,6 +23,7 @@
 // `garmin-fast` label. GarminTokenStore + AtomicFile are the real (pure-Qt)
 // units, driven against a real temp config dir with controlled file modes.
 
+#include "GarminAccountEpoch.h"
 #include "GarminConnect.h"
 #include "GarminTokenStore.h"
 #include "IGarminDownloadClient.h"
@@ -204,6 +205,104 @@ class TestGarminConnectOpen : public QObject
         QVERIFY2(!ok, "open() must fail when the stored session cannot be restored");
         QVERIFY2(!errors.isEmpty(), "a labelled error must be pushed when restore fails");
         QCOMPARE(fake.restoreCalls, 1);
+    }
+
+    // B-R010-04 — the backfill dialog (REQ-010 UI wiring) is handed an
+    // already-open()'d GarminConnect and needs the SAME authenticated client
+    // + per-account keys ensureClient()/resolveConfigDir()/resolveGarminUserId()
+    // already latch for readdir()/readFile(); these public wrappers publish
+    // exactly that, once open() has run.
+    void backfillAccessorsExposeTheOpenedClientAndKeys()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        writeTokenFile(tmp.path(), kBlob, 0600);
+
+        FakeRestoreClient fake;
+        GarminConnect gc(nullptr, &fake, tmp.path(), QStringLiteral("9998887"));
+
+        QStringList errors;
+        QVERIFY(gc.open(errors));
+
+        QCOMPARE(gc.backfillClient(), static_cast<IGarminDownloadClient*>(&fake));
+        QCOMPARE(gc.backfillConfigDir(), tmp.path());
+        QCOMPARE(gc.backfillGarminUserId(), QStringLiteral("9998887"));
+    }
+
+    // B-R010-05 — backfillGarminUserId() must answer from the uid LATCHED at
+    // open() time, never a live re-resolve of active-account.json: a
+    // disconnect/reconnect to a DIFFERENT account mid-backfill must not
+    // repoint which per-account sidecar a running backfill writes into.
+    void backfillGarminUserIdReturnsTheLatchedUidNotALiveReresolve()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QVERIFY(GarminTokenStore::persistConnectSuccess(tmp.path(), QStringLiteral("accountA"), kBlob));
+
+        FakeRestoreClient fake;
+        GarminConnect gc(nullptr, &fake, tmp.path()); // no uid override: reads active-account.json for real
+
+        QStringList errors;
+        QVERIFY(gc.open(errors));
+        QCOMPARE(gc.backfillGarminUserId(), QStringLiteral("accountA"));
+
+        // Simulate a reconnect to a DIFFERENT account landing on disk while
+        // this instance's session stays latched to accountA (mirrors
+        // AddCloudWizard's persist-success producer running through a
+        // second, freshly-opened instance - DEC-garmin-019 C).
+        QVERIFY(GarminTokenStore::persistConnectSuccess(tmp.path(), QStringLiteral("accountB"), kBlob));
+        QCOMPARE(GarminTokenStore::loadActiveAccountUserId(tmp.path()), QStringLiteral("accountB"));
+
+        QCOMPARE(gc.backfillGarminUserId(), QStringLiteral("accountA"));
+    }
+
+    // B-R010-05 — backfillSessionStillValid() must go false the moment this
+    // session is superseded (REQ-017 clause a), even though the reconnect
+    // that superseded it leaves a perfectly valid tokens.json on disk (which
+    // would satisfy accountStillConnected() alone) - the same independence
+    // sessionSuperseded() already guarantees readdir()/readFile().
+    void backfillSessionStillValidGoesFalseOnReconnectToADifferentAccount()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QVERIFY(GarminTokenStore::persistConnectSuccess(tmp.path(), QStringLiteral("accountA"), kBlob));
+
+        FakeRestoreClient fake;
+        GarminConnect gc(nullptr, &fake, tmp.path());
+
+        QStringList errors;
+        QVERIFY(gc.open(errors));
+        QVERIFY2(gc.backfillSessionStillValid(), "pre-condition: a freshly opened session must be valid");
+
+        // A second, independent GarminConnect instance disconnects (bumps the
+        // shared epoch for this config dir) and then reconnects to a
+        // DIFFERENT account - GarminAccountEpoch::bump()'s documented "other
+        // still-live instances" case.
+        GarminAccountEpoch::bump(tmp.path());
+        QVERIFY(GarminTokenStore::persistConnectSuccess(tmp.path(), QStringLiteral("accountB"), kBlob));
+        QVERIFY2(GarminTokenStore::loadChecked(tmp.path()).isOk(),
+                 "pre-condition: the reconnect leaves a perfectly valid tokens.json");
+
+        QVERIFY2(!gc.backfillSessionStillValid(),
+                 "a superseded session must refuse even though tokens.json now checks out");
+    }
+
+    // Positive control: a session that is never superseded and stays
+    // connected reports valid for the whole run, and re-asking mutates
+    // nothing (matches downloadResultStillWanted()'s zero-side-effect shape).
+    void backfillSessionStillValidStaysTrueWhileConnected()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        writeTokenFile(tmp.path(), kBlob, 0600);
+
+        FakeRestoreClient fake;
+        GarminConnect gc(nullptr, &fake, tmp.path());
+
+        QStringList errors;
+        QVERIFY(gc.open(errors));
+        QVERIFY(gc.backfillSessionStillValid());
+        QVERIFY(gc.backfillSessionStillValid());
     }
 
     // close() performs bounded teardown and returns promptly. With an injected
