@@ -707,7 +707,20 @@ When OFF: source files are not compiled, `CloudServiceFactory` never registers t
 
 ### Installer manifest delta
 
-- Win NSIS / macOS DMG / Linux AppImage: each installer's Python-bundle manifest gets two extra entries (the wheels for `garminconnect` and `curl_cffi`) when the build flag is ON.
+- **Corrected 2026-09-11 (REQ-NF-Pkg-001 step 2 build):** none of the 3 installers have a curated,
+  per-package manifest to edit — all 3 bundle `src/Python/requirements.txt`'s resolved site-packages
+  tree wholesale: Windows' NSIS script recursively includes the whole `Lib\` directory
+  (`File /nonfatal /a /r "Lib\"`, `src/Resources/win32/GC3.8-Master-W64-QT6.nsi:163-164`), macOS's
+  `after_build.sh` does a wholesale `rsync -ax` of site-packages into the app bundle, and Linux's
+  `after_build.sh` does a plain `pip install -r Python/requirements.txt` into the AppImage's own
+  Python before repacking. Adding `garminconnect`/`curl_cffi` to `requirements.txt` is therefore
+  sufficient on all 3 platforms — no `.nsi`/CI-script edit needed, verified by direct read of all 3
+  scripts plus a real `pip download` wheel-resolution check for all 3 target platform/Python-3.11
+  combinations (see traceability.md's REQ-NF-Pkg-001 row for the verified wheel filenames).
+- Win NSIS / macOS DMG / Linux AppImage: each installer's Python-bundle bundles `garminconnect` and
+  `curl_cffi` wheels (transitively: `requests`, `ua-generator`, `cffi`, `certifi`,
+  `charset_normalizer`, `idna`, `urllib3`, `pycparser` — all prebuilt wheels, no source builds needed
+  on any of the 3 target platforms) when the build flag is ON, via the wholesale mechanism above.
 - Phase 1: a **manual smoke checklist** in CONTRIBUTING runs `import garminconnect` from each installer on a clean VM (REQ-NF-Pkg-001 disposition).
 - Phase 2 follow-up: CI smoke jobs per platform — tracked as a separate ticket, not gating Phase 1.
 
