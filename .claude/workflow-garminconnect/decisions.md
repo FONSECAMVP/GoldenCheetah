@@ -2400,3 +2400,65 @@ A — the cheap, already-built, already-tested dialog-local fix closes the expos
 grep -n "context.isNull()" src/Cloud/GarminBackfillDialog.cpp   # expect the SessionCheck lambda's short-circuit guard
 grep -n "B-R010-10" .claude/workflow-garminconnect/findings.md   # expect the deferred, non-blocking residual this DEC references
 git log --oneline -1 -- src/Cloud/GarminConnect.cpp src/Cloud/CloudService.cpp   # expect no commit from this session touching either file
+
+## DEC-049 — REQ-NF-Pkg-001 scope expansion: port Garmin sources into the qmake release build before any installer/packaging work
+
+- Status: accepted (user decision, 2026-09-11, live during session)
+- Reversibility: cheap to start, moderate to fully undo once landed — the new `contains(DEFINES, "GC_WANT_GARMINCONNECT")` block in `src/src.pro` and the `gcconfig.pri.in` toggle are additive and flag-gated (default OFF, matching `GC_WANT_PYTHON`/`GC_WANT_R`'s existing pattern), so reverting is a clean file-level revert with no cascading signature changes; the 3 CI `before_build` script edits are equally additive/mechanical
+- Decided / last-reviewed: 2026-09-11
+- Serves: REQ-NF-Pkg-001 (PRD text: "Installer bundles `garminconnect`+`curl_cffi` **when the build flag is ON**")
+- Dependents: `src/src.pro`, `src/gcconfig.pri.in`, `appveyor/linux/before_build.sh`, `appveyor/macos/before_build.sh`, `appveyor/windows/before_build.ps1` (this cycle); `src/Python/requirements.txt` + installer manifest deltas (deferred follow-on, same REQ)
+- Research: independently confirmed (grep across `src/src.pro`, `build.pro`, `appveyor.yml`, `docs/MODERNIZATION.md`, `docs/BUILD_NOTES.md`) that GoldenCheetah's actual CI/release pipeline (`appveyor.yml`) builds exclusively via **qmake** (`qmake build.pro` → `src/src.pro`), not CMake. `docs/MODERNIZATION.md` explicitly documents CMake as an "alternative"/"New Method" build with "CI/CD integration with CMake" still an open, unchecked roadmap item. Every Garmin source file across all of Stage 1-7 (`GarminConnect.cpp` and ~15 more) was added only to `src/CMakeLists.txt`'s `GC_WANT_GARMINCONNECT` block (added `aa6131add` and earlier) — `grep -in garmin src/src.pro` returns zero matches. REQ-NF-Pkg-001's own PRD acceptance text ("bundles ... when the build flag is ON") presupposes a working `GC_WANT_GARMINCONNECT` qmake build that does not exist — an unstated dependency inside the requirement's own acceptance criteria, not previously surfaced by any A1/A2 red-team pass because those passes evaluated the CMake-side implementation, which does compile.
+
+### The problem
+REQ-NF-Pkg-001 was queued as "installer bundles two Python packages" — a small, low-risk packaging task. Investigation before dispatch found the real gap is one level deeper: the qmake build that `appveyor.yml` actually runs to produce the Windows NSIS installer, macOS DMG, and Linux AppImage contains **zero Garmin code at all**. Bundling `garminconnect`/`curl_cffi` into that installer would be necessary but not sufficient — the resulting binary still would not have the feature compiled in, so REQ-NF-Pkg-001's PRD acceptance could not actually be met by packaging work alone.
+
+### Resolution
+Split REQ-NF-Pkg-001 into two sequenced pieces under the same REQ:
+1. **This cycle** — port the ~16 Garmin `.cpp`/`.h` files into `src/src.pro` via a new `contains(DEFINES, "GC_WANT_GARMINCONNECT")` block (mirroring the existing `GC_WANT_PYTHON` block at `src/src.pro:220-243`, which already solves embedded-CPython include/lib resolution per-platform — `src/gcconfig.pri.in:74-90`'s `python3-config` auto-detect fallback, and all 3 `appveyor/*/before_build.{sh,ps1}` scripts' existing enable-the-flag pattern). Verified locally by an actual `qmake6 && make` attempt with the flag ON, not just source-diff review.
+2. **Deferred, same REQ, next cycle** — `src/Python/requirements.txt` + installer-manifest deltas (the originally-scoped packaging work), now meaningful because step 1 will make the flag reachable in the real release build.
+
+### Alternatives
+| Opt | Rel | Scal | Maint | BP |
+|---|---|---|---|---|
+| **A port qmake first, packaging second, same REQ — CHOSEN** | 5 — fixes the actual blocker; packaging work done before this would be dead weight | 4 — mirrors an established per-feature qmake pattern (`GC_WANT_PYTHON`/`GC_WANT_R`), no new mechanism invented | 4 — flag-gated, additive, reversible; sequencing keeps each half independently verifiable (compiles first, then packages) | 5 — matches the project's own stated `contains(DEFINES, ...)` idiom for every other optional feature |
+| B proceed with packaging only, as originally PRD-scoped; open a separate future REQ for the qmake port | 2 — ships something that still cannot reach a user even after "closing" REQ-NF-Pkg-001, misrepresenting the ledger's meaning of closure | 4 — low risk, small diff | 3 — leaves a known-insufficient REQ marked closed against its own PRD acceptance text, which the ledger's own governance rules treat as a real problem, not paperwork | 2 — technically satisfies literal packaging text while leaving the requirement's actual intent (user can use the feature) unmet |
+| C treat this as a brand-new REQ (e.g. REQ-NF-Pkg-002) rather than extending REQ-NF-Pkg-001 | 4 — equally correct technically | 4 — same | 3 — splits one PRD requirement's closure across two REQ ids in the ledger, adding bookkeeping overhead for no traceability benefit since both trace to the identical PRD row | 3 — no established precedent in this ledger for this kind of split; REQ-010's own B-R010-04 follow-on precedent instead reused the SAME REQ id for a same-REQ scope split |
+
+### Cascade impact
+- A (chosen): `src/src.pro`, `src/gcconfig.pri.in`, 3 CI before_build scripts touched this cycle; `unittests/unittests.pro` (qmake test project) deliberately OUT of scope — Garmin tests continue running only via the existing CMake/ctest path (`garmin-fast` label), a pre-existing test-parity gap this DEC does not attempt to close. No other REQ's files touched.
+- B: would require a second full dispatch cycle later to actually fix the real blocker, after having already marked REQ-NF-Pkg-001 "closed" once — a ledger integrity problem matching the class of near-miss in [[garmin-ledger-governance-mechanics]].
+- C: purely a ledger bookkeeping choice; deferred, not blocking, revisit only if the split REQ id ever causes real traceability confusion.
+
+### Chosen
+A — port first, package second, same REQ. Matches the user's explicit instruction ("port Garmin sources into qmake first") and an established in-project precedent (`GC_WANT_PYTHON`) for exactly this shape of optional-feature qmake integration.
+
+### Alignment probe
+grep -n "GC_WANT_GARMINCONNECT" src/src.pro   # expect a new contains(DEFINES, ...) block, mirroring GC_WANT_PYTHON's shape
+grep -n "GC_WANT_GARMINCONNECT" src/gcconfig.pri.in   # expect a new commented-out toggle line, alongside GC_WANT_R/GC_WANT_PYTHON
+grep -rn "GC_WANT_GARMINCONNECT" appveyor/   # expect enable-lines in all 3 before_build scripts
+git log --oneline -1 -- src/Python/requirements.txt   # expect NO commit yet from this cycle (deferred to step 2)
+
+### Step 1 outcome (2026-09-11)
+Built and independently re-verified GREEN by the orchestrator (real `qmake6`+`make` runs, not just the
+builder's report). One real complication surfaced and was resolved during the build: `Cloud/PyEmbeddedAdapter.cpp`
+needs Python.h ahead of any Qt header (documented in its own file comment — Qt's `slots` macro collides with a
+`slots` field in CPython's `object.h`), but this project's qmake build forces a global PCH (`stable.h`, pulling in
+Qt) on Linux/Windows. The builder's first fix (`<file>.CONFIG -= precompile_header`, the existing pattern already
+used for `.c` files at `src/src.pro:874-884`) was confirmed a no-op for `.cpp` files under qmake's unix/GCC PCH
+generator. Its second fix (a hand-rolled `QMAKE_EXTRA_COMPILERS` rule) compiled correctly but omitted
+header-dependency tracking — a real incremental-rebuild staleness risk (a future header-only edit could leave the
+object stale). This was caught by a user-directed parallel Codex investigator, dispatched read-only into an
+isolated `/tmp` scratch reproduction alongside the builder (no shared working-tree risk), which verified both the
+original PCH-exclusion failure and the dependency-tracking gap against real generated Makefiles, and found that
+qmake ships a built-in (undocumented publicly, but real and shipped in `precompile_header.prf`) `NO_PCH_SOURCES`
+mechanism that handles both correctly. The builder adopted it: `contains(DEFINES, "GC_WANT_GARMINCONNECT") { macx
+{ SOURCES += Cloud/PyEmbeddedAdapter.cpp } else { NO_PCH_SOURCES += Cloud/PyEmbeddedAdapter.cpp } }`. The
+orchestrator independently reproduced both build variants and the header-dependency fix from scratch (not reusing
+the builder's binaries) before recording this outcome. Diff scope: exactly the 5 files listed under "Dependents"
+above, +126 lines, all additive, no governance files touched by the builder. No new DEC needed for this
+complication — resolved within DEC-049's own step 1 scope.
+
+Probe: touch src/Cloud/PyEmbeddedAdapter.h && (cd src && make -j$(nproc)) 2>&1 | grep PyEmbeddedAdapter.cpp
+  # expect exactly one recompile line for this file (no -include GoldenCheetah/stable.h flag on it), confirming
+  # both the PCH exclusion and header-dependency tracking are still correct
