@@ -1,4 +1,4 @@
-# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-11 by Inspector (REQ-010 UI wiring closes B-R010-04, committed `2b8cedae3` — see line 19 note)
+# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-12 by Inspector (Stage 7 closed — REQ-013 `e17262a0b` ledger reconciliation, inspector-cycle pilot run)
 # Per-id lifecycle status lives ONLY in .claude/workflow-garminconnect/traceability.md (DEC-015 SSOT).
 # For a DEC's status read decisions.md. For a finding's severity/disposition read findings.md.
 # ALL superseded cursor narrative -> .claude/workflow-garminconnect/archive/state-history.md
@@ -25,8 +25,10 @@ PHASE:     2.2 · Garmin Connect integration, Stage 6 (UAF-family stubs) **CLOSE
            the Athlete Accounts page; two reviewer delta-check passes + one orchestrator diff read
            found and fixed five further defects (B-R010-07..09, all FIXED; B-R010-10 deferred by
            user decision → DEC-048; B-R010-11 informational, disclosed not fixed). Full resolution
-           only in decisions.md/traceability.md/findings.md per DEC-015. Remaining Stage 7
-           (buildable): REQ-013, REQ-NF-Pkg-001, REQ-NF-Compat-001. Stages 8-9 not yet open.
+           only in decisions.md/traceability.md/findings.md per DEC-015. **Stage 7 CLOSED 2026-09-12**
+           — REQ-013 (`e17262a0b`), REQ-NF-Pkg-001 (`e609215f0`), REQ-NF-Compat-001
+           (`0f654f4a5`) all committed; see COUNTS-ADDENDUM-2 below for the reconciliation.
+           **Stage 8 (NF/coverage debt) now OPEN** — see NEXT_GATE. Stage 9 not yet open.
 OPEN:      **STAGE 6 CLOSED 2026-09-08, COMMITTED `4a72d2279`** — all six REQs TEST VERIFIED
            on executed evidence. REQ-020/022/023/024 TEST VERIFIED 2026-09-06..08
            (T-161..T-172); REQ-029 (DEC-041 base+amendment) + REQ-030 (new, DEC-044) TEST
@@ -82,12 +84,10 @@ NEXT_GATE: **Stage 6 CLOSED + COMMITTED 2026-09-08 (`4a72d2279`)** — all six R
            risk), B-R010-09 (three composed `Context*`-lifetime defects), B-R010-10 (deeper
            pre-existing `GarminConnect`/`CloudService` internal context-handling gap, shared by
            REQ-007/008/012/017 — see DEC-048), B-R010-11 (informational). Disposition detail for
-           each only in decisions.md/traceability.md/findings.md per DEC-015. **Remaining, not
-           yet started:** REQ-013 (profile
-           auto-fill, nice), REQ-NF-Pkg-001 (installer bundling — **`garminconnect`/`curl_cffi` are in NO
-           requirements or installer file on any platform, so the feature cannot reach a user at
-           all today**), REQ-NF-Compat-001 (`docs/garminconnect-known-limits.md` does not
-           exist). Then Stage 8
+           each only in decisions.md/traceability.md/findings.md per DEC-015. **Stage 7 CLOSED
+           2026-09-12** — REQ-013 (profile auto-fill, `e17262a0b`), REQ-NF-Pkg-001 (installer
+           bundling, `e609215f0`), REQ-NF-Compat-001 (`docs/garminconnect-known-limits.md`,
+           `0f654f4a5`) all committed and ledger-recorded. **Stage 8 now OPEN**
            (NF/coverage debt: Perf/Sec/Reliab/Obs/i18n bars + a REQ-NF-Build-001 regression
            guard) → Stage 9 (a real Garmin account exercising connect/MFA/sync/disconnect +
            Win/macOS/Linux installed-package smoke checklist — neither may be inferred from a
@@ -143,10 +143,16 @@ COUNTS-ADDENDUM-2 (2026-09-12, not yet folded into the block above): REQ-NF-Pkg-
            (B-R013-01). Two self-found pre-existing link-failure stubs also fixed (incomplete
            `PyEmbeddedAdapter` overrides in `ImportSeamStubs.cpp`/`ProviderSeamStubs.cpp`).
            Independently re-run by the orchestrator: `garmin-fast`+`garmin-py` 41/41, full `ctest`
-           42/42, clang-format clean on gate-matched files. Remaining Stage 7 item after REQ-013
-           commits: none — Stage 7 closes. findings 401 rows (400 + B-R013-01). Commit pending —
-           working tree mixes unrelated in-flight Coach/Qt6.8 changes; REQ-013's commit must be
-           scoped to the Garmin-only file set.
+           42/42, clang-format clean on gate-matched files. findings 401 rows (400 + B-R013-01).
+           **REQ-013 COMMITTED `e17262a0b`** 2026-09-12 (28 files, Garmin-only set, verified
+           zero overlap with the unrelated Coach/Qt6.8 work still sitting uncommitted in this
+           same tree) — traceability.md's REQ-013 row and the US-5 row both said
+           "UNCOMMITTED"/"Commit pending" until this pass; that was stale ledger prose written
+           before the commit landed and never corrected. Reconciled 2026-09-12 by the Inspector
+           (inspector-cycle pilot run), no code changed. **Stage 7 (missing Phase-1 product
+           surface) is now CLOSED (2026-09-12)** — its three remaining items are all committed:
+           REQ-013 `e17262a0b`, REQ-NF-Pkg-001 `e609215f0`, REQ-NF-Compat-001 `0f654f4a5`.
+           **NEXT: Stage 8 (NF/coverage debt)** — see NEXT_GATE below.
 
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md

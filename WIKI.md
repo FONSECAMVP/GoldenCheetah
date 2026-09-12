@@ -7,6 +7,10 @@ This hub is NAVIGATION + ROLLUPS ONLY. It carries no per-id status and no verdic
 ## MAP — directory manifest (authoritative; check before creating ANYTHING)
 WIKI.md · STATE.md · lessons.md   hub · SOLE live cursor (DEC-015) · LSN rules (index head is the hot read)
 wiki/                    5 spokes → PAGES
+.claude/skills/inspector-cycle/   project-authored Claude Code skill (not a vendor package) — Inspector's own
+                         herdr-stage-delegate-poll-validate-document-commit supervision loop; SKILL.md +
+                         references/ only, no scripts/hooks. Source of truth also kept at
+                         /home/andy/Downloads/inspector-cycle/ (authoring copy).
 .claude/workflow-INDEX.md   ledger index; names the active ledger
 .claude/workflow-garminconnect/   ACTIVE ledger: prd decisions design traceability findings dod ambiguities intake
                          options-catalog + cycles/archive/ validations/archive/ (ALL closed runs; 2026-08-30 the
