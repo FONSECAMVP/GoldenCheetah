@@ -65,10 +65,10 @@ LAST_CLV:  clv_findings.py 2026-09-12 (re-run post-REQ-NF-Sec-001+003/T-203 ledg
 NEXT_GATE: **Stage 8's first item, REQ-NF-Build-001 (T-202, build regression guard), is
            TEST VERIFIED + COMMITTED `f118691ea` 2026-09-12.** Stage 8's second item,
            REQ-NF-Sec-001+003 (T-203, password-never-persisted + no-verify=False source guards),
-           is **TEST VERIFIED 2026-09-12 (`garmin-sec-guard` label, 2/2 Passed — independently
-           re-run by the Inspector on a from-scratch rebuild) but NOT YET COMMITTED** — see
-           COUNTS-ADDENDUM-4 below. Next atomic unit after commit: REQ-NF-Sec-004 (docs-only —
-           disclose the file-based-token same-user-malware-replay residual risk in
+           is **TEST VERIFIED + COMMITTED `d271abae1` 2026-09-12** — see COUNTS-ADDENDUM-4 below
+           (that addendum's "NOT YET COMMITTED" line predates this commit and is superseded here).
+           Next atomic unit: REQ-NF-Sec-004 (docs-only — disclose the file-based-token
+           same-user-malware-replay residual risk in
            `docs/garminconnect-known-limits.md`, confirmed absent), then the remaining Stage 8
            NF items (Perf/Reliab/Obs/i18n bars — none started, see traceability.md's
            REQ-NF-Perf-001..003/Reliab-001..002/Obs-001/i18n-001 rows).
@@ -183,9 +183,10 @@ COUNTS-ADDENDUM-3 (2026-09-12, not yet folded into the block above): Stage 8's f
            reverted mutation). Judgment calls recorded in traceability.md's REQ-NF-Build-001 row
            (CMake/CTest-only, not qmake-CI wiring; deliberately outside the `garmin-fast` label).
            No pre-commit hook regex covers the three touched paths.
-COUNTS-ADDENDUM-4 (2026-09-12, not yet folded into the block above): Stage 8's second item,
+COUNTS-ADDENDUM-4 (2026-09-12, not yet folded into the block above; commit status superseded —
+           see NEXT_GATE above): Stage 8's second item,
            REQ-NF-Sec-001+003 (password-never-persisted + no-`verify=False` source guards),
-           **TEST VERIFIED — NOT YET COMMITTED.** New T-203: `unittests/buildguard/
+           **TEST VERIFIED — COMMITTED `d271abae1` 2026-09-12.** New T-203: `unittests/buildguard/
            garmin_sec_source_guard.py` (static, `testGarminSecSourceGuard` — 8 regex rules over
            47 Garmin-scope files, comment/docstring-stripped) + `unittests/Core/garminconnect/
            testGarminConnectPasswordPersistence.cpp` (runtime — real embedded CPython,
@@ -208,8 +209,9 @@ COUNTS-ADDENDUM-4 (2026-09-12, not yet folded into the block above): Stage 8's s
            testGarminSidecarStore already self-tag it). NF-Sec-004 confirmed still NOT STARTED
            (docs-only gap — checked `docs/garminconnect-known-limits.md` directly, the
            same-user-malware-can-replay-tokens disclosure is not there). **Awaiting commit** —
-           next Inspector cycle should commit this, then take NF-Sec-004 (docs-only) as the next
-           Stage 8 item, allocating T-204.
+           **Committed `d271abae1` 2026-09-12** (7 files: STATE.md/WIKI.md/traceability.md +
+           the two new tests + two CMakeLists.txt wirings). Next Stage 8 item: NF-Sec-004
+           (docs-only), allocating T-204.
 
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md
