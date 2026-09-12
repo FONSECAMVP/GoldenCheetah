@@ -95,10 +95,21 @@ in-flight process costs more to recover later than a short, controlled pause doe
 3. **EXIT and restart cleanly:**
    - Claude Code pane: `/exit` then a separate `enter` keypress — drops to a plain shell
      prompt; verify the old process is actually gone, THEN `herdr agent start <newname>
-     --kind ... --pane <same-id>` re-establishes tracking (the old custom name is lost,
-     re-rename if needed).
+     --kind claude --pane <same-id> -- --permission-mode auto` re-establishes tracking (the
+     old custom name is lost, re-rename if needed) **and launches the fresh session already
+     in auto mode.** A plain restart with no args comes back in "accept edits on" — one
+     step short of auto — and will stall on the first Bash permission dialog with nobody
+     piloting it to click through. Confirmed 2026-09-12 on a scratch pane: the `shift+tab`
+     mode-cycle keypress sent via `herdr agent send-keys`/`pane send-keys` does NOT reliably
+     change the mode (tried repeatedly, focused and unfocused, several key-name spellings —
+     `herdr` accepts the key with no error but Claude Code's status line never advances,
+     likely a Kitty-keyboard-protocol negotiation gap) — don't rely on it. The `--permission-
+     mode auto` launch flag is the reliable mechanism: verify by reading the fresh pane's
+     visible status line for `auto mode on` before treating the restart as complete, not just
+     by trusting the start command's own success response.
    - Codex pane: `/new` is lighter — resets context but keeps the SAME process/pane/agent
-     name; there is no old process to verify gone and nothing to restart.
+     name; there is no old process to verify gone and nothing to restart, and its permission
+     mode (whatever it was) carries over since the process itself never exited.
 4. **Re-brief** the fresh agent using the briefing shape in `agent-roster-and-dispatch.md`
    (mirror its own first-ever prompt), carrying forward: current stage/atomic unit, last
    independently-validated state, any findings not yet in the ledger, and the soft-landing
