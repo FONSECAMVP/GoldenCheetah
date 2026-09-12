@@ -70,9 +70,11 @@ NEXT_GATE: **Stage 8's first item, REQ-NF-Build-001 (T-202, build regression gua
            disclosure), is **TEST VERIFIED + COMMITTED `07501c477` 2026-09-12** — see
            COUNTS-ADDENDUM-5 below. All four REQ-NF-Sec sub-items now MET. Stage 8's fourth item,
            REQ-NF-Reliab-001..002 (retry schedule + never-partial-write resumability), is
-           **TEST VERIFIED + COMMITTED `51bc6b5a8`** (2026-09-12) — see COUNTS-ADDENDUM-6 below. Next
-           atomic unit: the remaining Stage 8 NF items (Perf/Obs/i18n bars — none started, see
-           traceability.md's REQ-NF-Perf-001..003/Obs-001/i18n-001 rows).
+           **TEST VERIFIED + COMMITTED `51bc6b5a8`** (2026-09-12) — see COUNTS-ADDENDUM-6 below.
+           Stage 8's fifth item, REQ-NF-Perf-002, was found **already MET** on inspection
+           (pre-existing test coverage, ledger was stale) — see COUNTS-ADDENDUM-7 below.
+           Next atomic unit: the remaining Stage 8 NF items (Obs-001/i18n-001, both NOT STARTED;
+           NF-Perf-001/003's end-to-end clauses remain flagged manual-only, not CI-automatable).
            Stage 6 CLOSED + COMMITTED
            2026-09-08 (`4a72d2279`, all six REQs TEST VERIFIED, all findings dispositioned, CLV
            PASS, full gate 37/37) and **Stage 7 CLOSED 2026-09-12** (history below, retained for
@@ -260,6 +262,26 @@ COUNTS-ADDENDUM-6 (2026-09-12, not yet folded into the block above): Stage 8's f
            the Garmin error code) is separate surface, not addressed here. **Committed
            `51bc6b5a8` 2026-09-12** (6 files: STATE.md/WIKI.md/traceability.md + the three test
            files). Next Stage 8 item: the remaining NF bars (Perf/Obs/i18n — none started).
+
+COUNTS-ADDENDUM-7 (2026-09-12, not yet folded into the block above): Stage 8's fifth item,
+           REQ-NF-Perf-002 (rate-limit pacing + concurrent-sync rejection), found **already MET**
+           on inspection — no new code or tests needed, the ledger cell was stale. Both of
+           prd.md:102's verification clauses were already covered by pre-existing tests:
+           `test_rate_limited_paces_consecutive_calls`/`test_rate_limited_no_wait_once_interval_
+           elapsed` (`test_gc_rate.py`, from the original REQ-010/DES-005 build) for the
+           unit-test-on-the-rate-limiter clause, and `concurrentReaddirWhileOneInProgressIsRejected`
+           (`testGarminConnectSync.cpp`, REQ-008 Slice-C's T-047/T-048 group) for the
+           integration-test-on-concurrent-invoke clause — the latter asserts rejection with an
+           "in progress" message matching the real production string in `GarminConnect.cpp:650`,
+           and that the guard releases after the outer sync completes. **Independently re-run by
+           the Inspector in isolation:** `testGarminConnectSync concurrentReaddirWhileOneInProgressIsRejected`
+           3/3, the two pytest pacing tests 2/2 — both GREEN. NF-Perf-001 (first-connect SSO
+           ≤30s) and NF-Perf-003's end-to-end clause (0-3-activity sync ≤5s) remain genuinely
+           open — both are prd.md-specified manual-stopwatch-on-reference-network criteria, not
+           CI-automatable without a real Garmin account and a controlled 50/10 Mbit link; flagged
+           as a manual Phase-close item, same disposition as the pre-existing A3-R007-02/CLV WARN.
+           No commit — ledger-only correction. Next Stage 8 item: REQ-NF-Obs-001 (structured
+           ErrorBus logging) or REQ-NF-i18n-001 (tr() coverage), both NOT STARTED.
 
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md
