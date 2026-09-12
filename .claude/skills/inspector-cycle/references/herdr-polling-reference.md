@@ -3,8 +3,24 @@
 Full operational detail lives in project memory (`herdr-cli-operational-knowledge.md`) —
 this is the load-bearing subset for running the poll step without re-reading all of it.
 Every command below needs `HERDR_ENV=1` set first. Drive the recurring poll cadence itself
-via the `/loop` skill (fixed interval or dynamic) — `ScheduleWakeup` is only reliable inside
-an active `/loop`, not called standalone.
+via the `/loop` skill.
+
+**Poll every 2 minutes, fixed — not `ScheduleWakeup`'s generic idle-tick default.**
+Confirmed 2026-09-12: a dynamic-pacing loop drifted to ~10-12 minutes between ticks, which
+the user flagged as too slow — that drift happens because `ScheduleWakeup`'s own guidance
+defaults an "idle tick with no specific signal" to 1200-1800s, and this loop is NOT that
+case: there's always a specific signal to watch (a supervised agent's status, a permission
+dialog, a context threshold). Use `/loop 2m /inspector-cycle` (fixed interval), not the
+dynamic/self-paced form, for this skill's outer cycle.
+
+**Keep each tick's chat output terse — relevant new information only, not narrated
+reasoning.** Report what changed (a status, a reading, a new finding) plainly; for a
+recurring, already-diagnosed pattern (e.g. the same tool-hook false positive firing again),
+name it briefly ("Nth recurrence, same pattern, approved") instead of re-explaining the
+full justification every tick — that reasoning was already established once and doesn't
+need restating each time nothing about it has changed. Save the detailed writeup for the
+findings-ledger entry (once, when the pattern is confirmed systemic), not for every tick's
+chat output.
 
 For context tokens, follow "Measuring current context" in
 `token-budget-and-soft-landing.md`. Polling reads metadata/output/files only; it never

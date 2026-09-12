@@ -100,7 +100,11 @@ Verify each staged file's actual diff before staging — never `git add -A`. Exp
 pre-commit gate (clang-format/mypy --strict/ledger-drift-lint) to be the actual bar, not
 `ctest`/`pytest` green alone. → `references/project-state-and-next-step.md`
 
-**Then go back to step 1.** Drive repeated cycles via the `/loop` skill, not standalone
-`ScheduleWakeup` calls. Do not end the cycle and wait for the user unless step 5 hit a real
-human-in-the-loop gate, or the complete feature's goal (Objective, above) is actually
-reached — report completion and stop, don't invent another stage.
+**Then go back to step 1.** Drive repeated cycles via the `/loop` skill on a **fixed 2-minute
+interval** (`/loop 2m /inspector-cycle`) — not standalone `ScheduleWakeup` calls, and not the
+dynamic/self-paced loop form, which drifts to a much slower cadence than active supervision
+needs (see `references/herdr-polling-reference.md`). Keep each tick's own chat output terse:
+new/changed information only, not restated reasoning for an already-diagnosed recurring
+pattern. Do not end the cycle and wait for the user unless step 5 hit a real human-in-the-loop
+gate, or the complete feature's goal (Objective, above) is actually reached — report
+completion and stop, don't invent another stage.
