@@ -136,7 +136,13 @@ def load_map_paths(wiki_path: str) -> tuple[set[str], str]:
 
 def in_map(path_tokens: set[str], rel: str) -> bool:
     """Is rel (or any parent dir of it) registered in the MAP?"""
-    rel_norm = rel.lstrip("./")
+    # NOTE: was `rel.lstrip("./")` — str.lstrip takes a CHARACTER SET, not a prefix, so it
+    # stripped only the single leading "." from a dot-directory path like
+    # ".claude/skills/x" (producing "claude/skills/x") while MAP tokens loaded by
+    # load_map_paths() keep their leading dot verbatim (e.g. ".claude/workflow-INDEX.md").
+    # Any dot-directory registration could therefore never match, an always-miss for the
+    # entire .claude/ subtree — found 2026-09-12 while registering a new skill directory.
+    rel_norm = rel[2:] if rel.startswith("./") else rel
     if rel_norm in path_tokens or (rel_norm + "/") in path_tokens:
         return True
     # parent-dir coverage: a file under a registered dir counts as mapped

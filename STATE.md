@@ -8,9 +8,11 @@
 # Evidence tables, the gate-defect writeup, the stage table, the commit manifest and the
 # exclusions list all moved to archive/state-history.md § 11 — read it for the full history.
 
-PHASE:     2.2 · Garmin Connect integration, Stage 6 (UAF-family stubs) **CLOSED 2026-09-08**
-           — Gates 1A/1B, Stages 2-5, and now Stage 6 all discharged on executed evidence.
-           Stage 7 (missing Phase-1 product surface) **OPEN, IN PROGRESS**: REQ-009 and REQ-014
+PHASE:     2.2 · Garmin Connect integration, Stage 6 (UAF-family stubs) **CLOSED 2026-09-08**,
+           Stage 7 (missing Phase-1 product surface) **CLOSED 2026-09-12** (see COUNTS-ADDENDUM-2
+           below), Stage 8 (NF/coverage debt) now OPEN — Gates 1A/1B, Stages 2-5, 6, and 7 all
+           discharged on executed evidence. Stage 7 history follows, retained for context: REQ-009
+           and REQ-014
            both committed (`abd1e119b`, `ac1fa40ba`, 2026-09-08 — DEC-045 + T-177; full status
            lives only in traceability.md per DEC-015). Ledger reconciled 2026-09-10 —
            traceability.md's REQ-009/014 rows plus REQ-029/030's stale "uncommitted" status, all
@@ -48,8 +50,8 @@ OPEN:      **STAGE 6 CLOSED 2026-09-08, COMMITTED `4a72d2279`** — all six REQs
            carried both REQs to GREEN plus the Stage 6 close itself.
            **Committed 2026-09-08 by user decision** (25 files, +8291/-1306; clang-format
            pre-commit hook reformatted 5 test files cosmetically, re-verified 5/5 PASS each
-           before the final commit). **NEXT: Stage 7 (missing Phase-1 product surface) — see
-           NEXT_GATE below.**
+           before the final commit). Stage 7 is now CLOSED (2026-09-12) — see NEXT_GATE below for
+           Stage 8, the current next gate.**
 BLOCKING:  — (none; B-R025-01/A3-R021b-F2/B-R029-01 all closed 2026-09-08, see above)
 CASCADE:   — (DEC-015 fully propagated; ledger_drift_lint.py EXIT=0)
 LAST_CLV:  clv_findings.py 2026-09-11 (re-run post-B-R010-04 UI-wiring ledger update) **PASS —
@@ -59,10 +61,10 @@ LAST_CLV:  clv_findings.py 2026-09-11 (re-run post-B-R010-04 UI-wiring ledger up
            `ledger_drift_lint.py` also re-run clean (silent pass). Orchestrator ran both directly
            against the just-edited files, not carried forward from a prior pass. Prior: 2026-09-10
            (post-REQ-010/DES-005 ledger update) PASS — 0 OUTSTANDING / 388 OK over 388 rows.
-NEXT_GATE: **Stage 6 CLOSED + COMMITTED 2026-09-08 (`4a72d2279`)** — all six REQs
-           (020/022/023/024/029/030) TEST VERIFIED, all findings dispositioned, CLV PASS, full
-           gate 37/37. **Stage 7 (missing Phase-1 product surface) OPEN, IN PROGRESS:**
-           REQ-009 (ToS notice) **COMMITTED `abd1e119b`**; REQ-014 (friendly error
+NEXT_GATE: **Stage 8 (NF/coverage debt) is now the live gate** — Stage 6 CLOSED + COMMITTED
+           2026-09-08 (`4a72d2279`, all six REQs TEST VERIFIED, all findings dispositioned, CLV
+           PASS, full gate 37/37) and **Stage 7 CLOSED 2026-09-12** (history below, retained for
+           context). Stage 7 history: REQ-009 (ToS notice) **COMMITTED `abd1e119b`**; REQ-014 (friendly error
            translation) **COMMITTED `ac1fa40ba`** (DEC-045). REQ-015 (CAPTCHA path) — two
            independent research passes (builder + a fresh Codex session) read the real
            `garminconnect==0.3.13` dependency's source directly and confirmed it discards
@@ -135,8 +137,9 @@ COUNTS-ADDENDUM-2 (2026-09-12, not yet folded into the block above): REQ-NF-Pkg-
            side findings only (untranslated Garmin strings, covered by the already-deferred
            REQ-NF-i18n-001; an unrelated pre-existing CMake GC_WANT_PYTHON/GC_HAVE_PYTHON naming
            mismatch, no REQ allocated). DEC-050 (REQ-013 scope narrowed to dob/weight/height,
-           hr_max/ftp_w deferred) recorded `459990bb6` (current HEAD at addendum time). **REQ-013
-           built and TEST VERIFIED, UNCOMMITTED** — new T-201 (Python `test_adapter_profile.py`
+           hr_max/ftp_w deferred) recorded `459990bb6` (HEAD at the time this paragraph was first
+           written — since superseded, see below). **REQ-013 built and TEST VERIFIED** — new
+           T-201 (Python `test_adapter_profile.py`
            16 slots; `testGarminConnectPyAdapter` +8 marshalling slots; `testGarminConnectWizardRouting`
            15→20 slots). Reviewer delta-check caught a real blocking UAF (raw `Context*` dangling
            across an async fetch after athlete-tab-close) — **FIXED same session, ASan-proven**
