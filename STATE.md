@@ -1,4 +1,4 @@
-# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-12 by Inspector (Stage 8 — REQ-NF-Build-001 T-202 COMMITTED `f118691ea`; REQ-NF-Sec-001+003 T-203 sec-guard TEST VERIFIED, not yet committed)
+# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-12 by Inspector (Stage 8 — REQ-NF-Sec-001..004 all MET+COMMITTED; REQ-NF-Reliab-001+002 T-204..206 TEST VERIFIED, not yet committed)
 # Per-id lifecycle status lives ONLY in .claude/workflow-garminconnect/traceability.md (DEC-015 SSOT).
 # For a DEC's status read decisions.md. For a finding's severity/disposition read findings.md.
 # ALL superseded cursor narrative -> .claude/workflow-garminconnect/archive/state-history.md
@@ -54,10 +54,11 @@ OPEN:      **STAGE 6 CLOSED 2026-09-08, COMMITTED `4a72d2279`** — all six REQs
            Stage 8, the current next gate.**
 BLOCKING:  — (none; B-R025-01/A3-R021b-F2/B-R029-01 all closed 2026-09-08, see above)
 CASCADE:   — (DEC-015 fully propagated; ledger_drift_lint.py EXIT=0)
-LAST_CLV:  clv_findings.py 2026-09-12 (re-run post-REQ-NF-Sec-004/`07501c477` ledger update) **PASS —
-           0 OUTSTANDING / 394 OK over 394 rows** (unchanged — REQ-NF-Sec-004 opened no findings,
-           docs-only). `ledger_drift_lint.py` also re-run clean (EXIT=0). Inspector ran both
-           directly against the just-edited files. NOTE (carried forward, still unresolved):
+LAST_CLV:  clv_findings.py 2026-09-12 (re-run post-REQ-NF-Reliab-001+002/T-204..206 ledger update)
+           **PASS — 0 OUTSTANDING / 394 OK over 394 rows** (unchanged — no new findings opened;
+           the T-206 id-collision was a ledger-hygiene fix, not a finding). `ledger_drift_lint.py`
+           also re-run clean (EXIT=0). Inspector ran both directly against the just-edited files.
+           NOTE (carried forward, still unresolved):
            this run's row count (394) does not match COUNTS-ADDENDUM-2's stated "findings 401
            rows" — not independently re-derived this pass either; the live clv_findings.py count
            above remains authoritative. Prior: 2026-09-12 (post-REQ-NF-Build-001/T-202 update)
@@ -67,9 +68,11 @@ NEXT_GATE: **Stage 8's first item, REQ-NF-Build-001 (T-202, build regression gua
            REQ-NF-Sec-001+003 (T-203), is **TEST VERIFIED + COMMITTED `d271abae1` 2026-09-12.**
            Stage 8's third item, REQ-NF-Sec-004 (docs-only file-based-token residual-risk
            disclosure), is **TEST VERIFIED + COMMITTED `07501c477` 2026-09-12** — see
-           COUNTS-ADDENDUM-5 below. All four REQ-NF-Sec sub-items now MET. Next atomic unit: the
-           remaining Stage 8 NF items (Perf/Reliab/Obs/i18n bars — none started, see
-           traceability.md's REQ-NF-Perf-001..003/Reliab-001..002/Obs-001/i18n-001 rows).
+           COUNTS-ADDENDUM-5 below. All four REQ-NF-Sec sub-items now MET. Stage 8's fourth item,
+           REQ-NF-Reliab-001..002 (retry schedule + never-partial-write resumability), is
+           **TEST VERIFIED, not yet committed** (2026-09-12) — see COUNTS-ADDENDUM-6 below. Next
+           atomic unit: the remaining Stage 8 NF items (Perf/Obs/i18n bars — none started, see
+           traceability.md's REQ-NF-Perf-001..003/Obs-001/i18n-001 rows).
            Stage 6 CLOSED + COMMITTED
            2026-09-08 (`4a72d2279`, all six REQs TEST VERIFIED, all findings dispositioned, CLV
            PASS, full gate 37/37) and **Stage 7 CLOSED 2026-09-12** (history below, retained for
@@ -228,6 +231,34 @@ COUNTS-ADDENDUM-5 (2026-09-12, not yet folded into the block above): Stage 8's t
            unchanged), `ledger_drift_lint.py` re-run clean (EXIT=0). **All four REQ-NF-Sec
            sub-items (001/002/003/004) now MET.** Next Stage 8 item: the remaining NF bars
            (Perf/Reliab/Obs/i18n — none started).
+
+COUNTS-ADDENDUM-6 (2026-09-12, not yet folded into the block above): Stage 8's fourth item,
+           REQ-NF-Reliab-001..002 (retry schedule + never-partial-write resumability),
+           **TEST VERIFIED, not yet committed.** New T-204 (`test_production_GarminClient_
+           retry_binds_the_spec_schedule`, `test_gc_rate.py` — pins the real wrapped
+           `GarminClient` retry decorator's 250ms/2s/3-attempt schedule via closure-cell +
+           behavioural halves), T-205 (`openWithTornTokenContentFailsWithRestoreLabel`,
+           `testGarminConnectOpen.cpp` — torn on-disk token content reaches the restore seam
+           verbatim and fails open() with a labelled sign-in-again error), T-206
+           (`sigkillMidWriteLeavesDestinationIntact`, `testAtomicFile.cpp` — 12-cycle real
+           fork/SIGKILL loop against `AtomicFile::writeOver`, byte-exact payload verification,
+           timing-independent). RED verified for the right reason on all three (4 retry-schedule
+           mutations, one non-atomic AtomicFile mutation, each caught then reverted byte-clean).
+           **Ledger-hygiene defect found and fixed by the Inspector before documenting:** the
+           builder self-assigned id `T-206` to BOTH the retry test and the SIGKILL test (an
+           internal collision) instead of checking `WIKI.md`'s `next:garmin-T-204` REGISTRIES
+           pointer — corrected by renumbering the retry test's in-code comment to `T-204` and
+           adding `T-205` to the previously-uncited torn-read test; no test behavior changed.
+           **Independently re-verified by the Inspector on rebuilt targets:** `ctest -R
+           "testAtomicFile|testGarminConnectOpen"` 4/4 Passed, `sigkillMidWriteLeavesDestination
+           Intact` re-run 3/3 clean, `pytest tests/test_gc_rate.py` 9/9, `ruff`/`ruff format
+           --diff`/`mypy --strict` clean on the Python file, `clang-format --dry-run --Werror`
+           clean on both `.cpp` files, full `ctest -L garmin-fast` re-confirmed 40/40 (319.73s) —
+           no collateral. Footprint exactly 3 files, all test-only; every production file touched
+           during RED (`gc_rate.py`, `AtomicFile.cpp`) reverted and `git status`-verified clean.
+           Flagged: REQ-NF-Reliab-001's "UI inspection" clause (permanent failures surface with
+           the Garmin error code) is separate surface, not addressed here. **Awaiting commit.**
+           Next Stage 8 item: the remaining NF bars (Perf/Obs/i18n — none started).
 
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md

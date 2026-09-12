@@ -30,6 +30,69 @@
 #include <QTemporaryDir>
 #include <QTest>
 
+#include <random>
+
+#ifdef Q_OS_UNIX
+#    include <sys/wait.h>
+#    include <unistd.h>
+
+#    include <csignal>
+#endif
+
+namespace {
+
+// T-206 / REQ-NF-Reliab-002 SIGKILL probe: a self-describing payload whose
+// declared fill length must match its actual size exactly, so a truncated or
+// interleaved write cannot pass the verifier below.
+QByteArray killProbePayload(int n)
+{
+    const int fill = 64 + (n % 448);
+    return QByteArray("KILLPROBE n=") + QByteArray::number(n) + QByteArray(" len=") + QByteArray::number(fill) +
+           QByteArray(" |") + QByteArray(fill, static_cast<char>('a' + (n % 26))) + QByteArray("|");
+}
+
+// Accepts EXACTLY "KILLPROBE n=<digits> len=<digits> |<fill of that length>|"
+// with nothing before or after; reports the parsed n. Any torn write breaks
+// at least the length contract or the closing sentinel.
+bool killProbeVerify(const QByteArray& bytes, int* nOut)
+{
+    const QByteArray header("KILLPROBE n=");
+    const QByteArray sepLen(" len=");
+    const QByteArray mid(" |");
+    if (!bytes.startsWith(header))
+        return false;
+    int pos = header.size();
+    int n = 0;
+    while (pos < bytes.size() && bytes[pos] >= '0' && bytes[pos] <= '9') {
+        n = n * 10 + (bytes[pos] - '0');
+        ++pos;
+    }
+    if (pos == header.size() || !bytes.mid(pos).startsWith(sepLen))
+        return false;
+    pos += sepLen.size();
+    int len = 0;
+    while (pos < bytes.size() && bytes[pos] >= '0' && bytes[pos] <= '9') {
+        len = len * 10 + (bytes[pos] - '0');
+        ++pos;
+    }
+    if (!bytes.mid(pos).startsWith(mid))
+        return false;
+    pos += mid.size();
+    if (len <= 0 || bytes.size() != pos + len + 1)
+        return false;
+    if (bytes[pos + len] != '|')
+        return false;
+    const char fillChar = static_cast<char>('a' + (n % 26));
+    for (int i = 0; i < len; ++i) {
+        if (bytes[pos + i] != fillChar)
+            return false;
+    }
+    *nOut = n;
+    return true;
+}
+
+} // namespace
+
 class TestAtomicFile : public QObject
 {
     Q_OBJECT
@@ -195,6 +258,69 @@ class TestAtomicFile : public QObject
         QVERIFY2(!QFileInfo::exists(dest + ".tmp"), "a failed write must not leave a .tmp residue");
     }
 #endif
+
+    // REQ-NF-Reliab-002 — the SIGKILL integration clause: a REAL process
+    // killed at an arbitrary point during a writeOver loop must leave the
+    // destination byte-identical to the OLD or the NEW content — never a
+    // partial mix, never a truncation. Atomicity itself comes from POSIX
+    // rename(2); what a killed process adds over the simulated-failure tests
+    // above is proof that the loop's REAL use of the tmp+fsync+rename
+    // sequence holds that guarantee at an arbitrary kill point (including
+    // mid-tmp-write and mid-rename windows).
+    void sigkillMidWriteLeavesDestinationIntact()
+    {
+#ifdef Q_OS_UNIX
+        const QFileDevice::Permissions kProbePerms = QFileDevice::ReadOwner | QFileDevice::WriteOwner; // 0600
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        const QString dest = tmp.filePath(QStringLiteral("killprobe.json"));
+
+        // Seed the destination with payload 0 — a known good "old content".
+        QVERIFY(AtomicFile::writeOver(dest, killProbePayload(0), kProbePerms));
+
+        // Fixed seed: the delay sequence is deterministic, but the invariant
+        // below holds for ANY kill point, so the assertion cannot flake —
+        // only the coverage (which write the kill lands in) varies.
+        std::mt19937 rng(20260912u);
+        for (int cycle = 0; cycle < 12; ++cycle) {
+            const pid_t pid = ::fork();
+            QVERIFY2(pid >= 0, "fork() failed");
+            if (pid == 0) {
+                // Child: write distinct payloads in a tight loop. Only
+                // _exit() from here — never return into the QtTest machinery
+                // after fork. Exit 42 = writeOver returned false while alive
+                // (a real AtomicFile failure, not a kill).
+                for (int n = 1; n <= 200000; ++n) {
+                    if (!AtomicFile::writeOver(dest, killProbePayload(n), kProbePerms))
+                        ::_exit(42);
+                }
+                ::_exit(0);
+            }
+
+            const int sleepMs = static_cast<int>(rng() % 80u) + 2;
+            QTest::qSleep(sleepMs);
+            QCOMPARE(::kill(pid, SIGKILL), 0);
+            int status = 0;
+            QCOMPARE(::waitpid(pid, &status, 0), pid);
+            QVERIFY2(!WIFEXITED(status) || WEXITSTATUS(status) != 42,
+                     "writeOver returned false in the live child — AtomicFile failed before any kill");
+
+            QFile f(dest);
+            QVERIFY2(f.open(QIODevice::ReadOnly), "destination must exist after a killed write loop");
+            const QByteArray onDisk = f.readAll();
+            f.close();
+
+            int n = -1;
+            QVERIFY2(killProbeVerify(onDisk, &n),
+                     "destination must be a COMPLETE self-describing payload — never a partial "
+                     "mix of old and new content (REQ-NF-Reliab-002)");
+            QCOMPARE(onDisk, killProbePayload(n)); // exact full-length equality
+            QVERIFY2(n >= 0 && n <= 200000, "payload counter must stay within the loop's range");
+        }
+#else
+        QSKIP("POSIX fork/SIGKILL test — not applicable on this platform");
+#endif
+    }
 };
 
 QTEST_APPLESS_MAIN(TestAtomicFile)

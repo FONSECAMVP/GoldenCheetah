@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import random
 import time
+import types
+from collections.abc import Callable
 
 import pytest
 
@@ -195,3 +197,107 @@ def test_with_retry_backoff_is_exponential_and_capped(monkeypatch: pytest.Monkey
     # attempts 1,2,3 each fail-then-sleep before attempt 4 fails and re-raises
     # (no sleep after the LAST attempt): base*2**0, base*2**1, min(cap, base*2**2)
     assert delays == pytest.approx([0.1, 0.2, 0.3])
+
+
+# --- T-204 (REQ-NF-Reliab-001) — the PRODUCTION-bound retry schedule ----------
+# test_every_network_calling_GarminClient_method_is_rate_limited_and_retried
+# proves the four network methods carry BOTH decorators (depth 2); this test
+# proves they bind the SPEC'D schedule — 250 ms base, 2 s cap, 3 attempts
+# (with_retry's signature defaults, never overridden at any of the four call
+# sites). A regression that overrode cap=10.0 would pass a depth-only check;
+# it cannot pass this one.
+
+
+def _transient_failer(counter: dict[str, int]) -> Callable[..., object]:
+    """An impl that fails with a transient GarminError forever, counting tries."""
+    from garmin_client import GarminError
+
+    def fail(*_args: object, **_kwargs: object) -> object:
+        counter["n"] += 1
+        raise GarminError("connection", "stub: still down")
+
+    return fail
+
+
+_SPEC_CALL_ARGS: dict[str, tuple[object, ...]] = {
+    "login": (),
+    "submit_mfa": ("123456",),
+    "list_activities_since": ("2026-01-01 00:00:00",),
+    "download_activity": ("42", "ORIGINAL"),
+}
+
+
+def _closure_cells(fn: object) -> dict[str, object]:
+    """Name-keyed closure cells of a decorator's wrapped function."""
+    assert isinstance(fn, types.FunctionType), "expected a plain wrapped function"
+    assert fn.__closure__ is not None, "expected a closure (decorator-captured args)"
+    return dict(zip(fn.__code__.co_freevars, (cell.cell_contents for cell in fn.__closure__)))
+
+
+def test_production_GarminClient_retry_binds_the_spec_schedule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The REAL wrapped GarminClient.{login,submit_mfa,list_activities_since,
+    download_activity} retry with exactly the prd schedule (250 ms base, 2 s
+    cap, max 3 attempts).
+
+    Two halves, because no single mechanism observes all three parameters:
+
+    - Behavioural (base + max_attempts): the wrapped method is driven with
+      time.sleep recorded and jitter zeroed against an always-transient impl;
+      the delays must be exactly [0.25, 0.5] over exactly 3 attempts.
+    - Closure cells (cap): with max_attempts=3 the largest scheduled delay is
+      0.5 s, so cap never binds and is behaviourally unobservable through the
+      production binding — the functools.wraps-preserved closure cell is the
+      only honest way to pin it.
+
+    The transient failure is injected by writing a fake into the
+    rate_limited layer's closure cell (CPython cells are writable) rather than
+    by patching GarminClient._<name>_impl: the impl is captured in the
+    decorator closures at class-body time, so a class-attr patch would never
+    be reached and the test would exercise nothing. This way the REAL
+    with_retry+rate_limited chain stays fully in the path under test.
+    """
+    from garmin_client import GarminClient, GarminError
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(random, "uniform", lambda _a, _b: 0.0)  # isolate base/cap terms
+    monkeypatch.setitem(_BUCKET, "min_interval", 0.0)  # pacing must not add sleeps
+
+    for name, call_args in _SPEC_CALL_ARGS.items():
+        fn = getattr(GarminClient, name)
+
+        # (1) Closure cells — pins all three parameters, including cap, which
+        # the behavioural half cannot reach within 3 attempts.
+        cells = _closure_cells(fn)
+        assert cells.get("base") == 0.25, f"{name}: base must stay the spec'd 0.25 s"
+        assert cells.get("cap") == 2.0, f"{name}: cap must stay the spec'd 2.0 s"
+        assert cells.get("max_attempts") == 3, f"{name}: max_attempts must stay 3"
+
+        # (2) Behaviour — real with_retry+rate_limited chain, transient impl
+        # failing forever: exactly 3 attempts, sleeps exactly [base, 2*base]
+        # (cap not reached at these attempt indexes), then the transient
+        # error surfaces to the caller.
+        attempts = {"n": 0}
+        always_transient = _transient_failer(attempts)
+
+        inner = fn.__wrapped__
+        inner_cells = _closure_cells(inner)
+        assert set(inner_cells) == {"fn"}, f"{name}: unexpected rate_limited closure shape"
+        original_impl = inner_cells["fn"]
+        assert inner.__closure__ is not None and len(inner.__closure__) == 1
+        cell = inner.__closure__[0]
+        cell.cell_contents = always_transient
+        try:
+            sleeps.clear()
+            with pytest.raises(GarminError) as excinfo:
+                getattr(GarminClient.__new__(GarminClient), name)(*call_args)
+            assert excinfo.value.kind == "connection", f"{name}: transient kind must surface"
+            assert attempts["n"] == 3, f"{name}: must give up after exactly 3 attempts"
+            assert sleeps == pytest.approx([0.25, 0.5]), (
+                f"{name}: retry delays must be the spec'd 250 ms -> 500 ms schedule "
+                "(250 ms base, exponential, cap 2.0 s, jitter zeroed)"
+            )
+        finally:
+            cell.cell_contents = original_impl

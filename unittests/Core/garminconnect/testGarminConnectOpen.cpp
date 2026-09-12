@@ -207,6 +207,62 @@ class TestGarminConnectOpen : public QObject
         QCOMPARE(fake.restoreCalls, 1);
     }
 
+    // T-205 / REQ-NF-Reliab-002 — torn-write detection on READ: tokens.json with
+    // CORRECT 0600 permissions but corrupted (truncated, non-JSON) content
+    // must still fail open() gracefully. Today's contract, pinned here
+    // deliberately, has three halves:
+    //   1. loadChecked does NO content validation — it returns Ok with
+    //      whatever bytes are on disk (the exact seam where a
+    //      LoadStatus::Torn case would appear if one were ever added);
+    //   2. those bytes are delivered VERBATIM to the restore attempt — the
+    //      component that parses them;
+    //   3. open() returns false with the "sign in again" label — no crash,
+    //      no download, forced fresh SSO.
+    // Scope note: the failure SIGNAL still comes from FakeRestoreClient —
+    // the real parser is Python load_tokens behind the production chain,
+    // not part of this binary. The JSON-parse of garbage itself is covered
+    // pytest-side (tests/test_adapter_restore.py::
+    // test_load_tampered_or_expired_blob_raises_session_expired). What THIS
+    // test adds is the missing link the existing openFailsWhenRestoreFails
+    // does not cover: REAL torn on-disk state -> REAL loadChecked ->
+    // verbatim delivery -> labelled failure, end to end through open().
+    void openWithTornTokenContentFailsWithRestoreLabel()
+    {
+        // Literal truncated bytes — not valid JSON in any shape (cut mid
+        // member, no closing quote or brace), i.e. exactly what a crash
+        // mid-legacy-write would leave behind.
+        const QByteArray kTorn("{\"oauth1\":\"OA1\",\"oauth2\":");
+
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        writeTokenFile(tmp.path(), kTorn, 0600);
+
+        // (1) the load seam hands torn CONTENT through as Ok at 0600.
+        const GarminTokenStore::LoadResult r = GarminTokenStore::loadChecked(tmp.path());
+        QVERIFY2(r.isOk(), "a 0600 token file must pass the permission gate regardless of content");
+        QCOMPARE(r.bytes, kTorn);
+
+        FakeRestoreClient fake;
+        fake.restoreOk = false;
+        fake.restoreKind = GarminRestoreFailure::SessionExpired;
+        GarminConnect gc(nullptr, &fake, tmp.path());
+
+        QStringList errors;
+        const bool ok = gc.open(errors);
+
+        // (2) the torn bytes reached the restore seam verbatim (the real
+        // chain would json-parse them exactly here and fail session_expired).
+        QCOMPARE(fake.restoreCalls, 1);
+        QCOMPARE(fake.lastRestoreBlob, QString::fromUtf8(kTorn));
+
+        // (3) labelled failure routing to a fresh sign-in; never a download.
+        QVERIFY2(!ok, "open() must fail on torn token content");
+        QVERIFY2(!errors.isEmpty(), "a labelled error must be pushed for torn token content");
+        QVERIFY2(errors.join(QLatin1Char(' ')).contains(QStringLiteral("sign in again")),
+                 "torn content must route the user to a fresh sign-in, not a crash");
+        QCOMPARE(fake.downloadCalls, 0);
+    }
+
     // B-R010-04 — the backfill dialog (REQ-010 UI wiring) is handed an
     // already-open()'d GarminConnect and needs the SAME authenticated client
     // + per-account keys ensureClient()/resolveConfigDir()/resolveGarminUserId()
