@@ -1,4 +1,4 @@
-# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-12 by Inspector (Stage 8 — all REQ-NF items now MET; REQ-NF-Build-001/Sec-001..004/Reliab-001+002/Obs-001 all COMMITTED; REQ-NF-i18n-001 T-208 TEST VERIFIED, not yet committed — Stage 8 closes on that commit)
+# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-12 by Inspector (all Stage 8 REQ-NF items MET+COMMITTED: Build-001/Sec-001..004/Reliab-001+002/Obs-001 and now REQ-NF-i18n-001 committed `da9ef33fa` — Stage 8 finished. Next: Stage 9, human-in-the-loop gate)
 # Per-id lifecycle status lives ONLY in .claude/workflow-garminconnect/traceability.md (DEC-015 SSOT).
 # For a DEC's status read decisions.md. For a finding's severity/disposition read findings.md.
 # ALL superseded cursor narrative -> .claude/workflow-garminconnect/archive/state-history.md
@@ -369,18 +369,18 @@ COUNTS-ADDENDUM-9 (2026-09-12, not yet folded into the block above): Stage 8's s
            this session). **Committed `e69dfa027` 2026-09-12** (8 files: STATE.md/WIKI.md/
            traceability.md/findings.md + GarminConnect.cpp/.h + the two test files). **All Stage 8
            REQ-NF items except REQ-NF-i18n-001 are now MET.** REQ-NF-i18n-001 (T-208, tr()
-           coverage) is now also TEST VERIFIED, not yet committed — see COUNTS-ADDENDUM-10
-           below. **All Stage 8 REQ-NF items now MET; every other Stage 8 item was already
-           committed (Build-001 `f118691ea`, Sec-001+003 `d271abae1`, Sec-004 `07501c477`,
-           Reliab-001+002 `51bc6b5a8`, Obs-001 `e69dfa027`) — REQ-NF-i18n-001's diff is the
-           only remaining uncommitted piece.** Stage 8 CLOSES on that commit. Next: Stage 9
-           (a real Garmin account exercising connect/MFA/sync/disconnect + Win/macOS/Linux
-           installed-package smoke checklist) — a human-in-the-loop gate (real user
-           credentials), not something the Inspector can build unattended.
+           coverage) is now also TEST VERIFIED + COMMITTED `da9ef33fa` — see
+           COUNTS-ADDENDUM-10 below. **All Stage 8 REQ-NF items now MET and COMMITTED**
+           (Build-001 `f118691ea`, Sec-001+003 `d271abae1`, Sec-004 `07501c477`,
+           Reliab-001+002 `51bc6b5a8`, Obs-001 `e69dfa027`, i18n-001 `da9ef33fa`).
+           **Stage 8 is CLOSED.** Next: Stage 9 (a real Garmin account exercising
+           connect/MFA/sync/disconnect + Win/macOS/Linux installed-package smoke checklist)
+           — a human-in-the-loop gate (real user credentials), not something the Inspector
+           can build unattended.
 
 COUNTS-ADDENDUM-10 (2026-09-12, not yet folded into the block above): Stage 8's last open item,
            REQ-NF-i18n-001 (T-208, tr() coverage for the Garmin-scope UI surface), is now
-           **TEST VERIFIED, not yet committed.** Builder converted 11 `QStringLiteral` prose
+           **TEST VERIFIED + COMMITTED `da9ef33fa` 2026-09-12.** Builder converted 11 `QStringLiteral` prose
            sites in `GarminBackfillController.h`/`.cpp` to `tr()` (via
            `Q_DECLARE_TR_FUNCTIONS(GarminBackfillController)`, public: reopened per this
            repo's established pattern) and added new `unittests/buildguard/
@@ -406,8 +406,9 @@ COUNTS-ADDENDUM-10 (2026-09-12, not yet folded into the block above): Stage 8's 
            send-keys ... enter` silently failed to submit (text sat unsent in the input box)
            because the pane was not focused; `herdr agent focus` before the keypress fixed
            it (Inspector-tooling note, not a project lesson — not added to lessons.md).
-           **All Stage 8 REQ-NF items now MET; Stage 8
-           closes on this commit.** Next: Stage 9 (human-in-the-loop gate, see above).
+           **All Stage 8 REQ-NF items now MET and COMMITTED. Stage 8 is CLOSED** (22 files,
+           `da9ef33fa`, includes STATE.md/WIKI.md/traceability.md/findings.md). Next:
+           Stage 9 (human-in-the-loop gate, see above).
 
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md
