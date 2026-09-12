@@ -1,4 +1,4 @@
-# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-12 by Inspector (Stage 8 — REQ-NF-Sec-001..004 all MET+COMMITTED; REQ-NF-Reliab-001+002 T-204..206 TEST VERIFIED, not yet committed; REQ-NF-Obs-001 T-207 TEST VERIFIED, not yet committed)
+# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-12 by Inspector (Stage 8 — REQ-NF-Sec-001..004 all MET+COMMITTED; REQ-NF-Reliab-001+002 T-204..206 TEST VERIFIED, not yet committed; REQ-NF-Obs-001 T-207 TEST VERIFIED + COMMITTED `e69dfa027`)
 # Per-id lifecycle status lives ONLY in .claude/workflow-garminconnect/traceability.md (DEC-015 SSOT).
 # For a DEC's status read decisions.md. For a finding's severity/disposition read findings.md.
 # ALL superseded cursor narrative -> .claude/workflow-garminconnect/archive/state-history.md
@@ -352,9 +352,10 @@ COUNTS-ADDENDUM-9 (2026-09-12, not yet folded into the block above): Stage 8's s
            re-run clean (EXIT=0). WIKI.md's TEST registry corrected `next:garmin-T-207` →
            `next:garmin-T-208` (T-207 was already consumed by this REQ; the pointer had gone
            stale, same class of miss as the DEC-registry gap COUNTS-ADDENDUM-8 already fixed once
-           this session). **All Stage 8 REQ-NF items except REQ-NF-i18n-001 are now MET.** Next
-           Stage 8 item: REQ-NF-i18n-001 (tr() coverage), in progress with the builder (T-208
-           claimed).
+           this session). **Committed `e69dfa027` 2026-09-12** (8 files: STATE.md/WIKI.md/
+           traceability.md/findings.md + GarminConnect.cpp/.h + the two test files). **All Stage 8
+           REQ-NF items except REQ-NF-i18n-001 are now MET.** Next Stage 8 item: REQ-NF-i18n-001
+           (tr() coverage), in progress with the builder (T-208 claimed).
 
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md
