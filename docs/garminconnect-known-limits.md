@@ -1,6 +1,6 @@
 # Garmin Connect — Known Limitations
 
-GoldenCheetah's Garmin Connect integration (Phase 1) has three known
+GoldenCheetah's Garmin Connect integration (Phase 1) has four known
 limitations users and contributors should be aware of.
 
 ## One account at a time
@@ -36,3 +36,18 @@ possible during a transition. The adapter that wraps this library
 seam specifically so that swapping the underlying library — for a fork, or a
 different implementation entirely — is a one-file change rather than a
 rewrite of the feature.
+
+## Tokens are stored as files, not in the OS keychain
+
+Garmin Connect sign-in tokens are stored as files inside the GoldenCheetah
+athlete configuration directory — `tokens.json` for the session itself, plus
+per-account sidecar files beside it (see `src/Cloud/GarminTokenStore.h` and
+`src/Cloud/GarminSidecarStore.h`). The files are written atomically and
+locked to owner-only (0600) permissions, which is the strongest file-level
+protection available. This is still a deliberate trade-off with a residual
+risk: any malware running as the SAME OS user can read those files and replay
+the tokens, and GoldenCheetah cannot defend against that, because by then the
+attacker already holds every right the user has. Storing the tokens in the
+operating system keychain instead is the improvement path that removes it,
+and a future phase may adopt that if real-world use surfaces concrete
+concerns — it is named as a direction, not committed to or scheduled.

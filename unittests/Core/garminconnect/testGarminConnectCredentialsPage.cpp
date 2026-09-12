@@ -123,6 +123,21 @@ class TestGarminConnectCredentialsPage : public QObject
                  "the subtitle must actually communicate the re-login expectation, not just be non-empty");
     }
 
+    // REQ-NF-Sec-004 — the same static subtitle must also disclose that
+    // sign-in tokens are stored as files under the athlete folder rather than
+    // in the OS keychain (the user-visible half of the residual-risk
+    // disclosure; the full text lives in docs/garminconnect-known-limits.md
+    // and README.md). Supplementary regression coverage only — the REQ's own
+    // verification is docs review per prd.md, not a dedicated test harness.
+    void pageHasSecurityNotice()
+    {
+        FakeAuthClient fake;
+        GarminCredentialsPage page(&fake);
+        QVERIFY2(page.subTitle().contains(QStringLiteral("keychain"), Qt::CaseInsensitive),
+                 "REQ-NF-Sec-004: the subtitle must disclose file-based token storage via the "
+                 "OS-keychain contrast, not just the re-login expectation");
+    }
+
     // The page must expose discoverable QLineEdits for email + password. The
     // wizard-tile contract test (TEST-001) locked the *service* surface; this
     // locks the *page* surface a future page-flow test or theming pass needs.

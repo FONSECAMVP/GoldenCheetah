@@ -22,10 +22,16 @@ GarminCredentialsPage::GarminCredentialsPage(IGarminAuthClient* authClient, QWid
     // REQ-NF-Compat-001(b) — static, one-time notice: a Garmin-side session
     // invalidation (e.g. a password change) forces a full re-login rather than
     // a silent reauth. Set once here so a user hitting that mid-flow is not
-    // surprised by it; the full three-point limitations text lives in
+    // surprised by it; the full limitations text lives in
     // docs/garminconnect-known-limits.md, not crammed into this page.
+    // REQ-NF-Sec-004 — the same notice carries the file-based-token
+    // disclosure: tokens are stored under the athlete folder with owner-only
+    // file permissions rather than in the OS keychain, so same-user malware
+    // could read and replay them (residual risk, detailed in the doc above).
     setSubTitle(tr("If Garmin ends your existing session (for example after a password change), "
-                   "you may be asked to sign in again here. This is expected."));
+                   "you may be asked to sign in again here. This is expected. Note that sign-in "
+                   "tokens are stored in files under your GoldenCheetah athlete folder rather "
+                   "than in your operating system keychain."));
 
     m_email = new QLineEdit(this);
     m_email->setObjectName(QStringLiteral("garminEmail"));
