@@ -28,6 +28,14 @@ search, a read, a benign build/test step, a snapshot-verify-restore cycle checke
 sends something externally, or isn't confidently routine: do nothing, describe it plainly
 to the user, let them decide.
 
+**Read the scope of the approval option, not just the command.** A "don't ask again for
+X" option can cover a much wider command family than the one routine action in front of
+you (e.g. approving a single `herdr pane read` this way can silently allow-list `herdr
+pane *` — including `run`/`send-keys`/`close`, real mutations — in the project's own
+`settings.local.json`, persisting past this one dialog). Confirmed 2026-09-12: exactly this
+happened and had to be narrowed back down after the fact. Default to the one-time approval
+option unless the wildcard's actual scope is itself confidently read-only.
+
 ## Identity and topology drift
 
 - Your OWN cross-session identity (`ListAgents` "this session is X") can drift mid-
