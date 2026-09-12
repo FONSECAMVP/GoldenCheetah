@@ -74,7 +74,11 @@ DEC  garmin:001–043                 decisions.md ## Decision index  next:garmi
      (Option A / Option C respectively) and BOTH BUILT + execution-verified 2026-09-05 (TEST-158;
      TEST-159+160) — both findings closed on executed evidence; see decisions.md entries for trade space.
 DES  garmin:001–014 (+001a,003a)    design.md                       next:garmin-015
-TEST garmin:T-001–T-172 (T-143–T-153 = DEC-040; T-161–T-163 = REQ-020 wizard; T-164–T-166 = REQ-022 OpenData; T-167–T-169 = REQ-023 store/uncompress; T-170–T-172 = REQ-024 Strava loop — four new targets; per-id build state → traceability.md)   next:garmin-T-173
+TEST garmin:T-001–T-201 (T-143–T-153 = DEC-040; T-161–T-163 = REQ-020 wizard; T-164–T-166 = REQ-022 OpenData; T-167–T-169 = REQ-023 store/uncompress; T-170–T-172 = REQ-024 Strava loop; T-176 REQ-009; T-177 REQ-014; T-179+T-194-196 REQ-010; T-201 REQ-013 — per-id build state → traceability.md)   next:garmin-T-202
+     REGISTRIES line was stale (still read "next:garmin-T-173") — corrected 2026-09-12 by the
+     Inspector during the inspector-cycle pilot run, cross-verified against the ledger's true
+     max (grep for T-[0-9]+/TEST-[0-9]+ across traceability.md/decisions.md/findings.md/
+     STATE.md), no code changed.
      T-154–T-156 BUILT 2026-09-04 (DEC-033: out-param correctness + syncNext/downloadNext clause-(e)
      coverage, all passing). TEST-076 (pre-existing id, allocated long before this session, previously
      unused/dead-code-pinned) also BUILT 2026-09-04 — closes B-R027-09. T-157 BUILT 2026-09-04 (B-R028-01
