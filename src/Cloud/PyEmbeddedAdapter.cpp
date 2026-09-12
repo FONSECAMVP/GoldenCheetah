@@ -235,6 +235,21 @@ PyLoadTokensOutcome classifyLoadTokensException(PyObject* module)
     return out;
 }
 
+// fetchProfile() classification (REQ-013, DEC-050): connection -> Network,
+// anything else / foreign (including rate_limit — this outcome has no
+// dedicated RateLimit kind, mirroring PyLoadTokensOutcome) -> Unknown.
+PyProfileOutcome classifyProfileException(PyObject* module)
+{
+    const RaisedExc e = takeRaisedException(module);
+    PyProfileOutcome out;
+    out.rawMessage = e.message;
+    if (e.isGarminError && e.kind == QStringLiteral("connection"))
+        out.kind = PyProfileOutcome::Network;
+    else
+        out.kind = PyProfileOutcome::Unknown;
+    return out;
+}
+
 } // namespace
 
 PyEmbeddedAdapter::PyEmbeddedAdapter(const QString& modulePath)
@@ -581,6 +596,74 @@ PyLoadTokensOutcome PyEmbeddedAdapter::loadTokens(const QString& tokenBlob)
     Py_INCREF(m_client);
 
     out.kind = PyLoadTokensOutcome::Success;
+    return out;
+}
+
+PyProfileOutcome PyEmbeddedAdapter::fetchProfile()
+{
+    PyProfileOutcome out;
+
+    // Step 1 — fail-safe before touching any interpreter API. Never throws.
+    if (!Py_IsInitialized()) {
+        out.kind = PyProfileOutcome::Unknown;
+        out.rawMessage = QStringLiteral("embedded Python unavailable");
+        return out;
+    }
+
+    // GIL held from here; the guard releases on every return below.
+    GilGuard gil;
+
+    // No retained session — authenticate()/loadTokens() must have succeeded
+    // first. The password is not kept (REQ-005), so we cannot build a fresh
+    // client here.
+    if (m_client == nullptr) {
+        out.kind = PyProfileOutcome::Unknown;
+        out.rawMessage = QStringLiteral("not authenticated");
+        return out;
+    }
+
+    // garmin_client is needed only to resolve the GarminError type for
+    // classification; it is already imported/cached from authenticate().
+    prependToSysPathIfAbsent(modulePath);
+    PyRef module(PyImport_ImportModule("garmin_client"));
+
+    PyRef result(PyObject_CallMethod(m_client, "get_profile", nullptr));
+    if (!result)
+        return classifyProfileException(module.get());
+
+    // A non-dict result is a DES-012 contract breach, not a valid profile:
+    // fold to Unknown rather than fabricate an empty Success.
+    if (!PyDict_Check(result.get())) {
+        out.kind = PyProfileOutcome::Unknown;
+        out.rawMessage = QStringLiteral("garmin_client.get_profile() returned a non-dict result");
+        return out;
+    }
+
+    // REQ-013 (DEC-050) — the Python adapter already did the defensive
+    // key-name/plausibility extraction; this seam only marshals whichever of
+    // the 3 keys are present. A missing key is a NORMAL Success outcome
+    // (Garmin didn't have that field), never a failure.
+    out.kind = PyProfileOutcome::Success;
+
+    PyObject* dob = PyDict_GetItemString(result.get(), "dob"); // borrowed
+    if (dob != nullptr && PyUnicode_Check(dob)) {
+        out.hasDob = true;
+        out.dob = toQString(dob);
+    }
+
+    PyObject* weight = PyDict_GetItemString(result.get(), "weight_kg"); // borrowed
+    if (weight != nullptr && (PyFloat_Check(weight) || PyLong_Check(weight))) {
+        out.hasWeightKg = true;
+        out.weightKg = PyFloat_AsDouble(weight);
+    }
+
+    PyObject* height = PyDict_GetItemString(result.get(), "height_cm"); // borrowed
+    if (height != nullptr && (PyFloat_Check(height) || PyLong_Check(height))) {
+        out.hasHeightCm = true;
+        out.heightCm = PyFloat_AsDouble(height);
+    }
+
+    PyErr_Clear(); // defensive: numeric conversion above never fails an otherwise-good Success
     return out;
 }
 

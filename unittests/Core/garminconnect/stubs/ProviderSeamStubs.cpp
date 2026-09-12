@@ -749,3 +749,8 @@ PyListOutcome PyEmbeddedAdapter::listActivitiesSince(const QString&)
 {
     return {};
 }
+
+PyProfileOutcome PyEmbeddedAdapter::fetchProfile()
+{
+    return {};
+}

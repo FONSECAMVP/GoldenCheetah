@@ -130,23 +130,50 @@ inline double dpiYFactor = 1.0;
 // ===========================================================================
 #ifndef _GC_Settings_h
 #    define _GC_Settings_h
-// Mirrors src/Core/Settings.h's define — this stub fully shadows that header
-// (same include guard), so the real macro never reaches this TU.
+// Mirrors src/Core/Settings.h's defines — this stub fully shadows that header
+// (same include guard), so the real macros never reach this TU.
 #    define GC_GARMIN_CONNECT_TOS_ACK "<global-general>garminConnectTosAck"
+// REQ-013 (DEC-050 first slice) — mirrors src/Core/Settings.h exactly (same
+// key strings) so there is no meaningful divergence from the production
+// values these tests exercise.
+#    define GC_DOB "<athlete-preferences>dob"
+#    define GC_WEIGHT "<athlete-preferences>weight"
+#    define GC_HEIGHT "<athlete-preferences>height"
+#    define GC_GARMIN_PROFILE_OFFERED "<athlete-preferences>garminProfileOffered"
 class Configuration
 {
   public:
-    void setCValue(const QString&, const QString&, const QVariant&) {}
     QVariant value(const QObject*, const QString& key, const QVariant& def = QVariant())
     {
         return m_values.value(key, def);
     }
     void setValue(const QString& key, const QVariant& v) { m_values.insert(key, v); }
+
+    // REQ-013 (DEC-050) — per-athlete settings, real (in-memory) round-trip so
+    // the profile auto-fill tests can assert on what was actually filled.
+    // Keyed on athleteName+key since the stub has no real per-athlete store.
+    // (Previously a no-op stub satisfying only AddFinish's activeSettingName()
+    // write, which nothing asserted on; now genuinely stores, which is a
+    // strict behavioural upgrade — nothing relied on the prior no-op.)
+    QVariant cvalue(const QString& athleteName, const QString& key, const QVariant& def = QVariant())
+    {
+        return m_cvalues.value(athleteName + QLatin1Char('|') + key, def);
+    }
+    void setCValue(const QString& athleteName, const QString& key, const QVariant& v)
+    {
+        m_cvalues.insert(athleteName + QLatin1Char('|') + key, v);
+    }
+
     // Test-only — resets the in-memory store between test slots.
-    void clearForTest() { m_values.clear(); }
+    void clearForTest()
+    {
+        m_values.clear();
+        m_cvalues.clear();
+    }
 
   private:
     QHash<QString, QVariant> m_values;
+    QHash<QString, QVariant> m_cvalues;
 };
 inline Configuration* appsettings = new Configuration();
 #endif
@@ -399,6 +426,12 @@ inline bool g_pyAdapterDeletedWhileWorkerThreadRunning = false;
 // script these keep seeing the historical Unknown outcome (non-breaking).
 inline PyAuthOutcome g_scriptedAuthenticateOutcome;
 inline PyAuthOutcome g_scriptedSubmitMfaOutcome;
+// REQ-013 (DEC-050) — scriptable so a routing test can drive the profile-offer
+// Apply path (fetchProfile) through the REAL GarminWorker.
+inline PyProfileOutcome g_scriptedFetchProfileOutcome;
+// REQ-013 (DEC-050) — count of fetchProfile() calls, so a test can assert
+// Skip / Apply-without-ticking never dispatches a fetch (Behaviour 8).
+inline int g_fetchProfileCalls = 0;
 
 class PyEmbeddedAdapter : public IGarminPyAdapter
 {
@@ -428,6 +461,16 @@ class PyEmbeddedAdapter : public IGarminPyAdapter
     // REQ-008 Slice A seam extension (DEC-013 compile-enforced) — the wizard
     // stub does not list; a default outcome satisfies the interface so it compiles.
     PyListOutcome listActivitiesSince(const QString&) override { return {}; }
+
+    // REQ-013 (DEC-050) — scriptable so a routing test can drive the
+    // profile-offer Apply path through the REAL GarminWorker; defaults to
+    // Unknown (PyProfileOutcome's own default, non-breaking for existing
+    // tests that never script it).
+    PyProfileOutcome fetchProfile() override
+    {
+        ++g_fetchProfileCalls;
+        return g_scriptedFetchProfileOutcome;
+    }
 
     // Set by the destructor-order test to the chain's worker thread.
     QPointer<QThread> observedThread;

@@ -307,6 +307,9 @@ class PyEmbeddedAdapter : public IGarminPyAdapter
     // REQ-008 Slice A seam extension (DEC-013 compile-enforced) — readFile does
     // not list; a default outcome satisfies the interface so this stub compiles.
     PyListOutcome listActivitiesSince(const QString&) override { return {}; }
+    // REQ-013 (DEC-050) seam extension (DEC-013 compile-enforced) — readFile
+    // does not fetch a profile; a default outcome satisfies the interface.
+    PyProfileOutcome fetchProfile() override { return {}; }
     QString modulePath() const { return m_modulePath; }
 
   private:

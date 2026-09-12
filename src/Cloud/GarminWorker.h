@@ -81,6 +81,39 @@ Q_DECLARE_METATYPE(GarminListFailure)
 Q_DECLARE_METATYPE(GarminActivitySummary)
 Q_DECLARE_METATYPE(QVector<GarminActivitySummary>)
 
+// REQ-013 (DEC-050 first slice) — the success payload of
+// GarminWorker::profileFetched. Mirrors PyProfileOutcome's field shape
+// (Success case only, see IGarminPyAdapter.h): a field's has* flag being
+// false is a NORMAL outcome (Garmin didn't have that field), not a failure.
+// hr_max/ftp_w are explicitly OUT of this slice (DES-011 Scope paragraph) and
+// have no fields here. Registered as a metatype (below + qRegisterMetaType in
+// the ctor) so it can cross the worker thread boundary via a queued
+// connection.
+struct GarminProfileResult
+{
+    bool hasDob = false;
+    QString dob; // ISO "YYYY-MM-DD"
+    bool hasWeightKg = false;
+    double weightKg = 0.0;
+    bool hasHeightCm = false;
+    double heightCm = 0.0;
+};
+Q_DECLARE_METATYPE(GarminProfileResult)
+
+// REQ-013 (DEC-050 first slice) — the failure payload of
+// GarminWorker::profileFailed. Mirrors GarminRestoreFailure's shape one op
+// sideways, but with no dedicated SessionExpired/RateLimit kind —
+// PyProfileOutcome has none either (see IGarminPyAdapter.h). Registered as a
+// metatype (below + qRegisterMetaType in the ctor) so it can cross the worker
+// thread boundary via a queued connection.
+struct GarminProfileFailure
+{
+    enum Kind { Network, Unknown };
+    Kind kind = Unknown;
+    QString rawMessage;
+};
+Q_DECLARE_METATYPE(GarminProfileFailure)
+
 class GarminWorker : public QObject
 {
     Q_OBJECT
@@ -123,6 +156,15 @@ class GarminWorker : public QObject
     // failure → failed(). `code` is the 6-digit OTP forwarded verbatim.
     void submitMfa(const QString& code, QUuid requestId);
 
+    // REQ-013 (DEC-050 first slice) — fetch dob/weight_kg/height_cm via the
+    // retained adapter session, off the GUI thread, for the opt-in
+    // post-connect auto-fill offer (DES-011). Emits profileFetched() on
+    // Success (which may carry zero fields — Garmin not having a field is
+    // normal, not a failure), else profileFailed(). hr_max/ftp_w are
+    // explicitly deferred (DES-011 Scope paragraph) and are not part of this
+    // op's payload.
+    void fetchProfile(QUuid requestId);
+
   signals:
     // Emitted on the worker thread; cross-thread queued connection delivers
     // them to slots on the GUI thread (e.g. WorkerAuthClient re-emits).
@@ -148,6 +190,12 @@ class GarminWorker : public QObject
     // REQ-007 closure (Slice 1) — restore results, same threading contract.
     void sessionRestored(QUuid id);
     void restoreFailed(QUuid id, GarminRestoreFailure error);
+
+    // REQ-013 (DEC-050 first slice) — profile-fetch results, same threading
+    // contract as above. A Success with no has* flags set is a NORMAL
+    // outcome (Garmin had none of the 3 fields).
+    void profileFetched(QUuid id, GarminProfileResult result);
+    void profileFailed(QUuid id, GarminProfileFailure error);
 
   private:
     // Shared Success/failure mapping used by BOTH authenticate() (for its

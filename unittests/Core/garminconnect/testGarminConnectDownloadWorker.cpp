@@ -104,6 +104,11 @@ class FakeDownloadPyAdapter : public IGarminPyAdapter
         listCallCount.fetch_add(1);
         return scriptedListOutcome;
     }
+
+    // REQ-013 (DEC-050) seam extension (DEC-013 compile-enforced) — this
+    // download-worker test never fetches a profile; a default outcome
+    // satisfies the interface. No assertion added/changed.
+    PyProfileOutcome fetchProfile() override { return {}; }
 };
 
 namespace {

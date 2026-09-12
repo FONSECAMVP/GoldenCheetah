@@ -11,8 +11,10 @@ Phase 2.2 status (REQ-by-REQ):
   - REQ-014 login connection/rate_limit translation: GREEN.
   - REQ-010 (DES-005): login/submit_mfa/list_activities_since/download_activity
     are all paced + retried via gc_rate.py.
-  - REQ-003 / REQ-008 / REQ-012 / REQ-013: still raise
-    NotImplementedError until their owning slice reaches GREEN.
+  - REQ-013 (DEC-050 first slice — dob/weight_kg/height_cm only; hr_max/ftp_w
+    deferred) get_profile: GREEN.
+  - REQ-003 / REQ-008 / REQ-012: still raise NotImplementedError until their
+    owning slice reaches GREEN.
 
 The wider `_EXCEPTION_MAP` (captcha, mfa_required, token_permissions) lands
 with later slices (A2-005, REQ-003, REQ-015) — not this module's scope yet.
@@ -21,6 +23,7 @@ with later slices (A2-005, REQ-003, REQ-015) — not this module's scope yet.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import date
 from typing import Any
 
 from gc_rate import rate_limited, with_retry
@@ -304,8 +307,77 @@ class GarminClient:
         is_transient=lambda e: isinstance(e, GarminError) and e.kind in ("connection", "rate_limit"),
     )
 
-    def get_profile(self) -> dict[str, Any]:
-        raise NotImplementedError("REQ-013 GREEN step not yet implemented")
+    def _get_profile_impl(self) -> dict[str, Any]:
+        # REQ-013 (DEC-050 first slice) — dob/weight_kg/height_cm only; hr_max
+        # and ftp_w are DEFERRED (they live in GC's date-ranged Zones/CP system,
+        # not a simple scalar — see DES-011's "Scope" paragraph). The real
+        # library's profile/settings response is UNTYPED (no typed.py model)
+        # and UNVERIFIED against a live account (this project has never tested
+        # against one — traceability.md's "LIVE-SERVICE TESTED: NO" row). Every
+        # field below is therefore extracted defensively: a short list of
+        # plausible key-name candidates is tried per field, and a field is
+        # silently OMITTED (never raises) on a missing key, wrong type, or an
+        # implausible value. REQ-013's own "only fill missing fields" contract
+        # already treats "Garmin didn't have this" as a normal outcome, not an
+        # error, so this degrades safely either way.
+        try:
+            raw = self._garmin.get_userprofile_settings()
+        except _gc.exceptions.GarminConnectConnectionError as e:
+            raise GarminError("connection", str(e) or "Could not reach Garmin Connect", e) from e
+        except _gc.exceptions.GarminConnectTooManyRequestsError as e:
+            raise GarminError("rate_limit", str(e) or "Garmin Connect is rate-limiting profile fetch", e) from e
+
+        if not isinstance(raw, dict):
+            return {}
+
+        profile: dict[str, Any] = {}
+
+        # DOB — candidate keys unconfirmed (DEC-050); accept only a value whose
+        # first 10 chars parse as an ISO YYYY-MM-DD date.
+        for key in ("birthDate", "dateOfBirth"):
+            value = raw.get(key)
+            if not isinstance(value, str):
+                continue
+            try:
+                date.fromisoformat(value[:10])
+            except ValueError:
+                continue
+            profile["dob"] = value[:10]
+            break
+
+        # Weight — Garmin has been observed to report weight in grams rather
+        # than kilograms on some endpoints; anything implausibly large for a
+        # kilogram value is treated as grams and converted. A result outside a
+        # sane human range is dropped rather than filled with nonsense.
+        for key in ("weight", "weightInKilograms", "userWeight"):
+            value = raw.get(key)
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                continue
+            weight_kg = float(value)
+            if weight_kg > 300:
+                weight_kg /= 1000.0
+            if 20.0 <= weight_kg <= 300.0:
+                profile["weight_kg"] = weight_kg
+                break
+
+        # Height — candidate keys unconfirmed (DEC-050); sanity-bounded to a
+        # plausible human range in centimeters.
+        for key in ("height", "heightInCentimeters", "userHeight"):
+            value = raw.get(key)
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                continue
+            height_cm = float(value)
+            if 50.0 <= height_cm <= 250.0:
+                profile["height_cm"] = height_cm
+                break
+
+        return profile
+
+    # DES-005/DEC-007 — same pacing/retry wrapping as the other read calls.
+    get_profile = with_retry(
+        rate_limited(_get_profile_impl),
+        is_transient=lambda e: isinstance(e, GarminError) and e.kind in ("connection", "rate_limit"),
+    )
 
     def disconnect(self) -> None:
         raise NotImplementedError("REQ-012 GREEN step not yet implemented")

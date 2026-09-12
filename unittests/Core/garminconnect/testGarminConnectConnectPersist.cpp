@@ -249,6 +249,7 @@ class FakeAuthPyAdapter : public IGarminPyAdapter
     PyDownloadOutcome downloadActivity(const QString&, const QString&) override { return {}; }
     PyLoadTokensOutcome loadTokens(const QString&) override { return {}; }
     PyListOutcome listActivitiesSince(const QString&) override { return {}; }
+    PyProfileOutcome fetchProfile() override { return {}; }
 };
 
 // ---------------------------------------------------------------------------

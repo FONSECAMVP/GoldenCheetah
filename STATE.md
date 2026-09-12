@@ -125,6 +125,28 @@ COUNTS-ADDENDUM (2026-09-11, not yet folded into the block above — a full COUN
            (testGarminBackfillController 20 slots, testGarminConnectOpen 11 slots,
            testGarminBackfillDialogLifetime new 5 slots). DEC48. findings 393 rows (388 + 5:
            B-R010-07/08/09 fixed, B-R010-10 deferred, B-R010-11 informational — see LAST_CLV).
+COUNTS-ADDENDUM-2 (2026-09-12, not yet folded into the block above): REQ-NF-Pkg-001 (DEC-049,
+           src.pro/CMakeLists.txt packaging-absence fix) committed `e609215f0` 2026-09-11,
+           ledger-recorded `ee15a6e6e`, stale US-table row fixed `98b89f327`. REQ-NF-Compat-001
+           (known-limits doc + connect-dialog notice) committed `0f654f4a5` 2026-09-11,
+           ledger-recorded `e79545bb7` — independently re-verified 40/40 `garmin-fast`. A
+           user-requested qmake/CMake Garmin-parity audit (separate Codex session) came back
+           clean: no other REQ shares REQ-NF-Pkg-001's src.pro-absence gap; two low-priority
+           side findings only (untranslated Garmin strings, covered by the already-deferred
+           REQ-NF-i18n-001; an unrelated pre-existing CMake GC_WANT_PYTHON/GC_HAVE_PYTHON naming
+           mismatch, no REQ allocated). DEC-050 (REQ-013 scope narrowed to dob/weight/height,
+           hr_max/ftp_w deferred) recorded `459990bb6` (current HEAD at addendum time). **REQ-013
+           built and TEST VERIFIED, UNCOMMITTED** — new T-201 (Python `test_adapter_profile.py`
+           16 slots; `testGarminConnectPyAdapter` +8 marshalling slots; `testGarminConnectWizardRouting`
+           15→20 slots). Reviewer delta-check caught a real blocking UAF (raw `Context*` dangling
+           across an async fetch after athlete-tab-close) — **FIXED same session, ASan-proven**
+           (B-R013-01). Two self-found pre-existing link-failure stubs also fixed (incomplete
+           `PyEmbeddedAdapter` overrides in `ImportSeamStubs.cpp`/`ProviderSeamStubs.cpp`).
+           Independently re-run by the orchestrator: `garmin-fast`+`garmin-py` 41/41, full `ctest`
+           42/42, clang-format clean on gate-matched files. Remaining Stage 7 item after REQ-013
+           commits: none — Stage 7 closes. findings 401 rows (400 + B-R013-01). Commit pending —
+           working tree mixes unrelated in-flight Coach/Qt6.8 changes; REQ-013's commit must be
+           scoped to the Garmin-only file set.
 
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md

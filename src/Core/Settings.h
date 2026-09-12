@@ -279,6 +279,12 @@
 #define GC_DOB                          "<athlete-preferences>dob"
 #define GC_WEIGHT                       "<athlete-preferences>weight"
 #define GC_HEIGHT                       "<athlete-preferences>height"
+// REQ-013 (DEC-050 first slice) — per-athlete gate for the opt-in Garmin
+// profile auto-fill offer (DES-011): whether this athlete has already been
+// asked, so the post-connect dialog only ever shows once per athlete. Unlike
+// GC_GARMIN_CONNECT_TOS_ACK (a GLOBAL one-time risk acknowledgement), this is
+// about THIS athlete's profile, not the app as a whole.
+#define GC_GARMIN_PROFILE_OFFERED       "<athlete-preferences>garminProfileOffered"
 #define GC_WBALTAU                      "<athlete-preferences>wbaltau"
 #define GC_SEX                          "<athlete-preferences>sex"
 #define GC_BIO                          "<athlete-preferences>bio"

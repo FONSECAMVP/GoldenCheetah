@@ -199,3 +199,25 @@ class GarminClient:
         if SCENARIO == "list_value_error":
             raise ValueError("stub: not a garmin error (listing)")
         raise GarminError("unknown", "stub: unrecognized list scenario %r" % (SCENARIO,))
+
+    # REQ-013 (DEC-050 first slice) — get_profile mirrors garmin_client.GarminClient
+    # as PyEmbeddedAdapter.fetchProfile() calls it: () -> dict carrying only the
+    # keys it confidently found among dob/weight_kg/height_cm (mirroring the REAL
+    # adapter's own defensive extraction — this stub returns the ALREADY-extracted
+    # shape, since PyEmbeddedAdapter only marshals whichever of the 3 keys are
+    # present, it never re-parses raw Garmin field names). Behaviour is switched on
+    # profile_* SCENARIO values (disjoint from the other scenarios above).
+    def get_profile(self):
+        if SCENARIO == "profile_full":
+            return {"dob": "1985-06-15", "weight_kg": 72.5, "height_cm": 178.0}
+        if SCENARIO == "profile_partial":
+            return {"dob": "1990-01-02"}  # weight/height absent — a normal Success
+        if SCENARIO == "profile_empty":
+            return {}  # Garmin had none of the 3 fields — still a normal Success
+        if SCENARIO == "profile_non_dict":
+            return "i am a str, not a dict"  # contract breach → Unknown, never Success
+        if SCENARIO == "profile_connection":
+            raise GarminError("connection", "stub: profile connection refused")
+        if SCENARIO == "profile_value_error":
+            raise ValueError("stub: not a garmin error (profile)")
+        raise GarminError("unknown", "stub: unrecognized profile scenario %r" % (SCENARIO,))

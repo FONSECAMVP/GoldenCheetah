@@ -155,6 +155,41 @@ struct PyLoadTokensOutcome
 };
 
 // ---------------------------------------------------------------------------
+// PyProfileOutcome — value type returned by IGarminPyAdapter::fetchProfile()
+// (REQ-013, DEC-050 first slice). Mirrors PyLoadTokensOutcome's shape — a
+// single-shot op with no extra params. Unlike the other outcomes, Success
+// does NOT imply every field was found: DEC-050 records that the real
+// library's profile/settings response is untyped and unverified against a
+// live account, so garmin_client.get_profile() extracts each of
+// dob/weight_kg/height_cm defensively and simply omits whatever it could not
+// confidently find. A Success with zero `has*` flags set is therefore a
+// VALID, expected outcome (Garmin had none of the three fields), not a
+// failure — the same "only fill missing fields, absence is normal" contract
+// REQ-013's acceptance criterion already states. hr_max/ftp_w are explicitly
+// OUT of this slice (DES-011 Scope paragraph) and have no fields here.
+// ---------------------------------------------------------------------------
+
+struct PyProfileOutcome
+{
+    enum Kind { Success, Network, Unknown };
+    Kind kind = Unknown;
+
+    // Each field is populated only when kind == Success AND the adapter
+    // found and could confidently parse that specific field. Absent/unset is
+    // NOT an error — see the type-level comment above.
+    bool hasDob = false;
+    QString dob; // ISO "YYYY-MM-DD"
+    bool hasWeightKg = false;
+    double weightKg = 0.0;
+    bool hasHeightCm = false;
+    double heightCm = 0.0;
+
+    // Populated for non-Success outcomes only. Raw library message — DES-008
+    // translates at the page/ErrorBus layer; the adapter does NOT translate.
+    QString rawMessage;
+};
+
+// ---------------------------------------------------------------------------
 // Interface — header-only, no QObject inheritance. Production
 // PyEmbeddedAdapter holds the embedded-Python sub-interpreter reference and
 // invokes garmin_client.GarminClient.login() / .download_activity();
@@ -209,6 +244,17 @@ class IGarminPyAdapter
     // holds a live session for downloadActivity(); failures fold into
     // PyLoadTokensOutcome (SessionExpired / Network / Unknown). Never throws.
     virtual PyLoadTokensOutcome loadTokens(const QString& tokenBlob) = 0;
+
+    // REQ-013 (DEC-050 first slice) — fetch dob/weight_kg/height_cm from
+    // Garmin's profile (garmin_client.get_profile()) for the opt-in
+    // post-connect auto-fill offer. Reuses the session authenticate()/
+    // loadTokens() established (REQ-005 forbids retaining the password for a
+    // fresh client). Success may have zero fields populated (Garmin had
+    // none of them) — see PyProfileOutcome. Adding this pure-virtual is a
+    // compile-enforced seam (DEC-013 Option A): a production adapter — or a
+    // test double — that forgets to implement it is a build break, not a
+    // silent runtime no-op. Never throws.
+    virtual PyProfileOutcome fetchProfile() = 0;
 };
 
 #endif // GC_IGarminPyAdapter_h

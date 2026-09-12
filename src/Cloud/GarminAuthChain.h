@@ -55,6 +55,14 @@ class GarminAuthChain
     // lives on it; the adapter is invoked there, never on the caller's).
     QThread* workerThread();
 
+    // REQ-013 (DEC-050 first slice) — the underlying worker, so a caller
+    // holding the auth chain (the wizard, post-persist) can also dispatch
+    // fetchProfile() for the opt-in profile auto-fill offer. Callers MUST
+    // invoke its slots via a queued call (e.g. QMetaObject::invokeMethod with
+    // Qt::AutoConnection) rather than calling directly — the worker lives on
+    // workerThread(), not the caller's thread.
+    GarminWorker* worker();
+
   private:
     // Declaration order matters for destruction (reverse order): the client
     // and worker are destroyed before the thread object, and the destructor

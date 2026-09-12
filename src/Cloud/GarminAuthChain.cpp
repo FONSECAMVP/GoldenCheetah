@@ -52,3 +52,8 @@ QThread* GarminAuthChain::workerThread()
 {
     return &m_thread;
 }
+
+GarminWorker* GarminAuthChain::worker()
+{
+    return &m_worker;
+}

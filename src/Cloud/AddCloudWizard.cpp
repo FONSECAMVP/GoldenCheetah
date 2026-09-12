@@ -33,7 +33,10 @@
 #include "PyEmbeddedAdapter.h"
 #endif
 
+#include <QCheckBox>
+#include <QDate>
 #include <QMessageBox>
+#include <QMetaObject>
 #include <QPixmap>
 #include <QPointer>
 #include <QRegExp>
@@ -218,9 +221,56 @@ AddCloudWizard::ensureGarminAuthPage()
         if (!cloudService) return;
         if (!showGarminToSNoticeIfNeeded()) return;
         cloudService->persistConnectSuccess(result.garmin_user_id, result.tokenBlob);
+        // REQ-013 (DEC-050 first slice) — the profile auto-fill offer needs a
+        // persisted, live session to fetch against, so it runs AFTER persist.
+        showGarminProfileOfferIfNeeded();
     };
     connect(authPage, &GarminCredentialsPage::succeeded, this, persist);
     connect(mfaPage, &GarminMfaPage::succeeded, this, persist);
+
+    // REQ-013 (DEC-050 first slice) — wire the profile-fetch result handlers
+    // ONCE, under the SAME `if (garminChain) return;` idempotency as the
+    // persist lambda above. showGarminProfileOfferIfNeeded() dispatches
+    // fetchProfile() on garminChain->worker() asynchronously; these two
+    // handlers fill only currently-empty dob/weight/height Athlete fields
+    // when the result lands, guarded by request-id correlation
+    // (m_pendingProfileRequestId) so a late/duplicate result can never be
+    // double-applied. A fetch failure is silently dropped (DES-011 defines
+    // no error UI for this nice-to-have feature).
+    connect(garminChain->worker(), &GarminWorker::profileFetched, this,
+            [this](QUuid id, GarminProfileResult result) {
+        if (id != m_pendingProfileRequestId) return;
+        // DEC-030 rider (REQ-020): this fetch is dispatched async (queued
+        // cross-thread) and can land arbitrarily long after dispatch, so an
+        // athlete-tab close in the meantime can free Context while this
+        // result is in flight — leaving the raw `context` member DANGLING
+        // (not null). Guard against m_pendingProfileContext (a QPointer
+        // captured while Context was still known-alive, at dispatch time in
+        // showGarminProfileOfferIfNeeded()) instead of `context` directly.
+        if (m_pendingProfileContext.isNull() || !m_pendingProfileContext->athlete) return;
+        const QString cyclist = m_pendingProfileContext->athlete->cyclist;
+
+        // "Currently empty" is checked against the RAW stored value (an
+        // explicit empty/invalid default), NOT Athlete::getWeight()/
+        // getHeight()'s own fallback defaults, which would always appear
+        // non-empty (DEC-050).
+        if (result.hasDob) {
+            const QDate existing = appsettings->cvalue(cyclist, GC_DOB).toDate();
+            if (!existing.isValid()) {
+                const QDate parsed = QDate::fromString(result.dob, Qt::ISODate);
+                if (parsed.isValid()) appsettings->setCValue(cyclist, GC_DOB, parsed);
+            }
+        }
+        if (result.hasWeightKg) {
+            const QString existing = appsettings->cvalue(cyclist, GC_WEIGHT, QString()).toString();
+            if (existing.isEmpty()) appsettings->setCValue(cyclist, GC_WEIGHT, result.weightKg);
+        }
+        if (result.hasHeightCm) {
+            const QString existing = appsettings->cvalue(cyclist, GC_HEIGHT, QString()).toString();
+            if (existing.isEmpty()) appsettings->setCValue(cyclist, GC_HEIGHT, result.heightCm);
+        }
+    });
+    connect(garminChain->worker(), &GarminWorker::profileFailed, this, [](QUuid, GarminProfileFailure) {});
 }
 
 bool (*AddCloudWizard::s_garminToSPromptOverride)() = nullptr;
@@ -283,6 +333,66 @@ bool AddCloudWizard::showGarminToSNoticeIfNeeded()
     }
     appsettings->setValue(GC_GARMIN_CONNECT_TOS_ACK, true);
     return true;
+}
+
+bool (*AddCloudWizard::s_garminProfileOfferPromptOverride)() = nullptr;
+
+void AddCloudWizard::setGarminProfileOfferPromptForTest(bool (*prompt)())
+{
+    s_garminProfileOfferPromptOverride = prompt;
+}
+
+void AddCloudWizard::showGarminProfileOfferIfNeeded()
+{
+    if (!context || !context->athlete) return;
+    const QString cyclist = context->athlete->cyclist;
+
+    // REQ-013 (DEC-050) — per-athlete one-time gate: distinct from
+    // GC_GARMIN_CONNECT_TOS_ACK's GLOBAL one-time ack, since this is about
+    // whether THIS athlete's profile has already been offered.
+    if (appsettings->cvalue(cyclist, GC_GARMIN_PROFILE_OFFERED, false).toBool())
+        return;
+
+    bool optedIn;
+    if (s_garminProfileOfferPromptOverride) {
+        optedIn = s_garminProfileOfferPromptOverride();
+    } else {
+        // Same non-modal-wizard-survives-teardown guard as
+        // showGarminToSNoticeIfNeeded() (DEC-030/REQ-020 rider precedent):
+        // a parentless box, `self` guarding every post-exec() use of `this`.
+        QPointer<AddCloudWizard> self(this);
+        QMessageBox box;
+        box.setWindowTitle(tr("Garmin Connect"));
+        box.setText(tr("Use Garmin profile data to fill in your Athlete profile?\n\n"
+                        "GoldenCheetah will only fill fields that are currently empty. "
+                        "Your existing data will not be changed."));
+        QCheckBox *checkbox = new QCheckBox(tr("Yes, use my Garmin profile to fill missing GC fields"));
+        box.setCheckBox(checkbox);
+        QAbstractButton *applyButton = box.addButton(tr("Apply"), QMessageBox::AcceptRole);
+        box.addButton(tr("Skip"), QMessageBox::RejectRole);
+        box.exec();
+        if (self.isNull()) return; // wizard torn down mid-modal
+        optedIn = (box.clickedButton() == applyButton) && checkbox->isChecked();
+    }
+
+    // One-time regardless of the answer — Skip must not re-prompt next time.
+    appsettings->setCValue(cyclist, GC_GARMIN_PROFILE_OFFERED, true);
+
+    if (!optedIn) return;
+    if (!garminChain) return;
+
+    m_pendingProfileRequestId = QUuid::createUuid();
+    // DEC-030 rider (REQ-020) — captured now, while `context` is still
+    // known-alive (this function's own guard above just verified it), so the
+    // async profileFetched() handler can detect a teardown that happens
+    // before the result lands.
+    m_pendingProfileContext = context;
+    // String+Q_ARG form (not the function-pointer overload): GarminWorker
+    // lives on garminChain->workerThread(), so this MUST cross the thread
+    // boundary as a queued call (Qt::AutoConnection resolves to Queued here,
+    // same as WorkerAuthClient's dispatch-signal pattern one layer up).
+    QMetaObject::invokeMethod(garminChain->worker(), "fetchProfile", Qt::AutoConnection,
+                              Q_ARG(QUuid, m_pendingProfileRequestId));
 }
 #endif
 

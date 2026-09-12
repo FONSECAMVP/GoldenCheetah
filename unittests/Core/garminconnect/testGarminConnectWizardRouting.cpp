@@ -43,6 +43,8 @@
 
 #include <QAbstractButton>
 #include <QApplication>
+#include <QCheckBox>
+#include <QDate>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
@@ -66,6 +68,11 @@ namespace {
 // invocations, so a test can assert the modal fired exactly once (or never,
 // for the one-time-flag-already-set case).
 int g_toSPromptCalls = 0;
+
+// REQ-013 (DEC-050) — count of setGarminProfileOfferPromptForTest's scripted
+// invocations, so a test can assert the offer modal fired exactly once (or
+// never, for the already-offered case).
+int g_profileOfferPromptCalls = 0;
 
 struct WizardFixture
 {
@@ -308,6 +315,9 @@ class TestGarminConnectWizardRouting : public QObject
         g_scriptedAuthenticateOutcome = successOutcome(kUid, kBlob);
 
         WizardFixture fx;
+        // REQ-013 (DEC-050): pre-acknowledge so the post-persist profile-offer
+        // modal is skipped too — this suite tests persist-wiring, not that offer.
+        appsettings->setCValue(fx.athlete.cyclist, GC_GARMIN_PROFILE_OFFERED, true);
         AddCloudWizard wizard(&fx.ctx);
         CloudService service;
         service.context = &fx.ctx; // resolves the config dir for persist
@@ -337,6 +347,9 @@ class TestGarminConnectWizardRouting : public QObject
         g_scriptedSubmitMfaOutcome = successOutcome(kUid2, kBlob2);
 
         WizardFixture fx;
+        // REQ-013 (DEC-050): pre-acknowledge so the post-persist profile-offer
+        // modal is skipped too — this suite tests persist-wiring, not that offer.
+        appsettings->setCValue(fx.athlete.cyclist, GC_GARMIN_PROFILE_OFFERED, true);
         AddCloudWizard wizard(&fx.ctx);
         CloudService service;
         service.context = &fx.ctx;
@@ -367,6 +380,9 @@ class TestGarminConnectWizardRouting : public QObject
         g_scriptedAuthenticateOutcome = successOutcome(kUid, kBlob);
 
         WizardFixture fx;
+        // REQ-013 (DEC-050): pre-acknowledge so the post-persist profile-offer
+        // modal is skipped too — this suite tests persist-wiring, not that offer.
+        appsettings->setCValue(fx.athlete.cyclist, GC_GARMIN_PROFILE_OFFERED, true);
         AddCloudWizard wizard(&fx.ctx);
         CloudService service;
         service.context = &fx.ctx;
@@ -456,6 +472,9 @@ class TestGarminConnectWizardRouting : public QObject
         });
 
         WizardFixture fx;
+        // REQ-013 (DEC-050): pre-acknowledge so the post-persist profile-offer
+        // modal is skipped too — this suite tests the ToS gate, not that offer.
+        appsettings->setCValue(fx.athlete.cyclist, GC_GARMIN_PROFILE_OFFERED, true);
         AddCloudWizard wizard(&fx.ctx);
         CloudService service;
         service.context = &fx.ctx;
@@ -491,6 +510,9 @@ class TestGarminConnectWizardRouting : public QObject
         });
 
         WizardFixture fx;
+        // REQ-013 (DEC-050): pre-acknowledge so the post-persist profile-offer
+        // modal is skipped too — this suite tests the ToS gate, not that offer.
+        appsettings->setCValue(fx.athlete.cyclist, GC_GARMIN_PROFILE_OFFERED, true);
         AddCloudWizard wizard(&fx.ctx);
         CloudService service;
         service.context = &fx.ctx;
@@ -586,6 +608,287 @@ class TestGarminConnectWizardRouting : public QObject
         // Reaching here at all (no crash, no double-free) is the assertion the
         // finding demanded — the box was parentless, so deleting the wizard
         // did not cascade-delete it out from under the still-running exec().
+    }
+
+    // --- Behaviour 8: REQ-013 (DEC-050) — post-connect profile-offer opt-in --
+    //
+    // showGarminProfileOfferIfNeeded() runs immediately after persist
+    // (Behaviour 5/6), gated per-athlete by GC_GARMIN_PROFILE_OFFERED. These
+    // tests script the answer via AddCloudWizard::setGarminProfileOfferPromptForTest
+    // (true == Apply + checkbox ticked; false == Skip OR Apply without
+    // ticking, per the seam's own doc comment) and drive a REAL fetchProfile()
+    // round trip through the chain worker, exactly as Behaviour 5 drives a
+    // real auth-success.
+
+    // Opt-in (Apply + ticked): fetchProfile() dispatches exactly once, and its
+    // result fills ONLY the fields that were empty beforehand — a pre-existing
+    // value must survive untouched (DEC-050's "only fill missing fields").
+    void profileOfferOptInFillsOnlyEmptyFieldsFromFetch()
+    {
+        appsettings->clearForTest();
+        appsettings->setValue(GC_GARMIN_CONNECT_TOS_ACK, true);
+        g_persistConnectSuccessCalls = 0;
+        g_fetchProfileCalls = 0;
+        g_profileOfferPromptCalls = 0;
+        g_scriptedAuthenticateOutcome = successOutcome(kUid, kBlob);
+
+        PyProfileOutcome profile;
+        profile.kind = PyProfileOutcome::Success;
+        profile.hasDob = true;
+        profile.dob = QStringLiteral("1990-05-15");
+        profile.hasWeightKg = true;
+        profile.weightKg = 82.5;
+        profile.hasHeightCm = true;
+        profile.heightCm = 181.0;
+        g_scriptedFetchProfileOutcome = profile;
+
+        AddCloudWizard::setGarminProfileOfferPromptForTest([]() -> bool {
+            ++g_profileOfferPromptCalls;
+            return true; // Apply + checkbox ticked
+        });
+
+        WizardFixture fx;
+        // WEIGHT is already populated -> must NOT be overwritten by the fetch.
+        appsettings->setCValue(fx.athlete.cyclist, GC_WEIGHT, QStringLiteral("70"));
+
+        AddCloudWizard wizard(&fx.ctx);
+        CloudService service;
+        service.context = &fx.ctx;
+        wizard.cloudService = &service;
+        wizard.ensureGarminAuthPage();
+
+        auto* page21 = static_cast<GarminCredentialsPage*>(wizard.page(21));
+        driveCredentials(page21, QStringLiteral("rider@example.com"), QStringLiteral("secret"));
+
+        QTRY_COMPARE(g_profileOfferPromptCalls, 1);
+        QTRY_COMPARE(g_fetchProfileCalls, 1);
+        QTRY_VERIFY2(appsettings->cvalue(fx.athlete.cyclist, GC_DOB).toDate().isValid(),
+                     "opted-in fetch must fill the previously-empty DOB");
+        QCOMPARE(appsettings->cvalue(fx.athlete.cyclist, GC_DOB).toDate(), QDate(1990, 5, 15));
+        QCOMPARE(appsettings->cvalue(fx.athlete.cyclist, GC_HEIGHT).toDouble(), 181.0);
+        // Pre-existing WEIGHT survives untouched -- the fetched 82.5 is discarded.
+        QCOMPARE(appsettings->cvalue(fx.athlete.cyclist, GC_WEIGHT).toString(), QStringLiteral("70"));
+        QVERIFY2(appsettings->cvalue(fx.athlete.cyclist, GC_GARMIN_PROFILE_OFFERED, false).toBool(),
+                 "the one-time offer flag must be set after Apply");
+
+        AddCloudWizard::setGarminProfileOfferPromptForTest(nullptr);
+    }
+
+    // Skip: no fetch is ever dispatched, but the one-time flag is still set
+    // (Skip must not re-prompt on a later connect).
+    void profileOfferSkipNeverFetchesButSetsOneTimeFlag()
+    {
+        appsettings->clearForTest();
+        appsettings->setValue(GC_GARMIN_CONNECT_TOS_ACK, true);
+        g_persistConnectSuccessCalls = 0;
+        g_fetchProfileCalls = 0;
+        g_profileOfferPromptCalls = 0;
+        g_scriptedAuthenticateOutcome = successOutcome(kUid2, kBlob2);
+        AddCloudWizard::setGarminProfileOfferPromptForTest([]() -> bool {
+            ++g_profileOfferPromptCalls;
+            return false; // Skip
+        });
+
+        WizardFixture fx;
+        AddCloudWizard wizard(&fx.ctx);
+        CloudService service;
+        service.context = &fx.ctx;
+        wizard.cloudService = &service;
+        wizard.ensureGarminAuthPage();
+
+        auto* page21 = static_cast<GarminCredentialsPage*>(wizard.page(21));
+        driveCredentials(page21, QStringLiteral("rider2@example.com"), QStringLiteral("secret"));
+
+        QTRY_VERIFY2(appsettings->cvalue(fx.athlete.cyclist, GC_GARMIN_PROFILE_OFFERED, false).toBool(),
+                     "Skip must still set the one-time flag");
+        QCOMPARE(g_profileOfferPromptCalls, 1);
+        QCOMPARE(g_fetchProfileCalls, 0);
+        QVERIFY2(!appsettings->cvalue(fx.athlete.cyclist, GC_DOB).isValid(), "Skip must not fetch or fill anything");
+
+        AddCloudWizard::setGarminProfileOfferPromptForTest(nullptr);
+    }
+
+    // One-time: with the flag already set (a prior session's answer, either
+    // way), a fresh connect must not re-show the offer at all.
+    void profileOfferSkippedOnceAlreadyOffered()
+    {
+        appsettings->clearForTest();
+        appsettings->setValue(GC_GARMIN_CONNECT_TOS_ACK, true);
+        g_persistConnectSuccessCalls = 0;
+        g_fetchProfileCalls = 0;
+        g_profileOfferPromptCalls = 0;
+        g_scriptedAuthenticateOutcome = successOutcome(kUid, kBlob);
+        AddCloudWizard::setGarminProfileOfferPromptForTest([]() -> bool {
+            ++g_profileOfferPromptCalls; // would opt in if this ever fired
+            return true;
+        });
+
+        WizardFixture fx;
+        appsettings->setCValue(fx.athlete.cyclist, GC_GARMIN_PROFILE_OFFERED, true);
+        AddCloudWizard wizard(&fx.ctx);
+        CloudService service;
+        service.context = &fx.ctx;
+        wizard.cloudService = &service;
+        wizard.ensureGarminAuthPage();
+
+        auto* page21 = static_cast<GarminCredentialsPage*>(wizard.page(21));
+        driveCredentials(page21, QStringLiteral("rider@example.com"), QStringLiteral("secret"));
+
+        QTRY_COMPARE(g_persistConnectSuccessCalls, 1); // persist still runs
+        QTest::qWait(50);                              // give an (erroneous) prompt/fetch dispatch a chance to fire
+        QCOMPARE(g_profileOfferPromptCalls, 0);
+        QCOMPARE(g_fetchProfileCalls, 0);
+        QVERIFY2(!appsettings->cvalue(fx.athlete.cyclist, GC_DOB).isValid(),
+                 "already-offered must not fetch or fill anything");
+
+        AddCloudWizard::setGarminProfileOfferPromptForTest(nullptr);
+    }
+
+    // Apply clicked but the checkbox left UNTICKED must behave like Skip — no
+    // fetch dispatched — encoding DES-011's opt-in-defaults-off framing
+    // (AddCloudWizard.cpp: `optedIn = (clickedButton == applyButton) &&
+    // checkbox->isChecked()`). Drives the REAL QMessageBox (no scripted
+    // override), since the checkbox state cannot be modeled through the
+    // boolean test seam alone. Same polling technique as Behaviour 7: the box
+    // is constructed deep inside the async persist chain, and the poller's own
+    // events are pumped BY box.exec()'s nested loop once the box exists.
+    void profileOfferApplyWithoutTickingBehavesLikeSkip()
+    {
+        appsettings->clearForTest();
+        appsettings->setValue(GC_GARMIN_CONNECT_TOS_ACK, true);
+        g_persistConnectSuccessCalls = 0;
+        g_fetchProfileCalls = 0;
+        AddCloudWizard::setGarminProfileOfferPromptForTest(nullptr); // force the REAL QMessageBox
+        g_scriptedAuthenticateOutcome = successOutcome(kUid2, kBlob2);
+
+        WizardFixture fx;
+        AddCloudWizard wizard(&fx.ctx);
+        CloudService service;
+        service.context = &fx.ctx;
+        wizard.cloudService = &service;
+        wizard.ensureGarminAuthPage();
+
+        auto* page21 = static_cast<GarminCredentialsPage*>(wizard.page(21));
+
+        QTimer poller;
+        poller.setInterval(2);
+        connect(&poller, &QTimer::timeout, [&]() {
+            QWidget* modal = QApplication::activeModalWidget();
+            auto* box = qobject_cast<QMessageBox*>(modal);
+            if (!box)
+                return; // keep polling — the box isn't up yet
+            poller.stop();
+            QCheckBox* checkbox = box->findChild<QCheckBox*>();
+            if (!checkbox)
+                return;
+            checkbox->setChecked(false); // deliberately leave unticked
+            for (QAbstractButton* b : box->buttons()) {
+                if (box->buttonRole(b) == QMessageBox::AcceptRole) {
+                    b->click(); // Apply, without ticking the checkbox
+                    break;
+                }
+            }
+        });
+        poller.start();
+
+        driveCredentials(page21, QStringLiteral("rider2@example.com"), QStringLiteral("secret"));
+
+        QTRY_VERIFY2(appsettings->cvalue(fx.athlete.cyclist, GC_GARMIN_PROFILE_OFFERED, false).toBool(),
+                     "the one-time flag must still be set even though Apply was unticked");
+        QCOMPARE(g_fetchProfileCalls, 0);
+        QVERIFY2(!appsettings->cvalue(fx.athlete.cyclist, GC_DOB).isValid(),
+                 "Apply without ticking the checkbox must not fetch or fill anything");
+    }
+
+    // --- Behaviour 9: REQ-013 hardening — dangling Context vs. an in-flight
+    // fetchProfile() (garmin_codex_reviewer finding) ------------------------
+    //
+    // Same DEC-030 rider class this file already guards in AddAuth::doAuth()/
+    // AddSettings::browseFolder() (QPointer<Context> ctx(wizard->context);
+    // if (ctx.isNull()) return;): the wizard is non-modal and parented to
+    // context->mainWindow (NOT to Context), so an athlete-tab close can free
+    // Context while the wizard survives. showGarminProfileOfferIfNeeded()'s
+    // fetchProfile() dispatch is async (queued cross-thread), so that
+    // teardown can land in the window between dispatch and the eventual
+    // profileFetched() delivery -- leaving the raw `context` member DANGLING
+    // (not null). This test builds its own heap-allocated Context (NOT the
+    // shared WizardFixture, which owns ctx by value and cannot model an
+    // independent teardown) and deletes it deterministically after the
+    // profile-offer has dispatched but BEFORE any profileFetched() result is
+    // delivered, then delivers the result by directly emitting the worker's
+    // signal -- the same "drive the signal deterministically, no real
+    // dispatch race" precedent garminMfaRequiredRoutesToPage22() already
+    // uses for mfaRequired(). Reaching the end at all (no crash, no UAF) is
+    // the assertion an ASan build would otherwise abort on.
+    void profileFetchedIgnoresResultAfterContextTornDownMidFlight()
+    {
+        appsettings->clearForTest();
+        appsettings->setValue(GC_GARMIN_CONNECT_TOS_ACK, true);
+        g_persistConnectSuccessCalls = 0;
+        g_scriptedAuthenticateOutcome = successOutcome(kUid, kBlob);
+
+        PyProfileOutcome profile;
+        profile.kind = PyProfileOutcome::Success;
+        profile.hasDob = true;
+        profile.dob = QStringLiteral("1990-05-15");
+        profile.hasWeightKg = true;
+        profile.weightKg = 82.5;
+        profile.hasHeightCm = true;
+        profile.heightCm = 181.0;
+        g_scriptedFetchProfileOutcome = profile; // stresses the SAME guard if the real async delivery also lands
+
+        AddCloudWizard::setGarminProfileOfferPromptForTest([]() -> bool { return true; }); // Apply + ticked
+
+        // Heap-allocated and independent of the wizard, mirroring production:
+        // the wizard is parented to context->mainWindow, not to Context.
+        AthleteDirectoryStructure home;
+        Athlete athlete;
+        athlete.cyclist = QStringLiteral("teardown-tester");
+        athlete.home = &home;
+        Context* ctx = new Context();
+        ctx->athlete = &athlete;
+        ctx->mainWindow = nullptr;
+
+        AddCloudWizard wizard(ctx);
+        CloudService service;
+        service.context = ctx;
+        wizard.cloudService = &service;
+        wizard.ensureGarminAuthPage();
+
+        auto* page21 = static_cast<GarminCredentialsPage*>(wizard.page(21));
+        QVERIFY(page21 != nullptr);
+        driveCredentials(page21, QStringLiteral("rider@example.com"), QStringLiteral("secret"));
+
+        // By the time persist has run, showGarminProfileOfferIfNeeded() has
+        // ALSO already run synchronously within the same persist lambda
+        // (AddCloudWizard.cpp's persist calls persistConnectSuccess() then
+        // showGarminProfileOfferIfNeeded() back-to-back on this thread), so
+        // m_pendingProfileContext is guaranteed captured and the fetchProfile()
+        // dispatch already posted by the time this QTRY_COMPARE returns.
+        QTRY_COMPARE(g_persistConnectSuccessCalls, 1);
+        QVERIFY2(!wizard.m_pendingProfileContext.isNull(),
+                 "precondition: the dispatch must have captured a live Context");
+
+        // Simulate the athlete-tab close racing the in-flight fetch: free
+        // Context NOW, strictly before any profileFetched() delivery.
+        delete ctx;
+        ctx = nullptr;
+        QVERIFY2(wizard.m_pendingProfileContext.isNull(), "the captured QPointer<Context> must observe the teardown");
+
+        // Deliver the result deterministically (no real-dispatch race), same
+        // technique garminMfaRequiredRoutesToPage22() uses for mfaRequired().
+        GarminProfileResult result;
+        result.hasDob = true;
+        result.dob = QStringLiteral("1990-05-15");
+        emit wizard.garminChain->worker()->profileFetched(wizard.m_pendingProfileRequestId, result);
+
+        // Let any pending event (including the REAL async worker round trip,
+        // if it hasn't already landed) run its course too.
+        QTest::qWait(50);
+
+        // No crash / no UAF is the assertion. Nothing could have been filled
+        // either, since the guard must bail before ever touching the freed
+        // Context/Athlete -- there is no live cyclist name left to check by.
     }
 
   private:

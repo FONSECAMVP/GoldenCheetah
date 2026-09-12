@@ -26,6 +26,10 @@ GarminWorker::GarminWorker(IGarminPyAdapter* py, QObject* parent) : QObject(pare
     qRegisterMetaType<GarminListFailure>("GarminListFailure");
     qRegisterMetaType<GarminActivitySummary>("GarminActivitySummary");
     qRegisterMetaType<QVector<GarminActivitySummary>>("QVector<GarminActivitySummary>");
+    // REQ-013 (DEC-050 first slice) — profileFetched/profileFailed payloads
+    // cross the worker thread boundary via a queued connection; register them.
+    qRegisterMetaType<GarminProfileResult>("GarminProfileResult");
+    qRegisterMetaType<GarminProfileFailure>("GarminProfileFailure");
 }
 
 void GarminWorker::authenticate(const QString& email, const QString& password, QUuid requestId)
@@ -207,6 +211,43 @@ void GarminWorker::restoreSession(const QString& tokenBlob, QUuid requestId)
         err.kind = GarminRestoreFailure::Unknown;
         err.rawMessage = outcome.rawMessage;
         emit restoreFailed(requestId, err);
+        return;
+    }
+    }
+}
+
+void GarminWorker::fetchProfile(QUuid requestId)
+{
+    // DEC-002 / DES-001: the worker is the SOLE caller of the adapter.
+    const PyProfileOutcome outcome = m_py->fetchProfile();
+
+    switch (outcome.kind) {
+    case PyProfileOutcome::Success: {
+        // A Success with some or all has* flags false is normal (Garmin
+        // didn't have that field) — not folded into a failure signal.
+        GarminProfileResult result;
+        result.hasDob = outcome.hasDob;
+        result.dob = outcome.dob;
+        result.hasWeightKg = outcome.hasWeightKg;
+        result.weightKg = outcome.weightKg;
+        result.hasHeightCm = outcome.hasHeightCm;
+        result.heightCm = outcome.heightCm;
+        emit profileFetched(requestId, result);
+        return;
+    }
+    case PyProfileOutcome::Network: {
+        GarminProfileFailure err;
+        err.kind = GarminProfileFailure::Network;
+        err.rawMessage = outcome.rawMessage;
+        emit profileFailed(requestId, err);
+        return;
+    }
+    case PyProfileOutcome::Unknown:
+    default: {
+        GarminProfileFailure err;
+        err.kind = GarminProfileFailure::Unknown;
+        err.rawMessage = outcome.rawMessage;
+        emit profileFailed(requestId, err);
         return;
     }
     }

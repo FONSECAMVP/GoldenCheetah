@@ -172,6 +172,13 @@ class TestGarminConnectPyAdapter : public QObject
         QCOMPARE(lOut.kind, PyListOutcome::Unknown);
         QCOMPARE(lOut.rawMessage, QStringLiteral("embedded Python unavailable"));
 
+        // REQ-013 (DEC-050) — the same fail-safe for the profile-fetch op:
+        // before the interpreter is up, fetchProfile must fold to Unknown /
+        // "embedded Python unavailable" without crashing (DES-013 step 1).
+        const PyProfileOutcome pOut = early.fetchProfile();
+        QCOMPARE(pOut.kind, PyProfileOutcome::Unknown);
+        QCOMPARE(pOut.rawMessage, QStringLiteral("embedded Python unavailable"));
+
         // Now bring the interpreter up and release the GIL from this (main)
         // thread so PyGILState_Ensure works from any thread afterwards.
         Py_Initialize();
@@ -752,6 +759,160 @@ class TestGarminConnectPyAdapter : public QObject
         QCOMPARE(out.kind, PyListOutcome::Success);
         QCOMPARE(out.activities.size(), 2);
         QCOMPARE(out.activities.at(0).activityId, QStringLiteral("1001"));
+    }
+
+    // ==================================================================
+    // REQ-013 (DEC-050 first slice) — fetchProfile marshalling (DES-013
+    // extension, same DEC-013 seam one op sideways). PyEmbeddedAdapter
+    // .fetchProfile() calls the authenticated GarminClient's get_profile()
+    // and marshals whichever of dob/weight_kg/height_cm are present in the
+    // returned dict — a dict missing some or all of the 3 keys is a NORMAL
+    // Success (DEC-050: Garmin not having a field is expected, not an
+    // error), never folded into a failure. Classifies failures by exception
+    // TYPE (LSN-006): connection→Network, anything else/foreign→Unknown
+    // (this outcome has no dedicated RateLimit kind — see
+    // IGarminPyAdapter.h). hr_max/ftp_w are explicitly OUT of this slice
+    // (DES-011 Scope) and have no fields to marshal.
+    //
+    // Session model (DES-013): fetchProfile reuses the client authenticate()
+    // established — REQ-005 forbids keeping the password. Each slot
+    // therefore authenticates (success) first.
+    // ==================================================================
+
+    // (a) all 3 fields present and sane → Success with all has* flags true
+    // and the exact values marshalled through.
+    void profileSuccessMarshalsAllThreeFields()
+    {
+        PyEmbeddedAdapter adapter(kStubsDir);
+        setScenario("success");
+        QCOMPARE(adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw")).kind,
+                 PyAuthOutcome::Success);
+
+        setScenario("profile_full");
+        const PyProfileOutcome out = adapter.fetchProfile();
+
+        QCOMPARE(out.kind, PyProfileOutcome::Success);
+        QVERIFY(out.hasDob);
+        QCOMPARE(out.dob, QStringLiteral("1985-06-15"));
+        QVERIFY(out.hasWeightKg);
+        QCOMPARE(out.weightKg, 72.5);
+        QVERIFY(out.hasHeightCm);
+        QCOMPARE(out.heightCm, 178.0);
+    }
+
+    // (b) only dob present → Success, with weight/height has* flags false —
+    // a partial result is still a normal Success, not a failure.
+    void profilePartialResultLeavesMissingFieldsUnset()
+    {
+        PyEmbeddedAdapter adapter(kStubsDir);
+        setScenario("success");
+        adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        setScenario("profile_partial");
+        const PyProfileOutcome out = adapter.fetchProfile();
+
+        QCOMPARE(out.kind, PyProfileOutcome::Success);
+        QVERIFY(out.hasDob);
+        QCOMPARE(out.dob, QStringLiteral("1990-01-02"));
+        QVERIFY2(!out.hasWeightKg, "an absent field must leave has* false, not a fabricated 0.0");
+        QVERIFY2(!out.hasHeightCm, "an absent field must leave has* false, not a fabricated 0.0");
+    }
+
+    // (c) DEC-050's single most important case: a dict with NONE of the 3
+    // fields still marshals to a clean Success with every has* flag false —
+    // never a crash, never a failure signal.
+    void profileEmptyResultIsSuccessWithNoFieldsSet()
+    {
+        PyEmbeddedAdapter adapter(kStubsDir);
+        setScenario("success");
+        adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        setScenario("profile_empty");
+        const PyProfileOutcome out = adapter.fetchProfile();
+
+        QCOMPARE(out.kind, PyProfileOutcome::Success);
+        QVERIFY(!out.hasDob);
+        QVERIFY(!out.hasWeightKg);
+        QVERIFY(!out.hasHeightCm);
+    }
+
+    // (d) GarminError kind='connection' → Network, raw message forwarded.
+    void profileConnectionErrorMapsToNetwork()
+    {
+        PyEmbeddedAdapter adapter(kStubsDir);
+        setScenario("success");
+        adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        setScenario("profile_connection");
+        const PyProfileOutcome out = adapter.fetchProfile();
+
+        QCOMPARE(out.kind, PyProfileOutcome::Network);
+        QCOMPARE(out.rawMessage, QStringLiteral("stub: profile connection refused"));
+    }
+
+    // (e) a non-GarminError exception (ValueError) → Unknown, NEVER Success
+    // (LSN-006: classify by type; a foreign exception is not a valid profile).
+    void profileForeignExceptionMapsToUnknownNotSuccess()
+    {
+        PyEmbeddedAdapter adapter(kStubsDir);
+        setScenario("success");
+        adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        setScenario("profile_value_error");
+        const PyProfileOutcome out = adapter.fetchProfile();
+
+        QVERIFY2(out.kind != PyProfileOutcome::Success, "a foreign exception must NOT be reported as a Success");
+        QCOMPARE(out.kind, PyProfileOutcome::Unknown);
+        QVERIFY2(out.rawMessage.contains(QStringLiteral("not a garmin error (profile)")),
+                 "rawMessage should carry str(e) of the foreign exception");
+    }
+
+    // (f) a non-dict return (contract breach of the DES-012 seam) → Unknown,
+    // NEVER a Success with fabricated fields.
+    void profileNonDictResultYieldsUnknownNotSuccess()
+    {
+        PyEmbeddedAdapter adapter(kStubsDir);
+        setScenario("success");
+        adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        setScenario("profile_non_dict");
+        const PyProfileOutcome out = adapter.fetchProfile();
+
+        QVERIFY2(out.kind != PyProfileOutcome::Success, "a non-dict result must NOT be reported as Success");
+        QCOMPARE(out.kind, PyProfileOutcome::Unknown);
+        QVERIFY2(!out.rawMessage.isEmpty(), "a non-dict result must carry an explanatory message");
+    }
+
+    // (g) fetchProfile before any successful authenticate → Unknown (no
+    // retained session), never a crash and never a Success.
+    void profileWithoutAuthenticateYieldsUnknownNotSuccess()
+    {
+        PyEmbeddedAdapter adapter(kStubsDir); // never authenticated
+        setScenario("profile_full");
+        const PyProfileOutcome out = adapter.fetchProfile();
+
+        QVERIFY2(out.kind != PyProfileOutcome::Success, "fetchProfile without a session must NOT succeed");
+        QCOMPARE(out.kind, PyProfileOutcome::Unknown);
+        QVERIFY2(!out.rawMessage.isEmpty(), "must explain why the profile fetch could not run");
+    }
+
+    // (h) the production call pattern: authenticate on this thread, then
+    // fetch the profile from a non-main worker-like std::thread. PyGILState_Ensure
+    // must acquire the GIL there and marshal the identical fields.
+    void profileFromWorkerThreadMarshalsSameFields()
+    {
+        PyEmbeddedAdapter adapter(kStubsDir);
+        setScenario("success");
+        adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        setScenario("profile_full");
+        PyProfileOutcome out;
+        std::thread worker([&] { out = adapter.fetchProfile(); });
+        worker.join();
+
+        QCOMPARE(out.kind, PyProfileOutcome::Success);
+        QVERIFY(out.hasDob);
+        QCOMPARE(out.dob, QStringLiteral("1985-06-15"));
     }
 
     void cleanupTestCase()

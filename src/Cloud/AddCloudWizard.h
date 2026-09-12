@@ -34,6 +34,8 @@
 #include <QCommandLinkButton>
 #include <QScrollArea>
 #include <QComboBox>
+#include <QPointer>
+#include <QUuid>
 
 class SettingCombo;
 
@@ -94,6 +96,40 @@ public:
     // QMessageBox.
     static void setGarminToSPromptForTest(bool (*prompt)());
     static bool (*s_garminToSPromptOverride)();
+
+    // REQ-013 (DEC-050 first slice) — opt-in post-connect profile auto-fill
+    // offer (DES-011). Shown once PER ATHLETE after a successful persisted
+    // connect (gated by GC_GARMIN_PROFILE_OFFERED — distinct from the ToS
+    // flag's GLOBAL one-time ack, since this is about THIS athlete's
+    // profile). Skip/decline is silent; opting in dispatches
+    // GarminWorker::fetchProfile() asynchronously and fills only
+    // currently-empty dob/weight/height Athlete fields when the result
+    // arrives. hr_max/ftp_w are explicitly deferred (DES-011 Scope
+    // paragraph) and are never touched by this slice.
+    void showGarminProfileOfferIfNeeded();
+
+    // Test seam: overrides the real profile-offer modal with a scripted
+    // answer (true == opted in: checkbox ticked + Apply; false == Skip, or
+    // Apply without ticking the checkbox). Pass nullptr to restore the
+    // production QMessageBox.
+    static void setGarminProfileOfferPromptForTest(bool (*prompt)());
+    static bool (*s_garminProfileOfferPromptOverride)();
+
+    // Correlates the async fetchProfile() dispatch with its eventual
+    // profileFetched()/profileFailed() result (stale/duplicate-result guard,
+    // same discipline as the credentials/MFA pages' pending-id checks).
+    QUuid m_pendingProfileRequestId;
+
+    // DEC-030 rider (REQ-020) — captured in showGarminProfileOfferIfNeeded()
+    // at the moment `context` is known-alive, so the async profileFetched()
+    // handler (which can run arbitrarily long after dispatch, across the
+    // worker-thread round trip) can detect an athlete-tab-close teardown that
+    // happened while the fetch was in flight. The raw `context` member itself
+    // would be left DANGLING (not null) by such a teardown — same class this
+    // file already guards in AddAuth::doAuth()/AddSettings::browseFolder()
+    // via QPointer<Context> — so the handler must check this QPointer, not
+    // `context` directly.
+    QPointer<Context> m_pendingProfileContext;
 #endif
 
 public slots:

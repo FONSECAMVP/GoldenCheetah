@@ -84,6 +84,15 @@ class PyEmbeddedAdapter : public IGarminPyAdapter
     // Unknown), classified by exception TYPE + .kind (LSN-006).
     PyLoadTokensOutcome loadTokens(const QString& tokenBlob) override;
 
+    // REQ-013 (DEC-050 first slice) — fetch dob/weight_kg/height_cm via the
+    // retained authenticated client (garmin_client.GarminClient.get_profile).
+    // Never throws; interpreter-down / no-session / library errors fold into a
+    // non-Success PyProfileOutcome (Network/Unknown). A Success with some or
+    // all `has*` flags false is normal (Garmin didn't have that field) — the
+    // Python adapter already did the defensive key-name/plausibility
+    // extraction; this seam only marshals whichever keys are present.
+    PyProfileOutcome fetchProfile() override;
+
   private:
     QString modulePath;
     PyObject* m_client = nullptr; // retained authenticated GarminClient; owned

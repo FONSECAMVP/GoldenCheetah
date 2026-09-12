@@ -143,6 +143,10 @@ class FakeListPyAdapter : public IGarminPyAdapter
         listCallCount.fetch_add(1);
         return scriptedListOutcome;
     }
+
+    // REQ-013 (DEC-050) seam extension (DEC-013 compile-enforced) — this sync
+    // test never fetches a profile; a default outcome satisfies the interface.
+    PyProfileOutcome fetchProfile() override { return {}; }
 };
 
 // ---------------------------------------------------------------------------

@@ -99,6 +99,10 @@ class FakePyAdapter : public IGarminPyAdapter
     // test never lists activities; a default outcome satisfies the interface so
     // the target still compiles. No assertion added/changed.
     PyListOutcome listActivitiesSince(const QString&) override { return {}; }
+
+    // REQ-013 (DEC-050) seam extension (DEC-013 compile-enforced) — this auth
+    // test never fetches a profile; a default outcome satisfies the interface.
+    PyProfileOutcome fetchProfile() override { return {}; }
 };
 
 // ---------------------------------------------------------------------------
@@ -159,6 +163,10 @@ class BusyPyAdapter : public IGarminPyAdapter
     // test never lists activities; a default outcome satisfies the interface so
     // the target still compiles. No assertion added/changed.
     PyListOutcome listActivitiesSince(const QString&) override { return {}; }
+
+    // REQ-013 (DEC-050) seam extension (DEC-013 compile-enforced) — this auth
+    // test never fetches a profile; a default outcome satisfies the interface.
+    PyProfileOutcome fetchProfile() override { return {}; }
 };
 
 // ---------------------------------------------------------------------------
