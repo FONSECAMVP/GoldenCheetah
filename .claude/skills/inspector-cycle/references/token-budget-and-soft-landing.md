@@ -63,16 +63,22 @@ At ~300-350k of your own tokens:
 1. Recognize the threshold and confirm you're at a safe stopping point (real, substantive
    work, not deferral) — same discipline as any soft-landing.
 2. Spawn a successor: `herdr tab create` a clean new tab (never squeeze into a busy one),
-   then `herdr agent start <new-name> --kind claude --pane <new-pane-id>`.
+   then `herdr agent start <new-name> --kind claude --pane <new-pane-id>`. **Name it by
+   incrementing your OWN version suffix**, not an arbitrary label: the first Inspector in a
+   project session is `garmin_inspector_v1.0`; each succession bumps the minor number
+   (`v1.0` → `v1.1` → `v1.2` → ...). If your own current name has no version suffix (an ad
+   hoc name, or you're the very first session in this lineage and were never renamed),
+   treat yourself as `v1.0` and name the successor `v1.1` — don't invent an unrelated name
+   or a bare incrementing integer.
 3. Send the successor a SHORT rebirth prompt — NOT a context dump. It only needs to say,
-   in substance: "You are a reborn Inspector succeeding `<old-name>`/`<old-pane-id>`, which
-   hit its self-refresh threshold. Invoke the `inspector-cycle` skill now — its own step 1
-   (herdr) and step 2 (current stage) will fully orient you from live project state; you do
-   not need your predecessor's conversation history for that. Once you've verified your own
-   orientation, retire your predecessor's pane, then continue the cycle. Report the
-   succession to the user when done." No PIDs, no stage recap, no findings list — the cycle
-   itself supplies all of that once invoked, by design (see "Successor's first actions"
-   below).
+   in substance: "You are `<new-name>`, a reborn Inspector succeeding `<old-name>`/
+   `<old-pane-id>`, which hit its self-refresh threshold. Invoke the `inspector-cycle` skill
+   now — its own step 0 (environment setup) and steps 1-2 (herdr, current stage) will fully
+   set you up and orient you from live project state; you do not need your predecessor's
+   conversation history for that. Once set up and oriented, retire your predecessor's pane,
+   then continue the cycle. Report the succession to the user when done." No PIDs, no stage
+   recap, no findings list — the cycle itself supplies all of that once invoked, by design
+   (see "Successor's first actions" below).
 4. WAIT and verify the successor actually comes alive and starts working (`herdr agent get
    <new-name>` transitions to `working`) before considering the handoff underway — don't
    assume the prompt landed just because the send succeeded.
@@ -85,6 +91,24 @@ At ~300-350k of your own tokens:
 ## Successor's first actions (what a reborn Inspector must do, unprompted)
 
 On receiving a rebirth prompt, before anything else:
+
+0. **Environment setup — do this FIRST, before step 1.** A freshly-started pane defaults to
+   whatever the harness's own defaults are, not necessarily what an autonomous supervisor
+   needs — don't assume, set it explicitly:
+   - Switch to auto mode yourself (`shift+tab` to cycle, or the equivalent for whatever
+     interface started you) rather than operating in `accept edits`/interactive mode and
+     drifting into auto mode only after several manual approvals pile up. Confirmed
+     2026-09-12: a test successor needed 3 manual dialog approvals from its predecessor
+     before it ended up in auto mode — that defeats the entire point of a self-succession
+     that's supposed to need no babysitting.
+   - Confirm the running model matches the project's intended one (check the pane's own
+     status line, or `~/.claude/settings.json`'s top-level `"model"` key) — don't assume a
+     fresh pane inherited the right one; a prior session's `/model` switch or a rate-limit
+     fallback does not carry forward automatically, and a silent wrong-model session is
+     easy to miss until much later.
+   - Re-brief the token-monitor (or restart it if it went idle/stopped itself — it's
+     designed to stop reporting once it flags its predecessor's overbudget state, per its
+     own briefing) so active polling of all 4 agents resumes immediately, not after a gap.
 1. Invoke the `inspector-cycle` skill and run its own step 1 (herdr) and step 2 (current
    stage) immediately — do not wait for, or ask for, a manual briefing from the
    predecessor. The skill's whole design (re-derive every step fresh from live state, never
@@ -99,10 +123,13 @@ On receiving a rebirth prompt, before anything else:
    `herdr pane send-text <pane> "/exit"` then `herdr agent send-keys <target> enter` —
    never a raw `herdr pane close` or kill. Verify the pane actually dropped to a plain
    shell prompt.
-4. Only then resume the normal cycle at step 3 (delegate work). Report the completed
-   succession to the user plainly — this is a first-of-its-kind mechanism, worth narrating
-   even though it doesn't need permission (see `autonomy-boundary.md`: an internal,
-   fully-reversible operational action like this is not a human-in-the-loop gate).
+4. Only then resume the normal cycle at step 3 (delegate work) and step 4 (poll agents) —
+   confirm all 4 supervised agents are actually being actively polled again (not just the
+   token-monitor from step 0), driven via `/loop` per `herdr-polling-reference.md`, not left
+   as a one-off orientation check. Report the completed succession to the user plainly —
+   this is a first-of-its-kind mechanism, worth narrating even though it doesn't need
+   permission (see `autonomy-boundary.md`: an internal, fully-reversible operational action
+   like this is not a human-in-the-loop gate).
 5. Ending a session that a user is actively, interactively attached to (rather than a
    background herdr pane with no live viewer) is the one exception worth a direct heads-up
    before retiring it — confirm with the user first in that specific case, since it
