@@ -410,6 +410,31 @@ COUNTS-ADDENDUM-10 (2026-09-12, not yet folded into the block above): Stage 8's 
            `da9ef33fa`, includes STATE.md/WIKI.md/traceability.md/findings.md). Next:
            Stage 9 (human-in-the-loop gate, see above).
 
+STAGE-9-KICKOFF (2026-09-12, user decision recorded live in conversation, not yet acted on):
+           user chose to proceed with Stage 9 now rather than pause or hand it off entirely.
+           Credential-flow agreement (both AskUserQuestion rounds, this session): the
+           Inspector builds and launches the real app itself (prefer the qmake build per
+           `garmin-build-system-duality` — qmake is the real CI/release path,
+           `GC_WANT_GARMINCONNECT` is currently commented out in `src/gcconfig.pri.in` and
+           needs enabling), then gives the user step-by-step instructions to follow inside
+           the running app's own Garmin-connect wizard. **The user drives all credential
+           entry themselves, directly into the app's dialog — never into chat, never typed
+           by the Inspector.** The Inspector's job is to launch the app, narrate what to
+           click/enter at each step (per prd.md US-1/US-3/US-4 and REQ-003/009/012/017's
+           acceptance criteria), and record what the user reports back (connect success
+           within ~30s incl. MFA round-trip, MFA 6-digit dialog behavior, sync pulling real
+           activities, Disconnect deleting tokens immediately) as the Stage 9 evidence in
+           traceability.md — this is the FIRST time this stage's acceptance criteria can be
+           checked on a real account; nothing here may be inferred from the existing seam
+           tests. **Known gap, flag to the user early:** REQ-NF-Pkg-001's own text calls for
+           a "manual smoke checklist" for Win/macOS/Linux installed packages "documented in
+           CONTRIBUTING" — grepped 2026-09-12, no Garmin content exists in `CONTRIBUTING.md`
+           yet (this checklist was never actually written). This dev machine is Linux-only —
+           the Win/macOS legs of that checklist cannot be executed here regardless; only the
+           live-account connect/MFA/sync/disconnect flow (the other half of Stage 9) and a
+           Linux installed-package smoke check are reachable from this session. Surface both
+           gaps to the user rather than silently narrowing scope.
+
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md
 (## Decision index, then entries) · validations/archive/ + cycles/archive/ (historical
