@@ -4,12 +4,14 @@
 
 - **Supervised agents (builder, reviewer, investigator, token-monitor): 250k hard budget.**
   Past this, start the soft-landing procedure below.
-- **The Inspector's own context: ~300-350k warn threshold.** Separate, higher, and refreshed
-  by a different mechanism than a worker (see "Self-succession" below) — never apply the
-  250k worker number to yourself. Don't rely on pure self-observation to catch this: brief
-  the token-monitor with the Inspector's own pane id too (see
-  `agent-roster-and-dispatch.md`) so its report each poll tick includes your own number,
-  not just the other 3's.
+- **The Inspector's own context: ~210k warn threshold.** A separate number from the 250k
+  worker budget, not simply scaled from it (correction 2026-09-12: an earlier draft of this
+  skill said ~300-350k — that was wrong; 210k is the real, confirmed warn point) — never
+  apply the 250k worker number to yourself, and don't assume yours is the higher one just
+  because you supervise. Refreshed by a different mechanism than a worker too (see
+  "Self-succession" below). Don't rely on pure self-observation to catch this: brief the
+  token-monitor with the Inspector's own pane id too (see `agent-roster-and-dispatch.md`)
+  so its report each poll tick includes your own number, not just the other 3's.
 
 ## Soft-landing procedure (for builder / reviewer / investigator / token-monitor)
 
@@ -59,7 +61,7 @@ succession solves this by reversing who controls whom: spawn your successor FIRS
 you're still alive to do it, then have the successor (fresh, under threshold, with full
 agency) retire YOU — not the other way around.**
 
-At ~300-350k of your own tokens:
+At ~210k of your own tokens:
 1. Recognize the threshold and confirm you're at a safe stopping point (real, substantive
    work, not deferral) — same discipline as any soft-landing.
 2. Spawn a successor: `herdr tab create` a clean new tab (never squeeze into a busy one),

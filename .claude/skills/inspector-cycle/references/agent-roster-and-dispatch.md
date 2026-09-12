@@ -58,10 +58,26 @@ touches the fix.
 
 ## Token-monitor specific notes
 
-Its job is narrow and cheap: read the other 3 panes' current context usage (not cumulative
-totals) and report it to the Inspector at each poll tick. This is a raw numeric read, not a
-work-correctness claim — delegating it does not conflict with "never trust a self-report,"
-which is about validating WORK, not reading a status line. The token-monitor itself is
-still subject to the same 250k budget and soft-landing procedure as the other 3 (see
-`token-budget-and-soft-landing.md`) — and while IT is soft-landing, the Inspector reads the
-other 3 panes directly for that one cycle rather than going without coverage.
+Its job is narrow and cheap: read the current context usage (not cumulative totals) of the
+other 3 agents AND the Inspector's own pane, and report all 4 numbers to the Inspector at
+each poll tick. Give it the Inspector's own pane id explicitly when briefing it — the
+Inspector's self-refresh threshold (see `token-budget-and-soft-landing.md`) is otherwise
+easy to miss, since nothing else in this cycle checks it externally. This is a raw numeric
+read, not a work-correctness claim — delegating it does not conflict with "never trust a
+self-report," which is about validating WORK, not reading a status line. The token-monitor
+itself is still subject to the same 250k budget and soft-landing procedure as the other 3
+(see `token-budget-and-soft-landing.md`) — and while IT is soft-landing, the Inspector reads
+all other panes (including its own) directly for that one cycle rather than going without
+coverage.
+
+**Reading the actual number, per agent kind — do not estimate from a bare percentage:**
+- **Claude Code panes** (builder, Inspector, token-monitor itself): the bottom status line
+  already shows a raw figure directly (`tok Nk/Mk`) — use it as-is, no conversion needed.
+- **Codex panes** (reviewer, investigator): the persistent bottom status line shows ONLY a
+  percentage ("Context 76% used") with no visible denominator — estimating a token count
+  from that percentage is unreliable (confirmed 2026-09-12: two Codex panes' real figures,
+  read via `/status`, were 199K/258K and 170K/258K — noticeably different from an earlier
+  estimate based on the bare percentage alone). Send `/status` to the pane instead
+  (`herdr pane send-text <pane> "/status"` then `enter`) and read its own reported
+  "Context window: X% left (Y used / Z total)" line — use Y (the actual used count)
+  directly, never re-derive it from a percentage.

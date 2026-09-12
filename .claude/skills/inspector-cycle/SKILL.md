@@ -61,15 +61,17 @@ project-state-and-next-step.md`
 Set/name the 4 standing agents for this stage — **builder** (Claude Code, TDD
 implementation), **reviewer** (Codex, delta-check), **investigator** (Codex, isolated
 parallel problem-solving), **token-monitor** (Claude Code, watches the other 3's context
-usage). Brief each in the shape of its own first-ever prompt, not a paraphrase. Any of the
-4 may spawn QGDW's own `qgdw-*` subagents internally to scope technical sub-work — that
-nesting is theirs to manage, not yours to micromanage. → `references/
-agent-roster-and-dispatch.md`
+usage AND your own — give it your pane id when briefing it). Brief each in the shape of
+its own first-ever prompt, not a paraphrase. Any of the 4 may spawn QGDW's own `qgdw-*`
+subagents internally to scope technical sub-work — that nesting is theirs to manage, not
+yours to micromanage. → `references/agent-roster-and-dispatch.md`
 
 ### 4. poll agents
-Proactively check status AND token budget for all 4 agents on your own initiative — do not
-wait to be asked. 250k budget per supervised agent (separate from your own 300-350k
-self-refresh threshold) → soft-landing, not a hard kill. → `references/
+Proactively check status AND token budget for all 4 agents AND yourself on your own
+initiative — do not wait to be asked, and don't rely only on the token-monitor's report for
+your own number if you can check your own pane directly too. 250k budget per supervised
+agent, ~210k for yourself (separate thresholds, see `references/
+token-budget-and-soft-landing.md`) → soft-landing, not a hard kill. → `references/
 token-budget-and-soft-landing.md` + `references/herdr-polling-reference.md`
 
 ### 5. validate agent results
