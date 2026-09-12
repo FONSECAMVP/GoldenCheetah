@@ -65,11 +65,13 @@ At ~300-350k of your own tokens:
 2. Spawn a successor: `herdr tab create` a clean new tab (never squeeze into a busy one),
    then `herdr agent start <new-name> --kind claude --pane <new-pane-id>`. **Name it by
    incrementing your OWN version suffix**, not an arbitrary label: the first Inspector in a
-   project session is `garmin_inspector_v1.0`; each succession bumps the minor number
-   (`v1.0` → `v1.1` → `v1.2` → ...). If your own current name has no version suffix (an ad
-   hoc name, or you're the very first session in this lineage and were never renamed),
-   treat yourself as `v1.0` and name the successor `v1.1` — don't invent an unrelated name
-   or a bare incrementing integer.
+   project session is `garmin_inspector_v1_0`; each succession bumps the minor number
+   (`v1_0` → `v1_1` → `v1_2` → ...) — herdr agent names only allow lowercase letters,
+   digits, `-`/`_` (confirmed: a literal dot is rejected with `invalid_agent_name`), so the
+   separator is an underscore, not a dot, even though it reads as "v1.0" conceptually. If
+   your own current name has no version suffix (an ad hoc name, or you're the very first
+   session in this lineage and were never renamed), treat yourself as `v1_0` and name the
+   successor `v1_1` — don't invent an unrelated name or a bare incrementing integer.
 3. Send the successor a SHORT rebirth prompt — NOT a context dump. It only needs to say,
    in substance: "You are `<new-name>`, a reborn Inspector succeeding `<old-name>`/
    `<old-pane-id>`, which hit its self-refresh threshold. Invoke the `inspector-cycle` skill
