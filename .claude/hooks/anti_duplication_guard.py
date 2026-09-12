@@ -323,16 +323,32 @@ def _resolve_cd(argstr: str, base):
     return ap if os.path.isdir(ap) else None
 
 
+_BACKUP_WORD_RE = re.compile(r"^(?P<base>.+)[.\-](?:orig|bak|backup)$")
+
+
 def _is_snapshot_restore(srcs, dest):
     """cp/mv <anywhere>/<name>.orig <path>/<name> is the sanctioned snapshot-restore
     pattern (LSN-032): restoring a file from its own backup copy is NOT a clobber. The
     backup may live in a scratchpad dir (/tmp/.../X.cpp.orig -> src/.../X.cpp), so the
-    match is on BASENAME + backup suffix, not on sibling paths."""
+    match is on BASENAME + backup suffix, not on sibling paths.
+
+    The basename may also carry EXTRA decoration between the destination's own name and
+    the backup word (`X.cpp.orch-mutation-orig`, not just `X.cpp.orig`) — a session
+    reasonably names a snapshot for traceability when several may exist at once. The
+    destination's basename must still be a literal prefix (an unrelated file's backup,
+    e.g. `OtherFile.cpp.orig`, still cannot restore onto `CloudService.cpp`), and the
+    source must still end in exactly one of the three known words — only the middle
+    decoration is tolerated (ORCH-058: the exact-match version denied this same LSN-084/
+    A3-mutation-proof convention it exists to sanction)."""
     if len(srcs) != 1:
         return False
     sb = os.path.basename(srcs[0])
     db = os.path.basename(dest.rstrip("/"))
-    return any(sb == db + suf for suf in _BACKUP_SUFFIXES)
+    m = _BACKUP_WORD_RE.match(sb)
+    if not m:
+        return False
+    base = m.group("base")
+    return base == db or base.startswith(db + ".") or base.startswith(db + "-")
 
 
 def shell_targets(command: str, base_cwd=None):
@@ -441,13 +457,22 @@ def inside_root(ap: str, root: str) -> bool:
                                     rel.startswith(os.pardir + os.sep))
 
 
-def is_vendor_path(ap: str, root: str) -> bool:
-    """Vendor territory is ROOT-ANCHORED: exactly `<root>/.claude/skills` or a
-    descendant of it — never an arbitrary absolute-path substring.
+# Skill packages that ship their own installer/reinstall mechanism and are therefore
+# genuinely replaced wholesale on update (see install_hook.py). A sibling skill
+# directory that isn't one of these (e.g. a project-authored skill living right next
+# to it) is NOT vendor territory just for being under `.claude/skills/`.
+VENDOR_SKILL_PACKAGES = ("quality-gated-dev-workflow",)
 
-    `/tmp/snap/.claude/skills/x.md` (outside the project) and
-    `<root>/scratch/.claude/skills/x.md` (inside, but not the vendor tree) are both
-    NOT vendor territory; `<root>/.claude/skills/...` still is.
+
+def is_vendor_path(ap: str, root: str) -> bool:
+    """Vendor territory is ROOT-ANCHORED: exactly `<root>/.claude/skills/<pkg>` for a
+    known vendor package (`VENDOR_SKILL_PACKAGES`) or a descendant of it — never the
+    whole `.claude/skills/` tree and never an arbitrary absolute-path substring.
+
+    `/tmp/snap/.claude/skills/quality-gated-dev-workflow/x.md` (outside the project)
+    and `<root>/.claude/skills/some-other-skill/x.md` (inside, but not a vendor
+    package) are both NOT vendor territory; `<root>/.claude/skills/
+    quality-gated-dev-workflow/...` still is.
     """
     if not inside_root(ap, root):
         return False
@@ -455,8 +480,12 @@ def is_vendor_path(ap: str, root: str) -> bool:
         rel = os.path.relpath(os.path.normpath(ap), root)
     except ValueError:
         return False
-    vendor = os.path.join(".claude", "skills")
-    return rel == vendor or rel.startswith(vendor + os.sep)
+    skills_dir = os.path.join(".claude", "skills")
+    for pkg in VENDOR_SKILL_PACKAGES:
+        vendor = os.path.join(skills_dir, pkg)
+        if rel == vendor or rel.startswith(vendor + os.sep):
+            return True
+    return False
 
 
 def main() -> None:
