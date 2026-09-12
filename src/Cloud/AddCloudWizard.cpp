@@ -142,7 +142,8 @@ AddCloudWizard::AddCloudWizard(Context *context, QString sname, bool sync) : QWi
 #ifdef GC_WANT_GARMINCONNECT
     // Edit mode for Garmin Connect: page 20 (generic AddAuth) has nothing to
     // show for the native SSO service, so register page 21 and start there.
-    if (service == "Garmin Connect") {
+    // Service identity key comparison, not display text.
+    if (service == "Garmin Connect") { // T208-ALLOW:I18N-TR-WRAP
         ensureGarminAuthPage();
         setStartId(21);
     }
@@ -512,7 +513,8 @@ int AddService::nextId() const
         // Garmin Connect uses its own native credentials page (21), not the
         // generic URL/Key/OAuth page (20). Non-Garmin services fall through
         // to 20 exactly as before.
-        if (wizard->cloudService->id() == "Garmin Connect") return 21;
+        // Service identity key comparison, not display text.
+        if (wizard->cloudService->id() == "Garmin Connect") return 21; // T208-ALLOW:I18N-TR-WRAP
 #endif
         return 20;
     }
@@ -534,7 +536,8 @@ AddService::clicked(QString p)
 #ifdef GC_WANT_GARMINCONNECT
     // first entry to the Garmin path: stand up adapter + chain + page 21
     // before next() asks nextId() to route there.
-    if (p == "Garmin Connect") wizard->ensureGarminAuthPage();
+    // Service identity key comparison, not display text.
+    if (p == "Garmin Connect") wizard->ensureGarminAuthPage(); // T208-ALLOW:I18N-TR-WRAP
 #endif
 
     wizard->next();
@@ -579,7 +582,8 @@ int AddConsent::nextId() const
     // else keeps the historical hardcoded 20. (Garmin currently defines no
     // Consent setting so this page is skipped for it, but if a consent text
     // is ever added the routing stays correct.)
-    if (wizard->cloudService && wizard->cloudService->id() == "Garmin Connect") return 21;
+    // Service identity key comparison, not display text.
+    if (wizard->cloudService && wizard->cloudService->id() == "Garmin Connect") return 21; // T208-ALLOW:I18N-TR-WRAP
 #endif
     return 20;
 }

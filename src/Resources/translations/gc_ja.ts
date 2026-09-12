@@ -581,6 +581,34 @@ It might be necessary to manually disable it.</source>
         <source>Edit Account Details</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <location filename="../../Cloud/AddCloudWizard.cpp" line="321"/>
+        <location filename="../../Cloud/AddCloudWizard.cpp" line="365"/>
+        <source>Garmin Connect</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/AddCloudWizard.cpp" line="285"/>
+        <source>GoldenCheetah connects to Garmin Connect using the same authentication flow as Garmin&apos;s mobile app. Garmin does not officially endorse third-party clients, and aggressive use may, in rare cases, lead to a temporary account restriction. GoldenCheetah limits its requests to a low rate to avoid this. You can disconnect at any time from the Cloud Services settings.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/AddCloudWizard.cpp" line="294"/>
+        <source>I understand — connect</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/AddCloudWizard.cpp" line="366"/>
+        <source>Use Garmin profile data to fill in your Athlete profile?
+
+GoldenCheetah will only fill fields that are currently empty. Your existing data will not be changed.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/AddCloudWizard.cpp" line="369"/>
+        <source>Yes, use my Garmin profile to fill missing GC fields</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>AddConsent</name>
@@ -13456,6 +13484,240 @@ Torque Adjust - this defines an absolute value in poinds per square inch or newt
     <message>
         <location filename="../../Metrics/GOVSS.cpp" line="382"/>
         <source>Gravity Ordered Velocity Stress Score, the BikeStress like metric defined by Dr. Skiba for Running, accounts for variations in speed, slope and relative intensity and duration</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>GarminBackfillController</name>
+    <message>
+        <location filename="../../Cloud/GarminBackfillController.cpp" line="163"/>
+        <source>Garmin Connect: invalid backfill range.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminBackfillController.cpp" line="169"/>
+        <source>Garmin Connect: backfill range exceeds the %1-day cap.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminBackfillController.cpp" line="198"/>
+        <location filename="../../Cloud/GarminBackfillController.cpp" line="315"/>
+        <source>Garmin Connect: could not persist backfill state.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminBackfillController.cpp" line="208"/>
+        <location filename="../../Cloud/GarminBackfillController.cpp" line="255"/>
+        <source>Garmin Connect: the account session is no longer valid; backfill paused.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminBackfillController.cpp" line="220"/>
+        <source>Garmin Connect: could not list activities for backfill.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminBackfillController.cpp" line="265"/>
+        <source>Garmin Connect: could not download activity %1.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminBackfillController.cpp" line="276"/>
+        <source>Garmin Connect: the account session became invalid while this activity was downloading; it was discarded.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminBackfillController.cpp" line="290"/>
+        <source>Garmin Connect: could not stage activity %1.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminBackfillController.cpp" line="304"/>
+        <source>Garmin Connect: could not record activity %1 as imported.</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>GarminBackfillDialog</name>
+    <message>
+        <location filename="../../Cloud/GarminBackfillDialog.cpp" line="44"/>
+        <location filename="../../Cloud/GarminBackfillDialog.cpp" line="84"/>
+        <source>Garmin Connect: Backfill History</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminBackfillDialog.cpp" line="85"/>
+        <source>Unable to connect, check your configuration in preferences.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminBackfillDialog.cpp" line="102"/>
+        <source>Start</source>
+        <translation type="unfinished">開始</translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminBackfillDialog.cpp" line="103"/>
+        <location filename="../../Cloud/GarminBackfillDialog.cpp" line="157"/>
+        <source>Cancel</source>
+        <translation type="unfinished">キャンセル</translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminBackfillDialog.cpp" line="107"/>
+        <source>Choose a date range and click Start.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminBackfillDialog.cpp" line="111"/>
+        <source>From:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminBackfillDialog.cpp" line="113"/>
+        <source>To:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminBackfillDialog.cpp" line="159"/>
+        <source>Starting...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminBackfillDialog.cpp" line="192"/>
+        <source>Imported %1 so far...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminBackfillDialog.cpp" line="216"/>
+        <source>Done. Imported %1 activities.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminBackfillDialog.cpp" line="217"/>
+        <source>Done. No new activities in this range.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminBackfillDialog.cpp" line="221"/>
+        <source>Paused after importing %1 activities.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminBackfillDialog.cpp" line="222"/>
+        <source>Paused: %1 (imported %2 so far)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminBackfillDialog.cpp" line="232"/>
+        <source>Close</source>
+        <translation type="unfinished">閉じる</translation>
+    </message>
+</context>
+<context>
+    <name>GarminConnect</name>
+    <message>
+        <location filename="../../Cloud/GarminConnect.cpp" line="462"/>
+        <location filename="../../Cloud/GarminConnect.cpp" line="751"/>
+        <source>Garmin Connect: no embedded session is available.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminConnect.cpp" line="473"/>
+        <source>Garmin Connect: the stored session file &apos;%1&apos; has unsafe permissions; please sign in again.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminConnect.cpp" line="480"/>
+        <source>Garmin Connect: no stored session found; please sign in again.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminConnect.cpp" line="488"/>
+        <source>Garmin Connect: could not restore the stored session; please sign in again.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminConnect.cpp" line="577"/>
+        <location filename="../../Cloud/GarminConnect.cpp" line="766"/>
+        <source>Garmin Connect: this session&apos;s account was disconnected; please sign in again.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminConnect.cpp" line="601"/>
+        <location filename="../../Cloud/GarminConnect.cpp" line="777"/>
+        <location filename="../../Cloud/GarminConnect.cpp" line="790"/>
+        <source>Garmin Connect: no connected account; please sign in again.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminConnect.cpp" line="629"/>
+        <source>Garmin Connect: the account was disconnected while this activity was downloading; it was discarded.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminConnect.cpp" line="639"/>
+        <location filename="../../Cloud/GarminConnect.cpp" line="701"/>
+        <source>Completed.</source>
+        <translation type="unfinished">完了。</translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminConnect.cpp" line="653"/>
+        <source>Garmin Connect: rate limited by the server; this activity was not downloaded. Please try again later.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminConnect.cpp" line="673"/>
+        <source>Garmin Connect: the account was disconnected; the TCX retry for this activity was not attempted.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminConnect.cpp" line="691"/>
+        <source>Garmin Connect: the account was disconnected while the TCX retry for this activity was downloading; it was discarded.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminConnect.cpp" line="711"/>
+        <source>Garmin Connect: this activity could not be downloaded as either FIT or TCX.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminConnect.cpp" line="737"/>
+        <source>Garmin Connect: sync already in progress.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminConnect.cpp" line="814"/>
+        <source>Garmin Connect: could not list activities; please try again.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminConnect.h" line="70"/>
+        <source>Garmin Connect</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminConnect.h" line="71"/>
+        <source>Download activities from Garmin Connect.</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>GarminCredentialsPage</name>
+    <message>
+        <location filename="../../Cloud/GarminCredentialsPage.cpp" line="21"/>
+        <source>Connect to Garmin Connect</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminCredentialsPage.cpp" line="31"/>
+        <source>If Garmin ends your existing session (for example after a password change), you may be asked to sign in again here. This is expected. Note that sign-in tokens are stored in files under your GoldenCheetah athlete folder rather than in your operating system keychain.</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>GarminMfaPage</name>
+    <message>
+        <location filename="../../Cloud/GarminMfaPage.cpp" line="137"/>
+        <source>Too many incorrect codes. Garmin Connect sign-in has been cancelled. Please start the connection again.</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -27743,6 +28005,26 @@ Python disabled in preferences.</source>
     <message>
         <location filename="../../Gui/SaveDialogs.cpp" line="396"/>
         <source>Modified activities</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminErrors.cpp" line="20"/>
+        <source>Garmin Connect rejected your email or password. Please check and try again.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminErrors.cpp" line="22"/>
+        <source>Couldn&apos;t reach Garmin Connect. Check your internet connection and try again.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminErrors.cpp" line="24"/>
+        <source>Garmin Connect is rate-limiting GoldenCheetah. Please wait a moment and try again.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminErrors.cpp" line="31"/>
+        <source>Connection to Garmin Connect failed (code: unknown).</source>
         <translation type="unfinished"></translation>
     </message>
 </context>

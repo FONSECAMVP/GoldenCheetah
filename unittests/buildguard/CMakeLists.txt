@@ -49,3 +49,21 @@ add_test(
 set_tests_properties(testGarminSecSourceGuard PROPERTIES
     LABELS "garmin-sec-guard"
     TIMEOUT 300)
+
+# --- T-208 / REQ-NF-i18n-001: static i18n source guard -----------------------
+# Both halves of prd.md's "all user-facing strings use tr() and appear in .ts
+# translation files": (1) every user-facing literal in the Garmin scope must
+# sit inside a tr()/translate() call, and (2) every tr() literal extracted
+# from that scope must appear as a <source> in every tracked gc_*.ts. Shares
+# its scope globs and comment-stripping state machine with the T-203 guard
+# above (imported, so the two can never drift). Same pure-stdlib, sub-second
+# shape; run via `ctest -L garmin-i18n-guard`.
+add_test(
+    NAME testGarminI18nSourceGuard
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/garmin_i18n_source_guard.py"
+            "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(testGarminI18nSourceGuard PROPERTIES
+    LABELS "garmin-i18n-guard"
+    TIMEOUT 300)

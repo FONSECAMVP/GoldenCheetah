@@ -160,13 +160,13 @@ GarminBackfillController::Result GarminBackfillController::start(const QString& 
     if (!startDt.isValid() || !endDt.isValid() || endDt < startDt) {
         result.outcome = Outcome::Rejected;
         result.pauseReason = PauseReason::InvalidRange;
-        result.message = QStringLiteral("Garmin Connect: invalid backfill range.");
+        result.message = tr("Garmin Connect: invalid backfill range.");
         return result;
     }
     if (startDt.daysTo(endDt) > kHardCapDays) {
         result.outcome = Outcome::Rejected;
         result.pauseReason = PauseReason::InvalidRange;
-        result.message = QStringLiteral("Garmin Connect: backfill range exceeds the %1-day cap.").arg(kHardCapDays);
+        result.message = tr("Garmin Connect: backfill range exceeds the %1-day cap.").arg(kHardCapDays);
         return result;
     }
 
@@ -195,7 +195,7 @@ GarminBackfillController::Result GarminBackfillController::start(const QString& 
         if (!GarminSidecarStore::saveBackfillState(m_configDir, m_uid, initial)) {
             result.outcome = Outcome::Paused;
             result.pauseReason = PauseReason::StatePersistFailed;
-            result.message = QStringLiteral("Garmin Connect: could not persist backfill state.");
+            result.message = tr("Garmin Connect: could not persist backfill state.");
             return result;
         }
     }
@@ -205,7 +205,7 @@ GarminBackfillController::Result GarminBackfillController::start(const QString& 
     if (sessionInvalidated()) {
         result.outcome = Outcome::Paused;
         result.pauseReason = PauseReason::SessionInvalidated;
-        result.message = QStringLiteral("Garmin Connect: the account session is no longer valid; backfill paused.");
+        result.message = tr("Garmin Connect: the account session is no longer valid; backfill paused.");
         return result;
     }
 
@@ -217,7 +217,7 @@ GarminBackfillController::Result GarminBackfillController::start(const QString& 
     if (!listed.ok) {
         result.outcome = Outcome::Paused;
         result.pauseReason = PauseReason::TransientError;
-        result.message = QStringLiteral("Garmin Connect: could not list activities for backfill.");
+        result.message = tr("Garmin Connect: could not list activities for backfill.");
         return result;
     }
 
@@ -252,7 +252,7 @@ GarminBackfillController::Result GarminBackfillController::start(const QString& 
         if (sessionInvalidated()) {
             result.outcome = Outcome::Paused;
             result.pauseReason = PauseReason::SessionInvalidated;
-            result.message = QStringLiteral("Garmin Connect: the account session is no longer valid; backfill paused.");
+            result.message = tr("Garmin Connect: the account session is no longer valid; backfill paused.");
             return result;
         }
 
@@ -262,7 +262,7 @@ GarminBackfillController::Result GarminBackfillController::start(const QString& 
             // reaching here means retries are exhausted (design.md's table).
             result.outcome = Outcome::Paused;
             result.pauseReason = PauseReason::TransientError;
-            result.message = QStringLiteral("Garmin Connect: could not download activity %1.").arg(s.activityId);
+            result.message = tr("Garmin Connect: could not download activity %1.").arg(s.activityId);
             return result;
         }
 
@@ -273,9 +273,9 @@ GarminBackfillController::Result GarminBackfillController::start(const QString& 
         if (sessionInvalidated()) {
             result.outcome = Outcome::Paused;
             result.pauseReason = PauseReason::SessionInvalidated;
-            result.message = QStringLiteral(
-                "Garmin Connect: the account session became invalid while this activity was downloading; "
-                "it was discarded.");
+            result.message =
+                tr("Garmin Connect: the account session became invalid while this activity was downloading; "
+                   "it was discarded.");
             return result;
         }
 
@@ -287,7 +287,7 @@ GarminBackfillController::Result GarminBackfillController::start(const QString& 
             // re-fetches it rather than silently skipping it forever.
             result.outcome = Outcome::Paused;
             result.pauseReason = PauseReason::TornWrite;
-            result.message = QStringLiteral("Garmin Connect: could not stage activity %1.").arg(s.activityId);
+            result.message = tr("Garmin Connect: could not stage activity %1.").arg(s.activityId);
             return result;
         }
 
@@ -301,8 +301,7 @@ GarminBackfillController::Result GarminBackfillController::start(const QString& 
         if (!GarminSidecarStore::recordImported(m_configDir, m_uid, s.activityId, entry)) {
             result.outcome = Outcome::Paused;
             result.pauseReason = PauseReason::StatePersistFailed;
-            result.message =
-                QStringLiteral("Garmin Connect: could not record activity %1 as imported.").arg(s.activityId);
+            result.message = tr("Garmin Connect: could not record activity %1 as imported.").arg(s.activityId);
             return result;
         }
 
@@ -313,7 +312,7 @@ GarminBackfillController::Result GarminBackfillController::start(const QString& 
         if (!GarminSidecarStore::saveBackfillState(m_configDir, m_uid, advanced)) {
             result.outcome = Outcome::Paused;
             result.pauseReason = PauseReason::StatePersistFailed;
-            result.message = QStringLiteral("Garmin Connect: could not persist backfill state.");
+            result.message = tr("Garmin Connect: could not persist backfill state.");
             return result;
         }
 

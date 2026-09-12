@@ -42,6 +42,7 @@
 
 #include "IGarminDownloadClient.h"
 
+#include <QCoreApplication>
 #include <QString>
 #include <QVector>
 
@@ -49,6 +50,14 @@
 
 class GarminBackfillController
 {
+  public:
+    // REQ-NF-i18n-001 (T-208): Result::message strings surface verbatim in
+    // GarminBackfillDialog's progress label, so they are user-facing and must
+    // be translatable even though this class is deliberately not a QObject
+    // (DES-009 decoupling). The macro gives tr() the class's own context.
+    // NOTE: it ends in a `private:` section — `public:` is re-opened below.
+    Q_DECLARE_TR_FUNCTIONS(GarminBackfillController)
+
   public:
     enum class Outcome { Done, Paused, Rejected };
 

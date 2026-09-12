@@ -1,4 +1,4 @@
-# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-12 by Inspector (Stage 8 — REQ-NF-Sec-001..004 all MET+COMMITTED; REQ-NF-Reliab-001+002 T-204..206 TEST VERIFIED, not yet committed; REQ-NF-Obs-001 T-207 TEST VERIFIED + COMMITTED `e69dfa027`)
+# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-12 by Inspector (Stage 8 — all REQ-NF items now MET; REQ-NF-Build-001/Sec-001..004/Reliab-001+002/Obs-001 all COMMITTED; REQ-NF-i18n-001 T-208 TEST VERIFIED, not yet committed — Stage 8 closes on that commit)
 # Per-id lifecycle status lives ONLY in .claude/workflow-garminconnect/traceability.md (DEC-015 SSOT).
 # For a DEC's status read decisions.md. For a finding's severity/disposition read findings.md.
 # ALL superseded cursor narrative -> .claude/workflow-garminconnect/archive/state-history.md
@@ -54,10 +54,24 @@ OPEN:      **STAGE 6 CLOSED 2026-09-08, COMMITTED `4a72d2279`** — all six REQs
            Stage 8, the current next gate.**
 BLOCKING:  — (none; B-R025-01/A3-R021b-F2/B-R029-01 all closed 2026-09-08, see above)
 CASCADE:   — (DEC-015 fully propagated; ledger_drift_lint.py EXIT=0)
-LAST_CLV:  clv_findings.py 2026-09-12 (re-run post-REQ-NF-Reliab-001+002/T-204..206 ledger update)
-           **PASS — 0 OUTSTANDING / 394 OK over 394 rows** (unchanged — no new findings opened;
-           the T-206 id-collision was a ledger-hygiene fix, not a finding). `ledger_drift_lint.py`
+LAST_CLV:  clv_findings.py 2026-09-12 (re-run post-B-I18N001-01/02 findings-ledger addition,
+           REQ-NF-i18n-001/T-208 reviewer-caught-and-fixed findings). **PASS — 0 OUTSTANDING /
+           399 OK over 399 rows** (397 + the 2 new B-I18N001 rows). `ledger_drift_lint.py` also
+           re-run clean (EXIT=0). Inspector ran both directly against the just-edited files.
+           Prior:
+           2026-09-12 (re-run post-ORCH-062 findings-ledger addition — anti-
+           duplication-guard false-positive on shell-redirect/loop-literal misparse, hit
+           repeatedly during T-208 builder supervision; LSN-036 miss:4 recorded alongside it).
+           **PASS — 0 OUTSTANDING / 397 OK over 397 rows.** Only 1 new row (ORCH-062) was
+           added this pass; the jump from 394→397 (+3) is NOT reconciled here — consistent with
+           the carried-forward NOTE below about this file's row count not tracking cleanly
+           against other counts, not independently re-derived this pass either. The live
+           clv_findings.py count above remains authoritative regardless. `ledger_drift_lint.py`
            also re-run clean (EXIT=0). Inspector ran both directly against the just-edited files.
+           Prior:
+           2026-09-12 (post-REQ-NF-Reliab-001+002/T-204..206 ledger update) PASS — 0 OUTSTANDING
+           / 394 OK over 394 rows (unchanged — no new findings opened; the T-206 id-collision was
+           a ledger-hygiene fix, not a finding).
            NOTE (carried forward, still unresolved):
            this run's row count (394) does not match COUNTS-ADDENDUM-2's stated "findings 401
            rows" — not independently re-derived this pass either; the live clv_findings.py count
@@ -354,8 +368,46 @@ COUNTS-ADDENDUM-9 (2026-09-12, not yet folded into the block above): Stage 8's s
            stale, same class of miss as the DEC-registry gap COUNTS-ADDENDUM-8 already fixed once
            this session). **Committed `e69dfa027` 2026-09-12** (8 files: STATE.md/WIKI.md/
            traceability.md/findings.md + GarminConnect.cpp/.h + the two test files). **All Stage 8
-           REQ-NF items except REQ-NF-i18n-001 are now MET.** Next Stage 8 item: REQ-NF-i18n-001
-           (tr() coverage), in progress with the builder (T-208 claimed).
+           REQ-NF items except REQ-NF-i18n-001 are now MET.** REQ-NF-i18n-001 (T-208, tr()
+           coverage) is now also TEST VERIFIED, not yet committed — see COUNTS-ADDENDUM-10
+           below. **All Stage 8 REQ-NF items now MET; every other Stage 8 item was already
+           committed (Build-001 `f118691ea`, Sec-001+003 `d271abae1`, Sec-004 `07501c477`,
+           Reliab-001+002 `51bc6b5a8`, Obs-001 `e69dfa027`) — REQ-NF-i18n-001's diff is the
+           only remaining uncommitted piece.** Stage 8 CLOSES on that commit. Next: Stage 9
+           (a real Garmin account exercising connect/MFA/sync/disconnect + Win/macOS/Linux
+           installed-package smoke checklist) — a human-in-the-loop gate (real user
+           credentials), not something the Inspector can build unattended.
+
+COUNTS-ADDENDUM-10 (2026-09-12, not yet folded into the block above): Stage 8's last open item,
+           REQ-NF-i18n-001 (T-208, tr() coverage for the Garmin-scope UI surface), is now
+           **TEST VERIFIED, not yet committed.** Builder converted 11 `QStringLiteral` prose
+           sites in `GarminBackfillController.h`/`.cpp` to `tr()` (via
+           `Q_DECLARE_TR_FUNCTIONS(GarminBackfillController)`, public: reopened per this
+           repo's established pattern) and added new `unittests/buildguard/
+           garmin_i18n_source_guard.py` (T-208, `testGarminI18nSourceGuard` — static: prose
+           literals sit inside `tr()`, every extracted literal has a matching `<source>` in
+           all 13 `gc_*.ts` files). Reviewer full delta-check found two real defects before
+           commit — see B-I18N001-01/02 in findings.md: (1) blocking — `GarminConnect`
+           (DES-014, deliberately no `Q_OBJECT`) inherits `CloudService::tr()` at runtime, so
+           all 16 `GarminConnect`-context `.ts` entries `lupdate` extracted were
+           translation-dead; fixed via `Q_DECLARE_TR_FUNCTIONS(GarminConnect)` +
+           `#include <QCoreApplication>`, proven at runtime with a hand-written `.ts` +
+           `lrelease` + a standalone `tr()`-calling program, not just via `lupdate`. (2)
+           non-blocking — all 13 `.ts` diffs carried this dev machine's absolute checkout
+           path in 51 newly-added `<location>` lines per file (a merge-script gap on 5
+           whole-context block inserts); fixed, 0 residual absolute-path fragments
+           confirmed by the reviewer's own re-grep. **Independently re-verified by the
+           Inspector**: `clang-format --dry-run --Werror` clean on `GarminConnect.h` (run
+           directly — the reviewer's own sandbox lacked the cached executable, an
+           environment gap, not a code finding), full `ctest -L garmin-fast` re-confirmed
+           40/40 (306.47s), `garmin_i18n_source_guard.py` PASS (33 files, 68 literals, 13
+           .ts, 0 findings), `garmin_sec_source_guard.py` PASS (47 files, 0 findings) — no
+           collateral. Dispatch mechanics note: the reviewer briefing's first `herdr agent
+           send-keys ... enter` silently failed to submit (text sat unsent in the input box)
+           because the pane was not focused; `herdr agent focus` before the keypress fixed
+           it (Inspector-tooling note, not a project lesson — not added to lessons.md).
+           **All Stage 8 REQ-NF items now MET; Stage 8
+           closes on this commit.** Next: Stage 9 (human-in-the-loop gate, see above).
 
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md

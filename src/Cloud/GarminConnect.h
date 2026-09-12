@@ -22,6 +22,7 @@
 #include "CloudService.h"
 
 #include <QByteArray>
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QHash>
 #include <QImage>
@@ -51,6 +52,15 @@ struct GarminDownloadFailure;
 class GarminConnect : public CloudService
 {
   public:
+    // REQ-NF-i18n-001 (T-208) — pins tr() to THIS class's context. Without it,
+    // unqualified tr() inside member functions resolves to the inherited
+    // CloudService::tr (context "CloudService", DES-014 deliberately adds no
+    // Q_OBJECT here), while lupdate extracts under "GarminConnect" — so every
+    // extracted entry is dead at runtime. NOTE: the macro ends in a
+    // `private:` section — `public:` is re-opened immediately below.
+    Q_DECLARE_TR_FUNCTIONS(GarminConnect)
+
+  public:
     GarminConnect(Context* context);
 
     // Test seam (garmin-fast) — inject a Python-free fake download/restore/list
@@ -66,7 +76,8 @@ class GarminConnect : public CloudService
 
     CloudService* clone(Context* context) { return new GarminConnect(context); }
 
-    QString id() const { return QStringLiteral("Garmin Connect"); }
+    // Service identity key; uiName() below is the display name.
+    QString id() const { return QStringLiteral("Garmin Connect"); } // T208-ALLOW:I18N-TR-WRAP
     QString uiName() const { return tr("Garmin Connect"); }
     QString description() const { return tr("Download activities from Garmin Connect."); }
     QImage logo() const;

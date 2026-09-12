@@ -130,7 +130,8 @@ RaisedExc takeRaisedException(PyObject* module)
 
     PyRef exc(PyErr_GetRaisedException()); // new ref; clears the indicator
     if (!exc) {
-        info.message = QStringLiteral("unknown embedded Python error");
+        // DES-008 developer diagnostic: rawMessage is never displayed in the UI.
+        info.message = QStringLiteral("unknown embedded Python error"); // T208-ALLOW:I18N-TR-WRAP
         return info;
     }
 
@@ -158,7 +159,8 @@ RaisedExc takeRaisedException(PyObject* module)
     }
 
     if (info.message.isEmpty())
-        info.message = QStringLiteral("embedded Python call failed");
+        // DES-008 developer diagnostic: rawMessage is never displayed in the UI.
+        info.message = QStringLiteral("embedded Python call failed"); // T208-ALLOW:I18N-TR-WRAP
 
     PyErr_Clear(); // spec: error state cleared before returning
     return info;
@@ -264,7 +266,8 @@ PyAuthOutcome PyEmbeddedAdapter::authenticate(const QString& email, const QStrin
     // Step 1 — fail-safe before touching any interpreter API. Never throws.
     if (!Py_IsInitialized()) {
         out.kind = PyAuthOutcome::Unknown;
-        out.rawMessage = QStringLiteral("embedded Python unavailable");
+        // DES-008 developer diagnostic: rawMessage is never displayed in the UI.
+        out.rawMessage = QStringLiteral("embedded Python unavailable"); // T208-ALLOW:I18N-TR-WRAP
         return out;
     }
 
@@ -299,7 +302,8 @@ PyAuthOutcome PyEmbeddedAdapter::authenticate(const QString& email, const QStrin
     // breach of the DES-012 seam, not bad credentials: fold to Unknown.
     if (!PyDict_Check(result.get())) {
         out.kind = PyAuthOutcome::Unknown;
-        out.rawMessage = QStringLiteral("garmin_client.login() returned a non-dict result");
+        // DES-008 developer diagnostic: rawMessage is never displayed in the UI.
+        out.rawMessage = QStringLiteral("garmin_client.login() returned a non-dict result"); // T208-ALLOW:I18N-TR-WRAP
         return out;
     }
 
@@ -324,6 +328,7 @@ PyAuthOutcome PyEmbeddedAdapter::authenticate(const QString& email, const QStrin
     PyObject* name = PyDict_GetItemString(result.get(), "display_name"); // borrowed
     if (uid == nullptr || name == nullptr) {
         out.kind = PyAuthOutcome::Unknown;
+        // T208-ALLOW:I18N-TR-WRAP: dES-008 developer diagnostic: rawMessage is never displayed in the UI.
         out.rawMessage = QStringLiteral("garmin_client.login() result missing required keys");
         PyErr_Clear();
         return out;
@@ -362,7 +367,8 @@ PyAuthOutcome PyEmbeddedAdapter::submitMfa(const QString& code)
     // Step 1 — fail-safe before touching any interpreter API. Never throws.
     if (!Py_IsInitialized()) {
         out.kind = PyAuthOutcome::Unknown;
-        out.rawMessage = QStringLiteral("embedded Python unavailable");
+        // DES-008 developer diagnostic: rawMessage is never displayed in the UI.
+        out.rawMessage = QStringLiteral("embedded Python unavailable"); // T208-ALLOW:I18N-TR-WRAP
         return out;
     }
 
@@ -373,7 +379,8 @@ PyAuthOutcome PyEmbeddedAdapter::submitMfa(const QString& code)
     // session. This is a contract/order error, NOT bad credentials: Unknown.
     if (m_client == nullptr) {
         out.kind = PyAuthOutcome::Unknown;
-        out.rawMessage = QStringLiteral("no pending MFA session");
+        // DES-008 developer diagnostic: rawMessage is never displayed in the UI.
+        out.rawMessage = QStringLiteral("no pending MFA session"); // T208-ALLOW:I18N-TR-WRAP
         return out;
     }
 
@@ -393,6 +400,7 @@ PyAuthOutcome PyEmbeddedAdapter::submitMfa(const QString& code)
     // Marshal the success dict — mirrors authenticate() step 5.
     if (!PyDict_Check(result.get())) {
         out.kind = PyAuthOutcome::Unknown;
+        // T208-ALLOW:I18N-TR-WRAP: dES-008 developer diagnostic: rawMessage is never displayed in the UI.
         out.rawMessage = QStringLiteral("garmin_client.submit_mfa() returned a non-dict result");
         return out;
     }
@@ -400,6 +408,7 @@ PyAuthOutcome PyEmbeddedAdapter::submitMfa(const QString& code)
     PyObject* name = PyDict_GetItemString(result.get(), "display_name"); // borrowed
     if (uid == nullptr || name == nullptr) {
         out.kind = PyAuthOutcome::Unknown;
+        // T208-ALLOW:I18N-TR-WRAP: dES-008 developer diagnostic: rawMessage is never displayed in the UI.
         out.rawMessage = QStringLiteral("garmin_client.submit_mfa() result missing required keys");
         PyErr_Clear();
         return out;
@@ -428,7 +437,8 @@ PyDownloadOutcome PyEmbeddedAdapter::downloadActivity(const QString& activityId,
     // Step 1 — fail-safe before touching any interpreter API. Never throws.
     if (!Py_IsInitialized()) {
         out.kind = PyDownloadOutcome::Unknown;
-        out.rawMessage = QStringLiteral("embedded Python unavailable");
+        // DES-008 developer diagnostic: rawMessage is never displayed in the UI.
+        out.rawMessage = QStringLiteral("embedded Python unavailable"); // T208-ALLOW:I18N-TR-WRAP
         return out;
     }
 
@@ -439,7 +449,8 @@ PyDownloadOutcome PyEmbeddedAdapter::downloadActivity(const QString& activityId,
     // password is not kept (REQ-005), so we cannot build a fresh client here.
     if (m_client == nullptr) {
         out.kind = PyDownloadOutcome::Unknown;
-        out.rawMessage = QStringLiteral("not authenticated");
+        // DES-008 developer diagnostic: rawMessage is never displayed in the UI.
+        out.rawMessage = QStringLiteral("not authenticated"); // T208-ALLOW:I18N-TR-WRAP
         return out;
     }
 
@@ -458,6 +469,7 @@ PyDownloadOutcome PyEmbeddedAdapter::downloadActivity(const QString& activityId,
     // fold to Unknown rather than fabricate an empty Success.
     if (!PyBytes_Check(result.get())) {
         out.kind = PyDownloadOutcome::Unknown;
+        // T208-ALLOW:I18N-TR-WRAP: dES-008 developer diagnostic: rawMessage is never displayed in the UI.
         out.rawMessage = QStringLiteral("garmin_client.download_activity() returned a non-bytes result");
         return out;
     }
@@ -467,6 +479,7 @@ PyDownloadOutcome PyEmbeddedAdapter::downloadActivity(const QString& activityId,
     if (PyBytes_AsStringAndSize(result.get(), &buf, &len) != 0) {
         PyErr_Clear();
         out.kind = PyDownloadOutcome::Unknown;
+        // T208-ALLOW:I18N-TR-WRAP: dES-008 developer diagnostic: rawMessage is never displayed in the UI.
         out.rawMessage = QStringLiteral("failed to read download bytes from embedded Python");
         return out;
     }
@@ -483,7 +496,8 @@ PyListOutcome PyEmbeddedAdapter::listActivitiesSince(const QString& sinceGmt)
     // Step 1 — fail-safe before touching any interpreter API. Never throws.
     if (!Py_IsInitialized()) {
         out.kind = PyListOutcome::Unknown;
-        out.rawMessage = QStringLiteral("embedded Python unavailable");
+        // DES-008 developer diagnostic: rawMessage is never displayed in the UI.
+        out.rawMessage = QStringLiteral("embedded Python unavailable"); // T208-ALLOW:I18N-TR-WRAP
         return out;
     }
 
@@ -495,7 +509,8 @@ PyListOutcome PyEmbeddedAdapter::listActivitiesSince(const QString& sinceGmt)
     // client here.
     if (m_client == nullptr) {
         out.kind = PyListOutcome::Unknown;
-        out.rawMessage = QStringLiteral("not authenticated");
+        // DES-008 developer diagnostic: rawMessage is never displayed in the UI.
+        out.rawMessage = QStringLiteral("not authenticated"); // T208-ALLOW:I18N-TR-WRAP
         return out;
     }
 
@@ -519,6 +534,7 @@ PyListOutcome PyEmbeddedAdapter::listActivitiesSince(const QString& sinceGmt)
         // listing: fold to Unknown rather than fabricate an empty Success.
         PyErr_Clear();
         out.kind = PyListOutcome::Unknown;
+        // T208-ALLOW:I18N-TR-WRAP: dES-008 developer diagnostic: rawMessage is never displayed in the UI.
         out.rawMessage = QStringLiteral("garmin_client.list_activities_since() returned a non-iterable result");
         return out;
     }
@@ -534,6 +550,7 @@ PyListOutcome PyEmbeddedAdapter::listActivitiesSince(const QString& sinceGmt)
         // Success with a bogus row).
         if (!PyDict_Check(item.get())) {
             out.kind = PyListOutcome::Unknown;
+            // T208-ALLOW:I18N-TR-WRAP: dES-008 developer diagnostic: rawMessage is never displayed in the UI.
             out.rawMessage = QStringLiteral("garmin_client.list_activities_since() yielded a non-dict item");
             return out;
         }
@@ -563,7 +580,8 @@ PyLoadTokensOutcome PyEmbeddedAdapter::loadTokens(const QString& tokenBlob)
     // Step 1 — fail-safe before touching any interpreter API. Never throws.
     if (!Py_IsInitialized()) {
         out.kind = PyLoadTokensOutcome::Unknown;
-        out.rawMessage = QStringLiteral("embedded Python unavailable");
+        // DES-008 developer diagnostic: rawMessage is never displayed in the UI.
+        out.rawMessage = QStringLiteral("embedded Python unavailable"); // T208-ALLOW:I18N-TR-WRAP
         return out;
     }
 
@@ -606,7 +624,8 @@ PyProfileOutcome PyEmbeddedAdapter::fetchProfile()
     // Step 1 — fail-safe before touching any interpreter API. Never throws.
     if (!Py_IsInitialized()) {
         out.kind = PyProfileOutcome::Unknown;
-        out.rawMessage = QStringLiteral("embedded Python unavailable");
+        // DES-008 developer diagnostic: rawMessage is never displayed in the UI.
+        out.rawMessage = QStringLiteral("embedded Python unavailable"); // T208-ALLOW:I18N-TR-WRAP
         return out;
     }
 
@@ -618,7 +637,8 @@ PyProfileOutcome PyEmbeddedAdapter::fetchProfile()
     // client here.
     if (m_client == nullptr) {
         out.kind = PyProfileOutcome::Unknown;
-        out.rawMessage = QStringLiteral("not authenticated");
+        // DES-008 developer diagnostic: rawMessage is never displayed in the UI.
+        out.rawMessage = QStringLiteral("not authenticated"); // T208-ALLOW:I18N-TR-WRAP
         return out;
     }
 
@@ -635,6 +655,7 @@ PyProfileOutcome PyEmbeddedAdapter::fetchProfile()
     // fold to Unknown rather than fabricate an empty Success.
     if (!PyDict_Check(result.get())) {
         out.kind = PyProfileOutcome::Unknown;
+        // T208-ALLOW:I18N-TR-WRAP: dES-008 developer diagnostic: rawMessage is never displayed in the UI.
         out.rawMessage = QStringLiteral("garmin_client.get_profile() returned a non-dict result");
         return out;
     }

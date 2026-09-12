@@ -77,7 +77,7 @@ DEC  garmin:001–050                 decisions.md ## Decision index  next:garmi
      (Option A / Option C respectively) and BOTH BUILT + execution-verified 2026-09-05 (TEST-158;
      TEST-159+160) — both findings closed on executed evidence; see decisions.md entries for trade space.
 DES  garmin:001–014 (+001a,003a)    design.md                       next:garmin-015
-TEST garmin:T-001–T-207 (T-143–T-153 = DEC-040; T-161–T-163 = REQ-020 wizard; T-164–T-166 = REQ-022 OpenData; T-167–T-169 = REQ-023 store/uncompress; T-170–T-172 = REQ-024 Strava loop; T-176 REQ-009; T-177 REQ-014; T-179+T-194-196 REQ-010; T-201 REQ-013; T-202 REQ-NF-Build-001 (Stage 8 build-guard); T-203 REQ-NF-Sec-001+003 (Stage 8 sec-guard); T-204–T-206 REQ-NF-Reliab-001+002 (Stage 8 retry-schedule/torn-read/SIGKILL-write); T-207 REQ-NF-Obs-001 (Stage 8 structured qDebug trace) — per-id build state → traceability.md)   next:garmin-T-208
+TEST garmin:T-001–T-208 (T-143–T-153 = DEC-040; T-161–T-163 = REQ-020 wizard; T-164–T-166 = REQ-022 OpenData; T-167–T-169 = REQ-023 store/uncompress; T-170–T-172 = REQ-024 Strava loop; T-176 REQ-009; T-177 REQ-014; T-179+T-194-196 REQ-010; T-201 REQ-013; T-202 REQ-NF-Build-001 (Stage 8 build-guard); T-203 REQ-NF-Sec-001+003 (Stage 8 sec-guard); T-204–T-206 REQ-NF-Reliab-001+002 (Stage 8 retry-schedule/torn-read/SIGKILL-write); T-207 REQ-NF-Obs-001 (Stage 8 structured qDebug trace); T-208 REQ-NF-i18n-001 (Stage 8 tr() coverage guard) — per-id build state → traceability.md)   next:garmin-T-209
      REGISTRIES line was stale (still read "next:garmin-T-173") — corrected 2026-09-12 by the
      Inspector during the inspector-cycle pilot run, cross-verified against the ledger's true
      max (grep for T-[0-9]+/TEST-[0-9]+ across traceability.md/decisions.md/findings.md/
@@ -101,7 +101,7 @@ LSN  001–085  (contiguous; LSN-048 has an index line AND a cold entry — that
      ORCH-061; lesson-miss, owed upstream to whoever maintains .claude/skills/quality-gated-dev-workflow/
      lessons.md itself was compacted 2026-09-06 (librarian Job-3): hot index rows capped, full narrative
      moved to each id's own `## LSN-NNN` cold entry — nothing deleted, see archive/state-history.md § 12.
-F    no F-### namespace — findings are `<cycle>-<seq>`; process series ORCH-001–061   next:ORCH-062
+F    no F-### namespace — findings are `<cycle>-<seq>`; process series ORCH-001–062   next:ORCH-063
      060 = informational, accept-with-note: 18 full `ctest -L garmin-fast` reruns logged across this
      branch vs orchestration.md's one-run-per-final-content-version rule — lean-evidence protocol
      adopted going forward (targeted test + 1 mutation per mechanism; full suite once per commit-ready
