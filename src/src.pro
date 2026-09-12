@@ -43,7 +43,7 @@ CONFIG += c++17
 ###=======================================================================
 ### Directory Structure - Split into subdirs to be more manageable
 ###=======================================================================
-INCLUDEPATH += ./ANT ./Train ./FileIO ./Cloud ./Charts ./Metrics ./Gui ./Core ./Planning
+INCLUDEPATH += ./ANT ./Train ./FileIO ./Cloud ./Charts ./Metrics ./Gui ./Core ./Planning ./Python
 QMAKE_CFLAGS_ISYSTEM =
 
 
@@ -307,6 +307,47 @@ contains(DEFINES, "GC_WANT_GARMINCONNECT") {
         SOURCES += Cloud/PyEmbeddedAdapter.cpp
     } else {
         NO_PCH_SOURCES += Cloud/PyEmbeddedAdapter.cpp
+    }
+}
+
+###==========================================================
+### OPTIONAL => Shared CPython process bootstrap (DEC-052)
+###==========================================================
+# B-STAGE9-01 fix: one shared, process-level Py_InitializeFromConfig() owner,
+# compiled whenever EITHER GC_WANT_PYTHON or GC_WANT_GARMINCONNECT is ON (an
+# OR, not either alone) — PythonEmbed.cpp's own initialization and
+# Cloud/PyEmbeddedAdapter.cpp's Py_IsInitialized() fail-safe (DES-013) both
+# depend on it. Previously nothing called Py_Initialize() at all whenever
+# GC_WANT_PYTHON was off, silently breaking Garmin Connect regardless of the
+# "either flag independent of the other" claim made just above and in
+# gcconfig.pri.in. Python-header-free public interface (LSN-007-style
+# invariant) — only the .cpp includes Python.h.
+#
+# INCLUDEPATH/LIBS for Python.h itself are already supplied by whichever of
+# the two blocks above is active (GC_WANT_PYTHON's PYTHONINCLUDES/PYTHONLIBS,
+# or GC_WANT_GARMINCONNECT's GARMIN_PYTHONINCLUDES/GARMIN_PYTHONLIBS just
+# above); qmake's `+=` accumulates regardless of file order, so whichever
+# flag(s) are actually on already cover this TU too.
+contains(DEFINES, "GC_WANT_PYTHON") | contains(DEFINES, "GC_WANT_GARMINCONNECT") {
+    message("Enabling shared CPython process bootstrap (DEC-052)")
+    HEADERS += Python/PyProcessBootstrap.h
+
+    # B-STAGE9-02 — PyProcessBootstrap.cpp needs Python.h to precede any Qt
+    # header, exactly like Cloud/PyEmbeddedAdapter.cpp just above (LSN-007:
+    # Qt's `slots` keyword-macro collides with the `slots` field in CPython's
+    # object.h). qmake's PCH on unix/GCC force-includes stable.h (Qt) ahead of
+    # every source file's own includes with no per-file opt-out, so this TU
+    # must go through the same NO_PCH_SOURCES escape hatch PyEmbeddedAdapter.cpp
+    # already uses (see that block's comment for the full rationale) — a plain
+    # SOURCES += here would silently reintroduce the exact collision LSN-007
+    # exists to prevent, invisible to CMake (which has no PCH) and only
+    # surfacing in the real qmake/Makefile build. On macOS the PCH is disabled
+    # entirely (see PRECOMPILED HEADER section below), so compile it as a
+    # normal source there instead.
+    macx {
+        SOURCES += Python/PyProcessBootstrap.cpp
+    } else {
+        NO_PCH_SOURCES += Python/PyProcessBootstrap.cpp
     }
 }
 

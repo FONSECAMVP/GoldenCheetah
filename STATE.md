@@ -1,4 +1,4 @@
-# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-12 by Inspector (all Stage 8 REQ-NF items MET+COMMITTED: Build-001/Sec-001..004/Reliab-001+002/Obs-001 and now REQ-NF-i18n-001 committed `da9ef33fa` — Stage 8 finished. Next: Stage 9, human-in-the-loop gate)
+# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-13 by Inspector (Stage 9 live-account connect attempt surfaced B-STAGE9-01 — real production defect, Py_Initialize() never called when GC_WANT_GARMINCONNECT=ON/GC_WANT_PYTHON=OFF; DEC-052 accepted, builder dispatched. Blocking Stage 9's credential-entry gate until fixed.)
 # Per-id lifecycle status lives ONLY in .claude/workflow-garminconnect/traceability.md (DEC-015 SSOT).
 # For a DEC's status read decisions.md. For a finding's severity/disposition read findings.md.
 # ALL superseded cursor narrative -> .claude/workflow-garminconnect/archive/state-history.md
@@ -54,7 +54,20 @@ OPEN:      **STAGE 6 CLOSED 2026-09-08, COMMITTED `4a72d2279`** — all six REQs
            Stage 8, the current next gate.**
 BLOCKING:  — (none; B-R025-01/A3-R021b-F2/B-R029-01 all closed 2026-09-08, see above)
 CASCADE:   — (DEC-015 fully propagated; ledger_drift_lint.py EXIT=0)
-LAST_CLV:  clv_findings.py 2026-09-12 (re-run post-B-I18N001-01/02 findings-ledger addition,
+LAST_CLV:  clv_findings.py 2026-09-13 (re-run post-B-STAGE9-01..05 findings-ledger closure —
+           all five findings flipped to a closing disposition, `fixed`/`superseded`, once the
+           Inspector independently re-verified both build systems GREEN). **PASS — 0
+           OUTSTANDING / 404 OK over 404 rows** (400 + the 4 new B-STAGE9-02..05 rows;
+           B-STAGE9-01 itself was already counted). `ledger_drift_lint.py` re-run clean
+           (EXIT=0) against both edited files (STATE.md/findings.md).
+           Prior:
+           2026-09-13 (post-B-STAGE9-01 findings-ledger addition). **FAIL — 1 OUTSTANDING / 399
+           OK over 400 rows** — this was EXPECTED, not a ledger defect: B-STAGE9-01 was a
+           genuinely open blocking finding (DEC-052 accepted, builder dispatched, not yet
+           built), correctly carrying a `BLOCKS: {STAGE:9, TASK:REQ-002, TASK:REQ-009,
+           TASK:REQ-012, TASK:REQ-017}` effect set (MISSING-EFFECT=0) — now closed, see above.
+           Prior:
+           2026-09-12 (re-run post-B-I18N001-01/02 findings-ledger addition,
            REQ-NF-i18n-001/T-208 reviewer-caught-and-fixed findings). **PASS — 0 OUTSTANDING /
            399 OK over 399 rows** (397 + the 2 new B-I18N001 rows). `ledger_drift_lint.py` also
            re-run clean (EXIT=0). Inspector ran both directly against the just-edited files.
@@ -434,6 +447,47 @@ STAGE-9-KICKOFF (2026-09-12, user decision recorded live in conversation, not ye
            live-account connect/MFA/sync/disconnect flow (the other half of Stage 9) and a
            Linux installed-package smoke check are reachable from this session. Surface both
            gaps to the user rather than silently narrowing scope.
+
+STAGE-9-BLOCKER (2026-09-13, discovered on the FIRST real live-account connect attempt,
+           **code defect now FIXED, live-account re-test still pending**):
+           qmake build (`GC_WANT_GARMINCONNECT=ON`, `GC_WANT_PYTHON` OFF per the kickoff plan
+           above) + real launch + real credential entry all completed as planned, but every
+           connect attempt failed with the generic "Connection to Garmin Connect failed
+           (code: unknown)". Root-caused (not a credentials/network/package issue — a missing
+           `garminconnect`/`curl_cffi` pip-install was found and fixed first, necessary but NOT
+           sufficient): `Py_Initialize()` is never called anywhere reachable in this
+           configuration — the only interpreter-init call in the whole tree
+           (`src/Python/PythonEmbed.cpp:248`) is gated behind the separate `GC_WANT_PYTHON`
+           flag, contradicting `src.pro`/`gcconfig.pri.in`'s own "either feature independent of
+           the other" design claim. Invisible to all 40 prior `garmin-fast` GREEN runs because
+           `testGarminConnectPyAdapter.cpp`'s own `initTestCase()` calls `Py_Initialize()`
+           itself — REQ-002's "TEST VERIFIED (seam)" qualifier in traceability.md was exactly
+           this gap, now proven real by a live run. Logged as **B-STAGE9-01** (findings.md),
+           root cause independently confirmed by the reviewer (source + wiring + built binary's
+           own symbol table). **DEC-052 accepted** (shared process-level CPython bootstrap,
+           main-thread, feature-agnostic — Three-Options-scored against the reviewer's two
+           researched alternatives). New `src/Python/PyProcessBootstrap.{h,cpp}` + wiring in
+           `main.cpp`/`PythonEmbed.cpp`/`src.pro`. Two reviewer delta-check rounds on the diff
+           found and closed four further defects before this was GREEN: **B-STAGE9-02**
+           (qmake PCH-bypass missing for the new TU — `NO_PCH_SOURCES` routing added, mirroring
+           `PyEmbeddedAdapter.cpp`'s existing LSN-007 pattern), **B-STAGE9-03** (inittab hook
+           could lose the CPython-init race on an internal scripting-toggle restart — hook now
+           passed whenever `GC_WANT_PYTHON` is compiled in, regardless of runtime toggle),
+           **B-STAGE9-04** (documented GIL-release contract false on the externally-initialized
+           path — superseded by B-STAGE9-05, below), **B-STAGE9-05** (B-STAGE9-04's own fix
+           attempt introduced a real GIL-ownership bug — `PyGILState_Check()` alone can't tell
+           "GIL held incidentally" from "GIL held deliberately by an unrelated caller scope";
+           a regression test proved a genuine fatal Python abort against the buggy code before
+           the fix removed the unsafe release entirely and narrowed the documented contract).
+           All four findings closed; full detail in findings.md. **Independently re-verified by
+           the Inspector on both build systems after the final fix:** CMake `ctest -L
+           "garmin-fast|garmin-py"` 42/42 (0 failures, `testPyProcessBootstrap` 6/6), qmake
+           `make -j8` exit 0 with `PyProcessBootstrap.o` compiled via its own non-PCH rule and
+           the `GoldenCheetah` binary relinked. The credential-entry human-in-the-loop gate
+           itself is NOT re-opened — the app already launched and the user already entered real
+           credentials once; the SAME live-account test needs to be repeated now that the fix
+           is built, not a fresh credential round. **Next: Inspector rebuilds/launches the real
+           qmake release binary and re-attempts the live Garmin login with the user.**
 
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md

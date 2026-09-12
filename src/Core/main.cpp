@@ -45,6 +45,13 @@
 #include "PythonEmbed.h"
 #include "FixPySettings.h"
 #endif
+#if defined(GC_WANT_PYTHON) || defined(GC_WANT_GARMINCONNECT)
+// DEC-052 — B-STAGE9-01 fix: the shared, process-level CPython bootstrap.
+// Compiled/called whenever EITHER flag is on (an OR, not either alone) so
+// Garmin Connect's embedded-CPython bridge (DES-013) has a live interpreter
+// to check even when GC_WANT_PYTHON is off — see PyProcessBootstrap.h.
+#include "PyProcessBootstrap.h"
+#endif
 #include <signal.h>
 
 
@@ -502,6 +509,38 @@ main(int argc, char *argv[])
             python = new PythonEmbed(); // initialise python in this thread ?
             if (python->loaded == false) python=NULL;
         }
+#endif
+
+#if defined(GC_WANT_PYTHON) || defined(GC_WANT_GARMINCONNECT)
+        // DEC-052 (B-STAGE9-01): ensure the shared, process-level interpreter
+        // is up on the main thread before any Garmin worker can start (a
+        // wizard/worker only ever starts later, off a running MainWindow's
+        // event loop). When GC_WANT_PYTHON is on and Python scripting loaded
+        // above, PythonEmbed's own construction already performed the real
+        // initialization, so this is a cached no-op. It is the ONLY
+        // initializer when Python scripting is off/disabled/unavailable —
+        // exactly the real-world gap DES-013's Py_IsInitialized() fail-safe
+        // was silently masking (Cloud/PyEmbeddedAdapter.cpp folded every op
+        // to Unknown regardless of credentials/network in that case).
+        PyProcessBootstrap::Config bootCfg;
+#ifdef GC_WANT_PYTHON
+        // B-STAGE9-03: pass the inittab hook whenever GC_WANT_PYTHON is
+        // COMPILED in — regardless of whether scripting is enabled for this
+        // particular run (the `embed`/`noPy` check above). Whichever call
+        // reaches ensureInitialized() first across the process wins the real
+        // init and is the ONLY call that ever gets to run a preInitHook; if
+        // scripting is off/unavailable now but a user later enables it via
+        // an internal restart (this same do{}while(restarting) loop, no
+        // process exit), the interpreter would already be up by then with
+        // NO further chance to register "goldencheetah" — CPython requires
+        // PyImport_AppendInittab() before the interpreter's FIRST
+        // Py_Initialize, with no exceptions after the fact. Registering the
+        // entry is side-effect-free until something actually imports it, so
+        // it's always safe to offer here even when embed/noPy means nothing
+        // uses it on this particular run.
+        bootCfg.preInitHook = &registerGoldenCheetahInittab;
+#endif
+        PyProcessBootstrap::ensureInitialized(bootCfg);
 #endif
 
         //this is the path within the current directory where GC will look for

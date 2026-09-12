@@ -405,6 +405,50 @@ target_compile_features(testGarminConnectPyAdapter PRIVATE cxx_std_17)
 add_test(NAME testGarminConnectPyAdapter COMMAND testGarminConnectPyAdapter)
 set_tests_properties(testGarminConnectPyAdapter PROPERTIES LABELS "garmin-py")
 
+# --- DEC-052 (B-STAGE9-01 fix) — PyProcessBootstrap shared interpreter -------
+# Reproduces the ACTUAL production defect: with GC_WANT_PYTHON off, nothing in
+# the tree used to call Py_Initialize() at all, so PyEmbeddedAdapter's (DES-013)
+# Py_IsInitialized() fail-safe was permanently true-for-"down" and every real
+# Garmin auth attempt failed regardless of credentials/network. This target
+# links ONLY Cloud/PyEmbeddedAdapter.cpp + Python/PyProcessBootstrap.cpp — NO
+# PythonEmbed involved anywhere — the exact Garmin-ON/Python-OFF configuration
+# that shipped broken, and brings the interpreter up via
+# PyProcessBootstrap::ensureInitialized() alone (no test-side Py_Initialize()),
+# unlike testGarminConnectPyAdapter's initTestCase() above (which deliberately
+# keeps calling Py_Initialize() itself to test DES-013's separate, still-valid,
+# UNCHANGED pre-init fail-safe). Real linked CPython -> `garmin-py`, never
+# `garmin-fast`.
+add_executable(testPyProcessBootstrap
+    testPyProcessBootstrap.cpp
+    ${CMAKE_SOURCE_DIR}/src/Python/PyProcessBootstrap.cpp
+    ${CMAKE_SOURCE_DIR}/src/Python/PyProcessBootstrap.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/PyEmbeddedAdapter.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/PyEmbeddedAdapter.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminPyAdapter.h
+)
+
+target_include_directories(testPyProcessBootstrap PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+    ${CMAKE_SOURCE_DIR}/src/Python
+)
+
+target_compile_definitions(testPyProcessBootstrap PRIVATE
+    "GARMIN_PYSTUBS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/pystubs\""
+)
+
+find_package(Threads REQUIRED)
+target_link_libraries(testPyProcessBootstrap PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Test
+    Python3::Python
+    Threads::Threads
+)
+target_compile_features(testPyProcessBootstrap PRIVATE cxx_std_17)
+
+add_test(NAME testPyProcessBootstrap COMMAND testPyProcessBootstrap)
+set_tests_properties(testPyProcessBootstrap PROPERTIES LABELS "garmin-py")
+
 # --- TEST-010 — REQ-007 (slice 3/3): GarminWorker DownloadActivity op ---------
 # The worker-side download op, symmetric to TEST-004's authenticate coverage:
 # maps PyDownloadOutcome kinds to downloaded()/downloadFailed() signals and runs

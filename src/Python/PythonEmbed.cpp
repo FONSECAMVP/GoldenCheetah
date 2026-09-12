@@ -33,6 +33,12 @@
 #endif
 #include <Python.h>
 
+// DEC-052 — the process-level interpreter is now owned by the shared
+// PyProcessBootstrap (main.cpp calls it before any Garmin worker can start);
+// PythonEmbed only registers its inittab entry ahead of that first init and
+// then attaches under the GIL. See PyProcessBootstrap.h for the contract.
+#include "PyProcessBootstrap.h"
+
 // we only really support Python 3, so lets only work on that basis
 #if PY_MAJOR_VERSION >= 3
 #define PYTHON3_VERSION PY_MINOR_VERSION
@@ -40,12 +46,31 @@
 
 // global instance of embedded python
 PythonEmbed *python;
-PyThreadState *mainThreadState;
 
 // SIP module with GoldenCheetah Bindings
 extern "C" {
 extern PyObject *PyInit_goldencheetah(void);
 };
+
+// DEC-052 / B-STAGE9-03 preInitHook: CPython's inittab contract requires this
+// to run before the interpreter's FIRST Py_Initialize — PyProcessBootstrap
+// invokes it synchronously just before Py_InitializeFromConfig(), only on
+// the call that performs real first-time initialization. Declared in
+// PythonEmbed.h (external linkage, Python-free signature) so main.cpp can
+// pass it to PyProcessBootstrap::ensureInitialized() itself whenever
+// GC_WANT_PYTHON is compiled in — even on a run where scripting is currently
+// disabled (GC_EMBED_PYTHON false / --no-python) and PythonEmbed is never
+// constructed at all. Without that, a later internal restart
+// (main.cpp's do{}while(restarting), same process) that enables scripting
+// would find the interpreter already initialized by someone else (e.g. the
+// bare Garmin-only bootstrap call) with this hook never having run — CPython
+// requires the inittab populated before the FIRST Py_Initialize, no
+// exceptions after the fact.
+void registerGoldenCheetahInittab()
+{
+    printd("PyImport_AppendInittab: goldencheetah\n");
+    PyImport_AppendInittab("goldencheetah", PyInit_goldencheetah);
+}
 
 QString
 PythonEmbed::buildVersion()
@@ -239,13 +264,25 @@ PythonEmbed::PythonEmbed(const bool verbose, const bool interactive) : verbose(v
         printd("Py_SetProgramName: %s\n", pybin.toStdString().c_str()); // not wide char string as printd uses printf not wprintf
         Py_SetProgramName((wchar_t*) pybin.toStdWString().c_str());
 
-        // our own module
-        printd("PyImport_AppendInittab: goldencheetah\n");
-        PyImport_AppendInittab("goldencheetah", PyInit_goldencheetah);
+        // DEC-052 — bring up (or attach to) the shared, process-level
+        // interpreter. registerGoldenCheetahInittab() and the interpreter's
+        // FIRST Py_InitializeFromConfig() only run on whichever call reaches
+        // PyProcessBootstrap::ensureInitialized() first across the whole
+        // process (main.cpp calls this before any Garmin worker can start,
+        // so in practice that's always this call). The GIL state on return
+        // differs by path — released if this call initialized; left
+        // untouched/unknown if it merely observed a prior external init
+        // (B-STAGE9-05) — so PythonEmbed always acquires it explicitly below
+        // via PyGILState_Ensure() rather than branching on which path was
+        // taken: PyGILState_Ensure() is safe to call either way.
+        printd("PyProcessBootstrap::ensureInitialized\n");
+        PyProcessBootstrap::Config bootCfg;
+        bootCfg.preInitHook = &registerGoldenCheetahInittab;
+        PyProcessBootstrap::Result bootResult = PyProcessBootstrap::ensureInitialized(bootCfg);
 
-        // need to load the interpreter etc
-        printd("PyInitializeEx(0)\n");
-        Py_InitializeEx(0);
+        if (bootResult.ok) {
+
+        PyGILState_STATE embedGil = PyGILState_Ensure();
 
         // set path - allocate storage for it...
         //printd("set path=%s\n", pypath.toStdString().c_str());
@@ -322,15 +359,25 @@ PythonEmbed::PythonEmbed(const bool verbose, const bool interactive) : verbose(v
             PyErr_Print(); //make python print any errors
             PyErr_Clear(); //and clear them !
 
-            // prepare for threaded processing
-            printd("PyEval_InitThreads\n");
-            PyEval_InitThreads();
-            mainThreadState = PyEval_SaveThread();
+            // DEC-052: the shared bootstrap already released the GIL from
+            // its own initializing call exactly once (or observed an
+            // already-initialized interpreter and touched no thread state at
+            // all); PythonEmbed releases only the GIL IT acquired above
+            // (embedGil) instead of calling PyEval_SaveThread() again here —
+            // an unconditional second release on an already-initialized path
+            // is the exact hazard DEC-052 flags.
             loaded = true;
 
             printd("Embedding completes\n");
+            PyGILState_Release(embedGil);
             return;
         } // sys != NULL
+
+        PyGILState_Release(embedGil);
+
+        } else {
+            fprintf(stderr, "Python embedding failed: %s\n", bootResult.error.toUtf8().constData());
+        } // bootResult.ok
     } // pythonInstalled == true
 
     // if we get here loading failed
