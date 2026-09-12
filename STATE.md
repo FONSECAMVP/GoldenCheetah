@@ -1,4 +1,4 @@
-# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-12 by Inspector (Stage 8 — REQ-NF-Sec-001..004 all MET+COMMITTED; REQ-NF-Reliab-001+002 T-204..206 TEST VERIFIED, not yet committed)
+# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-12 by Inspector (Stage 8 — REQ-NF-Sec-001..004 all MET+COMMITTED; REQ-NF-Reliab-001+002 T-204..206 TEST VERIFIED, not yet committed; REQ-NF-Obs-001 T-207 TEST VERIFIED, not yet committed)
 # Per-id lifecycle status lives ONLY in .claude/workflow-garminconnect/traceability.md (DEC-015 SSOT).
 # For a DEC's status read decisions.md. For a finding's severity/disposition read findings.md.
 # ALL superseded cursor narrative -> .claude/workflow-garminconnect/archive/state-history.md
@@ -320,6 +320,41 @@ COUNTS-ADDENDUM-8 (2026-09-12, not yet folded into the block above): Stage 8's s
            corrected; no code changed. Builder now dispatched to build the structured `qDebug`
            trace logging at each sync op boundary (open/readdir/readFile/backfill) per DEC-051's
            Option B and a log-format-review test (prd.md:112's own verification method).
+
+COUNTS-ADDENDUM-9 (2026-09-12, not yet folded into the block above): Stage 8's sixth item,
+           REQ-NF-Obs-001 (structured logs), is now **TEST VERIFIED, not yet committed** —
+           the structured `qDebug` trace-logging clause DEC-051 (COUNTS-ADDENDUM-8) dispatched
+           to the builder is complete. New `gcObsTrace()` helper in `src/Cloud/GarminConnect.cpp`
+           emits one fixed key=value line at every `open()` ("auth") and `readdir()`
+           ("sync_incremental") exit; new T-207 (`openEmitsStructuredObsTraceOnSuccess`,
+           `openEmitsStructuredObsTraceWithKindOnFailurePaths`, `readdirEmitsStructuredObsTrace
+           OnSuccessFailureAndGuard`) pins prd.md:112's log-format-review verification method as
+           an executable test via a new `ObsCapture` Qt-message-handler hook. Two prior mechanical
+           fixes (blockingRestore out-param init ordering; enum-cast-before-switch UB in the two
+           Kind-mapper helpers) were applied directly by the predecessor Inspector session and
+           reviewer-confirmed GREEN. This session then dispatched the reviewer for a FULL delta-
+           check on the complete diff (not just those two fixes) and it came back BLOCKED with two
+           further real, reviewer-caught defects — both fixed directly by the Inspector, each
+           re-confirmed GREEN by a follow-up reviewer pass: **B-OBS001-01** (five of `readdir()`'s
+           guard-rejection trace calls omitted `activity_count=0`, contradicting the method's own
+           documented field set — fixed, regression assertion added) and **B-OBS001-02**
+           (`ObsCapture`'s test-only Qt message handler was not reentrant/thread-safe per Qt's own
+           logging docs — fixed in two rounds: a `QMutex` + `snapshot()` accessor, then a follow-up
+           fix locking the constructor's handler-install + `current` assignment together, after the
+           reviewer caught that first round left that assignment outside the lock). **Independently
+           re-verified by the Inspector at each step**: `ctest -R "testGarminConnectOpen|
+           testGarminConnectSync"` GREEN after every fix round, full `ctest -L garmin-fast` 40/40
+           re-run twice (once after the two guard/mutex fixes, once again after the constructor-race
+           fix) with 0 failures each time, `clang-format --dry-run --Werror` clean on all four
+           touched files (`src/Cloud/GarminConnect.cpp`, `GarminConnect.h`,
+           `testGarminConnectOpen.cpp`, `testGarminConnectSync.cpp`). `clv_findings.py` re-run PASS
+           (0 OUTSTANDING / 396 OK — 394 + the two new B-OBS001 rows), `ledger_drift_lint.py`
+           re-run clean (EXIT=0). WIKI.md's TEST registry corrected `next:garmin-T-207` →
+           `next:garmin-T-208` (T-207 was already consumed by this REQ; the pointer had gone
+           stale, same class of miss as the DEC-registry gap COUNTS-ADDENDUM-8 already fixed once
+           this session). **All Stage 8 REQ-NF items except REQ-NF-i18n-001 are now MET.** Next
+           Stage 8 item: REQ-NF-i18n-001 (tr() coverage), in progress with the builder (T-208
+           claimed).
 
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md

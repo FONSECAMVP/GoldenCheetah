@@ -52,6 +52,7 @@
 #include <QFile>
 #include <QHash>
 #include <QMetaObject>
+#include <QMutex>
 #include <QString>
 #include <QStringList>
 #include <QTemporaryDir>
@@ -114,6 +115,54 @@ bool connectAccount(const QString& athleteConfigDir)
     return GarminTokenStore::persistConnectSuccess(athleteConfigDir, kUid, kBlob);
 }
 
+// REQ-NF-Obs-001 (T-207) — installs a Qt message handler for its lifetime and
+// records every qDebug line, so the structured gc_obs trace can be asserted
+// literally (prd.md:112's verification method is log-format review). QtTest
+// runs slots sequentially, so a single capture at a time is safe. Same helper
+// as testGarminConnectOpen.cpp — kept file-local per this suite's fake style.
+// Qt permits a message handler to be invoked concurrently from any thread
+// (Qt's own logging docs require handlers to be reentrant), and this suite's
+// sync trace slots run a real worker-thread chain while capture is installed
+// — so the writer (hook) and the reader (snapshot) serialize on one mutex.
+class ObsCapture
+{
+  public:
+    ObsCapture()
+    {
+        QMutexLocker locker(&mutex_);
+        prev_ = qInstallMessageHandler(&ObsCapture::hook);
+        current = this;
+    }
+    ~ObsCapture()
+    {
+        QMutexLocker locker(&mutex_);
+        current = nullptr;
+        locker.unlock();
+        qInstallMessageHandler(prev_);
+    }
+    ObsCapture(const ObsCapture&) = delete;
+    ObsCapture& operator=(const ObsCapture&) = delete;
+
+    QStringList snapshot() const
+    {
+        QMutexLocker locker(&mutex_);
+        return lines_;
+    }
+
+  private:
+    static void hook(QtMsgType, const QMessageLogContext&, const QString& msg)
+    {
+        QMutexLocker locker(&mutex_);
+        if (current != nullptr)
+            current->lines_ << msg;
+    }
+    static ObsCapture* current;
+    static QMutex mutex_;
+    QStringList lines_;
+    QtMessageHandler prev_;
+};
+ObsCapture* ObsCapture::current = nullptr;
+QMutex ObsCapture::mutex_;
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -401,6 +450,105 @@ class TestGarminConnectSync : public QObject
 
         QCOMPARE(entries.size(), 0);
         QVERIFY2(!errors.isEmpty(), "a listFailed outcome must surface via the errors out-param");
+    }
+
+    // REQ-NF-Obs-001 (T-207) — DES-008's structured qDebug developer-trace
+    // (design.md:786: "Structured qDebug mirrors the same fields"): readdir()
+    // (op "sync_incremental") emits ONE parseable gc_obs line per call —
+    // outcome, error_code (empty on success, the GC-stable kind on failure,
+    // the stable guard label on local rejections), duration_ms, and
+    // activity_count (entries returned on success, 0 on failure).
+    void readdirEmitsStructuredObsTraceOnSuccessFailureAndGuard()
+    {
+        // (a) success — activity_count carries the returned entry count.
+        {
+            QTemporaryDir tmp;
+            QVERIFY(tmp.isValid());
+            QVERIFY2(connectAccount(tmp.path()), "pre-condition: the account must be connected (DEC-garmin-020)");
+
+            FakeListPyAdapter adapter;
+            adapter.scriptedListOutcome.kind = PyListOutcome::Success;
+            GarminActivitySummary a1;
+            a1.activityId = QStringLiteral("2001");
+            a1.startTimeGMT = QStringLiteral("2026-07-10 08:30:00");
+            GarminActivitySummary a2;
+            a2.activityId = QStringLiteral("2002");
+            a2.startTimeGMT = QStringLiteral("2026-07-11 18:05:11");
+            adapter.scriptedListOutcome.activities = {a1, a2};
+
+            GarminDownloadChain chain(&adapter);
+            GarminConnect gc(nullptr, chain.client(), tmp.path(), kUid);
+
+            ObsCapture capture;
+            QStringList errors;
+            QList<CloudServiceEntry*> entries = gc.readdir(QString(), errors, QDateTime(), QDateTime());
+            QCOMPARE(entries.size(), 2);
+
+            const QStringList trace = capture.snapshot().filter(QStringLiteral("gc_obs op=sync_incremental"));
+            QCOMPARE(trace.size(), 1);
+            QVERIFY2(trace.first().contains(QStringLiteral("outcome=ok")),
+                     qPrintable(QStringLiteral("expected outcome=ok in: %1").arg(trace.first())));
+            QVERIFY2(trace.first().contains(QStringLiteral("error_code= ")),
+                     qPrintable(QStringLiteral("expected empty error_code in: %1").arg(trace.first())));
+            QVERIFY2(trace.first().contains(QStringLiteral("activity_count=2")),
+                     qPrintable(QStringLiteral("expected activity_count=2 in: %1").arg(trace.first())));
+            QVERIFY2(trace.first().contains(QStringLiteral("duration_ms=")),
+                     qPrintable(QStringLiteral("expected duration_ms=<n> in: %1").arg(trace.first())));
+        }
+
+        // (b) list failure — the real GarminListFailure::Kind survives into the
+        // trace's error_code (RateLimited translates to rate_limit).
+        {
+            QTemporaryDir tmp;
+            QVERIFY(tmp.isValid());
+            QVERIFY2(connectAccount(tmp.path()), "pre-condition: the account must be connected (DEC-garmin-020)");
+
+            FakeListPyAdapter adapter;
+            adapter.scriptedListOutcome.kind = PyListOutcome::RateLimited;
+
+            GarminDownloadChain chain(&adapter);
+            GarminConnect gc(nullptr, chain.client(), tmp.path(), kUid);
+
+            ObsCapture capture;
+            QStringList errors;
+            QList<CloudServiceEntry*> entries = gc.readdir(QString(), errors, QDateTime(), QDateTime());
+            QCOMPARE(entries.size(), 0);
+
+            const QStringList trace = capture.snapshot().filter(QStringLiteral("gc_obs op=sync_incremental"));
+            QCOMPARE(trace.size(), 1);
+            QVERIFY2(trace.first().contains(QStringLiteral("outcome=fail")),
+                     qPrintable(QStringLiteral("expected outcome=fail in: %1").arg(trace.first())));
+            QVERIFY2(trace.first().contains(QStringLiteral("error_code=rate_limit")),
+                     qPrintable(QStringLiteral("expected error_code=rate_limit in: %1").arg(trace.first())));
+            QVERIFY2(trace.first().contains(QStringLiteral("activity_count=0")),
+                     qPrintable(QStringLiteral("expected activity_count=0 on failure in: %1").arg(trace.first())));
+        }
+
+        // (c) local guard rejection — no connected account: carries its stable
+        // trace label (the DEC-garmin-020 fail-closed path, before any I/O).
+        {
+            QTemporaryDir tmp;
+            QVERIFY(tmp.isValid());
+            // deliberately NOT connected: no tokens.json
+
+            FakeSyncClient fake;
+            GarminConnect gc(nullptr, &fake, tmp.path(), kUid);
+
+            ObsCapture capture;
+            QStringList errors;
+            QList<CloudServiceEntry*> entries = gc.readdir(QString(), errors, QDateTime(), QDateTime());
+            QCOMPARE(entries.size(), 0);
+
+            const QStringList trace = capture.snapshot().filter(QStringLiteral("gc_obs op=sync_incremental"));
+            QCOMPARE(trace.size(), 1);
+            QVERIFY2(trace.first().contains(QStringLiteral("outcome=fail")),
+                     qPrintable(QStringLiteral("expected outcome=fail in: %1").arg(trace.first())));
+            QVERIFY2(trace.first().contains(QStringLiteral("error_code=no_connected_account")),
+                     qPrintable(QStringLiteral("expected error_code=no_connected_account in: %1").arg(trace.first())));
+            QVERIFY2(
+                trace.first().contains(QStringLiteral("activity_count=0")),
+                qPrintable(QStringLiteral("expected activity_count=0 on guard rejection in: %1").arg(trace.first())));
+        }
     }
 
     // REQ-NF-Perf-002: a second sync/readdir while one is in progress is REJECTED

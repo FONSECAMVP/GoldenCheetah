@@ -197,7 +197,9 @@ class GarminConnect : public CloudService
         int failureKind = 0; // GarminDownloadFailure::Kind when !ok
     };
     DownloadResult blockingDownload(const QString& fmt, const QString& remoteid);
-    bool blockingRestore(const QString& tokenBlob);
+    // REQ-NF-Obs-001 (T-207) — failureKindOut (may be null) receives the
+    // GarminRestoreFailure::Kind when the restore fails (Unknown on timeout).
+    bool blockingRestore(const QString& tokenBlob, int* failureKindOut = nullptr);
 
     // REQ-008 Slice C — one blocking list op (since→summaries); bridges the async
     // client to a sync result via a local QEventLoop keyed on a fresh requestId,
@@ -206,6 +208,7 @@ class GarminConnect : public CloudService
     {
         bool ok = false;
         QVector<GarminActivitySummary> summaries;
+        int failureKind = 0; // GarminListFailure::Kind when !ok (mirrors DownloadResult)
     };
     ListResult blockingList(const QString& sinceGmt);
 

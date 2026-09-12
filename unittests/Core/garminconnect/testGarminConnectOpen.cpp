@@ -32,6 +32,7 @@
 #include <QDir>
 #include <QFile>
 #include <QMetaObject>
+#include <QMutex>
 #include <QString>
 #include <QStringList>
 #include <QTemporaryDir>
@@ -109,6 +110,53 @@ QString writeTokenFile(const QString& configDir, const QByteArray& bytes, uint m
 #endif
     return path;
 }
+
+// REQ-NF-Obs-001 (T-207) — installs a Qt message handler for its lifetime and
+// records every qDebug line, so the structured gc_obs trace can be asserted
+// literally (prd.md:112's verification method is log-format review). QtTest
+// runs slots sequentially, so a single capture at a time is safe. Qt permits
+// a message handler to be invoked concurrently from any thread (Qt's own
+// logging docs require handlers to be reentrant), so the writer (hook) and
+// the reader (snapshot) serialize on one mutex — same as testGarminConnectSync.cpp.
+class ObsCapture
+{
+  public:
+    ObsCapture()
+    {
+        QMutexLocker locker(&mutex_);
+        prev_ = qInstallMessageHandler(&ObsCapture::hook);
+        current = this;
+    }
+    ~ObsCapture()
+    {
+        QMutexLocker locker(&mutex_);
+        current = nullptr;
+        locker.unlock();
+        qInstallMessageHandler(prev_);
+    }
+    ObsCapture(const ObsCapture&) = delete;
+    ObsCapture& operator=(const ObsCapture&) = delete;
+
+    QStringList snapshot() const
+    {
+        QMutexLocker locker(&mutex_);
+        return lines_;
+    }
+
+  private:
+    static void hook(QtMsgType, const QMessageLogContext&, const QString& msg)
+    {
+        QMutexLocker locker(&mutex_);
+        if (current != nullptr)
+            current->lines_ << msg;
+    }
+    static ObsCapture* current;
+    static QMutex mutex_;
+    QStringList lines_;
+    QtMessageHandler prev_;
+};
+ObsCapture* ObsCapture::current = nullptr;
+QMutex ObsCapture::mutex_;
 } // namespace
 
 class TestGarminConnectOpen : public QObject
@@ -261,6 +309,84 @@ class TestGarminConnectOpen : public QObject
         QVERIFY2(errors.join(QLatin1Char(' ')).contains(QStringLiteral("sign in again")),
                  "torn content must route the user to a fresh sign-in, not a crash");
         QCOMPARE(fake.downloadCalls, 0);
+    }
+
+    // REQ-NF-Obs-001 (T-207) — DES-008's structured qDebug developer-trace
+    // (design.md:786: "Structured qDebug mirrors the same fields"): open()
+    // (op "auth") emits ONE parseable gc_obs line per call — op, outcome,
+    // error_code (empty on success, the GC-stable kind on failure), duration_ms.
+    // prd.md:112's verification method is log-format review; this pins the
+    // format as executable review.
+    void openEmitsStructuredObsTraceOnSuccess()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        writeTokenFile(tmp.path(), kBlob, 0600);
+
+        FakeRestoreClient fake;
+        fake.restoreOk = true;
+        GarminConnect gc(nullptr, &fake, tmp.path());
+
+        ObsCapture capture;
+        QStringList errors;
+        QVERIFY(gc.open(errors));
+
+        const QStringList trace = capture.snapshot().filter(QStringLiteral("gc_obs op=auth"));
+        QCOMPARE(trace.size(), 1);
+        QVERIFY2(trace.first().contains(QStringLiteral("outcome=ok")),
+                 qPrintable(QStringLiteral("expected outcome=ok in: %1").arg(trace.first())));
+        // error_code present but EMPTY on success — the field set is fixed so a
+        // log parser can rely on the shape.
+        QVERIFY2(trace.first().contains(QStringLiteral("error_code= ")),
+                 qPrintable(QStringLiteral("expected empty error_code in: %1").arg(trace.first())));
+        QVERIFY2(trace.first().contains(QStringLiteral("duration_ms=")),
+                 qPrintable(QStringLiteral("expected duration_ms=<n> in: %1").arg(trace.first())));
+    }
+
+    // Every failure path carries the GC-stable code as its error_code field:
+    // the loadChecked enum (not_found / token_permissions_rejected) and the
+    // real GarminRestoreFailure::Kind (session_expired / network / unknown).
+    void openEmitsStructuredObsTraceWithKindOnFailurePaths()
+    {
+        // (a) no stored session -> LoadStatus::NotFound -> not_found
+        {
+            QTemporaryDir tmp;
+            QVERIFY(tmp.isValid());
+            FakeRestoreClient fake;
+            GarminConnect gc(nullptr, &fake, tmp.path());
+
+            ObsCapture capture;
+            QStringList errors;
+            QVERIFY(!gc.open(errors));
+
+            const QStringList trace = capture.snapshot().filter(QStringLiteral("gc_obs op=auth"));
+            QCOMPARE(trace.size(), 1);
+            QVERIFY2(trace.first().contains(QStringLiteral("outcome=fail")),
+                     qPrintable(QStringLiteral("expected outcome=fail in: %1").arg(trace.first())));
+            QVERIFY2(trace.first().contains(QStringLiteral("error_code=not_found")),
+                     qPrintable(QStringLiteral("expected error_code=not_found in: %1").arg(trace.first())));
+        }
+
+        // (b) restore failure -> the actual GarminRestoreFailure::Kind
+        {
+            QTemporaryDir tmp;
+            QVERIFY(tmp.isValid());
+            writeTokenFile(tmp.path(), kBlob, 0600);
+
+            FakeRestoreClient fake;
+            fake.restoreOk = false;
+            fake.restoreKind = GarminRestoreFailure::SessionExpired;
+            GarminConnect gc(nullptr, &fake, tmp.path());
+
+            ObsCapture capture;
+            QStringList errors;
+            QVERIFY(!gc.open(errors));
+
+            const QStringList trace = capture.snapshot().filter(QStringLiteral("gc_obs op=auth"));
+            QCOMPARE(trace.size(), 1);
+            QVERIFY2(trace.first().contains(QStringLiteral("error_code=session_expired")),
+                     qPrintable(QStringLiteral("expected error_code=session_expired in: %1").arg(trace.first())));
+        }
     }
 
     // B-R010-04 — the backfill dialog (REQ-010 UI wiring) is handed an

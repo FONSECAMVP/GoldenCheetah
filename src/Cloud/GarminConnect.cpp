@@ -29,6 +29,8 @@
 #include <QBuffer>
 #include <QColor>
 #include <QDateTime>
+#include <QDebug>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QTimer>
 #include <QUuid>
@@ -50,6 +52,63 @@ constexpr int kDefaultSinceDays = 7;
 // this format (DES-010). Parsing it to a QDateTime lets readdir carry it as the
 // CloudServiceEntry timestamp; the raw string is what gets recorded in the sidecar.
 const char* const kGarminTimeFormat = "yyyy-MM-dd HH:mm:ss";
+
+// REQ-NF-Obs-001 (T-207) — DES-008's structured developer-trace mirror
+// (design.md:786): every instrumented sync op emits ONE qDebug line with the
+// ErrorBus event's fields in a fixed, parseable key=value shape. DEC-051: the
+// user-facing half of REQ-NF-Obs-001 is the existing errors out-param +
+// readFailed signal (DEC-023); these lines are the developer-trace half only.
+//
+// Wire format (deliberately chosen, no prior convention existed):
+//   gc_obs op=<op> outcome=<ok|fail> error_code=<code> duration_ms=<ms>
+//     [+ " activity_count=<n>" for ops that return activities]
+// error_code is EMPTY on success and otherwise the GC-stable kind — the
+// GarminRestoreFailure/GarminListFailure enum names below, the
+// GarminTokenStore::LoadStatus names, or a stable label for the local guard
+// paths that carry no enum (sync_in_progress / no_session /
+// session_superseded / no_connected_account / no_uid). Field order and
+// presence are fixed per op so a log parser can rely on the shape.
+void gcObsTrace(const char* op, bool ok, const char* errorCode, qint64 durationMs, int activityCount = -1)
+{
+    QString line =
+        QStringLiteral("gc_obs op=%1 outcome=%2 error_code=%3 duration_ms=%4")
+            .arg(QString::fromLatin1(op), QString::fromLatin1(ok ? "ok" : "fail"), QString::fromLatin1(errorCode))
+            .arg(durationMs);
+    if (activityCount >= 0)
+        line += QStringLiteral(" activity_count=%1").arg(activityCount);
+    qDebug().noquote() << line;
+}
+
+// GC-stable kind names (DES-008 addendum: keyed on the Kind enums, never on a
+// raw exception-class string). Switches on the raw int (not a cast-first
+// static_cast<Kind>(kind)) — an out-of-range int converted to an unscoped enum
+// before the switch is undefined behavior per [expr.static.cast]; the default
+// case only protects a switch-on-int, not a pre-switch conversion.
+const char* garminRestoreKindCode(int kind)
+{
+    switch (kind) {
+    case static_cast<int>(GarminRestoreFailure::SessionExpired):
+        return "session_expired";
+    case static_cast<int>(GarminRestoreFailure::Network):
+        return "network";
+    case static_cast<int>(GarminRestoreFailure::Unknown):
+        break;
+    }
+    return "unknown";
+}
+
+const char* garminListKindCode(int kind)
+{
+    switch (kind) {
+    case static_cast<int>(GarminListFailure::Network):
+        return "network";
+    case static_cast<int>(GarminListFailure::RateLimit):
+        return "rate_limit";
+    case static_cast<int>(GarminListFailure::Unknown):
+        break;
+    }
+    return "unknown";
+}
 
 QDateTime parseGarminTime(const QString& s)
 {
@@ -251,8 +310,15 @@ bool GarminConnect::backfillSessionStillValid()
     return downloadResultStillWanted();
 }
 
-bool GarminConnect::blockingRestore(const QString& tokenBlob)
+bool GarminConnect::blockingRestore(const QString& tokenBlob, int* failureKindOut)
 {
+    // REQ-NF-Obs-001 (T-207) — the kind is needed for the trace's error_code;
+    // Unknown unless a restoreFailed actually carries one (timeout stays Unknown).
+    // Set on EVERY exit path, including the no-client early return below —
+    // the out-param contract holds regardless of which guard rejects first.
+    if (failureKindOut != nullptr)
+        *failureKindOut = static_cast<int>(GarminRestoreFailure::Unknown);
+
     IGarminDownloadClient* client = m_client;
     if (!client)
         return false;
@@ -270,14 +336,16 @@ bool GarminConnect::blockingRestore(const QString& tokenBlob)
             ok = true;
             loop.quit();
         });
-    const QMetaObject::Connection c2 =
-        QObject::connect(client, &IGarminDownloadClient::restoreFailed, &loop, [&](QUuid id, GarminRestoreFailure) {
-            if (done || id != reqId)
-                return;
-            done = true;
-            ok = false;
-            loop.quit();
-        });
+    const QMetaObject::Connection c2 = QObject::connect(client, &IGarminDownloadClient::restoreFailed, &loop,
+                                                        [&](QUuid id, GarminRestoreFailure failure) {
+                                                            if (done || id != reqId)
+                                                                return;
+                                                            done = true;
+                                                            ok = false;
+                                                            if (failureKindOut != nullptr)
+                                                                *failureKindOut = static_cast<int>(failure.kind);
+                                                            loop.quit();
+                                                        });
     QTimer::singleShot(kRestoreTimeoutMs, &loop, [&]() {
         if (!done) {
             done = true;
@@ -340,6 +408,7 @@ GarminConnect::DownloadResult GarminConnect::blockingDownload(const QString& fmt
 GarminConnect::ListResult GarminConnect::blockingList(const QString& sinceGmt)
 {
     ListResult res;
+    res.failureKind = static_cast<int>(GarminListFailure::Unknown); // REQ-NF-Obs-001 (T-207): timeout stays Unknown
     IGarminDownloadClient* client = m_client;
     if (!client)
         return res;
@@ -358,11 +427,12 @@ GarminConnect::ListResult GarminConnect::blockingList(const QString& sinceGmt)
                                                             loop.quit();
                                                         });
     const QMetaObject::Connection c2 =
-        QObject::connect(client, &IGarminDownloadClient::listFailed, &loop, [&](QUuid id, GarminListFailure) {
+        QObject::connect(client, &IGarminDownloadClient::listFailed, &loop, [&](QUuid id, GarminListFailure failure) {
             if (done || id != reqId)
                 return;
             done = true;
             res.ok = false;
+            res.failureKind = static_cast<int>(failure.kind); // REQ-NF-Obs-001 (T-207)
             loop.quit();
         });
     QTimer::singleShot(kListTimeoutMs, &loop, [&]() {
@@ -382,9 +452,15 @@ GarminConnect::ListResult GarminConnect::blockingList(const QString& sinceGmt)
 
 bool GarminConnect::open(QStringList& errors)
 {
+    // REQ-NF-Obs-001 (T-207) — op "auth": one structured trace line per call,
+    // success and every early-return failure (DES-008 fields, key=value shape).
+    QElapsedTimer obsTimer;
+    obsTimer.start();
+
     IGarminDownloadClient* client = ensureClient();
     if (!client) {
         errors << tr("Garmin Connect: no embedded session is available.");
+        gcObsTrace("auth", false, "no_session", obsTimer.elapsed());
         return false;
     }
 
@@ -396,17 +472,21 @@ bool GarminConnect::open(QStringList& errors)
     if (r.isRejected()) {
         errors << tr("Garmin Connect: the stored session file '%1' has unsafe permissions; please sign in again.")
                       .arg(r.path);
+        gcObsTrace("auth", false, "token_permissions_rejected", obsTimer.elapsed());
         return false;
     }
     // No stored session yet — the caller must run the credentials wizard.
     if (!r.isOk()) {
         errors << tr("Garmin Connect: no stored session found; please sign in again.");
+        gcObsTrace("auth", false, "not_found", obsTimer.elapsed());
         return false;
     }
 
     // REQ-005 / REQ-NF-Compat-001(b): silent reauth from the stored TOKENS only.
-    if (!blockingRestore(QString::fromUtf8(r.bytes))) {
+    int restoreFailureKind = static_cast<int>(GarminRestoreFailure::Unknown);
+    if (!blockingRestore(QString::fromUtf8(r.bytes), &restoreFailureKind)) {
         errors << tr("Garmin Connect: could not restore the stored session; please sign in again.");
+        gcObsTrace("auth", false, garminRestoreKindCode(restoreFailureKind), obsTimer.elapsed());
         return false;
     }
 
@@ -416,6 +496,7 @@ bool GarminConnect::open(QStringList& errors)
     // instance, correctly rebinds to the account that is current now. A FAILED
     // open() latches nothing — it never claimed a session.
     latchSession();
+    gcObsTrace("auth", true, "", obsTimer.elapsed());
     return true;
 }
 
@@ -644,10 +725,17 @@ QList<CloudServiceEntry*> GarminConnect::readdir(QString path, QStringList& erro
     Q_UNUSED(to);
     QList<CloudServiceEntry*> returning;
 
+    // REQ-NF-Obs-001 (T-207) — op "sync_incremental": one structured trace line
+    // per call — guard rejections, list failures, and the success return (with
+    // activity_count = entries returned) all carry DES-008's fields.
+    QElapsedTimer obsTimer;
+    obsTimer.start();
+
     // DES-010 step 1 / REQ-NF-Perf-002 — reject a concurrent sync; the running
     // one continues. FIRST check, before any I/O or worker op.
     if (m_syncInProgress) {
         errors << tr("Garmin Connect: sync already in progress.");
+        gcObsTrace("sync_incremental", false, "sync_in_progress", obsTimer.elapsed(), 0);
         return returning;
     }
     m_syncInProgress = true;
@@ -661,6 +749,7 @@ QList<CloudServiceEntry*> GarminConnect::readdir(QString path, QStringList& erro
     IGarminDownloadClient* client = m_client;
     if (client == nullptr) {
         errors << tr("Garmin Connect: no embedded session is available.");
+        gcObsTrace("sync_incremental", false, "no_session", obsTimer.elapsed(), 0);
         return returning;
     }
 
@@ -675,6 +764,7 @@ QList<CloudServiceEntry*> GarminConnect::readdir(QString path, QStringList& erro
     // disk I/O.
     if (sessionSuperseded()) {
         errors << tr("Garmin Connect: this session's account was disconnected; please sign in again.");
+        gcObsTrace("sync_incremental", false, "session_superseded", obsTimer.elapsed(), 0);
         return returning;
     }
 
@@ -685,6 +775,7 @@ QList<CloudServiceEntry*> GarminConnect::readdir(QString path, QStringList& erro
     // deleted on its own, leaves the uid resolvable while the account is not usable.
     if (!accountStillConnected()) {
         errors << tr("Garmin Connect: no connected account; please sign in again.");
+        gcObsTrace("sync_incremental", false, "no_connected_account", obsTimer.elapsed(), 0);
         return returning;
     }
 
@@ -697,6 +788,7 @@ QList<CloudServiceEntry*> GarminConnect::readdir(QString path, QStringList& erro
     const QString uid = m_openedUserId;
     if (uid.isEmpty()) {
         errors << tr("Garmin Connect: no connected account; please sign in again.");
+        gcObsTrace("sync_incremental", false, "no_uid", obsTimer.elapsed(), 0);
         return returning;
     }
 
@@ -720,6 +812,7 @@ QList<CloudServiceEntry*> GarminConnect::readdir(QString path, QStringList& erro
     const ListResult listed = blockingList(sinceGmt);
     if (!listed.ok) {
         errors << tr("Garmin Connect: could not list activities; please try again.");
+        gcObsTrace("sync_incremental", false, garminListKindCode(listed.failureKind), obsTimer.elapsed(), 0);
         return returning;
     }
 
@@ -742,6 +835,7 @@ QList<CloudServiceEntry*> GarminConnect::readdir(QString path, QStringList& erro
         m_pendingStartTimes.insert(s.activityId, s.startTimeGMT);
     }
 
+    gcObsTrace("sync_incremental", true, "", obsTimer.elapsed(), returning.size());
     return returning;
 }
 
