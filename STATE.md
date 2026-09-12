@@ -70,7 +70,7 @@ NEXT_GATE: **Stage 8's first item, REQ-NF-Build-001 (T-202, build regression gua
            disclosure), is **TEST VERIFIED + COMMITTED `07501c477` 2026-09-12** — see
            COUNTS-ADDENDUM-5 below. All four REQ-NF-Sec sub-items now MET. Stage 8's fourth item,
            REQ-NF-Reliab-001..002 (retry schedule + never-partial-write resumability), is
-           **TEST VERIFIED, not yet committed** (2026-09-12) — see COUNTS-ADDENDUM-6 below. Next
+           **TEST VERIFIED + COMMITTED `51bc6b5a8`** (2026-09-12) — see COUNTS-ADDENDUM-6 below. Next
            atomic unit: the remaining Stage 8 NF items (Perf/Obs/i18n bars — none started, see
            traceability.md's REQ-NF-Perf-001..003/Obs-001/i18n-001 rows).
            Stage 6 CLOSED + COMMITTED
@@ -257,8 +257,9 @@ COUNTS-ADDENDUM-6 (2026-09-12, not yet folded into the block above): Stage 8's f
            no collateral. Footprint exactly 3 files, all test-only; every production file touched
            during RED (`gc_rate.py`, `AtomicFile.cpp`) reverted and `git status`-verified clean.
            Flagged: REQ-NF-Reliab-001's "UI inspection" clause (permanent failures surface with
-           the Garmin error code) is separate surface, not addressed here. **Awaiting commit.**
-           Next Stage 8 item: the remaining NF bars (Perf/Obs/i18n — none started).
+           the Garmin error code) is separate surface, not addressed here. **Committed
+           `51bc6b5a8` 2026-09-12** (6 files: STATE.md/WIKI.md/traceability.md + the three test
+           files). Next Stage 8 item: the remaining NF bars (Perf/Obs/i18n — none started).
 
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md
