@@ -60,6 +60,12 @@ Compact schema per `references/formats.md` § `decisions.md`. **The recap source
 | DEC-043 | `CloudServiceAutoDownload` cross-thread lifetime UAF, `readComplete`/`readFailed` vs. athlete-tab teardown (A3-R028e-F1) → **Option C, guards in the completion slots PLUS cooperative cancel-and-`wait()` at teardown (extends DEC-040's `CancelToken`)** | accepted · **BUILT + execution-verified 2026-09-05 (TEST-159/TEST-160; watchdog 170/170 + syncdialog 99/99 both backends, `ctest -L garmin-fast` 27/27, app target linked) — closes A3-R028e-F1** | 2026-09-05 |
 | DEC-044 | `RideFile::appendOrUpdatePoint` reads a deleted `RideFilePoint*` (`RideFile.cpp:1658` delete vs. `:1709-1711` unconditional read) (B-R029-01) → **Option A, alias the surviving point: track whichever pointer is still valid after the branch and pass that to `updateMin`/`updateMax`/`updateAvg`, not the possibly-deleted `point`** | accepted · **BUILT + mutation-verified 2026-09-08 (T-173, `testGarminConnectFileIOLifetime` 5/5 both backends, zero ASan reports, orchestrator-independently-rerun) — closes B-R029-01** | 2026-09-08 |
 | DEC-045 | REQ-014 translation locus + keying (recording-only, build predates this entry) → **confirms DES-008's page-layer locus (worker/adapter stay raw); keys `GarminErrors::translate()` on `GarminAuthFailure::Kind`, not DES-008's sample (raw exception class name), which does not survive the Python→adapter→worker pipeline** | accepted · recording-only · **BUILT + committed `ac1fa40ba` (2026-09-08); T-177 (`testGarminConnectErrors`, 4/4)** | 2026-09-10 (build 2026-09-08) |
+| DEC-046 | REQ-015 CAPTCHA detection → defer, no structured signal survives the real `garminconnect` dependency | accepted (user decision, option 2 of 3) · no code written | 2026-09-10 |
+| DEC-047 | REQ-010/DES-009 pagination model → per-activity pacing/checkpointing, not per-page, against the real `garminconnect` dependency | accepted · recording-only · **BUILT** (formalizes a resolution already implemented + reviewer-confirmed during REQ-010's build) | 2026-09-10 |
+| DEC-048 | B-R010-04 UI wiring scope split → fix the new backfill-local exposure now, defer `GarminConnect`'s own internal context-handling gap | accepted · recording-only · **BUILT + committed `2b8cedae3`** | 2026-09-10/11 |
+| DEC-049 | REQ-NF-Pkg-001 scope expansion → port Garmin sources into the qmake release build before any installer/packaging work | accepted (user decision, live during session) · **BUILT + committed `e609215f0`** | 2026-09-11 |
+| DEC-050 | REQ-013 scope → narrow the first slice to DOB/weight/height, defer HR-max/FTP | accepted (user decision, option 1 of 3) · **BUILT + committed `e17262a0b`** | 2026-09-12 |
+| DEC-051 | REQ-NF-Obs-001's "ErrorBus" clause → satisfied by the project's real, already-decided error channels; build only the missing structured `qDebug` trace logging | accepted (Inspector, Three-Options Doctrine — ordinary architecture reconciliation, not a human-in-the-loop gate) | 2026-09-12 |
 
 ### Dormant index
 
@@ -2499,3 +2505,40 @@ B — matches the user's explicit instruction and keeps the REQ buildable now wi
 grep -n "REQ-013" .claude/workflow-garminconnect/traceability.md   # expect the row to cite DEC-050
 grep -n "hr_max\|ftp_w" .claude/workflow-garminconnect/design.md   # expect DES-011 to mark these deferred, not silently removed
 find src/Cloud -iname "GarminProfile*"   # expect: no matches yet (nothing built until the builder dispatch runs)
+
+---
+
+## DEC-051 — REQ-NF-Obs-001's "ErrorBus" clause: satisfied by the project's real error channels; build only the missing structured trace logging
+
+- Status: accepted (Inspector, Three-Options Doctrine — an ordinary architecture reconciliation against a design-doc premise already disproven by DEC-022, not a human-in-the-loop gate)
+- Reversibility: cheap — this entry changes no code, only which existing mechanism REQ-NF-Obs-001's first clause is scored against; the new `qDebug` logging it authorizes is additive
+- Decided / last-reviewed: 2026-09-12
+- Serves: REQ-NF-Obs-001
+- Dependents: `GarminConnect.{h,cpp}` (sync op sites: open/readdir/readFile/backfill), any new structured-log test
+- Origin: dispatching Stage 8's next atomic unit surfaced that DES-008's "ErrorBus" sample (`design.md:774`) describes a channel DEC-022 already found **does not exist in the tree** ("`ErrorBus` DOES NOT EXIST — only DES-008 prose and a TODO at `GarminConnect.cpp:649`"), and DEC-023 already chose a different, real replacement (the `readFailed(QByteArray*, QString, QString)` signal) for the one place that gap actually blocked shipping. REQ-NF-Obs-001 was never updated to reflect that.
+
+### The problem
+`design.md:774-786`'s DES-008 sample has every sync op emit an `ErrorBus::emit({...})` struct with fields `{service, op, severity, duration_ms, activity_count, garmin_error_code, message}`. No `ErrorBus` class or free function exists anywhere in `src/` (confirmed by grep — the only three hits are `IGarminPyAdapter.h`/`GarminWorker.h`/`GarminConnect.cpp` referencing REQ-NF-Obs-001 in comments, not an implementation). DEC-022 (2026-08-04) already surfaced and rejected building this exact thing as "Option B — new out-of-band error channel (ErrorBus)... REJECTED: ErrorBus DOES NOT EXIST in the tree... It would be a new subsystem". DEC-023 (2026-08-04) chose instead a narrowly-scoped `readFailed` signal on `CloudService`, now built and tested, that already carries user-facing sync errors to both `CloudServiceSyncDialog` and `CloudServiceAutoDownload`. Separately, `GarminConnect::open()`/`readdir()` already surface errors via the existing `QStringList& errors` out-param convention shared by every `CloudService` (extensively tested — e.g. `openFailsWhenRestoreFails`, `listFailureSurfacesViaErrorsAndReturnsEmptyList`). REQ-NF-Obs-001's user-facing-errors clause is, in substance, already met by these two real mechanisms; only the requirement's own wording still names the never-built one. The genuinely open piece is DES-008's *second* sentence — "Structured `qDebug` mirrors the same fields for developer trace logging" — no such structured logging exists anywhere in the Garmin sources today (grepped for a duration/activity-count/error-code-keyed `qDebug` call, zero hits).
+
+### Resolution
+Score REQ-NF-Obs-001's "user-facing errors" clause as MET via the already-built, already-tested `readFailed` signal (DEC-023) + the `errors` out-param convention (DES-001-era, used throughout `GarminConnect`) — no new subsystem. Build ONLY the missing half: structured `qDebug` developer-trace logging at each sync op boundary (open/readdir/readFile/backfill), carrying the fields DES-008 specifies (op name, duration, activity count, Garmin error code — `service`/`severity` folded in as the op-name prefix and success/failure already implicit in whether an error code is present, since there is no severity enum anywhere else in this codebase to reuse). `design.md`'s DES-008 gets a dated addendum (mirroring DEC-045's own addendum pattern) marking the `ErrorBus` sample superseded-in-practice by DEC-022/023, not deleted (historical record).
+
+### Alternatives
+| Opt | Rel | Scal | Maint | BP |
+|---|---|---|---|---|
+| **B — reuse `readFailed`+`errors` for the user-facing half, build only `qDebug` trace logging — CHOSEN** | 5 — reuses two mechanisms already shipped and covered by existing tests; zero new failure surface for the user-facing half | 5 — no new subsystem to scale | 5 — avoids a second, parallel error-reporting channel alongside DEC-023's chosen one; one less thing to keep in sync | 5 — directly consistent with DEC-022's own explicit rejection of a new ErrorBus channel; doesn't re-litigate a settled decision |
+| A — build the full `ErrorBus` class DES-008 describes | 2 — new, unexercised subsystem; DEC-022 already flagged the identical proposal as leaving errors as "a side channel... while the loop still stalled" for the one case it was tested against | 2 — a second global bus is a wider blast radius than one REQ needs | 1 — now TWO overlapping error-reporting mechanisms (`readFailed`/`errors` AND `ErrorBus`) with no clear rule for which callers use which — a maintenance trap | 1 — contradicts DEC-022's own prior rejection of this exact option with no new information to justify reopening it |
+| C — defer REQ-NF-Obs-001 entirely as "not buildable as scoped" (REQ-015/DEC-046 precedent) | 5 — no risk | 5 — nothing to maintain | 3 — leaves a real, easily-closeable gap (no structured trace logging at all) sitting open indefinitely | 2 — REQ-015's dead-end was a genuine external-dependency wall; this REQ has no such wall, just a stale requirement description — treating them the same undersells what's actually buildable |
+
+### Cascade impact
+- B (chosen): `traceability.md`'s REQ-NF-Obs-001 row updated to cite this DEC and split the requirement into its two now-separately-scored halves. `design.md`'s DES-008 gets a dated addendum. Builder dispatched to add structured `qDebug` calls + a log-format-review test (prd.md:112's own verification method) at the sync op boundaries.
+- A: would need to design the `ErrorBus` class itself (thread-safety, subscriber model, retention) before any REQ-NF-Obs-001 code — a materially bigger unit than this REQ's scope.
+- C: would need REQ-NF-Obs-001's row rewritten to DEFERRED, discarding the already-met user-facing-error coverage along with the genuinely-missing trace-logging piece.
+
+### Chosen
+B — reuses proven mechanisms, adds the one real gap, and does not reopen a question DEC-022 already answered.
+
+### Alignment probe
+grep -rn "ErrorBus" src/Cloud/   # expect: still zero implementation hits (comments only) — B does not build one
+grep -n "readFailed" src/Cloud/CloudService.h   # expect: the DEC-023 signal, unchanged
+grep -n "qDebug" src/Cloud/GarminConnect.cpp   # expect: new structured calls at sync op boundaries after the builder dispatch runs

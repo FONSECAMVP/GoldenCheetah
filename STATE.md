@@ -73,7 +73,17 @@ NEXT_GATE: **Stage 8's first item, REQ-NF-Build-001 (T-202, build regression gua
            **TEST VERIFIED + COMMITTED `51bc6b5a8`** (2026-09-12) — see COUNTS-ADDENDUM-6 below.
            Stage 8's fifth item, REQ-NF-Perf-002, was found **already MET** on inspection
            (pre-existing test coverage, ledger was stale) — see COUNTS-ADDENDUM-7 below.
-           Next atomic unit: the remaining Stage 8 NF items (Obs-001/i18n-001, both NOT STARTED;
+           Stage 8's sixth item, REQ-NF-Obs-001, needed a technical decision before it was
+           buildable — DES-008's "ErrorBus" sample turned out to name a mechanism DEC-022 already
+           found doesn't exist in the tree; **DEC-051** (Inspector, Three-Options Doctrine)
+           reconciles this: the user-facing-errors clause is MET via DEC-023's `readFailed` signal
+           + the pre-existing `errors` out-param convention, and only structured `qDebug`
+           developer-trace logging remains genuinely open — see COUNTS-ADDENDUM-8 below, now
+           dispatched to the builder. Also fixed this pass: the DEC registry (WIKI.md said
+           `next:garmin-044`, true max was DEC-050) and the decisions.md Active index (DEC-046..050
+           existed as full entries but were never added to the index table — the exact "no gaps"
+           failure the index's own header warns about) — both ledger-hygiene misses, no code
+           changed. Next atomic unit after the builder returns: REQ-NF-i18n-001 (NOT STARTED;
            NF-Perf-001/003's end-to-end clauses remain flagged manual-only, not CI-automatable).
            Stage 6 CLOSED + COMMITTED
            2026-09-08 (`4a72d2279`, all six REQs TEST VERIFIED, all findings dispositioned, CLV
@@ -282,6 +292,34 @@ COUNTS-ADDENDUM-7 (2026-09-12, not yet folded into the block above): Stage 8's f
            as a manual Phase-close item, same disposition as the pre-existing A3-R007-02/CLV WARN.
            No commit — ledger-only correction. Next Stage 8 item: REQ-NF-Obs-001 (structured
            ErrorBus logging) or REQ-NF-i18n-001 (tr() coverage), both NOT STARTED.
+
+COUNTS-ADDENDUM-8 (2026-09-12, not yet folded into the block above): Stage 8's sixth item,
+           REQ-NF-Obs-001 (structured logs), required a technical decision before it was buildable
+           as originally worded. DES-008's sample had every sync op emit through an `ErrorBus`
+           channel that a grep of `src/` confirms was never implemented (only three comment hits
+           in `IGarminPyAdapter.h`/`GarminWorker.h`/`GarminConnect.cpp`) — and DEC-022 (2026-08-04)
+           had already found and rejected this exact gap while resolving B-R017-06 ("ErrorBus DOES
+           NOT EXIST in the tree... would be a new subsystem"), choosing instead DEC-023's
+           `readFailed` signal. REQ-NF-Obs-001 was never updated to reflect that. **DEC-051**
+           (Inspector's own Three-Options Doctrine scoring — an ordinary architecture
+           reconciliation, not a human-in-the-loop gate) resolves it: Option B (reuse `readFailed`
+           + the pre-existing `errors` out-param convention for the user-facing half; build only
+           the missing `qDebug` structured trace logging) scored 5/5/5/5 against reliability/
+           scalability/maintainability/best-practices, clearly ahead of Option A (build the
+           never-existing `ErrorBus` class DES-008 described — would create a second, overlapping
+           error-reporting mechanism alongside DEC-023's chosen one) and Option C (defer the whole
+           REQ, which would discard the already-met user-facing-error coverage along with the one
+           genuinely missing piece). `traceability.md`'s REQ-NF-Obs-001 row and `design.md`'s
+           DES-008 both updated (dated addendum, sample kept verbatim for historical record, not
+           deleted). **Two further ledger-hygiene defects found and fixed while researching this:**
+           the DEC registry (`WIKI.md` said `next:garmin-044`; true max via
+           `grep -oE 'DEC-[0-9]+' decisions.md \| sort -u` was DEC-050) and the decisions.md Active
+           index table, which stopped at DEC-045 — DEC-046 through DEC-050 existed as full entries
+           in the file but were never added to the index list, the exact "no gaps" failure the
+           index's own header explicitly warns against (citing the prior VAL-017 incident). Both
+           corrected; no code changed. Builder now dispatched to build the structured `qDebug`
+           trace logging at each sync op boundary (open/readdir/readFile/backfill) per DEC-051's
+           Option B and a log-format-review test (prd.md:112's own verification method).
 
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md

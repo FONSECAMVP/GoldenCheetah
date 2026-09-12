@@ -804,6 +804,20 @@ unchanged from the sample above. `CaptchaRequired`/`MfaRequired`/`TokenPermissio
 `GarminAuthFailure::Kind` member today — implemented for `Auth`/`Network`/`RateLimit`/`Unknown` only,
 generic fallback (`"Connection to Garmin Connect failed (%1)"`) for anything else.
 
+### DES-008 addendum — 2026-09-12 (DEC-051): the "ErrorBus events" sample above was never built
+
+The `ErrorBus::emit({...})` sample above (and the "existing `ErrorBus` channel (the same one Strava/
+Dropbox use)" framing that introduces it) describes a mechanism that turned out not to exist anywhere
+in the tree — DEC-022 (2026-08-04) found this while resolving B-R017-06 and explicitly rejected
+building it ("Option B — new out-of-band error channel... REJECTED: ErrorBus DOES NOT EXIST in the
+tree"). DEC-023 (2026-08-04) chose a narrower, real replacement for the one case that gap actually
+blocked shipping: a `readFailed(QByteArray*, QString, QString)` signal on `CloudService`. REQ-NF-Obs-001
+(the requirement this sample serves) was never updated to reflect that resolution — see **DEC-051**,
+which reconciles it: the user-facing-errors half is scored as MET via `readFailed` + the pre-existing
+`errors` out-param convention, and only the sample's second sentence (structured `qDebug` mirroring the
+same fields for developer trace logging) remains genuinely unbuilt and authorized to proceed. This
+sample is kept verbatim above for historical record, not as a build target.
+
 ---
 
 ## DES-009 — Bulk backfill controller
