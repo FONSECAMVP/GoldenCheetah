@@ -54,9 +54,9 @@ OPEN:      **STAGE 6 CLOSED 2026-09-08, COMMITTED `4a72d2279`** — all six REQs
            Stage 8, the current next gate.**
 BLOCKING:  — (none; B-R025-01/A3-R021b-F2/B-R029-01 all closed 2026-09-08, see above)
 CASCADE:   — (DEC-015 fully propagated; ledger_drift_lint.py EXIT=0)
-LAST_CLV:  clv_findings.py 2026-09-12 (re-run post-REQ-NF-Sec-001+003/T-203 ledger update) **PASS —
-           0 OUTSTANDING / 394 OK over 394 rows** (unchanged from the T-202 pass — T-203 opened
-           no findings). `ledger_drift_lint.py` also re-run clean (EXIT=0). Inspector ran both
+LAST_CLV:  clv_findings.py 2026-09-12 (re-run post-REQ-NF-Sec-004/`07501c477` ledger update) **PASS —
+           0 OUTSTANDING / 394 OK over 394 rows** (unchanged — REQ-NF-Sec-004 opened no findings,
+           docs-only). `ledger_drift_lint.py` also re-run clean (EXIT=0). Inspector ran both
            directly against the just-edited files. NOTE (carried forward, still unresolved):
            this run's row count (394) does not match COUNTS-ADDENDUM-2's stated "findings 401
            rows" — not independently re-derived this pass either; the live clv_findings.py count
@@ -64,14 +64,12 @@ LAST_CLV:  clv_findings.py 2026-09-12 (re-run post-REQ-NF-Sec-001+003/T-203 ledg
            PASS — 0 OUTSTANDING / 394 OK over 394 rows; 2026-09-11 (post-B-R010-04) PASS — 393/393.
 NEXT_GATE: **Stage 8's first item, REQ-NF-Build-001 (T-202, build regression guard), is
            TEST VERIFIED + COMMITTED `f118691ea` 2026-09-12.** Stage 8's second item,
-           REQ-NF-Sec-001+003 (T-203, password-never-persisted + no-verify=False source guards),
-           is **TEST VERIFIED + COMMITTED `d271abae1` 2026-09-12** — see COUNTS-ADDENDUM-4 below
-           (that addendum's "NOT YET COMMITTED" line predates this commit and is superseded here).
-           Next atomic unit: REQ-NF-Sec-004 (docs-only — disclose the file-based-token
-           same-user-malware-replay residual risk in
-           `docs/garminconnect-known-limits.md`, confirmed absent), then the remaining Stage 8
-           NF items (Perf/Reliab/Obs/i18n bars — none started, see traceability.md's
-           REQ-NF-Perf-001..003/Reliab-001..002/Obs-001/i18n-001 rows).
+           REQ-NF-Sec-001+003 (T-203), is **TEST VERIFIED + COMMITTED `d271abae1` 2026-09-12.**
+           Stage 8's third item, REQ-NF-Sec-004 (docs-only file-based-token residual-risk
+           disclosure), is **TEST VERIFIED + COMMITTED `07501c477` 2026-09-12** — see
+           COUNTS-ADDENDUM-5 below. All four REQ-NF-Sec sub-items now MET. Next atomic unit: the
+           remaining Stage 8 NF items (Perf/Reliab/Obs/i18n bars — none started, see
+           traceability.md's REQ-NF-Perf-001..003/Reliab-001..002/Obs-001/i18n-001 rows).
            Stage 6 CLOSED + COMMITTED
            2026-09-08 (`4a72d2279`, all six REQs TEST VERIFIED, all findings dispositioned, CLV
            PASS, full gate 37/37) and **Stage 7 CLOSED 2026-09-12** (history below, retained for
@@ -211,7 +209,25 @@ COUNTS-ADDENDUM-4 (2026-09-12, not yet folded into the block above; commit statu
            same-user-malware-can-replay-tokens disclosure is not there). **Awaiting commit** —
            **Committed `d271abae1` 2026-09-12** (7 files: STATE.md/WIKI.md/traceability.md +
            the two new tests + two CMakeLists.txt wirings). Next Stage 8 item: NF-Sec-004
-           (docs-only), allocating T-204.
+           (docs-only) — see COUNTS-ADDENDUM-5.
+COUNTS-ADDENDUM-5 (2026-09-12, not yet folded into the block above): Stage 8's third item,
+           REQ-NF-Sec-004 (file-based-token-storage residual-risk disclosure, docs-only per
+           prd.md's verification method — no new test harness), **TEST VERIFIED — COMMITTED
+           `07501c477` 2026-09-12** (4 files: `docs/garminconnect-known-limits.md` new fourth
+           section, `README.md` pointer extended, `src/Cloud/GarminCredentialsPage.cpp`
+           first-connect `setSubTitle()` extended, `unittests/Core/garminconnect/
+           testGarminConnectCredentialsPage.cpp` +1 supplementary slot `pageHasSecurityNotice()`
+           beside the existing `pageHasReloginNotice()` — no new T-id consumed, matching
+           REQ-NF-Compat-001's precedent; WIKI.md's TEST registry unchanged, still
+           `next:garmin-T-204`). **Independently rebuilt and re-run by the Inspector**:
+           `testGarminConnectCredentialsPage` (18/18) + `testGarminConnectWizardRouting` (20/20)
+           both GREEN including the new slot, `garmin-sec-guard` 2/2, full `garmin-fast` 40/40 —
+           no collateral; clang-format `--dry-run --Werror` clean on both touched `.cpp` files;
+           `git status --short` on the 4 named paths matched the builder's claimed footprint
+           exactly before staging. `clv_findings.py` re-run PASS (0 OUTSTANDING/394 OK,
+           unchanged), `ledger_drift_lint.py` re-run clean (EXIT=0). **All four REQ-NF-Sec
+           sub-items (001/002/003/004) now MET.** Next Stage 8 item: the remaining NF bars
+           (Perf/Reliab/Obs/i18n — none started).
 
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md
