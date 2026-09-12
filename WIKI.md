@@ -74,7 +74,7 @@ DEC  garmin:001–043                 decisions.md ## Decision index  next:garmi
      (Option A / Option C respectively) and BOTH BUILT + execution-verified 2026-09-05 (TEST-158;
      TEST-159+160) — both findings closed on executed evidence; see decisions.md entries for trade space.
 DES  garmin:001–014 (+001a,003a)    design.md                       next:garmin-015
-TEST garmin:T-001–T-202 (T-143–T-153 = DEC-040; T-161–T-163 = REQ-020 wizard; T-164–T-166 = REQ-022 OpenData; T-167–T-169 = REQ-023 store/uncompress; T-170–T-172 = REQ-024 Strava loop; T-176 REQ-009; T-177 REQ-014; T-179+T-194-196 REQ-010; T-201 REQ-013; T-202 REQ-NF-Build-001 (Stage 8 build-guard) — per-id build state → traceability.md)   next:garmin-T-203
+TEST garmin:T-001–T-203 (T-143–T-153 = DEC-040; T-161–T-163 = REQ-020 wizard; T-164–T-166 = REQ-022 OpenData; T-167–T-169 = REQ-023 store/uncompress; T-170–T-172 = REQ-024 Strava loop; T-176 REQ-009; T-177 REQ-014; T-179+T-194-196 REQ-010; T-201 REQ-013; T-202 REQ-NF-Build-001 (Stage 8 build-guard); T-203 REQ-NF-Sec-001+003 (Stage 8 sec-guard) — per-id build state → traceability.md)   next:garmin-T-204
      REGISTRIES line was stale (still read "next:garmin-T-173") — corrected 2026-09-12 by the
      Inspector during the inspector-cycle pilot run, cross-verified against the ledger's true
      max (grep for T-[0-9]+/TEST-[0-9]+ across traceability.md/decisions.md/findings.md/

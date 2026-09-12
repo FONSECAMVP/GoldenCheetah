@@ -2444,3 +2444,40 @@ set_tests_properties(testGarminBackfillDialogLifetime PROPERTIES
     LABELS "garmin-fast"
     TIMEOUT 60
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;ASAN_OPTIONS=detect_leaks=0:abort_on_error=0:halt_on_error=1")
+
+# --- T-203 — REQ-NF-Sec-001: password-never-persisted RUNTIME sentinel --------
+# The runtime half of the Sec-001 guard (static half: buildguard/
+# garmin_sec_source_guard.py, testGarminSecSourceGuard). Redirects
+# HOME/XDG_*/TMPDIR into a private temp root BEFORE Py_Initialize, drives the
+# production PyEmbeddedAdapter::authenticate() through a real embedded CPython
+# against the pystubs stub, then byte-scans the whole sentinel tree for the
+# password (UTF-8 + UTF-16LE). A canary file proves the scan is not vacuous.
+# Links real CPython, so — like testGarminConnectPyAdapter — it must NEVER
+# carry `garmin-fast`. Label: `garmin-sec-guard`.
+add_executable(testGarminConnectPasswordPersistence
+    testGarminConnectPasswordPersistence.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/PyEmbeddedAdapter.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/PyEmbeddedAdapter.h
+    ${CMAKE_SOURCE_DIR}/src/Cloud/IGarminPyAdapter.h
+)
+
+target_include_directories(testGarminConnectPasswordPersistence PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+)
+
+target_compile_definitions(testGarminConnectPasswordPersistence PRIVATE
+    "GARMIN_PYSTUBS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/pystubs\""
+)
+
+target_link_libraries(testGarminConnectPasswordPersistence PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Test
+    Python3::Python
+)
+target_compile_features(testGarminConnectPasswordPersistence PRIVATE cxx_std_17)
+
+add_test(NAME testGarminConnectPasswordPersistence COMMAND testGarminConnectPasswordPersistence)
+set_tests_properties(testGarminConnectPasswordPersistence PROPERTIES
+    LABELS "garmin-sec-guard"
+    TIMEOUT 300)

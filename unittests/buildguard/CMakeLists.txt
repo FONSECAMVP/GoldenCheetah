@@ -31,3 +31,21 @@ foreach(_gc_garmin_mode OFF ON)
         TIMEOUT 5400
         ENVIRONMENT "CMAKE_COMMAND=${CMAKE_COMMAND}")
 endforeach()
+
+# --- T-203 / REQ-NF-Sec-001 + REQ-NF-Sec-003: static security source guard ---
+# Makes prd.md's two manual grep audits executable: no password identifier may
+# touch a persistence API in the Garmin tree (Sec-001, dod.md's "grep test"),
+# and no disable-verification idiom (verify=False, CERT_NONE, VerifyNone,
+# ignoreSslErrors, ...) may appear (Sec-003). Comment-stripped matching; pure
+# stdlib; runs in well under a second — no build involved.
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
+add_test(
+    NAME testGarminSecSourceGuard
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/garmin_sec_source_guard.py"
+            "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(testGarminSecSourceGuard PROPERTIES
+    LABELS "garmin-sec-guard"
+    TIMEOUT 300)

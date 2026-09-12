@@ -1,4 +1,4 @@
-# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-12 by Inspector (Stage 8 — REQ-NF-Build-001 T-202 build-guard TEST VERIFIED, not yet committed; inspector-cycle self-succession run)
+# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-12 by Inspector (Stage 8 — REQ-NF-Build-001 T-202 COMMITTED `f118691ea`; REQ-NF-Sec-001+003 T-203 sec-guard TEST VERIFIED, not yet committed)
 # Per-id lifecycle status lives ONLY in .claude/workflow-garminconnect/traceability.md (DEC-015 SSOT).
 # For a DEC's status read decisions.md. For a finding's severity/disposition read findings.md.
 # ALL superseded cursor narrative -> .claude/workflow-garminconnect/archive/state-history.md
@@ -54,22 +54,24 @@ OPEN:      **STAGE 6 CLOSED 2026-09-08, COMMITTED `4a72d2279`** — all six REQs
            Stage 8, the current next gate.**
 BLOCKING:  — (none; B-R025-01/A3-R021b-F2/B-R029-01 all closed 2026-09-08, see above)
 CASCADE:   — (DEC-015 fully propagated; ledger_drift_lint.py EXIT=0)
-LAST_CLV:  clv_findings.py 2026-09-12 (re-run post-REQ-NF-Build-001/T-202 ledger update) **PASS —
-           0 OUTSTANDING / 394 OK over 394 rows** (0 MALFORMED, 0 UNKNOWN-SEVERITY,
-           0 UNKNOWN-DISPOSITION, 0 NEEDS-DISPOSITION, MISSING-EFFECT 0). No new finding rows
-           this pass (REQ-NF-Build-001 opened none). `ledger_drift_lint.py` also re-run clean
-           (EXIT=0). Inspector ran both directly against the just-edited files, not carried
-           forward from a prior pass. NOTE: this run's row count (394) does not match
-           COUNTS-ADDENDUM-2's stated "findings 401 rows" — that figure was not independently
-           re-derived this pass and is flagged, not silently trusted; the live clv_findings.py
-           count above is authoritative. Prior: 2026-09-11 (post-B-R010-04 UI-wiring ledger
-           update) PASS — 0 OUTSTANDING / 393 OK over 393 rows.
-NEXT_GATE: **Stage 8's first item, REQ-NF-Build-001 (GC_WANT_GARMINCONNECT build regression
-           guard), is TEST VERIFIED 2026-09-12 (T-202, `garmin-build-guard` label, 2/2 Passed —
-           independently re-run by the Inspector, not just relayed) but NOT YET COMMITTED** —
-           see COUNTS-ADDENDUM-3 below. Next atomic unit after commit: pick the next Stage 8
-           NF item (Perf/Sec/Reliab/Obs/i18n bars — none started, see traceability.md's
-           REQ-NF-Perf-001..003/Sec-001..004/Reliab-001..002/Obs-001/i18n-001 rows).
+LAST_CLV:  clv_findings.py 2026-09-12 (re-run post-REQ-NF-Sec-001+003/T-203 ledger update) **PASS —
+           0 OUTSTANDING / 394 OK over 394 rows** (unchanged from the T-202 pass — T-203 opened
+           no findings). `ledger_drift_lint.py` also re-run clean (EXIT=0). Inspector ran both
+           directly against the just-edited files. NOTE (carried forward, still unresolved):
+           this run's row count (394) does not match COUNTS-ADDENDUM-2's stated "findings 401
+           rows" — not independently re-derived this pass either; the live clv_findings.py count
+           above remains authoritative. Prior: 2026-09-12 (post-REQ-NF-Build-001/T-202 update)
+           PASS — 0 OUTSTANDING / 394 OK over 394 rows; 2026-09-11 (post-B-R010-04) PASS — 393/393.
+NEXT_GATE: **Stage 8's first item, REQ-NF-Build-001 (T-202, build regression guard), is
+           TEST VERIFIED + COMMITTED `f118691ea` 2026-09-12.** Stage 8's second item,
+           REQ-NF-Sec-001+003 (T-203, password-never-persisted + no-verify=False source guards),
+           is **TEST VERIFIED 2026-09-12 (`garmin-sec-guard` label, 2/2 Passed — independently
+           re-run by the Inspector on a from-scratch rebuild) but NOT YET COMMITTED** — see
+           COUNTS-ADDENDUM-4 below. Next atomic unit after commit: REQ-NF-Sec-004 (docs-only —
+           disclose the file-based-token same-user-malware-replay residual risk in
+           `docs/garminconnect-known-limits.md`, confirmed absent), then the remaining Stage 8
+           NF items (Perf/Reliab/Obs/i18n bars — none started, see traceability.md's
+           REQ-NF-Perf-001..003/Reliab-001..002/Obs-001/i18n-001 rows).
            Stage 6 CLOSED + COMMITTED
            2026-09-08 (`4a72d2279`, all six REQs TEST VERIFIED, all findings dispositioned, CLV
            PASS, full gate 37/37) and **Stage 7 CLOSED 2026-09-12** (history below, retained for
@@ -167,7 +169,7 @@ COUNTS-ADDENDUM-2 (2026-09-12, not yet folded into the block above): REQ-NF-Pkg-
            **NEXT: Stage 8 (NF/coverage debt)** — see NEXT_GATE below.
 COUNTS-ADDENDUM-3 (2026-09-12, not yet folded into the block above): Stage 8's first item,
            REQ-NF-Build-001 (the `GC_WANT_GARMINCONNECT` CMake-flag build regression guard),
-           **TEST VERIFIED — NOT YET COMMITTED.** New T-202: `unittests/buildguard/
+           **TEST VERIFIED — COMMITTED `f118691ea` 2026-09-12.** New T-202: `unittests/buildguard/
            garmin_flag_build_guard.sh` + `unittests/buildguard/CMakeLists.txt` (ctest label
            `garmin-build-guard`, TIMEOUT 5400, registered unconditionally for both flag values)
            + a 4-line `unittests/CMakeLists.txt` wire-in. RED verified for the right reason
@@ -180,8 +182,34 @@ COUNTS-ADDENDUM-3 (2026-09-12, not yet folded into the block above): Stage 8's f
            40/40 (315.11s), no collateral. Findings: none opened (only RED was the intentional,
            reverted mutation). Judgment calls recorded in traceability.md's REQ-NF-Build-001 row
            (CMake/CTest-only, not qmake-CI wiring; deliberately outside the `garmin-fast` label).
-           No pre-commit hook regex covers the three touched paths. **Awaiting commit** — next
-           Inspector cycle should commit this before picking Stage 8's next NF item (T-203).
+           No pre-commit hook regex covers the three touched paths.
+COUNTS-ADDENDUM-4 (2026-09-12, not yet folded into the block above): Stage 8's second item,
+           REQ-NF-Sec-001+003 (password-never-persisted + no-`verify=False` source guards),
+           **TEST VERIFIED — NOT YET COMMITTED.** New T-203: `unittests/buildguard/
+           garmin_sec_source_guard.py` (static, `testGarminSecSourceGuard` — 8 regex rules over
+           47 Garmin-scope files, comment/docstring-stripped) + `unittests/Core/garminconnect/
+           testGarminConnectPasswordPersistence.cpp` (runtime — real embedded CPython,
+           HOME/XDG_*/TMPDIR redirect pre-`Py_Initialize`, UTF-8+UTF-16LE byte scan of the whole
+           sentinel tree, canary file proves the scan isn't vacuous) + two CMakeLists.txt
+           registrations, label `garmin-sec-guard`. RED verified for the right reason on both
+           halves (4 injected static violations caught by rule id, comment-only mentions
+           correctly produced zero findings; a mutated stub persisting the password under the
+           redirected HOME caught at the runtime layer, pinpointing the leak file). Two real bugs
+           self-found and fixed in the guard itself during RED (a regex alternation-precedence
+           bug letting bare `password` match anywhere; a fail-open Python comment-stripper that
+           only scanned comment lines). **Independently re-run by the Inspector on a
+           from-scratch rebuild** (deleted the builder's own build artifacts first, not just
+           re-executed them): `ctest -L garmin-sec-guard` 2/2 Passed (0.19s), `garmin-fast`
+           re-confirmed 40/40 (313.41s), `pytest` (src/Python/garminconnect) re-confirmed 51/51
+           (0.06s) — no collateral. Cross-file citation verified real (the C++ test cites
+           `tests/test_token_store.py::test_dumped_blob_never_contains_the_password`, confirmed
+           to exist exactly as cited). REQ-NF-Sec-002 confirmed untouched and still MET
+           (re-verified, not just trusted, that testAtomicFile/testGarminTokenStore/
+           testGarminSidecarStore already self-tag it). NF-Sec-004 confirmed still NOT STARTED
+           (docs-only gap — checked `docs/garminconnect-known-limits.md` directly, the
+           same-user-malware-can-replay-tokens disclosure is not there). **Awaiting commit** —
+           next Inspector cycle should commit this, then take NF-Sec-004 (docs-only) as the next
+           Stage 8 item, allocating T-204.
 
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md
