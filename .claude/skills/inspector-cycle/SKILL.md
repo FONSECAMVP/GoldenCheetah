@@ -1,6 +1,6 @@
 ---
 name: inspector-cycle
-description: Use when acting as the Inspector supervising builder/reviewer/investigator/token-monitor herdr agents on this GoldenCheetah project. Runs one full herdr-stage-delegate-poll-validate-document-commit cycle, decides when a supervised agent needs a soft-landing context refresh, and autonomously advances stage-to-stage toward the complete feature — stopping only at a real human-in-the-loop (credential/security) gate, never for an ordinary technical decision.
+description: Use when acting as the Inspector supervising builder/reviewer/investigator herdr agents on this GoldenCheetah project. Runs one full herdr-stage-delegate-poll-validate-document-commit cycle, decides when a supervised agent needs a soft-landing context refresh, and autonomously advances stage-to-stage toward the complete feature — stopping only at a real human-in-the-loop (credential/security) gate, never for an ordinary technical decision.
 ---
 
 # Inspector Cycle
@@ -31,7 +31,7 @@ and take the top-scored option yourself.
 ## Relationship to other skills (no collision)
 
 This skill is a thin supervisory loop. It does not reimplement:
-- **`quality-gated-dev-workflow`** owns the stage/tier model, the ledgers
+- **`quality-gated-dev-workflow`** the brain, the compass - owns the stage/tier model, the ledgers
   (`STATE.md`/`traceability.md`/`decisions.md`/`findings.md`), the Three-Options Doctrine
   scoring axes, and the `qgdw-*` subagents. This skill reads and updates those artifacts
   using QGDW's own conventions — it never invents a parallel ledger.
@@ -58,29 +58,36 @@ current stage (or the next stage, if the current one just closed). → `referenc
 project-state-and-next-step.md`
 
 ### 3. delegate work
-Set/name the 4 standing agents for this stage — **builder** (Claude Code, TDD
+Set/name the 3 standing agents for this stage — **builder** (Claude Code, TDD
 implementation), **reviewer** (Codex, delta-check), **investigator** (Codex, isolated
-parallel problem-solving), **token-monitor** (Claude Code, watches the other 3's context
-usage AND your own — give it your pane id when briefing it). Brief each in the shape of
-its own first-ever prompt, not a paraphrase. Any of the 4 may spawn QGDW's own `qgdw-*`
-subagents internally to scope technical sub-work — that nesting is theirs to manage, not
-yours to micromanage. → `references/agent-roster-and-dispatch.md`
+parallel problem-solving). Brief each in the shape of its own first-ever prompt, not a
+paraphrase. Any of the 3 may spawn QGDW's own `qgdw-*` subagents internally to scope
+technical sub-work — that nesting is theirs to manage, not yours to micromanage. There is
+no standing token-monitor agent — context usage is a mechanical file read, not a job that
+needs its own LLM (see step 4). → `references/agent-roster-and-dispatch.md`
 
 ### 4. poll agents
-Proactively check status AND token budget for all 4 agents AND yourself on your own
-initiative — do not wait to be asked, and don't rely only on the token-monitor's report for
-your own number if you can check your own pane directly too. 250k budget per supervised
-agent, ~210k for yourself (separate thresholds, see `references/
+Proactively check status AND token budget for all 3 agents AND yourself on your own
+initiative — never inject `/status` to poll. Token budget is read directly, by you, by
+running the two one-shot scripts in `scripts/` against each pane's live PID (`claude_context.py`
+for Claude Code panes, `codex_context.py` for Codex panes) — no dedicated token-monitor
+agent needed; this is a deterministic file read, not work worth spending a supervised
+agent's own context on. 250k budget per supervised agent, ~210k for yourself (separate
+thresholds, pass `--threshold 210000` when reading your own pane — see `references/
 token-budget-and-soft-landing.md`) → soft-landing, not a hard kill. → `references/
 token-budget-and-soft-landing.md` + `references/herdr-polling-reference.md`
 
 ### 5. validate agent results
-Never accept a self-report as done. Read the actual diff/output yourself before passing it
-on. On a QGDW gate FAIL, follow QGDW's failed-gate governance (blocker line only) and loop
-back to repair — don't proceed to document/commit. On PASS: approve, deny, or fix per your
-own judgment against reliability/scalability/maintainability/best-practices — escalate to
-the user only per `references/autonomy-boundary.md`'s gate list and its one named scope
-exception (both live there, not in the roster file).
+On every builder GREEN report, actually dispatch the reviewer for a delta-check on the real
+diff FIRST — for every REQ, not just lifetime-safety C++ — before doing your own
+rebuild/rerun. Never accept a self-report as done, and never let your own re-verification
+substitute for the reviewer's independent read; they catch different bug classes. Read the
+actual diff/output yourself too before passing it on. On a QGDW gate FAIL, follow QGDW's
+failed-gate governance (blocker line only) and loop back to repair — don't proceed to
+document/commit. On PASS: approve, deny, or fix per your own judgment against
+reliability/scalability/maintainability/best-practices — escalate to the user only per
+`references/autonomy-boundary.md`'s gate list and its one named scope exception (both live
+there, not in the roster file). → `references/agent-roster-and-dispatch.md`
 
 ### 6. document
 Update `STATE.md`/`traceability.md`/`decisions.md`/`findings.md` per QGDW's own ledger

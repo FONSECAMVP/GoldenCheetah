@@ -6,6 +6,10 @@ Every command below needs `HERDR_ENV=1` set first. Drive the recurring poll cade
 via the `/loop` skill (fixed interval or dynamic) — `ScheduleWakeup` is only reliable inside
 an active `/loop`, not called standalone.
 
+For context tokens, follow "Measuring current context" in
+`token-budget-and-soft-landing.md`. Polling reads metadata/output/files only; it never
+submits `/status` or Enter to another pane. Unknown token usage is a coverage gap.
+
 ## Status is not always what it says
 
 - `blocked` in `herdr agent list` does NOT always mean a permission dialog is waiting — it

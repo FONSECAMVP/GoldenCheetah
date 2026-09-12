@@ -2,18 +2,79 @@
 
 ## Two separate thresholds — don't conflate them
 
-- **Supervised agents (builder, reviewer, investigator, token-monitor): 250k hard budget.**
-  Past this, start the soft-landing procedure below.
+- **Supervised agents (builder, reviewer, investigator): 250,000-token refresh threshold.**
+  At or above this, start the soft-landing procedure below.
 - **The Inspector's own context: ~210k warn threshold.** A separate number from the 250k
   worker budget, not simply scaled from it (correction 2026-09-12: an earlier draft of this
   skill said ~300-350k — that was wrong; 210k is the real, confirmed warn point) — never
   apply the 250k worker number to yourself, and don't assume yours is the higher one just
   because you supervise. Refreshed by a different mechanism than a worker too (see
-  "Self-succession" below). Don't rely on pure self-observation to catch this: brief the
-  token-monitor with the Inspector's own pane id too (see `agent-roster-and-dispatch.md`)
-  so its report each poll tick includes your own number, not just the other 3's.
+  "Self-succession" below). There is no token-monitor agent to catch this externally — read
+  your own pane's PID with `scripts/claude_context.py --pid <your-pid> --threshold 210000`
+  yourself, every poll tick, the same mechanical way you read the other 3 numbers.
 
-## Soft-landing procedure (for builder / reviewer / investigator / token-monitor)
+## Measuring current context (read-only on every poll)
+
+The number is the latest reported **current context**, not lifetime/billing usage.
+Never send `/status` or `/context` into a supervised pane to measure it: these can queue
+behind work, concatenate with existing input, or show no context count. Do not convert a
+bare percentage, assume a model capacity, or treat `idle`/`done` as zero tokens. There is
+no standing token-monitor agent for any of this — the Inspector runs these two one-shot,
+read-only scripts itself, directly, every poll tick (including against its own pane); it is
+a mechanical file read, not work worth spending a supervised LLM's own context on.
+
+- **Claude Code panes** (builder, and the Inspector's own pane): `scripts/claude_context.py
+  --pid <pid>` reads the process's own session transcript (`~/.claude/projects/<project>/
+  <session-id>.jsonl`, located via the pane's live PID, never a remembered session id or a
+  newest-by-mtime guess) and sums the latest assistant turn's `input_tokens +
+  cache_creation_input_tokens + cache_read_input_tokens` — the same fields
+  `~/.claude/statusline.sh` sums into its `tok Nk` figure (Claude Code 2.1.261's
+  `context_window.total_input_tokens`). Output tokens are excluded, same as the footer.
+  Sidechain (Task-tool subagent) usage events are skipped — they aren't the pane's own
+  context. Pass `--threshold 210000` when reading the Inspector's own pane; the default
+  `250000` applies to a supervised worker.
+- **Codex panes** (reviewer, investigator): `scripts/codex_context.py --pid <pid>` reads the
+  unique rollout file currently open by the pane's Codex process, then selects the latest
+  `event_msg` / `token_count` record's `info.last_token_usage.total_tokens`. This includes
+  cached context; do not subtract cached input or add reasoning/output again. Neither
+  `info.total_token_usage` nor a session database's `tokens_used` is current context.
+
+For each pane, get its current process identity without touching its input, then run the
+matching reader:
+
+```bash
+herdr pane process-info --pane <live-pane-id>
+python3 .claude/skills/inspector-cycle/scripts/claude_context.py --pid <claude-pid>   # builder / Inspector's own pane
+python3 .claude/skills/inspector-cycle/scripts/codex_context.py --pid <codex-pid>     # reviewer / investigator
+```
+
+Use the `pid` of the `name: "claude"` or `name: "codex"` entry (as appropriate) in
+`result.process_info.foreground_processes`; if there is no unique entry of the expected
+kind, report `unknown`. Resolve it anew each tick and after `/new`/restart/soft-landing.
+Never choose a session by modification time or cwd alone: multiple agents can share a cwd
+and account. Run the reader from the checkout containing this skill, or use its absolute
+path.
+
+Both readers emit the same JSON shape: `used_tokens`, `session_id`, `source`, `sample_at`,
+`threshold`, and `status`. `warn` means **used_tokens >= threshold**, including exactly
+equal; `below_threshold` describes the last sample only. Exit 0 means the read succeeded
+(even when warning); exit 2 and `status: unknown` mean no usable measurement. A new session
+may have no transcript/rollout content yet until its first turn. Missing/ambiguous files,
+incomplete records, and compaction without a new usage sample stay unknown; do not carry
+the old session's count forward. An old timestamp in an idle, unchanged session is its last
+reported count. If a working agent's sample stops advancing across polls, flag telemetry as
+stale and do not claim it is safely below threshold. These are last-reported measurements,
+not predictions of in-flight growth.
+
+Both readers only read files and exit; neither polls in the background, sends keystrokes,
+or performs a refresh. Continue the established `/loop` cadence, invoking the readers
+yourself each tick. On a warning, start that session's soft-landing once, continue
+coverage of the rest, and use the procedure below.
+
+Field semantics: [Claude status-line documentation](https://code.claude.com/docs/en/statusline#context-window-fields).
+Recheck a reader's field assumptions if the underlying transcript/rollout format changes.
+
+## Soft-landing procedure (for builder / reviewer / investigator)
 
 Never hard-kill an agent mid-work — a soft landing exists specifically because breaking an
 in-flight process costs more to recover later than a short, controlled pause does now.
@@ -28,7 +89,6 @@ in-flight process costs more to recover later than a short, controlled pause doe
    - reviewer: finish the current delta-check pass — don't leave a partial finding list.
    - investigator: finish the current isolated repro conclusion (nothing to leave clean in
      the real tree, since it never touched it).
-   - token-monitor: flush its current status snapshot to the Inspector first.
 2. **WAIT** for the agent to actually confirm the safe stopping point — read what it
    reports; don't guess from the outside, and don't treat a `done`/`idle` snapshot as
    permanent (a fresh turn can start again within seconds).
@@ -44,7 +104,7 @@ in-flight process costs more to recover later than a short, controlled pause doe
    independently-validated state, any findings not yet in the ledger, and the soft-landing
    note itself (what was in flight when it paused).
 
-## NO SCRIPTS, ever
+## No restart scripts
 
 Do not attempt to automate any part of this (a detached/background process that waits for
 a pane's PID to exit and restarts it, `setsid`/`nohup`/`disown`, asking a peer session to run
@@ -114,9 +174,9 @@ On receiving a rebirth prompt, before anything else:
      fresh pane inherited the right one; a prior session's `/model` switch or a rate-limit
      fallback does not carry forward automatically, and a silent wrong-model session is
      easy to miss until much later.
-   - Re-brief the token-monitor (or restart it if it went idle/stopped itself — it's
-     designed to stop reporting once it flags its predecessor's overbudget state, per its
-     own briefing) so active polling of all 4 agents resumes immediately, not after a gap.
+   - Resume direct context-usage script reads (`claude_context.py`/`codex_context.py`) for
+     all 3 supervised agents AND your own new pane immediately, not after a gap — there is
+     no standing token-monitor agent to re-brief; this is just you running the readers.
 1. Invoke the `inspector-cycle` skill and run its own step 1 (herdr) and step 2 (current
    stage) immediately — do not wait for, or ask for, a manual briefing from the
    predecessor. The skill's whole design (re-derive every step fresh from live state, never
@@ -132,9 +192,10 @@ On receiving a rebirth prompt, before anything else:
    never a raw `herdr pane close` or kill. Verify the pane actually dropped to a plain
    shell prompt.
 4. Only then resume the normal cycle at step 3 (delegate work) and step 4 (poll agents) —
-   confirm all 4 supervised agents are actually being actively polled again (not just the
-   token-monitor from step 0), driven via `/loop` per `herdr-polling-reference.md`, not left
-   as a one-off orientation check. Report the completed succession to the user plainly —
+   confirm all 3 supervised agents, plus your own pane, are actually having their context
+   usage read again on the established cadence (not just the one-off check from step 0),
+   driven via `/loop` per `herdr-polling-reference.md`, not left as a one-off orientation
+   check. Report the completed succession to the user plainly —
    this is a first-of-its-kind mechanism, worth narrating even though it doesn't need
    permission (see `autonomy-boundary.md`: an internal, fully-reversible operational action
    like this is not a human-in-the-loop gate).
