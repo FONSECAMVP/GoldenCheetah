@@ -2462,3 +2462,40 @@ complication — resolved within DEC-049's own step 1 scope.
 Probe: touch src/Cloud/PyEmbeddedAdapter.h && (cd src && make -j$(nproc)) 2>&1 | grep PyEmbeddedAdapter.cpp
   # expect exactly one recompile line for this file (no -include GoldenCheetah/stable.h flag on it), confirming
   # both the PCH exclusion and header-dependency tracking are still correct
+
+## DEC-050 — REQ-013 scope: narrow the first slice to DOB/weight/height, defer HR-max/FTP
+
+- Status: accepted (user decision 2026-09-12, option 1 of 3 presented)
+- Reversibility: cheap — nothing built yet for this REQ; the deferred fields are additive (DES-011's `{dob, weight_kg, height_cm}` return shape already has room to widen to `hr_max, ftp_w` later without a breaking change)
+- Decided / last-reviewed: 2026-09-12
+- Serves: REQ-013
+- Dependents: none yet (pre-build scope decision, same posture as DEC-046)
+- Research: read the real `garminconnect==0.3.13` wheel (downloaded via `pip download`, extracted, inspected `__init__.py`/`typed.py` directly — same rigor as DEC-046) and GC's own data model (`src/Core/Athlete.cpp`, `src/Core/Settings.h`, `src/Core/DataFilter.cpp`)
+
+### The problem
+DES-011 specifies a `FetchProfile` op returning `{dob, weight_kg, height_cm, hr_max, ftp_w (if any)}`, all filled into GC's Athlete profile if currently empty. Two gaps surfaced on inspection, before any code was written:
+- **Schema risk (all 5 fields):** the real library exposes plausible endpoints (`get_userprofile_settings()` → `/userprofile-service/userprofile/settings`; dedicated `get_cycling_ftp()`, `get_heart_rate_zones()`) but none are typed in the library (`typed.py` has no profile/settings model) and this project has never tested against a live Garmin account (`traceability.md`'s own "LIVE-SERVICE TESTED: NO — never, on any requirement" row). The exact raw JSON field names (e.g. `birthDate` vs `dateOfBirth`) cannot be confirmed from source alone. Unlike DEC-046's CAPTCHA case this is not a proven dead end — REQ-013's own "only fill missing fields" contract already degrades safely (a wrong/absent key name just means that field no-ops) — but it is a real, unverified external contract worth recording rather than silently assuming.
+- **Architectural mismatch (hr_max/ftp_w only):** GC's DOB/weight/height map cleanly to existing simple per-cyclist app-settings scalars (`GC_DOB`/`GC_WEIGHT`/`GC_HEIGHT`, `Settings.h:279-281`, read via `appsettings->cvalue(cyclist, KEY)`). HR-max and FTP do NOT — in GC's real data model both live inside the date-ranged Zones/CP system (`Athlete::hrZones(sport)->getMaxHr(range)`, `DataFilter.cpp:4034`), not a simple scalar. "Filling if missing" for these two would mean creating or editing a dated zone range, a materially bigger and riskier change than a `setCValue` call, disproportionate for a `nice`-priority REQ.
+
+### Resolution
+Build REQ-013's first slice against `{dob, weight_kg, height_cm}` only, via the existing per-cyclist app-settings scalars, with defensive (try-multiple-candidate-keys, skip-if-absent) parsing of the real library's unverified JSON shape. Defer `hr_max`/`ftp_w` to a follow-up slice once the Zones-system interaction is separately designed — DES-011's own "(if any)" qualifier already anticipated these two being softer-effort than the other three.
+
+### Alternatives
+| Opt | Rel | Scal | Maint | BP |
+|---|---|---|---|---|
+| **B narrow to dob/weight/height, defer hr_max/ftp_w — CHOSEN** | 4 — builds against a schema risk that degrades safely (absent field = no-op, not a crash), skips the higher-risk Zones-system surface entirely for now | 5 — the 3-field shape needs no Zones-system design work at all | 5 — small, reversible, additive; matches DES-011's own "(if any)" softness for the two deferred fields | 4 — proportionate to a `nice`-priority REQ; doesn't block on an unresolved Zones-interaction design |
+| A build the full DES-011 scope now (all 5 fields) | 3 — same schema risk PLUS new Zones-system write logic, for a nice-priority item | 2 — Zones date-range writes are a new, more complex mechanism with its own edge cases (no current range? overlapping range? which sport?) | 2 — materially larger surface for later maintenance, undesigned today | 2 — disproportionate effort for a `nice` REQ relative to its value |
+| C defer REQ-013 entirely | 5 — no risk introduced | 5 — nothing to maintain | 5 — no code | 2 — treats a degrades-safely schema risk the same as DEC-046's proven dead end, which it is not; throws away the 3 low-risk fields along with the 2 higher-risk ones |
+
+### Cascade impact
+- B (chosen): `design.md`'s DES-011 narrowed to the first-slice return shape; `hr_max`/`ftp_w` recorded as an explicit follow-up, not silently dropped. `traceability.md`'s REQ-013 row updated to cite this DEC.
+- A: would need its own DEC for the Zones-system write mechanism (which range to edit, how to handle no-existing-range, sport selection) before any code.
+- C: would need REQ-013's traceability row rewritten to DEFERRED, matching REQ-015's shape; revisit only if the user decides the 3 low-risk fields aren't worth it either.
+
+### Chosen
+B — matches the user's explicit instruction and keeps the REQ buildable now without inventing Zones-system design work it doesn't need yet.
+
+### Alignment probe
+grep -n "REQ-013" .claude/workflow-garminconnect/traceability.md   # expect the row to cite DEC-050
+grep -n "hr_max\|ftp_w" .claude/workflow-garminconnect/design.md   # expect DES-011 to mark these deferred, not silently removed
+find src/Cloud -iname "GarminProfile*"   # expect: no matches yet (nothing built until the builder dispatch runs)

@@ -997,7 +997,7 @@ Garmin has invalidated the session server-side raises `GarminError(kind='session
 ## DES-011 — Optional profile auto-fill
 
 **Serves:** REQ-013.
-**Composes with:** DEC-004 (wizard post-flow), DEC-002 (FetchProfile request runs on the worker).
+**Composes with:** DEC-004 (wizard post-flow), DEC-002 (FetchProfile request runs on the worker), **DEC-050 (2026-09-12 — narrowed the first slice below; see "Scope" before building)**.
 
 Post-connect dialog, shown once on first successful connect, **defaults off**:
 
@@ -1017,6 +1017,17 @@ If checked + Apply:
 - Worker: `FetchProfile` → returns `{dob, weight_kg, height_cm, hr_max, ftp_w (if any)}`.
 - For each field: if the matching `Athlete` field is **empty/unset**, fill it. Otherwise no-op.
 - No overwrite of user-provided data; not retried on subsequent connects.
+
+**Scope (DEC-050, first slice — build against this, not the full shape above):** `FetchProfile` returns only
+`{dob, weight_kg, height_cm}` for now. `hr_max` and `ftp_w` are DEFERRED, not dropped — in GC's real data model
+they live inside the date-ranged Zones/CP system (`Athlete::hrZones(sport)->getMaxHr(range)`), not a simple
+scalar like DOB/weight/height (`GC_DOB`/`GC_WEIGHT`/`GC_HEIGHT`, `Settings.h:279-281`), and need their own
+design pass for how to create/edit a zone range before they can be built safely. **Unverified-schema risk
+(DEC-050):** the real `garminconnect` library's profile/settings response shape is untyped and unverified
+against a live account (this project has never tested against one) — implement field extraction defensively
+(try plausible key-name candidates, skip silently if absent/unparseable) rather than assuming a single
+confirmed shape; this degrades safely because the REQ's own "only fill missing fields" contract already
+treats an unavailable Garmin field as a no-op, not an error.
 
 ---
 
