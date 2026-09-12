@@ -74,6 +74,35 @@ coverage of the rest, and use the procedure below.
 Field semantics: [Claude status-line documentation](https://code.claude.com/docs/en/statusline#context-window-fields).
 Recheck a reader's field assumptions if the underlying transcript/rollout format changes.
 
+**Known unknown case: a mid-session model fallback rotates the transcript (Claude Code
+panes only).** Confirmed 2026-09-12 on the builder pane: a rate-limit auto-fallback (see
+`herdr-cli-operational-knowledge.md`'s "silently auto-fall-back" note) switched the running
+`claude` process to a non-Anthropic backend (`glm-5.3-flash[1m]`, visible as an unprompted
+`/model` entry in scrollback) and, in doing so, started writing to a BRAND NEW, still-empty
+`~/.claude/projects/.../<session-id>.jsonl` under the SAME PID — the live process and its
+actual accumulated context kept running uninterrupted, but `claude_context.py` resolves
+strictly to whatever session file the PID's tasks-fd currently points to, so it correctly
+(not buggily) reports `unknown` — there is genuinely no usage event in that fresh file yet.
+This is a real gap in the file-based approach, not a parsing bug to fix in the script: there
+is no reliable field in the new file linking it back to the prior one's accumulated context.
+- **Detect it:** `unknown` / "no recent usage event" persisting across 2+ poll ticks for a
+  pane that is otherwise visibly active (`blocked`/`working`, not a fresh idle pane) — check
+  `herdr pane read <pane> --source visible` scrollback for an unprompted `/model` switch to
+  an id that isn't the project's configured Claude model.
+- **Recover, for that pane, that tick only:** read the visible footer instead (`herdr pane
+  read <pane> --source visible --lines 12`, the `tok Nk/Mk` figure, first number, per the
+  general Claude Code footer semantics above). Keep re-attempting `claude_context.py` every
+  tick regardless — once the fallback model itself produces an assistant turn, the new file
+  gets a usable usage event and the script read resumes on its own; don't keep using the
+  footer past that point.
+
+**Reporting format:** the Reading column is normally just the bare number — no prose, no
+restated reasoning. The one labeled exception is this confirmed model-fallback case: report
+it as `footer fallback: N` (not a bare number) so it's visibly flagged as a less-authoritative
+reading than the script's own, never presented as if the script produced it. Don't invent
+other prose exceptions; if a reading is genuinely `unknown` for any other reason, say `unknown`
+plus the reader's own `reason` field, not a paragraph.
+
 ## Soft-landing procedure (for builder / reviewer / investigator)
 
 Never hard-kill an agent mid-work — a soft landing exists specifically because breaking an
