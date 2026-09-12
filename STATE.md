@@ -1,4 +1,4 @@
-# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-12 by Inspector (Stage 7 closed — REQ-013 `e17262a0b` ledger reconciliation, inspector-cycle pilot run)
+# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-12 by Inspector (Stage 8 — REQ-NF-Build-001 T-202 build-guard TEST VERIFIED, not yet committed; inspector-cycle self-succession run)
 # Per-id lifecycle status lives ONLY in .claude/workflow-garminconnect/traceability.md (DEC-015 SSOT).
 # For a DEC's status read decisions.md. For a finding's severity/disposition read findings.md.
 # ALL superseded cursor narrative -> .claude/workflow-garminconnect/archive/state-history.md
@@ -54,14 +54,23 @@ OPEN:      **STAGE 6 CLOSED 2026-09-08, COMMITTED `4a72d2279`** — all six REQs
            Stage 8, the current next gate.**
 BLOCKING:  — (none; B-R025-01/A3-R021b-F2/B-R029-01 all closed 2026-09-08, see above)
 CASCADE:   — (DEC-015 fully propagated; ledger_drift_lint.py EXIT=0)
-LAST_CLV:  clv_findings.py 2026-09-11 (re-run post-B-R010-04 UI-wiring ledger update) **PASS —
-           0 OUTSTANDING / 393 OK over 393 rows** (0 MALFORMED, 0 UNKNOWN-SEVERITY,
-           0 UNKNOWN-DISPOSITION, 0 NEEDS-DISPOSITION, MISSING-EFFECT 0). Rows 388→393
-           (+B-R010-07..11: disposition detail only in findings.md/decisions.md per DEC-015).
-           `ledger_drift_lint.py` also re-run clean (silent pass). Orchestrator ran both directly
-           against the just-edited files, not carried forward from a prior pass. Prior: 2026-09-10
-           (post-REQ-010/DES-005 ledger update) PASS — 0 OUTSTANDING / 388 OK over 388 rows.
-NEXT_GATE: **Stage 8 (NF/coverage debt) is now the live gate** — Stage 6 CLOSED + COMMITTED
+LAST_CLV:  clv_findings.py 2026-09-12 (re-run post-REQ-NF-Build-001/T-202 ledger update) **PASS —
+           0 OUTSTANDING / 394 OK over 394 rows** (0 MALFORMED, 0 UNKNOWN-SEVERITY,
+           0 UNKNOWN-DISPOSITION, 0 NEEDS-DISPOSITION, MISSING-EFFECT 0). No new finding rows
+           this pass (REQ-NF-Build-001 opened none). `ledger_drift_lint.py` also re-run clean
+           (EXIT=0). Inspector ran both directly against the just-edited files, not carried
+           forward from a prior pass. NOTE: this run's row count (394) does not match
+           COUNTS-ADDENDUM-2's stated "findings 401 rows" — that figure was not independently
+           re-derived this pass and is flagged, not silently trusted; the live clv_findings.py
+           count above is authoritative. Prior: 2026-09-11 (post-B-R010-04 UI-wiring ledger
+           update) PASS — 0 OUTSTANDING / 393 OK over 393 rows.
+NEXT_GATE: **Stage 8's first item, REQ-NF-Build-001 (GC_WANT_GARMINCONNECT build regression
+           guard), is TEST VERIFIED 2026-09-12 (T-202, `garmin-build-guard` label, 2/2 Passed —
+           independently re-run by the Inspector, not just relayed) but NOT YET COMMITTED** —
+           see COUNTS-ADDENDUM-3 below. Next atomic unit after commit: pick the next Stage 8
+           NF item (Perf/Sec/Reliab/Obs/i18n bars — none started, see traceability.md's
+           REQ-NF-Perf-001..003/Sec-001..004/Reliab-001..002/Obs-001/i18n-001 rows).
+           Stage 6 CLOSED + COMMITTED
            2026-09-08 (`4a72d2279`, all six REQs TEST VERIFIED, all findings dispositioned, CLV
            PASS, full gate 37/37) and **Stage 7 CLOSED 2026-09-12** (history below, retained for
            context). Stage 7 history: REQ-009 (ToS notice) **COMMITTED `abd1e119b`**; REQ-014 (friendly error
@@ -156,6 +165,23 @@ COUNTS-ADDENDUM-2 (2026-09-12, not yet folded into the block above): REQ-NF-Pkg-
            surface) is now CLOSED (2026-09-12)** — its three remaining items are all committed:
            REQ-013 `e17262a0b`, REQ-NF-Pkg-001 `e609215f0`, REQ-NF-Compat-001 `0f654f4a5`.
            **NEXT: Stage 8 (NF/coverage debt)** — see NEXT_GATE below.
+COUNTS-ADDENDUM-3 (2026-09-12, not yet folded into the block above): Stage 8's first item,
+           REQ-NF-Build-001 (the `GC_WANT_GARMINCONNECT` CMake-flag build regression guard),
+           **TEST VERIFIED — NOT YET COMMITTED.** New T-202: `unittests/buildguard/
+           garmin_flag_build_guard.sh` + `unittests/buildguard/CMakeLists.txt` (ctest label
+           `garmin-build-guard`, TIMEOUT 5400, registered unconditionally for both flag values)
+           + a 4-line `unittests/CMakeLists.txt` wire-in. RED verified for the right reason
+           first (an injected B-R010-07-class leak failed the OFF leg at link with the expected
+           undefined reference; reverted, `git diff` empty on the touched file). GREEN
+           independently re-run by the Inspector (not just relayed): `ctest -L
+           garmin-build-guard` 2/2 Passed (OFF 741.14s, ON 768.24s — both full fresh builds,
+           since unrelated in-flight tree churn invalidated the scratch dirs' warm state
+           between the builder's own run and this one) and `ctest -L garmin-fast` re-confirmed
+           40/40 (315.11s), no collateral. Findings: none opened (only RED was the intentional,
+           reverted mutation). Judgment calls recorded in traceability.md's REQ-NF-Build-001 row
+           (CMake/CTest-only, not qmake-CI wiring; deliberately outside the `garmin-fast` label).
+           No pre-commit hook regex covers the three touched paths. **Awaiting commit** — next
+           Inspector cycle should commit this before picking Stage 8's next NF item (T-203).
 
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md
