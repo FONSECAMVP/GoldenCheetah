@@ -200,8 +200,16 @@ On receiving a rebirth prompt, before anything else:
    (topology can drift between the predecessor sending it and you checking).
 3. Retire the predecessor the same clean way a supervised Claude Code agent is refreshed:
    `herdr pane send-text <pane> "/exit"` then `herdr agent send-keys <target> enter` —
-   never a raw `herdr pane close` or kill. Verify the pane actually dropped to a plain
-   shell prompt.
+   never a raw `herdr pane close` or kill *while the process might still be mid-work*.
+   Verify the pane actually dropped to a plain shell prompt. **Then, because it's now
+   confirmed just an idle shell with nothing left to protect, close it:** `herdr pane close
+   <predecessor-pane-id>`. Confirmed 2026-09-12: closing the sole pane of a tab auto-closes
+   that tab too (no separate `herdr tab close` call needed) — verified via `herdr tab
+   list`/`workspace list` pane/tab counts dropping immediately after the close. Skipping
+   this step is exactly what caused the recurring "old Inspector's pane/tab sits open
+   forever" complaint: every prior succession retired the predecessor to a shell prompt but
+   never actually closed it, leaving a dead pane the user had to close by hand each time.
+   Do this AFTER confirming the shell prompt, never instead of the graceful exit above.
 4. Only then resume the normal cycle at step 3 (delegate work) and step 4 (poll agents) —
    confirm all 3 supervised agents, plus your own pane, are actually having their context
    usage read again on the established cadence (not just the one-off check from step 0),
