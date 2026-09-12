@@ -4,9 +4,12 @@
 
 - **Supervised agents (builder, reviewer, investigator, token-monitor): 250k hard budget.**
   Past this, start the soft-landing procedure below.
-- **The Inspector's own context: ~300-350k warn threshold.** Separate, higher, and the
-  restart-of-self is structurally different (see "Self-refresh" below) — never apply the
-  250k worker number to yourself.
+- **The Inspector's own context: ~300-350k warn threshold.** Separate, higher, and refreshed
+  by a different mechanism than a worker (see "Self-succession" below) — never apply the
+  250k worker number to yourself. Don't rely on pure self-observation to catch this: brief
+  the token-monitor with the Inspector's own pane id too (see
+  `agent-roster-and-dispatch.md`) so its report each poll tick includes your own number,
+  not just the other 3's.
 
 ## Soft-landing procedure (for builder / reviewer / investigator / token-monitor)
 
@@ -48,15 +51,60 @@ classifier as a self-persistence pattern, and separately confirmed by the user a
 principle, not just blocked in practice. Every soft-landing is a manual, deliberate action
 each time.
 
-## Self-refresh (Inspector's own context, not a supervised agent)
+## Self-succession (Inspector's own context, not a supervised agent)
 
-You cannot self-execute your own restart the way you refresh a worker — there's no
-controlling process left once you exit. At ~300-350k of your own tokens:
+A bare self-restart doesn't work — there's no controlling process left once you exit to
+verify the old one died and start the new one, the way you do for a worker. **Self-
+succession solves this by reversing who controls whom: spawn your successor FIRST, while
+you're still alive to do it, then have the successor (fresh, under threshold, with full
+agency) retire YOU — not the other way around.**
+
+At ~300-350k of your own tokens:
 1. Recognize the threshold and confirm you're at a safe stopping point (real, substantive
-   work, not deferral).
-2. Compose two ready-to-use prompts for the user: a handoff/context briefing (current
-   PIDs, stage/atomic-unit progress, what's independently verified vs. pending, known
-   findings not yet logged) and a fresh loop-kickoff prompt refined with anything learned
-   this cycle.
-3. Present both, then issue your own `/exit` — the user opens the fresh session with them.
-   That is the complete self-refresh, not a fallback.
+   work, not deferral) — same discipline as any soft-landing.
+2. Spawn a successor: `herdr tab create` a clean new tab (never squeeze into a busy one),
+   then `herdr agent start <new-name> --kind claude --pane <new-pane-id>`.
+3. Send the successor a SHORT rebirth prompt — NOT a context dump. It only needs to say,
+   in substance: "You are a reborn Inspector succeeding `<old-name>`/`<old-pane-id>`, which
+   hit its self-refresh threshold. Invoke the `inspector-cycle` skill now — its own step 1
+   (herdr) and step 2 (current stage) will fully orient you from live project state; you do
+   not need your predecessor's conversation history for that. Once you've verified your own
+   orientation, retire your predecessor's pane, then continue the cycle. Report the
+   succession to the user when done." No PIDs, no stage recap, no findings list — the cycle
+   itself supplies all of that once invoked, by design (see "Successor's first actions"
+   below).
+4. WAIT and verify the successor actually comes alive and starts working (`herdr agent get
+   <new-name>` transitions to `working`) before considering the handoff underway — don't
+   assume the prompt landed just because the send succeeded.
+5. The predecessor does NOT retire itself. That's the successor's job (step 5 below) —
+   this is the one thing that makes self-succession possible where bare self-restart
+   wasn't.
+6. NO SCRIPTS, same rule as any soft-landing: every step here is a deliberate, manual herdr
+   command issued by a live agent, never a detached background process.
+
+## Successor's first actions (what a reborn Inspector must do, unprompted)
+
+On receiving a rebirth prompt, before anything else:
+1. Invoke the `inspector-cycle` skill and run its own step 1 (herdr) and step 2 (current
+   stage) immediately — do not wait for, or ask for, a manual briefing from the
+   predecessor. The skill's whole design (re-derive every step fresh from live state, never
+   trust a cached snapshot) is exactly what makes a cold Inspector self-orienting: reading
+   `STATE.md`, the ledgers, and live herdr topology yourself tells you what's running and
+   what the next atomic unit is, the same way it would after any ordinary topology reset.
+2. Once you can state, from evidence you just read yourself, what's currently running and
+   what's next — you are oriented. Re-verify the predecessor's pane id via `herdr agent
+   list`/`workspace list` rather than trusting the rebirth prompt's claimed id blindly
+   (topology can drift between the predecessor sending it and you checking).
+3. Retire the predecessor the same clean way a supervised Claude Code agent is refreshed:
+   `herdr pane send-text <pane> "/exit"` then `herdr agent send-keys <target> enter` —
+   never a raw `herdr pane close` or kill. Verify the pane actually dropped to a plain
+   shell prompt.
+4. Only then resume the normal cycle at step 3 (delegate work). Report the completed
+   succession to the user plainly — this is a first-of-its-kind mechanism, worth narrating
+   even though it doesn't need permission (see `autonomy-boundary.md`: an internal,
+   fully-reversible operational action like this is not a human-in-the-loop gate).
+5. Ending a session that a user is actively, interactively attached to (rather than a
+   background herdr pane with no live viewer) is the one exception worth a direct heads-up
+   before retiring it — confirm with the user first in that specific case, since it
+   severs their current interactive connection even though the session itself is
+   resumable (`claude --resume <session-id>`).
