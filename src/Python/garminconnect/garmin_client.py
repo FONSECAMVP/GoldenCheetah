@@ -29,6 +29,27 @@ from typing import Any
 from gc_rate import rate_limited, with_retry
 
 try:
+    import os
+    import sys
+
+    if hasattr(os, "RTLD_DEEPBIND"):
+        # B-STAGE9-06: GoldenCheetah's own linked libcurl-gnutls.so.4 (loaded
+        # globally in-process for its own, unrelated networking) interposes
+        # curl_cffi's statically-bundled, patched libcurl-impersonate symbols
+        # via normal ELF global symbol resolution -- curl_cffi's wrapper has
+        # no -Bsymbolic protection. This forces curl_cffi's own extension to
+        # bind to itself instead of the host process's already-loaded system
+        # libcurl. RTLD_DEEPBIND is a glibc/Linux-only extension (not on
+        # macOS/Windows) -- the interposition this guards against is itself
+        # an ELF/glibc-specific loader behavior, so skipping it elsewhere is
+        # not a coverage gap on those platforms.
+        _old_dlopen_flags = sys.getdlopenflags()
+        try:
+            sys.setdlopenflags(_old_dlopen_flags | os.RTLD_DEEPBIND)
+            import curl_cffi._wrapper  # noqa: F401 — import-for-side-effect
+        finally:
+            sys.setdlopenflags(_old_dlopen_flags)
+
     import garminconnect as _gc
 except ImportError:
     # Library not present in dev/test environments without the runtime dep

@@ -2525,3 +2525,29 @@ add_test(NAME testGarminConnectPasswordPersistence COMMAND testGarminConnectPass
 set_tests_properties(testGarminConnectPasswordPersistence PROPERTIES
     LABELS "garmin-sec-guard"
     TIMEOUT 300)
+
+# --- B-STAGE9-06 — curl_cffi ELF symbol interposition regression -------------
+# Pure-Python/ELF-loader bug (garmin_client.py's RTLD_DEEPBIND import guard) —
+# nothing here is Qt or CMake-C++-specific, so this wraps the real pytest
+# regression (src/Python/garminconnect/tests/test_curl_cffi_interposition.py)
+# as a ctest entry via the system Python3 interpreter, mirroring
+# unittests/buildguard/CMakeLists.txt's Python3_EXECUTABLE pattern. Touches a
+# REAL CPython + the real installed curl_cffi/garminconnect packages (the
+# ONLY test in this tree that exercises garmin_client.py's actual
+# `import garminconnect` path rather than a monkeypatched fake) — labeled
+# `garmin-py`, never `garmin-fast`, matching that label's existing meaning.
+# Skips itself (via the test file's own pytest.mark.skipif) on non-Linux,
+# where os.RTLD_DEEPBIND does not exist — not a coverage gap there, since the
+# bug it guards against is itself a Linux/glibc ELF loader behavior.
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
+add_test(
+    NAME testGarminCurlCffiInterposition
+    COMMAND "${Python3_EXECUTABLE}" -m pytest
+            "${CMAKE_SOURCE_DIR}/src/Python/garminconnect/tests/test_curl_cffi_interposition.py"
+            -v
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/src/Python/garminconnect"
+)
+set_tests_properties(testGarminCurlCffiInterposition PROPERTIES
+    LABELS "garmin-py"
+    TIMEOUT 60)

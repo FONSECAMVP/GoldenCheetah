@@ -1,4 +1,4 @@
-# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-13 by Inspector (Stage 9 live-account connect attempt surfaced B-STAGE9-01 — real production defect, Py_Initialize() never called when GC_WANT_GARMINCONNECT=ON/GC_WANT_PYTHON=OFF; DEC-052 accepted, builder dispatched. Blocking Stage 9's credential-entry gate until fixed.)
+# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-13 by Inspector (B-STAGE9-06 FIXED — RTLD_DEEPBIND guard applied in garmin_client.py + regression test (testGarminCurlCffiInterposition, `garmin-py`); builder GREEN 43/43 (`ctest -L "garmin-fast|garmin-py"`, was 42); `garmin_codex_reviewer` independent delta-check PASS, no defects; not yet committed. B-STAGE9-07 (pre-existing PythonEmbed.cpp Py_SetProgramName dangling-pointer bug, non-causal side finding) — user chose fix-now via AskUserQuestion, queued next for the builder. B-STAGE9-01..05 remain FIXED/COMMITTED `173135907`. Stage 9's live-account acceptance criterion still not met — pending re-test attempt #3 after this commit.)
 # Per-id lifecycle status lives ONLY in .claude/workflow-garminconnect/traceability.md (DEC-015 SSOT).
 # For a DEC's status read decisions.md. For a finding's severity/disposition read findings.md.
 # ALL superseded cursor narrative -> .claude/workflow-garminconnect/archive/state-history.md
@@ -54,7 +54,20 @@ OPEN:      **STAGE 6 CLOSED 2026-09-08, COMMITTED `4a72d2279`** — all six REQs
            Stage 8, the current next gate.**
 BLOCKING:  — (none; B-R025-01/A3-R021b-F2/B-R029-01 all closed 2026-09-08, see above)
 CASCADE:   — (DEC-015 fully propagated; ledger_drift_lint.py EXIT=0)
-LAST_CLV:  clv_findings.py 2026-09-13 (re-run post-B-STAGE9-01..05 findings-ledger closure —
+LAST_CLV:  clv_findings.py 2026-09-13 (re-run post-B-STAGE9-06 closure — builder GREEN,
+           reviewer delta-check PASS). **PASS — 0 OUTSTANDING / 406 OK over 406 rows.**
+           `ledger_drift_lint.py` re-run clean (EXIT=0) against both edited files
+           (STATE.md/findings.md).
+           Prior:
+           2026-09-13 (re-run post-B-STAGE9-06 findings-ledger addition — live
+           Stage-9 re-test #2's new curl_cffi/garminconnect defect, disposition `open`,
+           investigation dispatched to `pch_investigator`). **FAIL — 1 OUTSTANDING / 404 OK over
+           405 rows** — EXPECTED, not a ledger defect: B-STAGE9-06 is a genuinely open blocking
+           finding, correctly carrying a `BLOCKS: {STAGE:9, TASK:REQ-002, TASK:REQ-009,
+           TASK:REQ-012, TASK:REQ-017}` effect set (MISSING-EFFECT=0). `ledger_drift_lint.py`
+           re-run clean (EXIT=0) against both edited files (STATE.md/findings.md).
+           Prior:
+           2026-09-13 (re-run post-B-STAGE9-01..05 findings-ledger closure —
            all five findings flipped to a closing disposition, `fixed`/`superseded`, once the
            Inspector independently re-verified both build systems GREEN). **PASS — 0
            OUTSTANDING / 404 OK over 404 rows** (400 + the 4 new B-STAGE9-02..05 rows;
@@ -483,11 +496,57 @@ STAGE-9-BLOCKER (2026-09-13, discovered on the FIRST real live-account connect a
            the Inspector on both build systems after the final fix:** CMake `ctest -L
            "garmin-fast|garmin-py"` 42/42 (0 failures, `testPyProcessBootstrap` 6/6), qmake
            `make -j8` exit 0 with `PyProcessBootstrap.o` compiled via its own non-PCH rule and
-           the `GoldenCheetah` binary relinked. The credential-entry human-in-the-loop gate
-           itself is NOT re-opened — the app already launched and the user already entered real
-           credentials once; the SAME live-account test needs to be repeated now that the fix
-           is built, not a fresh credential round. **Next: Inspector rebuilds/launches the real
-           qmake release binary and re-attempts the live Garmin login with the user.**
+           the `GoldenCheetah` binary relinked. **COMMITTED `173135907`.**
+
+STAGE-9-BLOCKER-2 (2026-09-13, live-account re-test #2, post-DEC-052 fix — B-STAGE9-06,
+           still OPEN): Inspector launched the freshly-built qmake binary (confirmed containing
+           `PyProcessBootstrap` symbols, confirmed `GC_WANT_GARMINCONNECT=ON`/`GC_WANT_PYTHON`
+           off in the active `gcconfig.pri`); user re-entered real credentials into the app's own
+           dialog. B-STAGE9-01's fix genuinely works — Python now bootstraps for real (proof: the
+           UI showed the classified `GarminErrors::translate(Network)` message, not the old
+           generic `Unknown` fold) — but the `garminconnect` 0.3.15 auth-strategy chain itself now
+           fails end-to-end: two `ImpersonateError: Impersonating chrome120/chrome150 is not
+           supported`, a real `429` IP rate-limit, a real `403` Cloudflare bot challenge, and a
+           genuine `AttributeError: 'RequestsCookieJar' object has no attribute 'jar'` library
+           bug (see B-STAGE9-06, findings.md, for full log detail and what's already been ruled
+           out — single curl_cffi install confirmed, no dynamic libcurl symbol collision
+           confirmed, identical calls confirmed working from a plain `python3` CLI in the same
+           env). Root cause not yet isolated — appears specific to curl_cffi's impersonation
+           running INSIDE GoldenCheetah's embedded-CPython process. **Dispatched to
+           `pch_investigator`** (isolated scratch-dir repro: bare embedded-CPython harness
+           mirroring `PyProcessBootstrap.cpp`'s init flags, testing both a Qt-free embed and a
+           non-main-OS-thread call, to isolate the variable).
+
+           **Root cause CONFIRMED (2026-09-13)** via the investigator's controlled A/B repro:
+           ELF symbol interposition — GoldenCheetah's own linked `libcurl-gnutls.so.4` (system,
+           GnuTLS) is already loaded process-globally by the time Python dlopens `curl_cffi`'s
+           wrapper, which statically bundles its own patched libcurl-impersonate (BoringSSL)
+           but exports its symbols with no `-Bsymbolic` protection — so `curl_easy_init`/
+           `curl_version` silently bind to the wrong (system) libcurl while `curl_easy_impersonate`
+           binds to curl_cffi's own `.so`, an ABI/internal-state mismatch that makes every Chrome
+           impersonation target report "not supported." Proven NOT to be CPython embedding, the
+           GIL, or `GarminAuthChain`'s QThread (a bare Qt-free embed on both the init thread and
+           an explicit pthread worker does NOT reproduce it; globally preloading
+           `libcurl-gnutls.so.4` DOES reproduce it, in the same bare harness). Fix: import
+           `curl_cffi`'s wrapper with `os.RTLD_DEEPBIND` (glibc/Linux-only, guarded by
+           `hasattr`) once, before `garminconnect` is imported, in `src/Python/garminconnect/
+           garmin_client.py` — the single documented choke point for that import. **Dispatched
+           to the builder**, TDD (RED via a test that recreates the interposition precondition,
+           then GREEN on the fix), not yet complete.
+
+           Also surfaced, non-causal: **B-STAGE9-07**, a pre-existing dangling-pointer bug in
+           `PythonEmbed.cpp`'s `Py_SetProgramName()` call (traces back through several
+           historical commits, not from this session's diff). Per this project's own
+           scope-boundary policy for pre-existing/foundational code, surfaced to the user via
+           `AskUserQuestion` — **user chose fix-now**, queued as its own atomic unit (separate
+           commit) immediately after B-STAGE9-06 reaches GREEN.
+
+           **Next: builder GREEN on B-STAGE9-06 → reviewer delta-check → Inspector independent
+           rebuild/re-verify on both build systems → commit → same cycle for B-STAGE9-07 → THEN
+           re-attempt the live-account test with the user a third time.** This does NOT reopen
+           the credential-entry human-in-the-loop gate itself — the user already entered real
+           credentials twice; only a fix-then-retry loop remains, not fresh credential entry
+           each time unless the UI state requires it.
 
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md
