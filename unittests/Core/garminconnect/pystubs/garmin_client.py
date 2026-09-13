@@ -64,6 +64,211 @@ class GarminError(Exception):
         super().__init__(message)
 
 
+# Reviewer delta-fix #1 regression fixture — a metaclass whose __getattribute__
+# makes __module__/__qualname__ resolve to a non-str object with a suspicious
+# __str__. Overriding __getattribute__ (rather than defining __module__/
+# __qualname__ directly in the metaclass body) is required: the compiler
+# injects its own __qualname__ entry into every class namespace, so a
+# same-named class-body definition collides with it and CPython rejects the
+# metaclass's own creation ("type __qualname__ must be a str, not property").
+# Intercepting at __getattribute__ time sidesteps that collision entirely.
+class NonStrAttrsMeta(type):
+    def __getattribute__(cls, name):
+        if name in ("__module__", "__qualname__"):
+            class _Leaky:
+                def __str__(self):
+                    return "LEAKED-SECRET-VIA-%s" % name.strip("_").upper()
+            return _Leaky()
+        return type.__getattribute__(cls, name)
+
+
+class NonStrAttrsError(Exception, metaclass=NonStrAttrsMeta):
+    """pyExceptionTypeName() must treat these non-str attrs as absent, never
+    stringify them — see the reviewer delta-fix #1 test in
+    testGarminConnectPyAdapter.cpp."""
+
+
+# Reviewer delta-fix #2 regression fixture — __qualname__ access raises
+# (simulating "absent"), forcing the tp_name fallback branch. A normal `class`
+# statement always gives a heap type a BARE (unqualified) raw tp_name — the
+# "module.Class" look of repr()/type.__module__/type.__qualname__ is
+# reconstructed on demand by CPython's generic getters, not baked into
+# tp_name itself. A real extension type authored directly in C (e.g.
+# curl_cffi's) CAN set tp_name to an already-dotted static string, so this
+# fixture reproduces that shape explicitly: type()'s 3-arg form does not
+# validate that `name` is a bare identifier, so passing a dotted string here
+# makes the resulting type's raw tp_name literally
+# "curl_cffi.requests.exceptions.ImpersonateError" — proving the old code's
+# unconditional moduleName+"."+qualName concatenation double-prefixed it.
+class QualnameRaisesMeta(type):
+    def __getattribute__(cls, name):
+        if name == "__qualname__":
+            raise AttributeError("qualname intentionally unavailable")
+        return type.__getattribute__(cls, name)
+
+
+TpNameFallbackError = QualnameRaisesMeta(
+    "curl_cffi.requests.exceptions.ImpersonateError", (Exception,), {}
+)
+"""pyExceptionTypeName() must fall back to tp_name directly here, without
+doubling the module prefix — see the reviewer delta-fix #2 test in
+testGarminConnectPyAdapter.cpp."""
+
+
+# Reviewer delta-fix #3 regression fixture — __module__ resolves to a
+# genuine `str` (passes PyUnicode_Check, so strictUnicodeAttr() accepts it),
+# but its CONTENT is not a real module path: Python lets any ordinary class
+# have __module__ reassigned to arbitrary string content, so a foreign or
+# adversarial exception type could smuggle secret-shaped text through here.
+# Unlike NonStrAttrsMeta above (wrong TYPE), this fixture is deliberately the
+# wrong SHAPE of an otherwise-valid str, exercising the grammar check rather
+# than the PyUnicode_Check gate.
+class BadModuleShapeMeta(type):
+    def __getattribute__(cls, name):
+        if name == "__module__":
+            return "sk-LEAKED-SECRET-abc123"
+        return type.__getattribute__(cls, name)
+
+
+class BadModuleShapeError(Exception, metaclass=BadModuleShapeMeta):
+    """pyExceptionTypeName() must reject a non-identifier-shaped __module__
+    string content, even though it passes PyUnicode_Check — see the reviewer
+    delta-fix #3 test in testGarminConnectPyAdapter.cpp."""
+
+
+# Reviewer delta-fix #4 regression fixtures — grammar-shaped is not the same
+# as safe: plenty of real secrets (API keys/tokens) are themselves
+# identifier-shaped (e.g. "hunter2", "sk_live_abc123") and would pass
+# isSafeDottedName() cleanly, so the grammar check alone (delta-fix #3)
+# cannot close this gap. __module__/__qualname__ are ordinary writable str
+# attributes on any class — no metaclass trickery needed to reassign them,
+# unlike delta-fix #1's non-str fixture.
+class ForeignModuleError(Exception):
+    """__module__ reassigned to a genuine, grammar-valid identifier
+    ("hunter2") that is NOT one of this integration's actual dependency-
+    chain module roots. pyExceptionTypeName() must reject it as foreign
+    rather than surface it — see the reviewer delta-fix #4 negative-case test
+    in testGarminConnectPyAdapter.cpp."""
+
+
+ForeignModuleError.__module__ = "hunter2"
+
+
+class AllowlistedThirdPartyError(Exception):
+    """__module__ reassigned to an ALLOWLISTED module path
+    (curl_cffi.requests.exceptions) that this class is NOT actually an
+    attribute of — a claimed-but-unbacked module string. Originally written
+    (delta-fix #4) to prove an allowlisted module string still produces its
+    full qualified name; delta-fix #6 found the allowlist-membership check
+    alone doesn't verify genuine provenance, so THIS fixture is exactly that
+    spoof and is now repurposed as the delta-fix #6 regression test. See
+    testGarminConnectPyAdapter.cpp."""
+
+
+AllowlistedThirdPartyError.__module__ = "curl_cffi.requests.exceptions"
+
+
+# Reviewer delta-fix #6 genuine-positive-path fixture — the pystub cannot
+# fabricate a class that is ACTUALLY an attribute of a real imported module
+# without importing a real module, so this imports the real, already-
+# installed `requests` package (transitively bundled with curl_cffi in the
+# real adapter's dependency chain — see requirements.txt) and raises one of
+# its genuine exception classes unmodified. Its __module__/__qualname__ are
+# never touched — they are exactly what a real dependency-backed exception
+# looks like, and isGenuineAllowlistedException()'s sys.modules walk must
+# resolve `requests.exceptions.ConnectionError` to this exact, real type
+# object. Guarded import: if `requests` isn't importable in some environment,
+# the scenario reports that explicitly rather than silently skipping.
+try:
+    import requests.exceptions as _real_requests_exceptions
+except ImportError:
+    _real_requests_exceptions = None
+
+
+# Reviewer delta-fix #5 regression fixtures — the delta-fix #4 allowlist
+# check only fired when moduleName was non-empty, leaving two bypasses open
+# whenever moduleName is empty (absent/non-str/invalid-shape): it fell
+# through to the qualname-or-tp_name logic UNGUARDED, and both qualName and
+# tp_name are independently attacker-settable (same as __module__ itself).
+class ModuleAndQualnameRaiseMeta(type):
+    def __getattribute__(cls, name):
+        if name in ("__module__", "__qualname__"):
+            raise AttributeError("%s intentionally unavailable" % name)
+        return type.__getattribute__(cls, name)
+
+
+# Bypass (a): BOTH __module__ AND __qualname__ are absent (access raises for
+# each independently), so pyExceptionTypeName() has no signal left except
+# tp_name — genuinely exercising the tp_name-fallback branch (unlike a
+# fixture that leaves __qualname__ readable, which would resolve via the
+# qualname-concatenation path instead, see bypass (b)). tp_name is crafted
+# here to a grammar-valid, secret-shaped string via type()'s 3-arg form
+# (same technique as delta-fix #2's TpNameFallbackError fixture).
+ModuleAbsentTpNameBypassError = ModuleAndQualnameRaiseMeta("sk_live_secret_abc", (Exception,), {})
+"""pyExceptionTypeName() must reject this as foreign — an absent __module__
+must not let a crafted tp_name substitute for module validation. See the
+reviewer delta-fix #5 bypass-(a) test in testGarminConnectPyAdapter.cpp."""
+
+
+class ModuleTypeConfusionMeta(type):
+    def __getattribute__(cls, name):
+        if name == "__module__":
+            class _Leaky:
+                def __str__(self):
+                    return "LEAKED-VIA-MODULE"
+            return _Leaky()
+        return type.__getattribute__(cls, name)
+
+
+# Bypass (b): __module__ resolves to a non-str object (delta-fix #1 shape),
+# so moduleName is empty, but __qualname__ is a genuine, grammar-valid str
+# ("hunter2") — pyExceptionTypeName() must not default moduleName to
+# "builtins" and emit "builtins.hunter2".
+class ModuleNonStrQualnameBypassError(Exception, metaclass=ModuleTypeConfusionMeta):
+    """pyExceptionTypeName() must reject this as foreign — an absent/non-str
+    __module__ must not let a merely-valid-shaped __qualname__ default to a
+    "builtins.<qualname>" name. See the reviewer delta-fix #5 bypass-(b) test
+    in testGarminConnectPyAdapter.cpp."""
+
+
+ModuleNonStrQualnameBypassError.__qualname__ = "hunter2"
+
+
+# Reviewer delta-fix #7 regression fixture — isGenuineAllowlistedException()
+# only proves tp_name resolves to a REAL, genuinely-registered object; "real"
+# and "allowlisted" are not the same guarantee. This fixture makes __module__
+# resolve to a genuinely ALLOWLISTED string ("builtins", passing delta-fix
+# #5's gate) while __qualname__ is absent (forcing the tp_name-fallback
+# branch), and tp_name is crafted to a module root ("os") that is NOT on
+# kAllowedModuleRoots. Unlike a merely-claimed, unbacked tp_name (which the
+# EXISTING provenance walk already rejects on its own, making a RED/GREEN
+# distinction unobservable), this fixture is genuinely, really registered as
+# an attribute of the real, already-imported `os` module — so
+# isGenuineAllowlistedException()'s walk WOULD succeed without delta-fix #7's
+# new module-root check, proving the fix closes a real, otherwise-leaking gap
+# rather than one the provenance walk already caught for an unrelated reason.
+import os as _os_for_delta_fix_7_fixture
+
+
+class ModuleBuiltinsQualnameRaisesMeta(type):
+    def __getattribute__(cls, name):
+        if name == "__module__":
+            return "builtins"
+        if name == "__qualname__":
+            raise AttributeError("qualname intentionally unavailable")
+        return type.__getattribute__(cls, name)
+
+
+TpNameNotAllowlistedError = ModuleBuiltinsQualnameRaisesMeta(
+    "os.TpNameNotAllowlistedError", (Exception,), {}
+)
+_os_for_delta_fix_7_fixture.TpNameNotAllowlistedError = TpNameNotAllowlistedError
+"""pyExceptionTypeName() must reject this as foreign — an allowlisted
+__module__ claim must not let a genuinely-real (really registered on `os`)
+but non-allowlisted tp_name substitute for module validation. See the
+reviewer delta-fix #7 test in testGarminConnectPyAdapter.cpp."""
+
+
 class GarminClient:
     def __init__(self, email, password):
         # AUTH-ONLY (DEC-014 Option B): exactly (email, password); no tokenstore
@@ -134,6 +339,26 @@ class GarminClient:
             raise GarminError("rate_limit", "stub: too many requests")
         if SCENARIO == "value_error":
             raise ValueError("stub: not a garmin error")
+        if SCENARIO == "type_confusion_error":
+            raise NonStrAttrsError("stub: non-str __module__/__qualname__")
+        if SCENARIO == "tp_name_fallback_error":
+            raise TpNameFallbackError("stub: __qualname__ raises, tp_name already module-qualified")
+        if SCENARIO == "bad_module_shape_error":
+            raise BadModuleShapeError("stub: __module__ is a str but not name-shaped")
+        if SCENARIO == "foreign_module_error":
+            raise ForeignModuleError("stub: __module__ is identifier-shaped but not allowlisted")
+        if SCENARIO == "allowlisted_third_party_error":
+            raise AllowlistedThirdPartyError("stub: __module__ is a real allowlisted third-party path")
+        if SCENARIO == "module_absent_tp_name_bypass_error":
+            raise ModuleAbsentTpNameBypassError("stub: __module__ absent, tp_name crafted")
+        if SCENARIO == "module_non_str_qualname_bypass_error":
+            raise ModuleNonStrQualnameBypassError("stub: __module__ non-str, __qualname__ = 'hunter2'")
+        if SCENARIO == "genuine_allowlisted_module_error":
+            if _real_requests_exceptions is None:
+                raise GarminError("unknown", "stub: real requests package unavailable in this environment")
+            raise _real_requests_exceptions.ConnectionError("stub: genuine dependency-backed exception")
+        if SCENARIO == "tp_name_not_allowlisted_error":
+            raise TpNameNotAllowlistedError("stub: __module__ allowlisted, tp_name module root is not")
         raise GarminError("unknown", "stub: unrecognized scenario %r" % (SCENARIO,))
 
     # T-036 / REQ-003 (MFA) — resume the pending MFA session on the SAME retained

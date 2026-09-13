@@ -102,6 +102,8 @@ void GarminWorker::emitAuthOutcome(const PyAuthOutcome& outcome, QUuid requestId
         GarminAuthFailure err;
         err.kind = GarminAuthFailure::Unknown;
         err.translatedMessage = outcome.rawMessage;
+        // Stage 9 diagnostic — see PyAuthOutcome::exceptionType's doc comment.
+        err.exceptionType = outcome.exceptionType;
         emit failed(requestId, err);
         return;
     }

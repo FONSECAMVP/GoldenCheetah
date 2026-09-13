@@ -245,6 +245,10 @@ class TestGarminConnectPyAdapter : public QObject
 
         QCOMPARE(out.kind, PyAuthOutcome::AuthFailed);
         QCOMPARE(out.rawMessage, QStringLiteral("stub: bad credentials"));
+        // Stage 9 diagnostic: exceptionType is only meaningful on the Unknown
+        // path (see PyAuthOutcome::exceptionType's doc comment) — a classified
+        // GarminError kind must leave it empty.
+        QVERIFY2(out.exceptionType.isEmpty(), "exceptionType must be empty for a classified GarminError kind (Auth)");
     }
 
     // (c) GarminError kind='connection' -> Network. Catches a collapse-all-
@@ -292,6 +296,239 @@ class TestGarminConnectPyAdapter : public QObject
         QCOMPARE(out.kind, PyAuthOutcome::Unknown);
         QVERIFY2(out.rawMessage.contains(QStringLiteral("stub: not a garmin error")),
                  "rawMessage should carry str(e) of the foreign exception");
+        // Stage 9 diagnostic (reviewer delta-fix, security): the raw message
+        // text is untrusted and unsafe to persist to the on-disk developer
+        // log verbatim (it can carry request payloads/headers/tokens, or a
+        // pathological library bug could even embed the password). Instead
+        // classifyPendingException() must surface the module-qualified
+        // exception TYPE name only — a type name cannot carry interpolated
+        // secret material by construction. The stub raises a bare
+        // `ValueError`, a builtin, so __module__ is "builtins".
+        QCOMPARE(out.exceptionType, QStringLiteral("builtins.ValueError"));
+    }
+
+    // Reviewer delta-fix #1 (security) — a custom metaclass makes the raised
+    // exception's __module__ AND __qualname__ resolve to non-str objects
+    // whose __str__ returns "LEAKED-SECRET-VIA-...". pyExceptionTypeName()
+    // must treat a non-unicode attribute as absent (never stringify it via
+    // toQString()'s str(o) fallback) — otherwise an adversarial/unusual
+    // foreign exception type could leak arbitrary text through a field whose
+    // entire contract is "carries no leak surface" (PyAuthOutcome::
+    // exceptionType's doc comment).
+    void nonStrModuleAndQualnameNeverLeakIntoExceptionType()
+    {
+        setScenario("type_confusion_error");
+
+        PyEmbeddedAdapter adapter(kStubsDir);
+        const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        QCOMPARE(out.kind, PyAuthOutcome::Unknown);
+        QVERIFY2(!out.exceptionType.contains(QStringLiteral("LEAKED-SECRET")),
+                 "a non-str __module__/__qualname__ must never be stringified into exceptionType");
+        // Reviewer delta-fix #5: a non-str (hence empty) moduleName no longer
+        // falls back to a "builtins.<class name>"-shaped name — the unified
+        // gate now requires moduleName to be present+valid+allowlisted
+        // before ANY derived name (qualname- or tp_name-based) is emitted,
+        // so an empty moduleName folds uniformly to foreign_exception.
+        QCOMPARE(out.exceptionType, QStringLiteral("foreign_exception"));
+    }
+
+    // Reviewer delta-fix #2 (correctness) — __qualname__ access raises,
+    // forcing the tp_name fallback branch, AND the raised type's raw tp_name
+    // is already a dotted, fully-qualified string (the stub constructs it via
+    // type()'s 3-arg form with a dotted name — see the fixture's comment for
+    // why this is the honest reproduction of a real C-extension type's shape,
+    // e.g. curl_cffi.requests.exceptions.ImpersonateError). The OLD code
+    // unconditionally prepended moduleName + "." on top of this, doubling the
+    // prefix (e.g. "garmin_client.curl_cffi.requests.exceptions.
+    // ImpersonateError"); the fix must return tp_name verbatim instead.
+    // Reviewer delta-fix #5 note: this fixture's moduleName is "garmin_client"
+    // (the real, unintercepted __module__ of the type()-constructed class —
+    // only __qualname__ is overridden) which is present/valid/allowlisted,
+    // so the delta-fix #5 gate passes it through unaffected.
+    //
+    // Reviewer delta-fix #6 UPDATE: this fixture's tp_name
+    // ("curl_cffi.requests.exceptions.ImpersonateError") was ALWAYS a
+    // synthetic claim — this pystub never imports real curl_cffi, so no such
+    // object is genuinely registered in sys.modules. Delta-fix #6's
+    // provenance walk now correctly rejects it as foreign, which is exactly
+    // the class of gap delta-fix #6 closes: a crafted dotted tp_name can no
+    // longer produce ANY name, doubled-prefix or otherwise. Noted limitation
+    // (per the reviewer's own guidance): real curl_cffi exception classes are
+    // plain Python `class` definitions with a BARE (undotted) tp_name
+    // matching their __qualname__ (confirmed via runtime inspection of the
+    // actual installed package), so a genuinely-backed reproduction of
+    // "missing __qualname__ + dotted tp_name" does not exist anywhere in
+    // this project's real dependency chain — there is nothing to construct
+    // a still-passing positive-path variant of this specific scenario from.
+    void qualnameFallbackToTpNameDoesNotDoubleModulePrefix()
+    {
+        setScenario("tp_name_fallback_error");
+
+        PyEmbeddedAdapter adapter(kStubsDir);
+        const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        QCOMPARE(out.kind, PyAuthOutcome::Unknown);
+        QCOMPARE(out.exceptionType, QStringLiteral("foreign_exception"));
+    }
+
+    // Reviewer delta-fix #3 (security) — __module__ resolves to a genuine
+    // `str` (passes PyUnicode_Check, so delta-fix #1's strictUnicodeAttr()
+    // gate alone does NOT catch this), but its content is not a real module
+    // path — "sk-LEAKED-SECRET-abc123" rather than an ASCII dotted
+    // identifier. Nothing stops a foreign/adversarial exception class from
+    // reassigning __module__ to arbitrary string content, so
+    // pyExceptionTypeName() must validate the SHAPE of an already-str value,
+    // not just its type, before surfacing it.
+    void nonIdentifierShapedModuleNeverLeaksIntoExceptionType()
+    {
+        setScenario("bad_module_shape_error");
+
+        PyEmbeddedAdapter adapter(kStubsDir);
+        const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        QCOMPARE(out.kind, PyAuthOutcome::Unknown);
+        QVERIFY2(!out.exceptionType.contains(QStringLiteral("LEAKED-SECRET")),
+                 "a str __module__ whose content is not name-shaped must never be surfaced verbatim");
+        // Reviewer delta-fix #5: an invalid-shape (hence empty) moduleName no
+        // longer falls back to a "builtins.<class name>"-shaped name — see
+        // the delta-fix #5 comment on nonStrModuleAndQualnameNeverLeak... above.
+        QCOMPARE(out.exceptionType, QStringLiteral("foreign_exception"));
+    }
+
+    // Reviewer delta-fix #4 (security) — grammar-shaped is not the same as
+    // safe: __module__ is reassigned to "hunter2", a genuine, grammar-valid
+    // ASCII identifier (would pass delta-fix #3's isSafeDottedName() cleanly)
+    // that is nonetheless NOT one of this integration's actual
+    // dependency-chain module roots. Real secrets (API keys/tokens) are
+    // often identifier-shaped too, so pyExceptionTypeName() must reject any
+    // module string outside the fixed allowlist rather than surface it.
+    void nonAllowlistedModuleFoldsToForeignException()
+    {
+        setScenario("foreign_module_error");
+
+        PyEmbeddedAdapter adapter(kStubsDir);
+        const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        QCOMPARE(out.kind, PyAuthOutcome::Unknown);
+        QCOMPARE(out.exceptionType, QStringLiteral("foreign_exception"));
+        QVERIFY2(!out.exceptionType.contains(QStringLiteral("hunter2")),
+                 "an identifier-shaped but non-allowlisted __module__ must never be surfaced verbatim");
+    }
+
+    // Reviewer delta-fix #6 (security) — REPURPOSED from delta-fix #4's
+    // positive-case test. That round proved an allowlisted __module__
+    // string produces a full qualified name; delta-fix #6 found this exact
+    // shape IS the spoof — __module__ is a claimed-but-unbacked allowlisted
+    // string ("curl_cffi.requests.exceptions") that this class is NOT
+    // actually an attribute of. isAllowedModuleRoot()'s string check alone
+    // can't tell claimed from genuine; isGenuineAllowlistedException()'s
+    // sys.modules + attribute-chain walk (compared by raw pointer identity)
+    // now correctly rejects it as foreign. See
+    // genuineDependencyBackedExceptionStillProducesFullyQualifiedName()
+    // below for the still-passing REAL positive-path replacement.
+    void spoofedAllowlistedModuleClaimFoldsToForeignException()
+    {
+        setScenario("allowlisted_third_party_error");
+
+        PyEmbeddedAdapter adapter(kStubsDir);
+        const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        QCOMPARE(out.kind, PyAuthOutcome::Unknown);
+        QCOMPARE(out.exceptionType, QStringLiteral("foreign_exception"));
+        QVERIFY2(!out.exceptionType.contains(QStringLiteral("AllowlistedThirdPartyError")),
+                 "a claimed-but-unbacked allowlisted __module__ must never be surfaced verbatim, "
+                 "even though the string itself is on the allowlist");
+    }
+
+    // Reviewer delta-fix #6 genuine-positive-path test — a REAL, unmodified
+    // exception raised from the real, already-installed `requests` package
+    // (transitively bundled with curl_cffi in the actual adapter's
+    // dependency chain). Its __module__/__qualname__ are never touched, so
+    // isGenuineAllowlistedException()'s sys.modules walk must resolve
+    // "requests.exceptions.ConnectionError" to this exact real type object
+    // by pointer identity, proving the delta-fix #6 provenance check does
+    // not regress genuine diagnostic value for a real dependency exception.
+    void genuineDependencyBackedExceptionStillProducesFullyQualifiedName()
+    {
+        setScenario("genuine_allowlisted_module_error");
+
+        PyEmbeddedAdapter adapter(kStubsDir);
+        const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        QCOMPARE(out.kind, PyAuthOutcome::Unknown);
+        QVERIFY2(out.rawMessage != QStringLiteral("stub: real requests package unavailable in this environment"),
+                 "the real `requests` package must be importable in this test environment for this test to be "
+                 "meaningful — see the pystub's guarded import");
+        QCOMPARE(out.exceptionType, QStringLiteral("requests.exceptions.ConnectionError"));
+    }
+
+    // Reviewer delta-fix #5 bypass (a) — __module__ is entirely absent
+    // (attribute access raises), so moduleName is empty; delta-fix #4's
+    // allowlist check only fired for a NON-empty moduleName, so this fell
+    // through unguarded to the tp_name fallback. The fixture crafts tp_name
+    // to a grammar-valid, secret-shaped string ("sk_live_secret_abc") via
+    // type()'s 3-arg form (same technique delta-fix #2's TpNameFallbackError
+    // used legitimately) to prove tp_name is exactly as attacker-settable as
+    // moduleName. Must fold to foreign_exception, not surface tp_name.
+    void moduleAbsentWithCraftedTpNameFoldsToForeignException()
+    {
+        setScenario("module_absent_tp_name_bypass_error");
+
+        PyEmbeddedAdapter adapter(kStubsDir);
+        const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        QCOMPARE(out.kind, PyAuthOutcome::Unknown);
+        QCOMPARE(out.exceptionType, QStringLiteral("foreign_exception"));
+        QVERIFY2(!out.exceptionType.contains(QStringLiteral("sk_live_secret_abc")),
+                 "an absent __module__ must not let a crafted tp_name substitute for module validation");
+    }
+
+    // Reviewer delta-fix #5 bypass (b) — __module__ resolves to a non-str
+    // object (delta-fix #1 shape, so moduleName is empty), but __qualname__
+    // is reassigned to a genuine, grammar-valid str ("hunter2"). The OLD
+    // code defaulted an empty moduleName to "builtins" and concatenated
+    // unconditionally, producing "builtins.hunter2" — falsely dressing an
+    // adversarial name as a real builtins exception. Must fold to
+    // foreign_exception instead.
+    void moduleNonStrWithValidShapedQualnameFoldsToForeignException()
+    {
+        setScenario("module_non_str_qualname_bypass_error");
+
+        PyEmbeddedAdapter adapter(kStubsDir);
+        const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        QCOMPARE(out.kind, PyAuthOutcome::Unknown);
+        QCOMPARE(out.exceptionType, QStringLiteral("foreign_exception"));
+        QVERIFY2(!out.exceptionType.contains(QStringLiteral("hunter2")),
+                 "an absent/non-str __module__ must not default to \"builtins\" and concatenate a "
+                 "merely-valid-shaped __qualname__");
+    }
+
+    // Reviewer delta-fix #7 (security) — __module__ resolves to a genuinely
+    // ALLOWLISTED string ("builtins", passing delta-fix #5's gate), but
+    // __qualname__ is absent (forcing the tp_name-fallback branch), and the
+    // type's tp_name is genuinely, really registered as an attribute of the
+    // real, already-imported `os` module (a module root NOT on
+    // kAllowedModuleRoots). isGenuineAllowlistedException()'s provenance
+    // walk WOULD succeed here (the object really is there) — proving "real"
+    // and "allowlisted" are different guarantees, and that delta-fix #7's
+    // new module-root check on tp_name closes a genuinely-leaking gap, not
+    // one the provenance walk already caught for an unrelated reason (an
+    // unbacked/fabricated tp_name would have been rejected regardless,
+    // making RED/GREEN unobservable — this fixture avoids that).
+    void tpNameModuleRootNotAllowlistedFoldsToForeignException()
+    {
+        setScenario("tp_name_not_allowlisted_error");
+
+        PyEmbeddedAdapter adapter(kStubsDir);
+        const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        QCOMPARE(out.kind, PyAuthOutcome::Unknown);
+        QCOMPARE(out.exceptionType, QStringLiteral("foreign_exception"));
+        QVERIFY2(!out.exceptionType.contains(QStringLiteral("os.TpNameNotAllowlistedError")),
+                 "an allowlisted __module__ claim must not let a non-allowlisted tp_name substitute for "
+                 "module validation, even if that tp_name is genuinely registered");
     }
 
     // REQ-002 / TEST-005 / A3-R002-TR-05 — malformed login() result branches.

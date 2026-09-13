@@ -11,6 +11,7 @@
 
 #include "GarminErrors.h"
 
+#include <QDebug>
 #include <QLabel>
 #include <QLineEdit>
 #include <QVBoxLayout>
@@ -137,6 +138,13 @@ void GarminMfaPage::onAuthFailed(QUuid id, GarminAuthFailure error)
             m_message->setText(tr("Too many incorrect codes. Garmin Connect sign-in has been cancelled. "
                                   "Please start the connection again."));
         } else {
+            // Diagnostic-only (Stage 9 live-account triage): logs ONLY the
+            // exception's TYPE name, never translatedMessage/rawMessage — see
+            // the matching comment in GarminCredentialsPage::onAuthFailed for
+            // the full leak-surface rationale. Developer-trace only, the UI
+            // never sees this line.
+            if (error.kind == GarminAuthFailure::Unknown)
+                qDebug().noquote() << QStringLiteral("garmin_auth_unknown exception_type=%1").arg(error.exceptionType);
             m_message->setText(GarminErrors::translate(error.kind));
         }
         emit aborted();
@@ -145,6 +153,12 @@ void GarminMfaPage::onAuthFailed(QUuid id, GarminAuthFailure error)
 
     // Attempts remain: show the error and re-prompt with a cleared field.
     m_state = Error;
+    // Diagnostic-only (Stage 9 live-account triage): logs ONLY the exception's
+    // TYPE name, never translatedMessage/rawMessage — see the matching comment
+    // in GarminCredentialsPage::onAuthFailed for the full leak-surface
+    // rationale. Developer-trace only, the UI never sees this line.
+    if (error.kind == GarminAuthFailure::Unknown)
+        qDebug().noquote() << QStringLiteral("garmin_auth_unknown exception_type=%1").arg(error.exceptionType);
     // REQ-014: translation happens HERE (page layer) — error.translatedMessage
     // carries the raw library text and must not be shown directly (GarminErrors.h).
     m_message->setText(GarminErrors::translate(error.kind));

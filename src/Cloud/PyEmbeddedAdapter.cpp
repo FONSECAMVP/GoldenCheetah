@@ -109,6 +109,269 @@ void prependToSysPathIfAbsent(const QString& dir)
     PyErr_Clear(); // swallow Contains/Insert errors — import will report
 }
 
+// Reviewer delta-fix #1 (security): __module__/__qualname__ are NOT
+// guaranteed to be plain str — a custom metaclass or descriptor can make
+// either resolve to an arbitrary object. toQString()'s str(o) fallback would
+// then execute that object's __str__/__repr__ and return whatever untrusted
+// text it produces, defeating pyExceptionTypeName()'s "carries no leak
+// surface" guarantee below. This helper accepts ONLY an actual PyUnicode
+// value; anything else (including one that merely LOOKS stringifiable) is
+// treated as absent, never stringified.
+QString strictUnicodeAttr(PyObject* o)
+{
+    if (o == nullptr || !PyUnicode_Check(o))
+        return QString();
+    const char* utf8 = PyUnicode_AsUTF8(o);
+    if (utf8 == nullptr) {
+        PyErr_Clear();
+        return QString();
+    }
+    return QString::fromUtf8(utf8);
+}
+
+// Reviewer delta-fix #3 (security): strictUnicodeAttr() only proves a value
+// IS a str — Python allows a foreign/adversarial exception class to reassign
+// __module__ or __qualname__ to any string content, which would sail through
+// PyUnicode_Check() and be surfaced verbatim by the old code. A genuine
+// module path or qualified name is always one or more ASCII identifier
+// segments (first char letter/underscore, remaining chars letters/digits/
+// underscore) joined by dots; anything else is untrusted content
+// masquerading as a name and must never reach exceptionType.
+bool isAsciiIdentifierChar(QChar c, bool first)
+{
+    const ushort u = c.unicode();
+    if (u == '_')
+        return true;
+    if (u >= 'a' && u <= 'z')
+        return true;
+    if (u >= 'A' && u <= 'Z')
+        return true;
+    return !first && u >= '0' && u <= '9';
+}
+
+bool isSafeDottedName(const QString& s)
+{
+    if (s.isEmpty())
+        return false;
+    const QStringList segments = s.split(QLatin1Char('.'));
+    for (const QString& seg : segments) {
+        if (seg.isEmpty())
+            return false;
+        for (int i = 0; i < seg.length(); ++i) {
+            if (!isAsciiIdentifierChar(seg.at(i), i == 0))
+                return false;
+        }
+    }
+    return true;
+}
+
+// Reviewer delta-fix #4 (security): a grammar-shaped module string is not
+// necessarily a SAFE one — plenty of real secrets (API keys/tokens) are
+// themselves identifier-shaped (e.g. "hunter2", "sk_live_abc123") and would
+// pass isSafeDottedName() cleanly if a foreign/adversarial exception type's
+// __module__ were reassigned to one (Python allows this on any ordinary
+// class; no metaclass needed). No regex can distinguish "looks like an
+// identifier" from "is a secret", so the only closure is to stop trusting an
+// arbitrary module string at all: this is the fixed, small set of module
+// roots this integration's actual dependency chain can raise exceptions
+// from — confirmed against the real installed packages and this project's
+// own Stage-9 live-account findings (B-STAGE9-06), not guessed:
+//   - builtins        — CPython built-in exceptions (e.g. ValueError).
+//   - garmin_client    — this project's own wrapper; home of GarminError.
+//   - garminconnect    — the upstream library's exceptions module
+//     (garminconnect.exceptions); GarminConnectInvalidFileFormatError is a
+//     real exception from here that garmin_client.py does NOT catch/wrap,
+//     so it must remain diagnosable rather than folding to foreign_exception.
+//   - curl_cffi        — e.g. curl_cffi.requests.exceptions.ImpersonateError
+//     (the exact type seen in B-STAGE9-06's live-account failure).
+//   - requests         — transitively bundled by curl_cffi; e.g.
+//     requests.exceptions.Timeout, requests.cookies.RequestsCookieJar
+//     (the AttributeError seen in B-STAGE9-06 raises as builtins.
+//     AttributeError, but the object it names lives here).
+//   - urllib3, socket, ssl, http, json — the underlying network/HTTP stack
+//     requests/curl_cffi are built on; genuine transport-level failures can
+//     surface directly from any of these.
+// Injecting a hostile class under one of these roots would require
+// compromising the dependency chain itself — a materially different, more
+// severe threat than a logging leak, and outside what this function can or
+// should defend against.
+const char* const kAllowedModuleRoots[] = {
+    "builtins", "garmin_client", "garminconnect", "curl_cffi", "requests",
+    "urllib3",  "socket",        "ssl",           "http",      "json",
+};
+
+bool isAllowedModuleRoot(const QString& moduleName)
+{
+    for (const char* root : kAllowedModuleRoots) {
+        const QString r = QString::fromLatin1(root);
+        if (moduleName == r || moduleName.startsWith(r + QStringLiteral(".")))
+            return true;
+    }
+    return false;
+}
+
+// Reviewer delta-fix #6 (security): __module__/__qualname__/tp_name are all
+// ordinary, Python-writable metadata — a foreign/adversarial class can set
+// __module__ to an ALLOWLISTED string (e.g. "curl_cffi.requests.exceptions")
+// without ever touching curl_cffi, pair it with a secret-shaped
+// __qualname__, and sail through isAllowedModuleRoot()'s string-membership
+// check untouched. That check proves the CLAIM is on the allowlist; it
+// proves nothing about whether the type genuinely lives there. This walks
+// the real sys.modules + attribute chain for dottedPath and confirms the
+// caller's `type` (the actual Py_TYPE(exc) of the raised exception) IS the
+// same object Python itself has registered there — by raw POINTER IDENTITY
+// only, never a Python-level comparison (a foreign class could override
+// __eq__ and defeat a value-based check; pointer identity on a real CPython
+// type object cannot be spoofed by attribute assignment alone). Never
+// leaves a pending Python error: every attribute-chain step is individually
+// guarded, same style as strictUnicodeAttr.
+bool isGenuineAllowlistedException(PyObject* type, const QString& dottedPath)
+{
+    PyObject* sysModules = PyImport_GetModuleDict(); // borrowed, never null once initialized
+    const QStringList segments = dottedPath.split(QLatin1Char('.'));
+    if (segments.isEmpty())
+        return false;
+
+    // Longest leading prefix (rejoined with '.') that is an actual key in
+    // sys.modules is the real, already-imported module object; if no prefix
+    // matches at all, the whole claim is unbacked.
+    PyObject* moduleObj = nullptr; // borrowed, owned by sys.modules
+    int prefixLen = 0;
+    for (int i = segments.size(); i >= 1; --i) {
+        QStringList prefixSegments;
+        for (int j = 0; j < i; ++j)
+            prefixSegments << segments.at(j);
+        const QString candidate = prefixSegments.join(QLatin1Char('.'));
+        PyRef key(PyUnicode_FromString(candidate.toUtf8().constData()));
+        if (!key) {
+            PyErr_Clear();
+            continue;
+        }
+        PyObject* found = PyDict_GetItem(sysModules, key.get()); // borrowed
+        if (found != nullptr) {
+            moduleObj = found;
+            prefixLen = i;
+            break;
+        }
+    }
+    if (moduleObj == nullptr)
+        return false;
+
+    // Walk the remaining trailing segments as a real attribute chain.
+    PyObject* current = moduleObj; // borrowed for the duration of the walk
+    PyObject* prevOwned = nullptr; // most recently GetAttrString'd owned ref
+    bool resolved = true;
+    for (int i = prefixLen; i < segments.size(); ++i) {
+        PyObject* next = PyObject_GetAttrString(current, segments.at(i).toUtf8().constData());
+        PyErr_Clear();
+        Py_XDECREF(prevOwned);
+        prevOwned = next;
+        if (next == nullptr) {
+            resolved = false;
+            break;
+        }
+        current = next;
+    }
+
+    const bool genuine = resolved && (current == type); // pointer identity, computed before decref
+    Py_XDECREF(prevOwned);
+    return genuine;
+}
+
+// Stage 9 live-account diagnostic: the module-qualified exception TYPE name
+// only (e.g. "builtins.ValueError") — deliberately NEVER the exception's
+// message/arguments (PyAuthOutcome::exceptionType's doc comment explains why
+// a type name, unlike str(exc), carries no leak surface). Never throws / never
+// leaves a pending Python error: every introspection step is individually
+// guarded and falls back to "unknown" rather than propagating a failure.
+QString pyExceptionTypeName(PyObject* exc)
+{
+    if (exc == nullptr)
+        return QStringLiteral("unknown");
+    PyObject* type = reinterpret_cast<PyObject*>(Py_TYPE(exc));
+    if (type == nullptr)
+        return QStringLiteral("unknown");
+
+    PyRef moduleObj(PyObject_GetAttrString(type, "__module__"));
+    QString moduleName = strictUnicodeAttr(moduleObj.get());
+    PyErr_Clear();
+    if (!moduleName.isEmpty() && !isSafeDottedName(moduleName))
+        moduleName.clear(); // delta-fix #3: str, but not name-shaped — treat as absent
+
+    // Reviewer delta-fix #5: ONE gate, checked before consulting qualName or
+    // tp_name at all. Earlier rounds let an empty moduleName (attribute
+    // absent/non-str/invalid-shape) fall through to the qualname-or-tp_name
+    // logic below unguarded — but both qualName and tp_name are exactly as
+    // independently attacker-settable as moduleName itself (delta-fix #2's
+    // own TpNameFallbackError fixture proves tp_name can be crafted to an
+    // arbitrary dotted string via type()'s 3-arg form; __qualname__ is a
+    // plain writable str attribute same as __module__). So moduleName must
+    // be present, Unicode, grammar-valid, AND allowlisted before this
+    // function will emit ANY derived name — an empty moduleName is now
+    // foreign too, not just a present-but-disallowed one.
+    if (moduleName.isEmpty() || !isAllowedModuleRoot(moduleName))
+        return QStringLiteral("foreign_exception");
+
+    PyRef qualObj(PyObject_GetAttrString(type, "__qualname__"));
+    QString qualName = strictUnicodeAttr(qualObj.get());
+    PyErr_Clear();
+    if (!qualName.isEmpty() && !isSafeDottedName(qualName))
+        qualName.clear(); // delta-fix #3: str, but not name-shaped — treat as absent
+
+    if (qualName.isEmpty()) {
+        // Reviewer delta-fix #2: __qualname__ absent/non-str/failed/invalid —
+        // tp_name is the best remaining name, and for a heap type outside the
+        // 'builtins' module it is ALREADY module-qualified (e.g.
+        // "curl_cffi.requests.exceptions.ImpersonateError"). Return it
+        // directly; do NOT fall through to the moduleName+"." concatenation
+        // below, which would double the module prefix.
+        const char* tpName = Py_TYPE(exc)->tp_name;
+        if (tpName != nullptr && tpName[0] != '\0') {
+            const QString tpNameStr = QString::fromUtf8(tpName);
+            if (isSafeDottedName(tpNameStr)) { // delta-fix #3: grammar guard
+                // Reviewer delta-fix #7: isGenuineAllowlistedException() only
+                // proves tpNameStr resolves to a REAL, genuinely-registered
+                // object — "real" and "allowlisted" are not the same
+                // guarantee, and only the latter was ever supposed to gate
+                // what gets logged. A foreign type can set __module__ to an
+                // allowlisted string (passing the gate above), hide
+                // __qualname__ (forcing this branch), and have tp_name
+                // genuinely be some real object from an UNallowlisted module
+                // reachable in this process (e.g. "evil.hunter2"). tp_name's
+                // OWN module portion — everything before the LAST '.', or
+                // moduleName itself for a bare/undotted tp_name (already
+                // validated allowlisted above) — must independently pass
+                // isAllowedModuleRoot() BEFORE the provenance walk even
+                // runs. Deliberately NOT an exact-equality check against
+                // moduleName: a genuine curl_cffi exception's tp_name is
+                // legitimately ALREADY module-qualified and differs from
+                // whatever module the raising code happens to live in (see
+                // TpNameFallbackError's fixture comment).
+                const int lastDot = tpNameStr.lastIndexOf(QLatin1Char('.'));
+                const QString tpModulePortion = lastDot >= 0 ? tpNameStr.left(lastDot) : moduleName;
+                // delta-fix #6: genuine-provenance guard — tp_name is
+                // exactly as claimable as moduleName/qualName; a
+                // grammar-valid but unbacked/spoofed tp_name is foreign,
+                // same marker as the moduleName-provenance check below.
+                if (isAllowedModuleRoot(tpModulePortion) && isGenuineAllowlistedException(type, tpNameStr))
+                    return tpNameStr;
+                return QStringLiteral("foreign_exception");
+            }
+        }
+        return QStringLiteral("unknown"); // no tp_name at all, or grammar-invalid — unchanged from before
+    }
+
+    // moduleName is guaranteed non-empty here — the delta-fix #5 gate above
+    // already returned "foreign_exception" for an empty/disallowed one.
+    const QString qualifiedName = moduleName + QStringLiteral(".") + qualName;
+    // delta-fix #6: confirm `type` genuinely IS the object sys.modules says
+    // lives at qualifiedName, not merely a class claiming to via writable
+    // __module__/__qualname__ attributes.
+    if (!isGenuineAllowlistedException(type, qualifiedName))
+        return QStringLiteral("foreign_exception");
+    return qualifiedName;
+}
+
 // Reads (and clears) the currently-raised exception ONCE, extracting the
 // pieces every classifier needs: whether it is a garmin_client.GarminError,
 // its .kind, and a non-empty raw message (DES-008 translates later; here we
@@ -122,6 +385,11 @@ struct RaisedExc
     bool isGarminError = false;
     QString kind;
     QString message;
+    // Stage 9 diagnostic — only classifyPendingException's PyAuthOutcome wires
+    // this through today (PyDownloadOutcome/PyListOutcome/PyProfileOutcome do
+    // not need it yet); populated here regardless since takeRaisedException
+    // is shared by all four classify*Exception functions.
+    QString exceptionType;
 };
 
 RaisedExc takeRaisedException(PyObject* module)
@@ -132,8 +400,11 @@ RaisedExc takeRaisedException(PyObject* module)
     if (!exc) {
         // DES-008 developer diagnostic: rawMessage is never displayed in the UI.
         info.message = QStringLiteral("unknown embedded Python error"); // T208-ALLOW:I18N-TR-WRAP
+        info.exceptionType = QStringLiteral("unknown");
         return info;
     }
+
+    info.exceptionType = pyExceptionTypeName(exc.get());
 
     if (module != nullptr) {
         PyRef geType(PyObject_GetAttrString(module, "GarminError"));
@@ -182,6 +453,11 @@ PyAuthOutcome classifyPendingException(PyObject* module)
         out.kind = PyAuthOutcome::RateLimit;
     else
         out.kind = PyAuthOutcome::Unknown; // captcha / foreign …
+    // Stage 9 diagnostic: only meaningful on the Unknown path (see
+    // PyAuthOutcome::exceptionType's doc comment); left empty for a classified
+    // GarminError kind so a dev-log line never fires for an already-known kind.
+    if (out.kind == PyAuthOutcome::Unknown)
+        out.exceptionType = e.exceptionType;
     return out;
 }
 

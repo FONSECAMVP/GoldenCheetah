@@ -107,6 +107,8 @@ add_executable(testGarminConnectCredentialsPage
     # REQ-014 — the page's onAuthFailed() calls GarminErrors::translate().
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminErrors.cpp
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminErrors.h
+    # Stage 9 diagnostic-trace test — shared qDebug capture helper.
+    MessageCapture.h
 )
 
 set_target_properties(testGarminConnectCredentialsPage PROPERTIES
@@ -148,6 +150,8 @@ add_executable(testGarminConnectMfaPage
     # REQ-014 — the page's onAuthFailed() calls GarminErrors::translate().
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminErrors.cpp
     ${CMAKE_SOURCE_DIR}/src/Cloud/GarminErrors.h
+    # Stage 9 diagnostic-trace test — shared qDebug capture helper.
+    MessageCapture.h
 )
 
 set_target_properties(testGarminConnectMfaPage PROPERTIES

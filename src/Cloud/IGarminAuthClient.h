@@ -49,6 +49,13 @@ struct GarminAuthFailure
     enum Kind { Auth, Network, Unknown, RateLimit };
     Kind kind = Unknown;
     QString translatedMessage;
+
+    // Stage 9 live-account diagnostic — mirrors PyAuthOutcome::exceptionType
+    // one seam up (GarminWorker copies it verbatim). Populated only when
+    // kind == Unknown: the module-qualified Python exception TYPE name, never
+    // its message/arguments, so it is safe to persist to a developer log
+    // (see PyAuthOutcome::exceptionType's doc comment for the full rationale).
+    QString exceptionType;
 };
 
 // ---------------------------------------------------------------------------

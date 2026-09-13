@@ -59,6 +59,16 @@ struct PyAuthOutcome
     // Populated for non-Success outcomes. Raw library message — DES-008
     // translates at the page layer; the adapter does NOT translate.
     QString rawMessage;
+
+    // Stage 9 live-account diagnostic — populated only when kind == Unknown:
+    // the module-qualified Python exception TYPE name (e.g.
+    // "builtins.ValueError", "curl_cffi.requests.exceptions.ImpersonateError"),
+    // NEVER the exception's message/arguments. A type name cannot carry
+    // interpolated secret material, unlike rawMessage above, which is why this
+    // field (not rawMessage) is safe for a developer-trace log line to persist
+    // to disk. Empty for a classified GarminError kind (Auth/Network/RateLimit
+    // already carry a known, safe kind).
+    QString exceptionType;
 };
 
 // ---------------------------------------------------------------------------

@@ -35,6 +35,7 @@
 #include "GarminErrors.h"
 #include "GarminMfaPage.h" // <-- intentionally missing in RED phase
 #include "IGarminAuthClient.h"
+#include "MessageCapture.h"
 
 #include <QLabel>
 #include <QLineEdit>
@@ -315,6 +316,102 @@ class TestGarminConnectMfaPage : public QObject
                  "REQ-014: the wrong-OTP text must not be shown for a Network/RateLimit/Unknown terminal failure");
         QVERIFY2(messageField(page)->text() != networkFail.translatedMessage,
                  "REQ-014: the raw library text must never be shown verbatim, even on the terminal attempt");
+    }
+
+    // Stage 9 live-account triage diagnostic (non-terminal site): an Unknown
+    // failure with attempts remaining must emit a developer-only qDebug trace
+    // of the exception TYPE name, while the label still only ever shows
+    // GarminErrors::translate() (GarminErrors.h's contract, unchanged here).
+    // Reviewer delta-fix: logs exceptionType, NEVER translatedMessage/
+    // rawMessage — an arbitrary foreign exception's message text is untrusted
+    // and unsafe to persist verbatim to the on-disk developer log.
+    void unknownFailureWithAttemptsRemainingLogsExceptionTypeButLabelStaysGeneric()
+    {
+        FakeAuthClient fake;
+        GarminMfaPage page(&fake);
+
+        GarminAuthFailure err;
+        err.kind = GarminAuthFailure::Unknown;
+        err.exceptionType = QStringLiteral("curl_cffi.requests.exceptions.ImpersonateError");
+        err.translatedMessage = QStringLiteral("SECRET: strategies 3-5 never ran, password=hunter2");
+
+        enterCode(page, QStringLiteral("111111"));
+        QVERIFY(!page.validatePage());
+
+        MessageCapture capture;
+        fake.synthFailed(fake.mfaCalls.first().requestId, err);
+        const QStringList lines = capture.snapshot();
+
+        bool foundType = false;
+        bool leakedMessage = false;
+        for (const QString& line : lines) {
+            if (line.contains(err.exceptionType))
+                foundType = true;
+            if (line.contains(err.translatedMessage))
+                leakedMessage = true;
+        }
+        QVERIFY2(foundType, "GarminAuthFailure::Unknown (attempts remaining) must emit a developer-trace qDebug "
+                            "line containing the exception's type name");
+        QVERIFY2(!leakedMessage, "The diagnostic trace must NEVER log the raw translatedMessage — only the "
+                                 "exception type name is safe to persist to the on-disk developer log");
+
+        QVERIFY2(messageField(page)->text() == GarminErrors::translate(GarminAuthFailure::Unknown),
+                 "The UI label must still only ever show the generic translated string");
+        QVERIFY2(!messageField(page)->text().contains(err.translatedMessage) &&
+                     !messageField(page)->text().contains(err.exceptionType),
+                 "REQ-014: the diagnostic trace must never leak the raw message or the exception type into the "
+                 "UI label");
+    }
+
+    // Stage 9 live-account triage diagnostic (terminal/3rd-strike site): same
+    // contract as above, but for the Aborted branch's non-Auth else-path.
+    void unknownFailureOnThirdAttemptLogsExceptionTypeButLabelStaysGeneric()
+    {
+        FakeAuthClient fake;
+        GarminMfaPage page(&fake);
+        QSignalSpy abortedSpy(&page, &GarminMfaPage::aborted);
+
+        GarminAuthFailure authFail;
+        authFail.kind = GarminAuthFailure::Auth;
+        authFail.translatedMessage = QStringLiteral("GarminError(kind=auth): raw library text");
+        for (int i = 0; i < 2; ++i) {
+            enterCode(page, QStringLiteral("111111"));
+            QVERIFY(!page.validatePage());
+            fake.synthFailed(fake.mfaCalls.at(i).requestId, authFail);
+        }
+
+        GarminAuthFailure unknownFail;
+        unknownFail.kind = GarminAuthFailure::Unknown;
+        unknownFail.exceptionType = QStringLiteral("curl_cffi.requests.exceptions.ImpersonateError");
+        unknownFail.translatedMessage = QStringLiteral("SECRET: strategies 3-5 never ran, password=hunter2");
+        enterCode(page, QStringLiteral("333333"));
+        QVERIFY(!page.validatePage());
+
+        MessageCapture capture;
+        fake.synthFailed(fake.mfaCalls.at(2).requestId, unknownFail);
+        const QStringList lines = capture.snapshot();
+
+        QCOMPARE(abortedSpy.count(), 1);
+        bool foundType = false;
+        bool leakedMessage = false;
+        for (const QString& line : lines) {
+            if (line.contains(unknownFail.exceptionType))
+                foundType = true;
+            if (line.contains(unknownFail.translatedMessage))
+                leakedMessage = true;
+        }
+        QVERIFY2(foundType, "GarminAuthFailure::Unknown on the 3rd/terminal attempt must emit a developer-trace "
+                            "qDebug line containing the exception's type name");
+        QVERIFY2(!leakedMessage, "The diagnostic trace must NEVER log the raw translatedMessage — only the "
+                                 "exception type name is safe to persist to the on-disk developer log");
+
+        QVERIFY2(messageField(page)->text() == GarminErrors::translate(GarminAuthFailure::Unknown),
+                 "The UI label must still only ever show the generic translated string, not the wrong-OTP text, "
+                 "not the raw message, and not the exception type");
+        QVERIFY2(!messageField(page)->text().contains(unknownFail.translatedMessage) &&
+                     !messageField(page)->text().contains(unknownFail.exceptionType),
+                 "REQ-014: the diagnostic trace must never leak the raw message or the exception type into the "
+                 "UI label");
     }
 
     // T-039 — A3-R003-05: initializePage() (Back-then-Next re-entry) resets the

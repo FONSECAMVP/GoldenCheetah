@@ -37,6 +37,7 @@
 #include "GarminCredentialsPage.h" // <-- intentionally missing in RED phase
 #include "GarminErrors.h"
 #include "IGarminAuthClient.h" // <-- intentionally missing in RED phase
+#include "MessageCapture.h"
 
 #include <QLabel>
 #include <QLineEdit>
@@ -283,6 +284,57 @@ class TestGarminConnectCredentialsPage : public QObject
                  "REQ-014: the page must never leak the raw library message verbatim");
         QVERIFY2(!page.validatePage(), "After an error, validatePage() must remain false so the user is forced to "
                                        "edit the credentials and resubmit before the wizard advances");
+    }
+
+    // Stage 9 live-account triage diagnostic: when the failure kind is Unknown
+    // (classifyPendingException() didn't recognize the raised exception as a
+    // GarminError), the exception's TYPE name must reach a developer-only
+    // qDebug trace so a dev can see what the interpreter actually raised — but
+    // the UI-visible label must still ONLY ever show GarminErrors::translate(),
+    // never the raw text (GarminErrors.h's contract, unchanged by this test).
+    // Reviewer delta-fix: logs exceptionType (a type name, e.g.
+    // "builtins.ValueError"), NEVER translatedMessage/rawMessage — an
+    // arbitrary foreign exception's message text is untrusted and unsafe to
+    // persist verbatim to the on-disk developer log.
+    void unknownFailureLogsExceptionTypeButLabelStaysGeneric()
+    {
+        FakeAuthClient fake;
+        GarminCredentialsPage page(&fake);
+        populate(page, QStringLiteral("rider@example.com"), QStringLiteral("wrong"));
+        QVERIFY(!page.validatePage());
+
+        GarminAuthFailure err;
+        err.kind = GarminAuthFailure::Unknown;
+        err.exceptionType = QStringLiteral("curl_cffi.requests.exceptions.ImpersonateError");
+        // Untrusted text that must NEVER reach the log — distinct from
+        // exceptionType so the test would fail if the log call regressed to
+        // logging translatedMessage again.
+        err.translatedMessage = QStringLiteral("SECRET: strategies 3-5 never ran, password=hunter2");
+
+        MessageCapture capture;
+        fake.synthFailed(fake.calls.first().requestId, err);
+        const QStringList lines = capture.snapshot();
+
+        bool foundType = false;
+        bool leakedMessage = false;
+        for (const QString& line : lines) {
+            if (line.contains(err.exceptionType))
+                foundType = true;
+            if (line.contains(err.translatedMessage))
+                leakedMessage = true;
+        }
+        QVERIFY2(foundType, "GarminAuthFailure::Unknown must emit a developer-trace qDebug line containing the "
+                            "exception's type name so a dev can diagnose an unclassified auth failure");
+        QVERIFY2(!leakedMessage,
+                 "The diagnostic trace must NEVER log the raw translatedMessage — only the exception type name "
+                 "is safe to persist to the on-disk developer log");
+
+        QLabel* msg = messageField(page);
+        QVERIFY2(msg->text() == GarminErrors::translate(GarminAuthFailure::Unknown),
+                 "The UI label must still only ever show the generic translated string");
+        QVERIFY2(!msg->text().contains(err.translatedMessage) && !msg->text().contains(err.exceptionType),
+                 "REQ-014: the diagnostic trace must never leak the raw message or the exception type into the "
+                 "UI label");
     }
 
     // REQ-005 wizard-side enforcement: the password is consumed by the

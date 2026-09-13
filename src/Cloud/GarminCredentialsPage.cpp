@@ -11,6 +11,7 @@
 
 #include "GarminErrors.h"
 
+#include <QDebug>
 #include <QLabel>
 #include <QLineEdit>
 #include <QVBoxLayout>
@@ -130,6 +131,18 @@ void GarminCredentialsPage::onAuthFailed(QUuid id, GarminAuthFailure error)
     if (m_state != InFlight)
         return; // A3-R003-06 — ignore a duplicate/late failure once terminal.
     m_state = Error;
+    // Diagnostic-only (Stage 9 live-account triage): Unknown means
+    // classifyPendingException() didn't recognize the raised exception as a
+    // GarminError. Logs ONLY the exception's module-qualified TYPE name (e.g.
+    // "builtins.ValueError") — NEVER translatedMessage/rawMessage, which can
+    // carry arbitrary untrusted exception text (request payloads, headers,
+    // tokens) unsafe to persist verbatim to a developer log file; a type name
+    // cannot carry interpolated secret material. Developer-trace only, mirrors
+    // the DES-008/gcObsTrace precedent (GarminConnect.cpp) — the UI never sees
+    // this line; see GarminErrors.h's translate() contract enforced by
+    // setText() below.
+    if (error.kind == GarminAuthFailure::Unknown)
+        qDebug().noquote() << QStringLiteral("garmin_auth_unknown exception_type=%1").arg(error.exceptionType);
     // REQ-014: translation happens HERE (page layer), not at the worker —
     // error.translatedMessage carries the raw library text and must not be
     // shown directly (see GarminErrors.h).
