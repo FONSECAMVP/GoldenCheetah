@@ -262,7 +262,11 @@ PythonEmbed::PythonEmbed(const bool verbose, const bool interactive) : verbose(v
 
         // tell python our program name - pretend to be the usual interpreter
         printd("Py_SetProgramName: %s\n", pybin.toStdString().c_str()); // not wide char string as printd uses printf not wprintf
-        Py_SetProgramName((wchar_t*) pybin.toStdWString().c_str());
+        // B-STAGE9-07 — the old inline call here passed a temporary
+        // std::wstring's buffer to Py_SetProgramName(), which CPython
+        // (<= 3.12) borrows for the interpreter's whole lifetime — a dangling
+        // pointer. setProgramName() owns the retention contract instead.
+        PyProcessBootstrap::setProgramName(pybin);
 
         // DEC-052 — bring up (or attach to) the shared, process-level
         // interpreter. registerGoldenCheetahInittab() and the interpreter's

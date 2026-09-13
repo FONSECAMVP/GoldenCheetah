@@ -21,6 +21,9 @@
 #include <QMutex>
 #include <QMutexLocker>
 
+#include <list>
+#include <string>
+
 namespace PyProcessBootstrap {
 
 namespace {
@@ -118,6 +121,23 @@ Result ensureInitialized(const Config &cfg)
 bool isInitialized()
 {
     return Py_IsInitialized() != 0;
+}
+
+void setProgramName(const QString &name)
+{
+    // B-STAGE9-07 — CPython (<= 3.12) borrows this pointer for the
+    // interpreter's entire lifetime; it is never copied on those versions.
+    // Every name ever handed over is therefore retained for the rest of the
+    // process: std::list nodes are stable once allocated and entries are
+    // never removed, so neither this call nor a later one (main.cpp's
+    // in-process restart loop constructs a new PythonEmbed and calls this
+    // again) can free or move storage CPython may still be holding. (The
+    // old inline PythonEmbed call passed a temporary's buffer straight
+    // through — testPythonProgramNameLifetime reproduces that defect and
+    // aborts under ASan on it.)
+    static std::list<std::wstring> retainedProgramNames;
+    retainedProgramNames.push_back(name.toStdWString());
+    Py_SetProgramName((wchar_t *)retainedProgramNames.back().c_str());
 }
 
 } // namespace PyProcessBootstrap

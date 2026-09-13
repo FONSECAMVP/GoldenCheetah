@@ -2551,3 +2551,55 @@ add_test(
 set_tests_properties(testGarminCurlCffiInterposition PROPERTIES
     LABELS "garmin-py"
     TIMEOUT 60)
+
+# --- B-STAGE9-07 — PyProcessBootstrap::setProgramName storage lifetime -------
+# Regression for the pre-existing PythonEmbed defect: the old inline
+#     Py_SetProgramName((wchar_t*) pybin.toStdWString().c_str())
+# handed CPython a temporary's buffer, which Python <= 3.12 borrows for the
+# interpreter's ENTIRE lifetime. Python 3.13 (this build) copies the string,
+# so the defect is invisible against the real libpython here — the test
+# interposes its own Py_SetProgramName definition (link-order interposition,
+# the same ELF mechanism B-STAGE9-06 documented) that models the <= 3.12
+# borrowed-pointer contract, and the REAL PyProcessBootstrap.cpp calls it.
+# Links real CPython -> `garmin-py`, never `garmin-fast`.
+#
+# A LIFETIME test whose RED half is an ASan heap-use-after-free on the
+# handed-over pointer, so -fsanitize=address is applied to compilation AND
+# linking and the build fails outright without a sanitizer-capable compiler
+# (precedent: testGarminConnectSyncDialogClose).
+add_executable(testPythonProgramNameLifetime
+    testPythonProgramNameLifetime.cpp
+    ${CMAKE_SOURCE_DIR}/src/Python/PyProcessBootstrap.cpp
+    ${CMAKE_SOURCE_DIR}/src/Python/PyProcessBootstrap.h
+)
+
+set_target_properties(testPythonProgramNameLifetime PROPERTIES AUTOMOC ON)
+
+target_include_directories(testPythonProgramNameLifetime PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Python
+)
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(testPythonProgramNameLifetime PRIVATE
+        -fsanitize=address -fno-omit-frame-pointer -g)
+    target_link_options(testPythonProgramNameLifetime PRIVATE -fsanitize=address)
+else()
+    message(FATAL_ERROR
+        "testPythonProgramNameLifetime (B-STAGE9-07) is a lifetime test and requires "
+        "AddressSanitizer; no -fsanitize=address for compiler ${CMAKE_CXX_COMPILER_ID}.")
+endif()
+
+target_link_libraries(testPythonProgramNameLifetime PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Test
+    Python3::Python
+)
+target_compile_features(testPythonProgramNameLifetime PRIVATE cxx_std_17)
+
+# TIMEOUT: runs in milliseconds; 60 s is policy headroom, not a measured need.
+add_test(NAME testPythonProgramNameLifetime COMMAND testPythonProgramNameLifetime)
+set_tests_properties(testPythonProgramNameLifetime PROPERTIES
+    LABELS "garmin-py"
+    TIMEOUT 60
+    ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0:abort_on_error=0:halt_on_error=1")

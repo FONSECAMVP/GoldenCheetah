@@ -107,6 +107,21 @@ Result ensureInitialized(const Config &cfg = Config());
 // just to ask. Safe to call at any time, from any thread.
 bool isInitialized();
 
+// B-STAGE9-07 — Py_SetProgramName() wrapper owning the storage contract that
+// (legacy, deprecated-since-3.11) API actually documents: on Python <= 3.12
+// CPython BORROWS the wchar_t* and may read it for the interpreter's entire
+// lifetime, so it must never alias a temporary. Python 3.13 now copies the
+// string instead (and 3.14 removes the function), but GoldenCheetah also
+// builds against 3.11/3.12 elsewhere, so the borrowed-pointer contract is
+// the one this must honor. Lives here rather than in PythonEmbed.cpp so the
+// lifetime behavior is unit-testable: PythonEmbed.cpp cannot be linked into
+// any unittest target (appsettings/Gui application layers), this module
+// already is (testPyProcessBootstrap). PythonEmbed's constructor calls this
+// immediately before ensureInitialized(), exactly where its old inline
+// Py_SetProgramName(temporary.c_str()) call — a dangling pointer CPython
+// retained on <= 3.12 — used to sit. Call it before the interpreter is up.
+void setProgramName(const QString &name);
+
 } // namespace PyProcessBootstrap
 
 #endif // GC_PYPROCESSBOOTSTRAP_H
