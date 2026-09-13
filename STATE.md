@@ -1,4 +1,4 @@
-# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-13 by Inspector (B-STAGE9-06 FIXED + COMMITTED `0c05f7c18`, independently re-verified 43/43 full gate. B-STAGE9-07 FIXED — PyProcessBootstrap::setProgramName retains handed-over names in a static std::list to satisfy Py_SetProgramName's <=3.12 borrowed-pointer contract; new ASan link-seam regression test (testPythonProgramNameLifetime, `garmin-py`); builder GREEN, full suite 44/44 (was 43); `garmin_codex_reviewer` independent delta-check PASS, no code defect. **COMMITTED `28958dc16`.** Inspector independently rebuilt (full `GoldenCheetah` app target + all unittests, exit 0) and re-ran the full suite: 44/44 PASS, 0 failures. B-STAGE9-01..07 all now FIXED/COMMITTED. Stage 9's live-account acceptance criterion still not met — next: re-attempt the live Garmin connect test with the user (attempt #3).)
+# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-13 by Inspector (B-STAGE9-08 FIXED + COMMITTED `c1948b513` — Stage 9 diagnostic exceptionType logging (PyEmbeddedAdapter.cpp's pyExceptionTypeName()), hardened across 8 reviewer delta-check rounds against 8 distinct leak-bypass classes (non-str stringification, double module-prefix, non-identifier-shaped names, unallowlisted modules, empty-moduleName bypass, spoofed __module__/__qualname__ not backed by the real object, genuinely-real-but-unallowlisted tp_name module root); round 8 GREEN, `garmin_codex_reviewer` independent delta-check PASS. Inspector independently rebuilt (full `GoldenCheetah` app target + all unittests, exit 0) and re-ran the full suite twice (once pre-commit, once post clang-format reformat): `testGarminConnectPyAdapter` 49/49, `ctest -L garmin-fast` 40/40, `ctest -L garmin-py` 4/4, 0 failures both times. B-STAGE9-01..08 all now FIXED/COMMITTED. Stage 9's live-account acceptance criterion still not met — next: re-attempt the live Garmin connect test with the user (attempt #3).)
 # Per-id lifecycle status lives ONLY in .claude/workflow-garminconnect/traceability.md (DEC-015 SSOT).
 # For a DEC's status read decisions.md. For a finding's severity/disposition read findings.md.
 # ALL superseded cursor narrative -> .claude/workflow-garminconnect/archive/state-history.md
@@ -54,7 +54,12 @@ OPEN:      **STAGE 6 CLOSED 2026-09-08, COMMITTED `4a72d2279`** — all six REQs
            Stage 8, the current next gate.**
 BLOCKING:  — (none; B-R025-01/A3-R021b-F2/B-R029-01 all closed 2026-09-08, see above)
 CASCADE:   — (DEC-015 fully propagated; ledger_drift_lint.py EXIT=0)
-LAST_CLV:  clv_findings.py 2026-09-13 (re-run post-B-STAGE9-06 closure — builder GREEN,
+LAST_CLV:  clv_findings.py 2026-09-13 (re-run post-B-STAGE9-08 closure — builder GREEN
+           on round 8, reviewer delta-check PASS after 8 fix rounds). **PASS — 0
+           OUTSTANDING / 407 OK over 407 rows.** `ledger_drift_lint.py` re-run clean
+           (EXIT=0) against both edited files (STATE.md/findings.md).
+           Prior:
+           2026-09-13 (re-run post-B-STAGE9-06 closure — builder GREEN,
            reviewer delta-check PASS). **PASS — 0 OUTSTANDING / 406 OK over 406 rows.**
            `ledger_drift_lint.py` re-run clean (EXIT=0) against both edited files
            (STATE.md/findings.md).
