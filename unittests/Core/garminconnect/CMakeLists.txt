@@ -2556,6 +2556,29 @@ set_tests_properties(testGarminCurlCffiInterposition PROPERTIES
     LABELS "garmin-py"
     TIMEOUT 60)
 
+# --- B-STAGE9-09 — fake-fidelity contract vs. the REAL garminconnect library -
+# DEC-014 OQ1 close / live-account regression guard. The B-STAGE9-08 live
+# diagnostic caught garmin_client.py reading `full_name_id`, an attribute the
+# real, installed python-garminconnect library never exposed — the dev .venv
+# used by every OTHER adapter test lacks the real wheel, so a hand-written
+# fake silently agreed with the bug. This ctest entry runs
+# test_adapter_real_library_contract.py against the system Python3 (same
+# interpreter/precondition as testGarminCurlCffiInterposition above) so it
+# exercises the REAL `garminconnect.Garmin` surface, not a fake. The test
+# file's own `pytest.importorskip` keeps it green wherever the real wheel is
+# absent — labeled `garmin-py`, never `garmin-fast`, matching that label's
+# existing meaning.
+add_test(
+    NAME testGarminRealLibraryContract
+    COMMAND "${Python3_EXECUTABLE}" -m pytest
+            "${CMAKE_SOURCE_DIR}/src/Python/garminconnect/tests/test_adapter_real_library_contract.py"
+            -v
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/src/Python/garminconnect"
+)
+set_tests_properties(testGarminRealLibraryContract PROPERTIES
+    LABELS "garmin-py"
+    TIMEOUT 60)
+
 # --- B-STAGE9-07 — PyProcessBootstrap::setProgramName storage lifetime -------
 # Regression for the pre-existing PythonEmbed defect: the old inline
 #     Py_SetProgramName((wchar_t*) pybin.toStdWString().c_str())

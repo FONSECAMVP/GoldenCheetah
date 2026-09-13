@@ -46,12 +46,14 @@ class _FakeGarminMfaBase:
     """Minimal fake of garminconnect.Garmin for the two-step MFA flow.
 
     login() returns the needs-MFA sentinel; resume_login() is overridden per
-    test. On a successful resume the library populates .full_name_id /
-    .display_name on the instance (as the adapter reads them).
+    test. On a successful resume the library populates .display_name on the
+    instance (as the adapter reads it).
+
+    B-STAGE9-09: deliberately has NO `full_name_id` — the real, installed
+    python-garminconnect library never exposed one.
     """
 
     display_name: str = ""
-    full_name_id: str = ""
     MFA_STATE = {"client": "state-opaque"}
 
     def __init__(self, email: str, password: str) -> None:
@@ -94,7 +96,6 @@ def test_submit_mfa_valid_code_returns_success_identity(monkeypatch: pytest.Monk
         def resume_login(self, code: str, client_state: Any) -> None:
             self.resume_calls.append((code, client_state))
             # The library completes auth + populates the identity on success.
-            self.full_name_id = "77"
             self.display_name = "MFA Athlete"
 
     _install_fake_gc(monkeypatch, _MfaOkGarmin)
@@ -106,7 +107,7 @@ def test_submit_mfa_valid_code_returns_success_identity(monkeypatch: pytest.Monk
 
     # Step 2 — a valid code completes auth on the SAME session.
     result = client.submit_mfa("123456")
-    assert result == {"garmin_user_id": "77", "display_name": "MFA Athlete"}, (
+    assert result == {"garmin_user_id": "MFA Athlete", "display_name": "MFA Athlete"}, (
         "submit_mfa() must return the SAME identity dict shape login() returns "
         "on a no-MFA success, so the worker's Success mapping is identical"
     )
@@ -175,7 +176,6 @@ def test_pending_mfa_retained_across_bad_code_then_retry_succeeds(monkeypatch: p
             if code == "000000":
                 raise _FakeAuthError("invalid one-time code")
             # A subsequent good code completes auth on the SAME session.
-            self.full_name_id = "88"
             self.display_name = "Retry Rider"
 
     _install_fake_gc(monkeypatch, _MfaRetryGarmin)
@@ -191,7 +191,7 @@ def test_pending_mfa_retained_across_bad_code_then_retry_succeeds(monkeypatch: p
     # Second attempt on the SAME client: the retained pending state lets a good
     # code succeed (it is NOT consumed/cleared by the failure).
     result = client.submit_mfa("123456")
-    assert result == {"garmin_user_id": "88", "display_name": "Retry Rider"}
+    assert result == {"garmin_user_id": "Retry Rider", "display_name": "Retry Rider"}
 
     # resume_login was called TWICE, both on the retained client_state — proving
     # the failure path preserved self._pending_mfa.
@@ -199,3 +199,42 @@ def test_pending_mfa_retained_across_bad_code_then_retry_succeeds(monkeypatch: p
         ("000000", _MfaRetryGarmin.MFA_STATE),
         ("123456", _MfaRetryGarmin.MFA_STATE),
     ]
+
+
+def test_submit_mfa_identity_shape_mismatch_raises_classified_GarminError(monkeypatch: pytest.MonkeyPatch) -> None:
+    """B-STAGE9-09 — MFA-path counterpart of the login() regression guard.
+
+    A successful resume_login() must not let a post-success identity-shape
+    mismatch (the B-STAGE9-08 live-account `full_name_id` root cause) escape
+    as a raw exception; it must raise a classified GarminError(kind='unknown')
+    with a diagnosable message instead. The pending-MFA state is still cleared
+    (resume_login() already consumed the one-time code — REQ-003).
+    """
+
+    class _ShapeMismatchGarmin(_FakeGarminMfaBase):
+        def resume_login(self, code: str, client_state: Any) -> None:
+            self.resume_calls.append((code, client_state))
+
+        @property
+        def display_name(self) -> str:  # type: ignore[override]
+            raise AttributeError("simulated: real library dropped this attribute")
+
+    _install_fake_gc(monkeypatch, _ShapeMismatchGarmin)
+
+    client = GarminClient("u@x.com", "p")
+    assert client.login() == {"mfa_required": True}
+
+    with pytest.raises(GarminError) as excinfo:
+        client.submit_mfa("123456")
+
+    assert excinfo.value.kind == "unknown", (
+        "a post-MFA identity shape mismatch is a programming/library-compat "
+        "error, not an authentication failure — must classify as "
+        "kind='unknown', never escape as a raw exception"
+    )
+    assert "AttributeError" in excinfo.value.message, "message must be diagnosable"
+    assert isinstance(excinfo.value.original, AttributeError)
+    assert client._pending_mfa is None, (
+        "resume_login() already consumed the one-time code — the pending "
+        "state must still be cleared even though identity resolution failed"
+    )

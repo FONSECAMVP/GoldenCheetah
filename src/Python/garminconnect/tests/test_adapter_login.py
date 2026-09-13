@@ -49,10 +49,15 @@ class _FakeRateError(Exception):
 
 
 class _FakeGarminBase:
-    """Minimal fake of garminconnect.Garmin. Tests subclass to inject behaviour."""
+    """Minimal fake of garminconnect.Garmin. Tests subclass to inject behaviour.
+
+    B-STAGE9-09: deliberately has NO `full_name_id` — the real, installed
+    python-garminconnect library never exposed one (that drift is what put a
+    bare `builtins.AttributeError` into production against a live account).
+    Only `display_name` is real.
+    """
 
     display_name: str = ""
-    full_name_id: str = ""
 
     def __init__(self, email: str, password: str) -> None:
         # DEC-014 Option B: AUTH-ONLY construction — no tokenstore path. The
@@ -97,7 +102,6 @@ def test_login_happy_path_constructs_auth_only_and_exposes_blob(tmp_path: Any, m
 
     class _OkGarmin(_FakeGarminBase):
         display_name = "Test Athlete"
-        full_name_id = "1234567"
 
         # Capture EVERY positional the adapter forwards, so a lingering
         # tokenstore path (a 3rd arg) is caught, not silently swallowed.
@@ -118,7 +122,7 @@ def test_login_happy_path_constructs_auth_only_and_exposes_blob(tmp_path: Any, m
     client = GarminClient("good@example.com", "goodpass")
     result = client.login()
 
-    assert result == {"garmin_user_id": "1234567", "display_name": "Test Athlete"}, (
+    assert result == {"garmin_user_id": "Test Athlete", "display_name": "Test Athlete"}, (
         "login() must return the per-DES-012 identity dict so the worker can "
         "resolve per-account sidecar paths (DES-002)"
     )
@@ -275,7 +279,6 @@ def test_password_not_retained_on_adapter_instance(tmp_path: Any, monkeypatch: p
 
     class _OkGarmin(_FakeGarminBase):
         display_name = "X"
-        full_name_id = "1"
 
         def login(self) -> None:
             tokenstore.write_text("{}")
@@ -291,3 +294,41 @@ def test_password_not_retained_on_adapter_instance(tmp_path: Any, monkeypatch: p
             f"Adapter attribute {attr_name!r} retains the password after login(); "
             "REQ-005 forbids any post-login retention on the adapter instance"
         )
+
+
+def test_login_identity_shape_mismatch_raises_classified_GarminError(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B-STAGE9-09 — live-account regression guard.
+
+    A B-STAGE9-08 live diagnostic caught the real reason a live login showed
+    the UI's generic "code: unknown" copy: `self._garmin.full_name_id` doesn't
+    exist on the real, installed library, so a bare `builtins.AttributeError`
+    escaped this adapter's classification boundary entirely and reached C++
+    unclassified. Any future library-shape mismatch in the post-login identity
+    read (a rename, a version bump) must instead raise a CLASSIFIED
+    GarminError(kind='unknown') with a diagnosable message — never a raw
+    exception.
+    """
+
+    class _ShapeMismatchGarmin(_FakeGarminBase):
+        def login(self) -> None:
+            pass
+
+        @property
+        def display_name(self) -> str:  # type: ignore[override]
+            raise AttributeError("simulated: real library dropped this attribute")
+
+    _install_fake_gc(monkeypatch, _ShapeMismatchGarmin)
+
+    client = GarminClient("u@x.com", "p")
+    with pytest.raises(GarminError) as excinfo:
+        client.login()
+
+    assert excinfo.value.kind == "unknown", (
+        "a post-login identity shape mismatch is a programming/library-compat "
+        "error, not an authentication failure — must classify as kind='unknown', "
+        "never escape as a raw exception"
+    )
+    assert "AttributeError" in excinfo.value.message, "message must be diagnosable"
+    assert isinstance(excinfo.value.original, AttributeError)

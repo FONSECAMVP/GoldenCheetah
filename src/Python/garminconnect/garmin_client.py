@@ -133,10 +133,35 @@ class GarminClient:
         if isinstance(result, tuple) and len(result) == 2 and result[0] == "needs_mfa":
             self._pending_mfa = result[1]
             return {"mfa_required": True}
-        return {
-            "garmin_user_id": str(self._garmin.full_name_id),
-            "display_name": self._garmin.display_name,
-        }
+        # B-STAGE9-09 (DEC-014 OQ1 close): the live-account root cause was
+        # `self._garmin.full_name_id`, an attribute the real, installed
+        # python-garminconnect library never exposes (only the tests' fakes
+        # DEFINED it, so mutation testing "killed" the very mutants that would
+        # have exposed the drift). `display_name` is the library's actual
+        # stable profile identifier (design.md's Paths section) and is reused
+        # verbatim for BOTH keys — the duplication is intentional; there is no
+        # separate numeric id exposed by the real library.
+        #
+        # The dict construction itself is wrapped in try/except: it sits AFTER
+        # the library call succeeds, so any future library-shape mismatch here
+        # must raise a CLASSIFIED GarminError instead of escaping this adapter
+        # as a raw, unclassified exception (the B-STAGE9-08 diagnostic caught
+        # exactly this happening — a bare builtins.AttributeError reaching C++
+        # unclassified and landing on the generic "code: unknown" UI copy).
+        # This is a programming/library-compat error, never an auth failure —
+        # kind='unknown', mirroring the no-pending-MFA-session precedent below.
+        try:
+            return {
+                "garmin_user_id": str(self._garmin.display_name),
+                "display_name": self._garmin.display_name,
+            }
+        except Exception as e:
+            raise GarminError(
+                "unknown",
+                f"Garmin Connect login succeeded but the identity response was "
+                f"in an unexpected shape ({type(e).__name__}: {e})",
+                e,
+            ) from e
 
     # DES-005/DEC-007 — paced (REQ-NF-Perf-002) and retried (REQ-NF-Reliab-001)
     # through gc_rate.py, same as list_activities_since/download_activity below.
@@ -234,14 +259,28 @@ class GarminClient:
             # REQ-003). The pending state is deliberately RETAINED so a retry
             # resumes the SAME session.
             raise GarminError("auth", str(e) or "Invalid MFA code", e) from e
-        # Success — clear the pending state and return the SAME identity dict
-        # shape login() returns on a no-MFA success (byte-for-byte parity so the
+        # Success — resume_login() consumed the OTP; clear the pending state
+        # unconditionally (REQ-003 — there is no scenario where retrying an
+        # already-consumed code makes sense, whether or not identity
+        # resolution below succeeds), then return the SAME identity dict shape
+        # login() returns on a no-MFA success (byte-for-byte parity so the
         # worker's Success mapping is identical for both paths).
         self._pending_mfa = None
-        return {
-            "garmin_user_id": str(self._garmin.full_name_id),
-            "display_name": self._garmin.display_name,
-        }
+        # B-STAGE9-09 — see _login_impl's matching comment: display_name (not
+        # full_name_id, which the real library never exposes) is the real
+        # identifier, and this dict construction is classified the same way.
+        try:
+            return {
+                "garmin_user_id": str(self._garmin.display_name),
+                "display_name": self._garmin.display_name,
+            }
+        except Exception as e:
+            raise GarminError(
+                "unknown",
+                f"Garmin Connect MFA succeeded but the identity response was "
+                f"in an unexpected shape ({type(e).__name__}: {e})",
+                e,
+            ) from e
 
     # DES-005/DEC-007 — same pacing/retry wrapping as login. is_transient
     # excludes kind='auth' (bad/expired OTP) and kind='unknown' (no pending
