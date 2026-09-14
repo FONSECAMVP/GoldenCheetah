@@ -553,6 +553,38 @@ STAGE-9-BLOCKER-2 (2026-09-13, live-account re-test #2, post-DEC-052 fix — B-S
            credentials twice; only a fix-then-retry loop remains, not fresh credential entry
            each time unless the UI state requires it.
 
+STAGE-9-CURSOR (2026-09-15, written by `garmin_inspector_v1_21` — this supersedes the
+           line-1 header narrative above, which stopped being accurate after B-STAGE9-09 and
+           should be read as history, not as the cursor. Per-id status lives only in
+           findings.md; this section carries sequencing and the live gate only):
+           B-STAGE9-01..11 and -13 are all committed — most recently B-STAGE9-13 (empty token
+           blob gets its own `LoadStatus::Empty` and `gc_obs error_code=empty`) committed
+           `1ae49a196`, 18 files, after reviewer round 3 came back clean and the Inspector
+           independently re-ran the build, the 40-test `garmin-fast` label, both per-binary
+           targets and the `empty_corrupt` mutation. Three findings remain open, all blocking:
+           **B-STAGE9-12** (stderr buffering defeats REQ-NF-Obs-001's `gc_obs` traces in the
+           real qmake binary) — RED delivered and reviewer-reviewed, repair queued, FROZEN
+           under the hard hold below. **B-STAGE9-14** (prefix-matching assertions in the Garmin
+           observation tests; escalated from non-blocking on the reviewer's round-3 verdict and
+           widened from 2 assertions to 11 by the Inspector's own grep) — dispatched
+           2026-09-15 to `garmin_builder_stage9_v6`. **B-STAGE9-15** (new) — the
+           `testGarminI18nSourceGuard` test has been RED in HEAD since `c1948b513` and nobody
+           saw it, because this project's habitual verification ritual is `ctest -L garmin-fast`
+           and that label does not cover `garmin-i18n-guard`. Queued, not dispatched; it needs
+           a decision (are those three `qDebug` trace literals really user-facing prose, or is
+           the guard's heuristic misfiring?) plus an independent second opinion first.
+           **THE HARD HOLD ON `src/Core/main.cpp` REMAINS IN FORCE**, and with it all of
+           B-STAGE9-12's production fix: no edit to that file, no qmake, no `make` against
+           `src.pro`. **THE ONE REAL HUMAN-IN-THE-LOOP GATE IS UNCHANGED AND STILL OPEN:** the
+           user's live Garmin sync re-test of `e5936375c` has not run. Re-verified 2026-09-15 —
+           GoldenCheetah not running, `~/.goldencheetah/Andy/activities/` still 1145 files,
+           `tokens.json` still the 0-byte file from 2026-09-13 20:53. No qmake rebuild is needed
+           for it (`src.pro` points `GARMIN_PY_MODULE_DIR` at the source tree, so the committed
+           Python fix is live on next launch). Success criterion is a NEW file under that
+           activities directory, NOT the UI; on failure the user must quit via File > Quit so
+           the buffered `gc_obs` lines flush — which is B-STAGE9-12 itself. Release the hold
+           once that test concludes.
+
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md
 (## Decision index, then entries) · validations/archive/ + cycles/archive/ (historical
