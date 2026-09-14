@@ -67,6 +67,7 @@ Compact schema per `references/formats.md` § `decisions.md`. **The recap source
 | DEC-050 | REQ-013 scope → narrow the first slice to DOB/weight/height, defer HR-max/FTP | accepted (user decision, option 1 of 3) · **BUILT + committed `e17262a0b`** | 2026-09-12 |
 | DEC-051 | REQ-NF-Obs-001's "ErrorBus" clause → satisfied by the project's real, already-decided error channels; build only the missing structured `qDebug` trace logging | accepted (Inspector, Three-Options Doctrine — ordinary architecture reconciliation, not a human-in-the-loop gate) | 2026-09-12 |
 | DEC-052 | B-STAGE9-01 fix → shared process-level CPython bootstrap owned by neither `PythonEmbed` nor `PyEmbeddedAdapter` alone, invoked once on the main thread before either feature's workers can run | accepted (Inspector, Three-Options Doctrine — ordinary architecture decision, not a human-in-the-loop gate; reviewer-researched options) | 2026-09-13 |
+| DEC-053 | B-STAGE9-15 remedy → developer-trace literals exempt from the i18n guard as a CATEGORY; the three flagged `qDebug` call sites are correct as written, the guard's heuristic is not | accepted (Inspector, Three-Options Doctrine — ordinary tooling-correctness decision, not a human-in-the-loop gate; standing-rule exception independently verified by a fresh unbriefed agent before recording) | 2026-09-15 |
 
 ### Dormant index
 
@@ -2580,3 +2581,44 @@ Introduce one shared, process-level CPython bootstrap function (new, small, Pyth
 grep -c "Py_Initialize" src/Python/PythonEmbed.cpp src/Cloud/PyEmbeddedAdapter.cpp <new-bootstrap-file>   # expect: bootstrap file owns the one Py_InitializeFromConfig call; PythonEmbed attaches, does not re-init
 grep -n "GC_WANT_PYTHON\|GC_WANT_GARMINCONNECT" src/src.pro src/CMakeLists.txt   # expect: the new bootstrap TU compiled under an OR of both flags, not either alone
 ctest -L garmin-fast   # expect: existing DES-013 fail-safe assertions in testGarminConnectPyAdapter.cpp still pass unchanged
+
+## DEC-053 — B-STAGE9-15 remedy: developer-trace literals are exempt from the i18n guard as a CATEGORY; the three flagged call sites are correct as written
+
+- Status: accepted (Inspector, Three-Options Doctrine — ordinary tooling-correctness decision, not a human-in-the-loop gate; the standing-rule exception was independently verified by a fresh unbriefed agent before recording, per this project's own rule)
+- Reversibility: high — changes one predicate in a static guard script plus its tests; no production behavior, no shipped binary, no user-visible surface
+- Decided / last-reviewed: 2026-09-15
+- Serves: B-STAGE9-15 (a RED `testGarminI18nSourceGuard` in HEAD since `c1948b513`, blocking a truthful Stage 9 gate)
+- Dependents: `unittests/buildguard/garmin_i18n_source_guard.py` (T-208), `src/Cloud/GarminCredentialsPage.cpp`, `src/Cloud/GarminMfaPage.cpp`, REQ-NF-i18n-001's traceability row
+- Origin: found 2026-09-15 by `garmin_inspector_v1_21` while running the static guards after a clang-format reformat during B-STAGE9-13's commit. The guard reports 3 `I18N-TR-WRAP` findings, all on the literal `garmin_auth_unknown exception_type=%1`, emitted at all three sites via `qDebug().noquote()`.
+
+### The problem
+Two separate defects are tangled, and they must not be conflated.
+
+(1) A GATE-COVERAGE defect. `testGarminI18nSourceGuard` carries the ctest label `garmin-i18n-guard`, which is NOT part of `garmin-fast` — the label this project's standing verification ritual runs after every unit, including the Inspector's own independent re-runs. A red test therefore sat in HEAD for two days unseen. The pre-commit hook does not run `ctest` either (clang-format/ruff/mypy/ledger-drift-lint only), so nothing caught it. This is the same blind-spot class as B-STAGE9-14 — a defect outside the habitual window is invisible to it no matter how many passes run — but demonstrated at the GATE layer rather than the review layer, which makes it the more serious of the two. Every "garmin-fast 40/40" claim recorded in this ledger since 2026-09-13 is narrower than it reads.
+
+(2) A GUARD-CORRECTNESS question, which this DEC resolves. `garmin_auth_unknown exception_type=%1` is a developer diagnostic trace, not user-facing prose: at all three sites it goes only to `qDebug().noquote()`, while the UI separately receives `GarminErrors::translate(error.kind)`. Translating it into 13 languages would treat developer telemetry as interface text and permanently mistranslate diagnostic output — a worse outcome than the red test.
+
+The guard's exemption logic was read directly rather than inferred (`is_technical()`, `garmin_i18n_source_guard.py:60-71`). A literal is exempt if it matches a date-format pattern, OR every whitespace-separated token contains `=`, OR it has `>= 2` `%` placeholders AND `>= 2` `=` signs. `gcObsTrace()`'s `"gc_obs op=%1 outcome=%2 error_code=%3 duration_ms=%4"` passes the third clause (4 and 4). The flagged literal fails all three: it has one `=` and one `%`, and its leading token `garmin_auth_unknown` is a bare event name carrying no `=`. So the guard is not drawing a principled user-facing-versus-developer-trace distinction at all — it is keying on incidental syntax, and the two structurally identical trace families land on opposite sides of it by accident.
+
+### Resolution
+Extend `is_technical()` so developer-trace literals are exempt as a CATEGORY rather than by placeholder arithmetic: a literal qualifies when it consists of `key=value` tokens optionally preceded by a SINGLE leading bare identifier-shaped event-name token (`snake_case`, no spaces), and contains at least one `key=value` token. This admits both existing trace families and the flagged one, while staying tight enough that real prose — which has multiple bare words and no `=` — is still caught. The three call sites are left unchanged. The repair is NOT complete without a RED-first test proving the new predicate still REJECTS a prose literal that merely contains an `=` sign; widening this predicate is exactly the kind of change that can silently turn the whole guard vacuous, which is this project's signature failure mode (B-STAGE9-13, B-STAGE9-14). Defect (1), the gate-coverage gap, is NOT fixed by this DEC and remains open in B-STAGE9-15 — the label-coverage question (whether `garmin-fast` should subsume the guard labels, or the ritual should change) is a separate unit.
+
+### Alternatives
+| Opt | Rel | Scal | Maint | BP |
+|---|---|---|---|---|
+| **1 — exempt developer-trace literals as a category; leave the call sites alone — CHOSEN** | 5 — fixes the real defect (the heuristic), and keeps diagnostic output untranslated where every consumer of it expects stable ASCII keys | 5 — any future `qDebug` trace line is handled by the rule instead of needing a new special case or a fresh red gate | 5 — one predicate, in one place, expressing the distinction the guard was always trying to draw | 5 — log/telemetry text is conventionally never localized; `%1`-count arithmetic is not a category test |
+| 2 — wrap the three call sites in `tr()` and add the literal to all 13 `.ts` files | 2 — makes a machine-parsed diagnostic key locale-dependent; a translator could reword `exception_type` and silently break any log reading | 1 — every future trace line needs 13 catalog entries and the same wrong treatment, compounding | 2 — leaves the misfiring heuristic in place, so the next structurally identical literal fails again for the same wrong reason | 1 — translating developer telemetry is a straightforward anti-pattern |
+| 3 — exclude the two page files from the guard's file globs | 1 — silences the symptom and blinds the guard to GENUINELY user-facing prose in two real UI files, which is most of what those files contain | 2 — every future file with one trace literal gets dropped wholesale | 1 — turns a precise rule into a file-level opt-out, the vacuous-guard failure mode | 1 — suppressing a check rather than correcting it |
+
+### Cascade impact
+- 1 (chosen): `unittests/buildguard/garmin_i18n_source_guard.py` predicate + its own tests; `findings.md`'s B-STAGE9-15 row cites this DEC; REQ-NF-i18n-001's traceability row needs a note that the guard's technical-exemption category was widened after T-208 was closed, so "TEST VERIFIED" for that REQ now rests on a revised predicate. The gate-coverage half of B-STAGE9-15 stays open and unaddressed by this DEC.
+- 2: would need 13 `.ts` files edited and would make defect (1) permanent by declaring the misfire correct.
+- 3: would need the guard's `CPP_GLOBS` narrowed, silently dropping real UI prose coverage for two credential-facing dialogs.
+
+### Chosen
+1 — the only option that fixes the actual defect (a syntactic heuristic masquerading as a semantic category) rather than ratifying it or hiding from it. Independently verified before recording, per this project's rule that a DEC bending a standing rule needs a fresh unbriefed second opinion: a separate, read-only Codex agent (`s915_i18n_second_opinion`, given only the narrow question and explicitly told the brief might be wrong) read the guard's rule implementation and the three call sites and returned the same three answers — developer trace, not prose; the `>=2 %` / `>=2 =` clause is why `gcObsTrace` escapes and this does not; remedy (b), fix the guard. The Inspector then re-read `is_technical()` directly to confirm that account rather than relaying it.
+
+### Alignment probe
+python3 unittests/buildguard/garmin_i18n_source_guard.py .   # expect: 0 findings, and NOT because the predicate went vacuous
+grep -n "garmin_auth_unknown" src/Cloud/GarminCredentialsPage.cpp src/Cloud/GarminMfaPage.cpp   # expect: still bare QStringLiteral, no tr()
+grep -c "garmin_auth_unknown" src/Resources/translations/gc_de.ts   # expect: 0 — never enters a catalog
