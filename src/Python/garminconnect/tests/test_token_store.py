@@ -40,6 +40,10 @@ class _FakeAuthError(Exception):
     """Stand-in for garminconnect.exceptions.GarminConnectAuthenticationError."""
 
 
+class _FakeConnError(Exception):
+    """Stand-in for garminconnect.exceptions.GarminConnectConnectionError."""
+
+
 class _FakeGarmin:
     """Fake of garminconnect.Garmin exposing only the surface the adapter's
     dump/load path touches: an in-memory OAuth session it can serialize to an
@@ -60,8 +64,44 @@ class _FakeGarmin:
 
     _instance_counter = 0
 
-    def __init__(self, email: str, password: str) -> None:
+    class _InnerClient:
+        """B-STAGE9-11: dumps()/loads() live on the inner `.client` object on
+        the real library, not on Garmin itself — see garmin_client.py's
+        dump_tokens()/load_tokens()."""
+
+        def __init__(self, outer: _FakeGarmin) -> None:
+            self._outer = outer
+
+        def dumps(self) -> str:
+            import json
+
+            return json.dumps(self._outer._session)
+
+        def loads(self, token_str: str) -> None:
+            import json
+
+            try:
+                data = json.loads(token_str)
+                if not isinstance(data, dict) or "oauth1_token" not in data:
+                    raise ValueError("missing oauth1_token")
+            except Exception as e:
+                # B-STAGE9-10 repair BLOCKING-2 (confirmed against the real,
+                # installed python-garminconnect 0.3.15 wheel by direct probe:
+                # Garmin().client.loads(x) for x in '', '}{ bad', '{}',
+                # '{"real":"blob"}' all raise GarminConnectConnectionError,
+                # never GarminConnectAuthenticationError). The real
+                # Client.loads() wraps ANY structural failure — bad JSON,
+                # missing keys, even its OWN internal AuthenticationError —
+                # into GarminConnectConnectionError. Modeling this as an auth
+                # error (the old fake here) is exactly the DEC-014 OQ1 lesson:
+                # match the real wheel's behavior, not the adapter's
+                # assumption.
+                raise _FakeConnError("Token extraction loads() structurally failed") from e
+            self._outer._session = data
+
+    def __init__(self, email: str, password: str, **_: Any) -> None:
         # DEC-014 Option B: AUTH-ONLY construction — no tokenstore path.
+        # **_ swallows B-STAGE9-10's return_on_mfa=True (unused on this path).
         self.email = email
         self._password = password  # library's own retention; never serialized
         # Per-instance monotonic serial → distinct seeded session per instance,
@@ -73,26 +113,7 @@ class _FakeGarmin:
             "oauth1_token": f"OA1-abc-{serial}",
             "oauth2_token": f"OA2-xyz-{serial}",
         }
-
-    # DEC-014 OQ1 — the real library's in-memory export/import. The fake mirrors
-    # the contract: dumps() -> opaque str; loads(str) restores the same session.
-    def dumps(self) -> str:
-        import json
-
-        return json.dumps(self._session)
-
-    def loads(self, token_str: str) -> None:
-        import json
-
-        try:
-            data = json.loads(token_str)
-        except (ValueError, TypeError) as e:
-            # A tampered blob no longer parses as a valid session — the real
-            # library surfaces an invalidated/expired session as an auth error.
-            raise _FakeAuthError("session could not be restored") from e
-        if not isinstance(data, dict) or "oauth1_token" not in data:
-            raise _FakeAuthError("session is expired or invalid")
-        self._session = data
+        self.client = _FakeGarmin._InnerClient(self)
 
 
 def _install_fake_gc(monkeypatch: pytest.MonkeyPatch, garmin_cls: type) -> None:
@@ -102,6 +123,7 @@ def _install_fake_gc(monkeypatch: pytest.MonkeyPatch, garmin_cls: type) -> None:
     fake_mod.Garmin = garmin_cls  # type: ignore[attr-defined]
     fake_mod.exceptions = types.SimpleNamespace(  # type: ignore[attr-defined]
         GarminConnectAuthenticationError=_FakeAuthError,
+        GarminConnectConnectionError=_FakeConnError,
     )
     monkeypatch.setattr(garmin_client, "_gc", fake_mod)
 

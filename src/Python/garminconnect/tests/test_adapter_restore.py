@@ -26,9 +26,17 @@ class _FakeAuthError(Exception):
     """Stand-in for garminconnect.exceptions.GarminConnectAuthenticationError."""
 
 
+class _FakeConnError(Exception):
+    """Stand-in for garminconnect.exceptions.GarminConnectConnectionError."""
+
+
 class _FakeGarminNoArg:
     """Fake of garminconnect.Garmin supporting the password-free construction
-    from_tokens() uses. Records the blob handed to loads()."""
+    from_tokens() uses. Records the blob handed to loads().
+
+    B-STAGE9-11: loads() lives on the inner `.client` object on the real
+    library, not on Garmin itself — see garmin_client.py's load_tokens().
+    """
 
     last_loaded: str | None = None
 
@@ -36,14 +44,21 @@ class _FakeGarminNoArg:
         # from_tokens must construct WITHOUT a password (REQ-005). A stray
         # positional would be caught here.
         assert args == (), "from_tokens must construct the library password-free (no positional args)"
+        self.client = types.SimpleNamespace(loads=self._loads)
 
-    def loads(self, token_str: str) -> None:
+    def _loads(self, token_str: str) -> None:
         _FakeGarminNoArg.last_loaded = token_str
 
 
 class _ExpiredGarminNoArg(_FakeGarminNoArg):
-    def loads(self, token_str: str) -> None:  # noqa: ARG002
-        raise _FakeAuthError("stored session is no longer valid")
+    def _loads(self, token_str: str) -> None:  # noqa: ARG002
+        # B-STAGE9-10 repair BLOCKING-2 (confirmed against the real, installed
+        # python-garminconnect 0.3.15 wheel by direct probe: Garmin().client.
+        # loads(x) for any structurally-bad x raises GarminConnectConnectionError,
+        # never GarminConnectAuthenticationError). Modeling this as an auth
+        # error is the DEC-014 OQ1 lesson: match the real wheel, not the
+        # adapter's assumption.
+        raise _FakeConnError("Token extraction loads() structurally failed")
 
 
 def _install_fake_gc(monkeypatch: pytest.MonkeyPatch, garmin_cls: type) -> None:
@@ -51,7 +66,10 @@ def _install_fake_gc(monkeypatch: pytest.MonkeyPatch, garmin_cls: type) -> None:
 
     fake_mod = types.ModuleType("garminconnect_fake")
     fake_mod.Garmin = garmin_cls  # type: ignore[attr-defined]
-    fake_mod.exceptions = types.SimpleNamespace(GarminConnectAuthenticationError=_FakeAuthError)  # type: ignore[attr-defined]
+    fake_mod.exceptions = types.SimpleNamespace(  # type: ignore[attr-defined]
+        GarminConnectAuthenticationError=_FakeAuthError,
+        GarminConnectConnectionError=_FakeConnError,
+    )
     monkeypatch.setattr(garmin_client, "_gc", fake_mod)
 
 

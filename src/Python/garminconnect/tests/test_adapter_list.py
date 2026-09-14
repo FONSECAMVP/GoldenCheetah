@@ -62,8 +62,9 @@ class _FakeGarminBase:
     """Minimal fake of garminconnect.Garmin exposing only what the listing path
     touches: get_activities_by_date()."""
 
-    def __init__(self, email: str, password: str) -> None:
+    def __init__(self, email: str, password: str, **_: Any) -> None:
         # DEC-014 Option B: AUTH-ONLY construction — no tokenstore path.
+        # **_ swallows B-STAGE9-10's return_on_mfa=True (unused on this path).
         self.email = email
         self.password = password
 

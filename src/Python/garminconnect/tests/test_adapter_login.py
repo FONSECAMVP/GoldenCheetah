@@ -59,14 +59,24 @@ class _FakeGarminBase:
 
     display_name: str = ""
 
-    def __init__(self, email: str, password: str) -> None:
+    def __init__(self, email: str, password: str, **_: Any) -> None:
         # DEC-014 Option B: AUTH-ONLY construction — no tokenstore path. The
         # library holds an in-memory session and self-writes no token file.
+        # **_ swallows B-STAGE9-10's return_on_mfa=True.
         self.email = email
         self.password = password
 
     def login(self) -> None:  # library returns None on success; adapter reads .display_name
         raise NotImplementedError  # overridden per test
+
+    def _load_profile_and_settings(self) -> None:
+        # B-STAGE9-10: the real wrapper's return_on_mfa=True skips this call on
+        # a plain success, so garmin_client.py calls it explicitly; a no-op
+        # here preserves whatever display_name a test already set (mirrors the
+        # real library's OWN _load_profile_and_settings, which populates
+        # display_name — see test_adapter_real_library_contract.py's
+        # _EarlyReturnGarmin for a fake that models the populating case).
+        pass
 
 
 def _install_fake_gc(monkeypatch: pytest.MonkeyPatch, garmin_cls: type) -> None:
@@ -105,17 +115,19 @@ def test_login_happy_path_constructs_auth_only_and_exposes_blob(tmp_path: Any, m
 
         # Capture EVERY positional the adapter forwards, so a lingering
         # tokenstore path (a 3rd arg) is caught, not silently swallowed.
-        def __init__(self, *args: Any) -> None:
+        # return_on_mfa is forwarded as a KEYWORD (B-STAGE9-10), so it never
+        # lands in `args` — the positional-only assertions below still hold.
+        def __init__(self, *args: Any, **_: Any) -> None:
             ctor_args["forwarded"] = args
             super().__init__(*args[:2])
+            # B-STAGE9-11: dumps() lives on the inner .client object on the
+            # real library, not on Garmin itself.
+            self.client = types.SimpleNamespace(dumps=lambda: '{"oauth1":"blob","oauth2":"blob"}')
 
         def login(self) -> None:
             # Auth-only: the library holds an in-memory session; it does NOT
             # write any token file (no tokenstore path was ever handed to it).
             pass
-
-        def dumps(self) -> str:
-            return '{"oauth1":"blob","oauth2":"blob"}'
 
     _install_fake_gc(monkeypatch, _OkGarmin)
 

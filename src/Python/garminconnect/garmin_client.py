@@ -89,22 +89,33 @@ class GarminClient:
         # The library's own retention is its contract — DES-012 isolates it.
         #
         # DEC-014 Option B (A3-R004-M3 security-close): construct the library
-        # AUTH-ONLY — exactly (email, password), NO tokenstore path. Passing a
-        # path here would let the library self-write a SECOND, unaudited token
-        # file whose permissions are never enforced/checked. Under Option B the
-        # session lives in memory; C++ (GarminTokenStore) owns the single atomic
-        # 0600 write of the blob exported by dump_tokens(). Nothing below this
-        # adapter writes a token file.
+        # AUTH-ONLY — exactly (email, password) plus return_on_mfa, NO
+        # tokenstore path. Passing a path here would let the library self-write
+        # a SECOND, unaudited token file whose permissions are never
+        # enforced/checked. Under Option B the session lives in memory; C++
+        # (GarminTokenStore) owns the single atomic 0600 write of the blob
+        # exported by dump_tokens(). Nothing below this adapter writes a token
+        # file.
         #
-        # NOTE(DEC-014 OQ1): the AUTH-ONLY 2-arg construction is a real-lib
-        # signature item, unconfirmed against the not-yet-bundled
-        # python-garminconnect wheel (like dumps()/loads() below). It is pinned
-        # by the fakes/pystub until the wheel is bundled (DES-007/Pkg).
-        self._garmin = _gc.Garmin(email, password)
-        # REQ-003 — retained pending-MFA state (the library's client_state) set
-        # by login() when Garmin requires an OTP; consumed by submit_mfa(). None
-        # until/unless the MFA path is entered. Holds no password (REQ-005).
-        self._pending_mfa: Any = None
+        # B-STAGE9-10 (confirmed against the real, installed python-
+        # garminconnect 0.3.15 wheel): return_on_mfa=True is REQUIRED for the
+        # ("needs_mfa", client_state) sentinel _login_impl branches on below to
+        # ever be produced at all — without it the real library raises
+        # GarminConnectAuthenticationError("MFA Required but no prompt_mfa
+        # mechanism supplied") instead. The trade-off this forces — the real
+        # wrapper's login() then returns EARLY AND UNCONDITIONALLY, even on a
+        # plain non-MFA success, skipping its own profile load — is
+        # compensated for explicitly in _login_impl below.
+        self._garmin = _gc.Garmin(email, password, return_on_mfa=True)
+        # REQ-003 — plain boolean sentinel: True once login() has retained a
+        # pending-MFA session, consumed (reset to None) by submit_mfa(). The
+        # real library's resume_login() never reads its first positional
+        # argument (client.py's own leading-underscore `_client_state` param
+        # name marks it dead code — B-STAGE9-10), so there is no client_state
+        # payload worth carrying; the pending session lives on the same
+        # self._garmin instance already kept alive. Holds no password
+        # (REQ-005).
+        self._pending_mfa: bool | None = None
 
     def _login_impl(self) -> dict[str, Any]:
         # REQ-014 — connection/rate_limit classified by exception TYPE (LSN-006),
@@ -119,20 +130,41 @@ class GarminClient:
             raise GarminError("rate_limit", str(e) or "Garmin Connect is rate-limiting sign-in", e) from e
         # REQ-003 — MFA-required signal. python-garminconnect/garth's login()
         # returns a ("needs_mfa", client_state) sentinel (instead of raising)
-        # when the account needs a 6-digit OTP. Detect it by SHAPE, never by
-        # message content (LSN-006); retain the client_state so submit_mfa() can
-        # resume the SAME session, and surface a stable {"mfa_required": True}
-        # sentinel to the worker adapter instead of a success identity. The
-        # no-MFA return below is unchanged byte-for-byte (library returns None
-        # / a non-sentinel on plain success -> falls through).
-        #
-        # NOTE(DEC-014 OQ1): the exact needs-MFA sentinel and resume_login()
-        # signature are unconfirmed against the not-yet-bundled
-        # python-garminconnect wheel (like dumps()/loads() above); pinned here by
-        # the fake/pystub until the wheel is bundled (DES-007/Pkg).
+        # when the account needs a 6-digit OTP, ONLY reachable because
+        # return_on_mfa=True was passed to the constructor above. Detect it by
+        # SHAPE, never by message content (LSN-006); set the plain boolean
+        # sentinel so submit_mfa() can resume the SAME session (the real
+        # resume_login() never reads client_state — see __init__'s comment),
+        # and surface a stable {"mfa_required": True} sentinel to the worker
+        # adapter instead of a success identity. The no-MFA return below is
+        # unchanged byte-for-byte (library returns a non-sentinel on plain
+        # success -> falls through).
         if isinstance(result, tuple) and len(result) == 2 and result[0] == "needs_mfa":
-            self._pending_mfa = result[1]
+            self._pending_mfa = True
             return {"mfa_required": True}
+        # B-STAGE9-10: return_on_mfa=True makes the real wrapper's login()
+        # return early UNCONDITIONALLY once past the needs-MFA check above —
+        # even on an immediate, non-MFA success — skipping its own call to
+        # _load_profile_and_settings() (confirmed by reading the real library's
+        # login() source: the return sits ABOVE that call). Without this
+        # explicit compensating call, display_name below stays unpopulated on
+        # EVERY non-MFA login, regressing B-STAGE9-09's live-confirmed fix.
+        # The resume_login() success path in _submit_mfa_impl does NOT need
+        # this: the library's own resume_login() wrapper already calls it.
+        #
+        # Repair BLOCKING-1 (confirmed against the real, installed python-
+        # garminconnect 0.3.15 wheel's own docstring): this call "Raises
+        # GarminConnectAuthenticationError if either [social profile or user
+        # settings] cannot be retrieved (e.g. the token is rejected)." Valid
+        # credentials do not guarantee this succeeds, so it needs the SAME
+        # classification boundary as the login()/resume_login() calls above —
+        # otherwise a failure here is exactly B-STAGE9-09's bug pattern
+        # reintroduced on a new line: an unclassified exception escaping to
+        # PyEmbeddedAdapter, folded to the generic "code: unknown" UI copy.
+        try:
+            self._garmin._load_profile_and_settings()
+        except _gc.exceptions.GarminConnectAuthenticationError as e:
+            raise GarminError("auth", str(e) or "Authentication failed", e) from e
         # B-STAGE9-09 (DEC-014 OQ1 close): the live-account root cause was
         # `self._garmin.full_name_id`, an attribute the real, installed
         # python-garminconnect library never exposes (only the tests' fakes
@@ -180,12 +212,12 @@ class GarminClient:
         # REQ-005: only OAuth bearer + refresh tokens live in this blob; the
         # password was handed to the library and never retained here.
         #
-        # NOTE(DEC-014 OQ1): the exact library export method is unconfirmed
-        # against the not-yet-bundled python-garminconnect wheel (no version pin
-        # in repo; lib absent from .venv). On the current native engine this is
-        # `dumps()`; confirm when the wheel is bundled (DES-007/Pkg). The adapter
-        # contract (return a non-empty str) is pinned by pytest against a fake.
-        return str(self._garmin.dumps())
+        # B-STAGE9-11 (confirmed against the real, installed python-
+        # garminconnect 0.3.15 wheel): the outer Garmin object has no dumps()
+        # of its own — the session export lives one level in, on the inner
+        # `.client` object. `self._garmin.dumps()` (the old code) raised
+        # AttributeError against the real library.
+        return str(self._garmin.client.dumps())
 
     @classmethod
     def from_tokens(cls, token_str: str) -> GarminClient:
@@ -196,10 +228,10 @@ class GarminClient:
         # is constructed password-free and the blob loaded; a tampered/expired
         # blob surfaces from load_tokens() as GarminError(kind='session_expired').
         #
-        # NOTE(DEC-014 OQ1): the password-free `_gc.Garmin()` construction is a
-        # real-lib signature item, unconfirmed against the not-yet-bundled
-        # python-garminconnect wheel (like dumps()/loads()). Pinned by the
-        # pystub/fake until the wheel is bundled (DES-007/Pkg).
+        # The password-free `_gc.Garmin()` construction (confirmed against the
+        # real, installed python-garminconnect 0.3.15 wheel: email/password
+        # are optional constructor args) needs no return_on_mfa here — the
+        # restore path never logs in, so the needs-MFA branch is unreachable.
         if _gc is None:
             raise GarminError(
                 "unknown",
@@ -214,8 +246,9 @@ class GarminClient:
         # REQ-004 counterpart of dump_tokens(): restore an authenticated session
         # from a previously-exported blob (the REQ-006 resume path feeds this).
         #
-        # NOTE(DEC-014 OQ1): real library import method unconfirmed (see above);
-        # `loads()` on the native engine.
+        # B-STAGE9-11 (confirmed against the real, installed python-
+        # garminconnect 0.3.15 wheel): loads() lives on the inner `.client`
+        # object, same as dumps() above — see dump_tokens()'s matching comment.
         #
         # DEC-014 OQ2 → REQ-NF-Compat-001(b): a tampered or server-side-
         # invalidated session surfaces from the library as an authentication
@@ -223,9 +256,24 @@ class GarminClient:
         # from login's 'auth' and from 'token_permissions' — so the resume path
         # can route it to a re-login prompt. Classify by exception TYPE, never
         # by message content (LSN-006).
+        #
+        # Repair BLOCKING-2 (confirmed against the real, installed python-
+        # garminconnect 0.3.15 wheel by direct probe AND by reading
+        # Client.loads()'s source): the real inner Client.loads() wraps ANY
+        # structural failure of the blob — bad JSON, missing keys, even its
+        # OWN internal GarminConnectAuthenticationError — into
+        # GarminConnectConnectionError("Token extraction loads() structurally
+        # failed"). GarminConnectAuthenticationError never actually reaches
+        # this call site on the real library; catching only it left every
+        # malformed/empty/tampered blob unclassified (this is why the user's
+        # 0-byte tokens.json produced error_code=unknown instead of
+        # session_expired).
         try:
-            self._garmin.loads(token_str)
-        except _gc.exceptions.GarminConnectAuthenticationError as e:
+            self._garmin.client.loads(token_str)
+        except (
+            _gc.exceptions.GarminConnectAuthenticationError,
+            _gc.exceptions.GarminConnectConnectionError,
+        ) as e:
             raise GarminError(
                 "session_expired",
                 str(e) or "Stored Garmin session is expired; please sign in again",
@@ -234,14 +282,16 @@ class GarminClient:
 
     def _submit_mfa_impl(self, code: str) -> dict[str, Any]:
         # REQ-003 — resume the pending-MFA session established by a prior login()
-        # that returned {"mfa_required": True}. Two-step flow: login() retained a
-        # client_state; resume_login(code, client_state) completes auth on the
-        # SAME session and populates the identity the same way login() does.
+        # that returned {"mfa_required": True}. Two-step flow: resume_login()
+        # completes auth on the SAME session (the one still held on
+        # self._garmin) and populates the identity the same way login() does.
         #
-        # NOTE(DEC-014 OQ1): the resume_login() call signature is unconfirmed
-        # against the not-yet-bundled python-garminconnect wheel (like
-        # dumps()/loads()); pinned here by the fake/pystub until the wheel is
-        # bundled (DES-007/Pkg).
+        # B-STAGE9-10 (confirmed against the real, installed python-
+        # garminconnect 0.3.15 wheel): resume_login(self, client_state,
+        # mfa_code) — and the leading underscore on the inner
+        # Client.resume_login's first parameter confirms it is genuinely never
+        # read. There is therefore nothing to carry from login(); the OTP goes
+        # in the SECOND positional slot, with a placeholder in the first.
         pending = getattr(self, "_pending_mfa", None)
         if pending is None:
             # Called out of order (no prior login() MFA outcome). This is a
@@ -252,13 +302,30 @@ class GarminClient:
                 "submit_mfa() called with no pending MFA session; call login() first",
             )
         try:
-            self._garmin.resume_login(code, pending)
+            self._garmin.resume_login(None, code)
         except _gc.exceptions.GarminConnectAuthenticationError as e:
             # Bad/expired OTP. Classify by exception TYPE (LSN-006) as
             # kind='auth' so the Slice-B page can re-prompt (up to 3 attempts —
             # REQ-003). The pending state is deliberately RETAINED so a retry
             # resumes the SAME session.
             raise GarminError("auth", str(e) or "Invalid MFA code", e) from e
+        except _gc.exceptions.GarminConnectConnectionError as e:
+            # Repair BLOCKING-3 (confirmed by reading the real, installed
+            # python-garminconnect 0.3.15 wheel's inner Client.resume_login
+            # source): AFTER _complete_mfa() has already verified a CORRECT
+            # code, resume_login() can still raise this — "token rejected by
+            # API tier after MFA" — a transient failure, not a bad code.
+            # kind='connection' is in the with_retry policy's is_transient
+            # set below, so classifying it (instead of leaving it unclassified
+            # like the B-STAGE9-09 bug pattern) makes the retry actually
+            # engage. Pending state is RETAINED, same as the auth branch.
+            raise GarminError("connection", str(e) or "Could not reach Garmin Connect", e) from e
+        except _gc.exceptions.GarminConnectTooManyRequestsError as e:
+            # Repair BLOCKING-3 (rate-limit half): the real inner
+            # Client._complete_mfa() raises this when every MFA-verify
+            # endpoint is rate-limited. Same classification rationale as the
+            # connection branch above.
+            raise GarminError("rate_limit", str(e) or "Garmin Connect is rate-limiting MFA verification", e) from e
         # Success — resume_login() consumed the OTP; clear the pending state
         # unconditionally (REQ-003 — there is no scenario where retrying an
         # already-consumed code makes sense, whether or not identity

@@ -49,7 +49,8 @@ class _FakeGarminBase:
     """Minimal fake of garminconnect.Garmin exposing only what the profile
     path touches: get_userprofile_settings()."""
 
-    def __init__(self, email: str, password: str) -> None:
+    def __init__(self, email: str, password: str, **_: Any) -> None:
+        # **_ swallows B-STAGE9-10's return_on_mfa=True (unused on this path).
         self.email = email
         self.password = password
 
