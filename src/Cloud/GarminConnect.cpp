@@ -475,6 +475,16 @@ bool GarminConnect::open(QStringList& errors)
         gcObsTrace("auth", false, "token_permissions_rejected", obsTimer.elapsed());
         return false;
     }
+    // B-STAGE9-13: a present, conforming token file with empty/blank content is
+    // NOT a restorable session — checked BEFORE the generic !isOk() fallback so
+    // it gets its own accurate label and error_code rather than folding into
+    // "not found" (erasing the never-connected vs. connected-but-persistence-
+    // broke distinction) or "unknown" (undiagnosable, per B-STAGE9-09/-10/-11/-12).
+    if (r.isEmpty()) {
+        errors << tr("Garmin Connect: the stored session file '%1' is empty; please sign in again.").arg(r.path);
+        gcObsTrace("auth", false, "empty", obsTimer.elapsed());
+        return false;
+    }
     // No stored session yet — the caller must run the credentials wizard.
     if (!r.isOk()) {
         errors << tr("Garmin Connect: no stored session found; please sign in again.");

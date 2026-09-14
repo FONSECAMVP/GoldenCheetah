@@ -14609,6 +14609,11 @@ La correction de couple - cette valeur définie une valeur absolue en newton mè
         <translation type="unfinished"></translation>
     </message>
     <message>
+        <location filename="../../Cloud/GarminConnect.cpp" line="484"/>
+        <source>Garmin Connect: the stored session file &apos;%1&apos; is empty; please sign in again.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
         <location filename="../../Cloud/GarminConnect.cpp" line="480"/>
         <source>Garmin Connect: no stored session found; please sign in again.</source>
         <translation type="unfinished"></translation>

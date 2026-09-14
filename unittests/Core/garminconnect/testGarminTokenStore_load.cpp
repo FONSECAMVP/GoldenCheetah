@@ -235,6 +235,77 @@ class TestGarminTokenStoreLoad : public QObject
         QCOMPARE(badR.status, GarminTokenStore::LoadStatus::TokenPermissionsRejected);
 #endif
     }
+
+    // B-STAGE9-13 — a PRESENT, conforming-0600 tokens.json with ZERO bytes must
+    // NOT be reported Ok: an empty blob is not a restorable session (nothing
+    // downstream can tell "healthy" from "empty" once status==Ok says so).
+    // RED against today's loadChecked(), which only checks existence + perms,
+    // never content: it returns Ok with empty bytes for exactly this file.
+    void emptyConformingFileIsNotReportedOk()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        // save() with an empty blob writes a real, conforming 0600 tokens.json
+        // with zero bytes — exactly the live-observed shape (0-byte, 0600).
+        QVERIFY(GarminTokenStore::save(athlete.path(), QByteArray()));
+        QCOMPARE(QFileInfo(GarminTokenStore::tokenFilePath(athlete.path())).size(), qint64(0));
+
+        const GarminTokenStore::LoadResult r = GarminTokenStore::loadChecked(athlete.path());
+
+        // Assert the EXACT outcome, not merely "not Ok": a counter-fix that maps
+        // blank content to TokenPermissionsRejected (wrong message, wrong
+        // gc_obs code) would also satisfy "!isOk()" — it must not satisfy this.
+        QCOMPARE(r.status, GarminTokenStore::LoadStatus::Empty);
+        QVERIFY2(r.isEmpty(), "a present, 0-byte, 0600 token file must be reported Empty");
+        QVERIFY2(!r.isOk(), "a present, 0-byte, 0600 token file must not be reported Ok");
+        QVERIFY(r.bytes.isEmpty());
+    }
+
+    // B-STAGE9-13 — same defect, whitespace-only content: a file that is not
+    // literally zero bytes but carries no usable blob (e.g. a truncated write
+    // that left only a trailing newline) must be treated the same as empty.
+    void whitespaceOnlyConformingFileIsNotReportedOk()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        QVERIFY(GarminTokenStore::save(athlete.path(), QByteArrayLiteral("\n \t\n")));
+
+        const GarminTokenStore::LoadResult r = GarminTokenStore::loadChecked(athlete.path());
+
+        QCOMPARE(r.status, GarminTokenStore::LoadStatus::Empty);
+        QVERIFY2(r.isEmpty(), "a present, whitespace-only, 0600 token file must be reported Empty");
+        QVERIFY2(!r.isOk(), "a present, whitespace-only, 0600 token file must not be reported Ok");
+        QVERIFY(r.bytes.isEmpty());
+    }
+
+    // B-STAGE9-13 — the new outcome must be EXACTLY Empty, and distinct from
+    // BOTH NotFound and TokenPermissionsRejected: "the file is empty", "there
+    // is no file", and "the perms are unsafe" are three different diagnoses
+    // (connected-but-persistence-broke / never-connected / unsafe-perms) that
+    // must not collapse into each other. In particular this kills the
+    // reviewer's counter-implementation (map blank content to
+    // TokenPermissionsRejected instead of Empty — still "not Ok", still no
+    // bytes, wrong user message and wrong gc_obs code): asserting the exact
+    // enum value, not just inequality with NotFound, is what catches it.
+    void emptyFileIsDistinctFromNotFoundAndRejected()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        QVERIFY(GarminTokenStore::save(athlete.path(), QByteArray()));
+
+        const GarminTokenStore::LoadResult emptyR = GarminTokenStore::loadChecked(athlete.path());
+
+        QTemporaryDir missingDir;
+        QVERIFY(missingDir.isValid());
+        const GarminTokenStore::LoadResult nfR = GarminTokenStore::loadChecked(missingDir.path());
+
+        QCOMPARE(emptyR.status, GarminTokenStore::LoadStatus::Empty);
+        QVERIFY2(emptyR.isEmpty() && !emptyR.isOk() && !emptyR.isRejected(),
+                 "the empty-file outcome must be Empty, and neither Ok nor Rejected");
+        QVERIFY2(emptyR.status != nfR.status,
+                 "an empty-but-present file must be a DIFFERENT status than an absent one");
+        QCOMPARE(nfR.status, GarminTokenStore::LoadStatus::NotFound);
+    }
 };
 
 QTEST_APPLESS_MAIN(TestGarminTokenStoreLoad)

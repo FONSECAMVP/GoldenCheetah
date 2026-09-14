@@ -172,7 +172,21 @@ GarminTokenStore::LoadResult GarminTokenStore::loadChecked(const QString& athlet
         result.status = LoadStatus::NotFound;
         return result;
     }
-    result.bytes = f.readAll();
+    const QByteArray bytes = f.readAll();
+
+    // B-STAGE9-13: present + conforming-perms but empty/whitespace-only content
+    // is NOT a restorable session — do not return it as Ok. Emptiness only, no
+    // parsing: tokens.json is an OPAQUE, security-locked blob to this class
+    // (REQ-006/007) — its format is the Python adapter's business and may
+    // change without notice, so this class must not assume or validate any
+    // shape. Emptiness is the only predicate that is correct independent of
+    // what that format is.
+    if (bytes.trimmed().isEmpty()) {
+        result.status = LoadStatus::Empty;
+        return result;
+    }
+
+    result.bytes = bytes;
     result.status = LoadStatus::Ok;
     return result;
 }

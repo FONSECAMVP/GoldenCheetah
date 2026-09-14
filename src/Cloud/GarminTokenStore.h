@@ -27,15 +27,30 @@
 class GarminTokenStore
 {
   public:
-    // REQ-006 / DES-002 — the three mutually-exclusive outcomes of a
-    // permission-enforcing load. A bare bool cannot encode three states, so the
+    // REQ-006 / DES-002 — the four mutually-exclusive outcomes of a
+    // permission-enforcing load. A bare bool cannot encode four states, so the
     // load-side guard reports through this enum + LoadResult.
     enum class LoadStatus {
-        Ok,                      // file present, owner-only 0600, bytes returned
-        NotFound,                // file absent or plain read error — "no session yet"
-        TokenPermissionsRejected // present but mode/ACL WIDER than owner-only:
-                                 // REFUSED (name matches the DES-008 %1 key);
-                                 // the caller maps this to a forced fresh SSO.
+        Ok,                       // file present, owner-only 0600, non-blank bytes returned
+        NotFound,                 // file absent or plain read error — "no session yet"
+        TokenPermissionsRejected, // present but mode/ACL WIDER than owner-only:
+                                  // REFUSED (name matches the DES-008 %1 key);
+                                  // the caller maps this to a forced fresh SSO.
+        Empty                     // B-STAGE9-13 — present, conforming 0600, but the
+                                  // content is empty or whitespace-only: NOT a
+                                  // restorable session. Deliberately a SEPARATE state
+                                  // from NotFound (never-connected) — "connected but
+                                  // persistence produced nothing" is a distinct,
+                                  // diagnostically real failure (mirrors
+                                  // GarminSidecarStore::LoadStatus::Torn). This is an
+                                  // emptiness check only, NEVER a content-shape/parse
+                                  // check: tokens.json is an OPAQUE, security-locked
+                                  // blob to this class (REQ-006/007) — its format is
+                                  // the Python adapter's business and may change
+                                  // without notice, so this class must not assume or
+                                  // validate any shape. Emptiness is the only
+                                  // predicate that is correct independent of what that
+                                  // format is. No bytes returned.
     };
 
     struct LoadResult
@@ -45,6 +60,7 @@ class GarminTokenStore
         QString path;     // the token file path (DES-008 %1 arg), set in every case
         bool isOk() const { return status == LoadStatus::Ok; }
         bool isRejected() const { return status == LoadStatus::TokenPermissionsRejected; }
+        bool isEmpty() const { return status == LoadStatus::Empty; }
     };
 
     // <athleteConfigDir>/garminconnect
@@ -117,6 +133,9 @@ class GarminTokenStore
     //     no bytes and the offending path (the caller emits a DES-008 message
     //     and forces a fresh SSO). A conforming 0600 file returns Ok + bytes.
     //   * absent/unreadable file returns NotFound (distinct from rejected).
+    //   * B-STAGE9-13: a conforming 0600 file whose bytes are empty or
+    //     whitespace-only returns Empty, no bytes (distinct from both NotFound
+    //     and Ok — see the LoadStatus::Empty comment for why).
     //   * Windows: ACL "only the owning user" check is REQ-NF-Pkg-001 Phase-2 CI
     //     territory (finding A3-R004-09) — not implemented here; the file opens
     //     normally. See loadChecked() body for the marked TODO.

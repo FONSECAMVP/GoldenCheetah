@@ -234,6 +234,52 @@ class TestGarminConnectOpen : public QObject
         QCOMPARE(fake.downloadCalls, 0);
     }
 
+    // B-STAGE9-13 — a PRESENT, conforming-0600 tokens.json with ZERO bytes
+    // (the live-observed shape: a connect attempt that failed to persist a
+    // real blob) must fail open() with an ACCURATE, DISTINCT label — not the
+    // misleading "could not restore the stored session" text a real restore
+    // ATTEMPT would produce — and must never attempt a restore or download
+    // with an empty blob.
+    void openFailsWithDistinctLabelOnEmptyTokenFile()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        const QString dest = writeTokenFile(tmp.path(), QByteArray(), 0600);
+
+        FakeRestoreClient fake;
+        GarminConnect gc(nullptr, &fake, tmp.path());
+
+        ObsCapture capture;
+        QStringList errors;
+        const bool ok = gc.open(errors);
+
+        QVERIFY2(!ok, "open() must fail on an empty token file");
+        // Assert the EXACT user-facing message, not merely "isn't the restore
+        // label": the reviewer's counter-implementation (map blank content to
+        // TokenPermissionsRejected) also avoids the restore label, but shows
+        // the WRONG ("unsafe permissions") text. This must be the specific
+        // empty-file message and nothing else.
+        QCOMPARE(errors.size(), 1);
+        QCOMPARE(
+            errors.first(),
+            QStringLiteral("Garmin Connect: the stored session file '%1' is empty; please sign in again.").arg(dest));
+        QCOMPARE(fake.restoreCalls, 0); // never attempted a restore with an empty blob
+        QCOMPARE(fake.downloadCalls, 0);
+
+        // Assert the EXACT gc_obs error_code, not merely "not not_found/unknown":
+        // the same counter-implementation would emit error_code=token_permissions_rejected,
+        // which is also neither not_found nor unknown, so only the literal code proves this.
+        // Match the FIELD, not a prefix of it: gcObsTrace() always writes
+        // "error_code=<code> duration_ms=<n>" (GarminConnect.cpp), so error_code is
+        // never the last field and the following " duration_ms=" is a reliable
+        // terminator. Without it, an implementation emitting error_code=empty_corrupt
+        // would satisfy a bare contains("error_code=empty").
+        const QStringList trace = capture.snapshot().filter(QStringLiteral("gc_obs op=auth"));
+        QCOMPARE(trace.size(), 1);
+        QVERIFY2(trace.first().contains(QStringLiteral("error_code=empty duration_ms=")),
+                 qPrintable(QStringLiteral("expected exact field error_code=empty in: %1").arg(trace.first())));
+    }
+
     // A restore that fails (e.g. session expired) → open() returns false with a
     // labelled error.
     void openFailsWhenRestoreFails()
@@ -386,6 +432,34 @@ class TestGarminConnectOpen : public QObject
             QCOMPARE(trace.size(), 1);
             QVERIFY2(trace.first().contains(QStringLiteral("error_code=session_expired")),
                      qPrintable(QStringLiteral("expected error_code=session_expired in: %1").arg(trace.first())));
+        }
+
+        // (c) B-STAGE9-13 — present but EMPTY token file -> a SPECIFIC
+        // error_code, neither folded into "not_found" (that would erase the
+        // never-connected vs. connected-but-persistence-broke distinction)
+        // nor left as "unknown" (getting a real kind instead of unknown is
+        // half the point of this unit).
+        {
+            QTemporaryDir tmp;
+            QVERIFY(tmp.isValid());
+            writeTokenFile(tmp.path(), QByteArray(), 0600);
+
+            FakeRestoreClient fake;
+            GarminConnect gc(nullptr, &fake, tmp.path());
+
+            ObsCapture capture;
+            QStringList errors;
+            QVERIFY(!gc.open(errors));
+
+            const QStringList trace = capture.snapshot().filter(QStringLiteral("gc_obs op=auth"));
+            QCOMPARE(trace.size(), 1);
+            // The EXACT code, not merely "isn't not_found/unknown": a
+            // counter-implementation emitting error_code=token_permissions_rejected
+            // would also pass a merely-negative assertion here. The trailing
+            // " duration_ms=" pins the field boundary (gcObsTrace() always emits
+            // duration_ms right after error_code), so error_code=empty_corrupt fails.
+            QVERIFY2(trace.first().contains(QStringLiteral("error_code=empty duration_ms=")),
+                     qPrintable(QStringLiteral("expected exact field error_code=empty in: %1").arg(trace.first())));
         }
     }
 
