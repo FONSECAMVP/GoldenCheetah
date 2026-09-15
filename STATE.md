@@ -561,13 +561,15 @@ STAGE-9-CURSOR (2026-09-15, written by `garmin_inspector_v1_21` — this superse
            blob gets its own `LoadStatus::Empty` and `gc_obs error_code=empty`) committed
            `1ae49a196`, 18 files, after reviewer round 3 came back clean and the Inspector
            independently re-ran the build, the 40-test `garmin-fast` label, both per-binary
-           targets and the `empty_corrupt` mutation. Three findings remain open, all blocking:
+           targets and the `empty_corrupt` mutation. Two findings remain open, both blocking:
            **B-STAGE9-12** (stderr buffering defeats REQ-NF-Obs-001's `gc_obs` traces in the
            real qmake binary) — RED delivered and reviewer-reviewed, repair queued, FROZEN
            under the hard hold below. **B-STAGE9-14** (prefix-matching assertions in the Garmin
-           observation tests; escalated from non-blocking on the reviewer's round-3 verdict and
-           widened from 2 assertions to 11 by the Inspector's own grep) — dispatched
-           2026-09-15 to `garmin_builder_stage9_v6`. **B-STAGE9-15** (new) — the
+           observation tests) — committed `625c1c337` 2026-09-15, reviewer round 1 clean, zero
+           production changes; escalated from non-blocking on the reviewer's round-3 verdict,
+           widened from the 2 assertions originally flagged to 11 by the Inspector's own grep
+           and to 12 by the builder, which found a selector the grep missed. Two remaining open
+           findings, both blocking. **B-STAGE9-15** — the
            `testGarminI18nSourceGuard` test has been RED in HEAD since `c1948b513` and nobody
            saw it, because this project's habitual verification ritual is `ctest -L garmin-fast`
            and that label does not cover `garmin-i18n-guard`. Queued, not dispatched; it needs
