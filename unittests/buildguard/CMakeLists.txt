@@ -67,3 +67,24 @@ add_test(
 set_tests_properties(testGarminI18nSourceGuard PROPERTIES
     LABELS "garmin-i18n-guard"
     TIMEOUT 300)
+
+# --- B-STAGE9-15 / DEC-053: unit tests for the guard's exemption predicate ---
+# testGarminI18nSourceGuard above only proves "0 findings against today's
+# tree" — an outcome a VACUOUS predicate satisfies more easily than a correct
+# one. DEC-053 widens the technical-literal exemption to cover developer-trace
+# lines as a category, and a widened exemption is the standard way a guard
+# quietly stops guarding. This entry runs the predicate's own pytest file,
+# whose load-bearing half asserts REJECTION: prose containing '=', prose with
+# a leading snake_case or capitalised word, and prose that drifts out of a
+# key=value prefix must all still be flagged. Same label as the guard it
+# defends, so the two always run together.
+add_test(
+    NAME testGarminI18nGuardPredicate
+    COMMAND "${Python3_EXECUTABLE}" -m pytest
+            "${CMAKE_CURRENT_SOURCE_DIR}/test_garmin_i18n_source_guard.py"
+            -v
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+set_tests_properties(testGarminI18nGuardPredicate PROPERTIES
+    LABELS "garmin-i18n-guard"
+    TIMEOUT 300)

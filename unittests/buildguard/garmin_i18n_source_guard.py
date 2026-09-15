@@ -14,10 +14,34 @@ executable and permanent, same pattern as T-203's sec-source guard:
   conservative prose heuristic: a literal containing two whitespace-separated
   word tokens. Two technical literal shapes are exempt (they carry spaces but
   are never shown to a user): date/time format patterns ("yyyy-MM-dd
-  HH:mm:ss") and key=value developer-trace format strings (the
-  "gc_obs op=%1 ..." qDebug lines from REQ-NF-Obs-001). Known limitation:
-  single-word UI literals ("OK") are not caught — every such literal in the
-  scope was verified tr()-wrapped when this guard landed.
+  HH:mm:ss") and developer-trace lines — a run of key=value tokens, optionally
+  preceded by one bare snake_case event name, covering both the
+  "gc_obs op=%1 ..." qDebug mirror from REQ-NF-Obs-001 and the
+  "garmin_auth_unknown exception_type=%1" Stage 9 triage lines (DEC-053).
+  Known limitation: single-word UI literals ("OK") are not caught — every such
+  literal in the scope was verified tr()-wrapped when this guard landed.
+  Known limitation: the developer-trace exemption matches a SHAPE, not a
+  meaning, so a literal written entirely as key=value tokens is exempt
+  whatever it says — a hypothetical user-facing string in that shape
+  ("status=offline action=retry") would not be caught. This is accepted, not
+  overlooked: no shape predicate can separate it from the genuine trace
+  "op=auth outcome=fail", because they are the same shape, and narrowing the
+  rule any further starts flagging the real traces DEC-053 exists to exempt.
+  The residual risk is bounded by convention rather than by the rule — every
+  genuine user-facing literal in the scope is ordinary prose ("Garmin
+  Connect: …", "Too many incorrect codes…", "Paused: …"), none is remotely
+  all-key=value. The boundary is pinned from the inside by
+  test_all_key_value_prose_is_a_known_limitation, so moving it in EITHER
+  direction shows up as a diff instead of happening silently.
+
+  The developer-trace exemption is a widening, and a widened exemption is the
+  standard way a guard goes vacuous, so it is pinned from BOTH sides by
+  unittests/buildguard/test_garmin_i18n_source_guard.py: that file asserts the
+  trace shapes are exempt AND that prose containing '=', prose with a leading
+  snake_case word, prose with a capitalised leading word, and prose that
+  drifts out of a key=value prefix are all still flagged. Running this script
+  over the tree proves "0 findings today"; only those rejection cases prove
+  the predicate still rejects anything.
 
   Rule I18N-TS-PRESENCE — every tr() literal extracted by the same pass must
   appear as a <source> in EVERY tracked src/Resources/translations/gc_*.ts.
@@ -54,22 +78,118 @@ ALLOW_MARKER = "T208-ALLOW:"
 
 # Literal classes that are never user-facing despite containing whitespace.
 DATE_FORMAT = re.compile(r"yyyy|HH:")
-TRACE_KV = re.compile(r"=")
+# The SHAPE of a single `key=value` trace token: an identifier-shaped key,
+# '=', then the value. The value is captured rather than constrained here
+# because its rule is a case comparison, not a character class — see
+# _is_kv_token(). Every value emitted anywhere in the scanned scope is a %N
+# placeholder (verified against the four real literals: gc_obs op=%1
+# outcome=%2 error_code=%3 duration_ms=%4, and garmin_auth_unknown
+# exception_type=%1 at three sites), so also admitting "empty" and "carries
+# no capital" is already generous. Rejecting a capitalised value is the SAFE
+# failure direction: the guard yells and a human looks, whereas exempting
+# prose is silent.
+KV_TOKEN = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*=(?P<value>\S*)$")
+# A bare snake_case event-name token, e.g. the leading "gc_obs" /
+# "garmin_auth_unknown". TRUE snake_case — at least one underscore — because
+# lower-case alone matches every ordinary English word, which made
+# "warning disk=full" and "error code=5 retry=now" exempt. Capitalisation is
+# not the discriminator (that mistake let the lower-case half of the class
+# through); carrying an underscore is.
+EVENT_NAME = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$")
 # Two word-ish tokens separated by whitespace => prose (=> user-facing).
 PROSE = re.compile(r"[A-Za-z][A-Za-z0-9%_'.!\-—]*[ \t]+[A-Za-z][A-Za-z0-9%_'.!\-—]*")
+
+
+def _is_kv_token(token: str) -> bool:
+    r"""One `key=value` trace token: identifier-shaped key, capital-free value.
+
+    The value rule is a direct case comparison, not a character class. The
+    character class it replaces, `[^A-Z\s]*`, was ASCII-only, so a PRECOMPOSED
+    non-ASCII capital slipped through while its decomposed form did not — the
+    same visible string classified differently depending on which Unicode
+    normalisation form the source file happened to be saved in:
+
+        status=Éteint action=arrêt       U+00C9          -> exempt  (wrong)
+        status=Éteint action=arret       'E' + U+0301    -> flagged
+        status=Übertragung code=%1       U+00DC          -> exempt  (wrong)
+
+    `value == value.lower()` is normalisation-independent and covers every
+    script. `.lower()` and NOT `.casefold()`: casefold maps 'ß' to 'ss', so a
+    legitimately lower-case German value would compare unequal and be flagged.
+
+    It also SUBSUMES the two alternatives the old regex spelled out — a %N
+    placeholder ('%1'.lower() == '%1') and an empty value ('' == '') both
+    satisfy it — so the alternation collapses instead of growing: one rule now
+    covers placeholders, empty values and lower-case words alike.
+    """
+    match = KV_TOKEN.match(token)
+    if match is None:
+        return False
+    value = match.group("value")
+    return value == value.lower()
+
+
+def is_developer_trace(literal: str) -> bool:
+    """A developer-trace literal, recognised as a CATEGORY (DEC-053).
+
+    The shape: a run of `key=value` tokens, optionally preceded by a SINGLE
+    bare snake_case event-name token, with at least one `key=value` token.
+    That admits both trace families this codebase emits —
+
+        gc_obs op=%1 outcome=%2 error_code=%3 duration_ms=%4   (REQ-NF-Obs-001)
+        garmin_auth_unknown exception_type=%1                  (Stage 9 triage)
+
+    — which the previous heuristic separated only by accident of syntax: it
+    exempted a literal with >= 2 '%' AND >= 2 '=', so the first escaped on
+    placeholder arithmetic while the second (one of each) was flagged as
+    user-facing prose. See DEC-053; the three call sites are correct as
+    written and are deliberately left untranslated.
+
+    The tightness that matters is structural, not statistical. Every token
+    after the optional event name must itself be `key=value`, so prose that
+    merely contains an '=' ("the timeout = 30 seconds was exceeded"), or that
+    starts with a snake_case-looking word ("garmin_auth_unknown please sign in
+    again"), or that drifts from a trace prefix into prose ("timeout=30
+    seconds exceeded"), is still caught. Only ONE leading bare token is
+    allowed, so "garmin auth unknown exception_type=%1" stays prose too, and
+    the key must be identifier-shaped, so "=value" and "%1=%2" are not tokens.
+
+    Two further constraints exist because a first revision of this predicate
+    was too loose in ways no rejection case then covered:
+
+      * the event name needs a real underscore. `^[a-z][a-z0-9_]*$` matches
+        every ordinary English word, which quietly exempted "warning
+        disk=full" and "error code=5 retry=now" — one bare word plus a clean
+        key=value run. Capitalisation is NOT the discriminator; an underscore
+        is. A legitimate single-word event name would now be flagged, which
+        is the safe direction: the guard yells and a human adds an
+        underscore or a T208-ALLOW marker.
+      * the VALUE side is constrained. Otherwise "status=Connected
+        action=Retry" is a perfectly well-formed token run with no leading
+        word at all, so neither the event-name rule nor the all-tokens rule
+        can see it. A value must carry no capital in ANY script
+        (`value == value.lower()`, see _is_kv_token), which admits the %N
+        placeholders and empty values the real traces emit.
+
+    This REPLACES the old placeholder-arithmetic clause rather than adding to
+    it: that clause was not merely too narrow, it was also too loose in the
+    other direction — "%1 of %2 files = incomplete sync = retry now" is prose
+    and satisfied it. Both directions are pinned by
+    unittests/buildguard/test_garmin_i18n_source_guard.py.
+    """
+    tokens = literal.split()
+    if not tokens:
+        return False
+    if not _is_kv_token(tokens[0]) and EVENT_NAME.match(tokens[0]):
+        tokens = tokens[1:]  # consume the single leading event-name token
+    return bool(tokens) and all(_is_kv_token(t) for t in tokens)
 
 
 def is_technical(literal: str) -> bool:
     """The documented whitespace-bearing non-UI literal shapes."""
     if DATE_FORMAT.search(literal):
         return True
-    tokens = literal.split()
-    if TRACE_KV.search(literal) and all(TRACE_KV.search(t) for t in tokens):
-        return True
-    # Multi-placeholder developer-trace format lines (the REQ-NF-Obs-001
-    # "gc_obs op=%1 outcome=%2 error_code=%3 duration_ms=%4" qDebug mirror):
-    # two or more %N placeholders AND two or more '=' never occurs in prose.
-    return literal.count("%") >= 2 and literal.count("=") >= 2
+    return is_developer_trace(literal)
 
 
 def c_unescape(literal: str) -> str:
