@@ -568,13 +568,26 @@ STAGE-9-CURSOR (2026-09-15, written by `garmin_inspector_v1_21` — this superse
            observation tests) — committed `625c1c337` 2026-09-15, reviewer round 1 clean, zero
            production changes; escalated from non-blocking on the reviewer's round-3 verdict,
            widened from the 2 assertions originally flagged to 11 by the Inspector's own grep
-           and to 12 by the builder, which found a selector the grep missed. Two remaining open
-           findings, both blocking. **B-STAGE9-15** — the
-           `testGarminI18nSourceGuard` test has been RED in HEAD since `c1948b513` and nobody
-           saw it, because this project's habitual verification ritual is `ctest -L garmin-fast`
-           and that label does not cover `garmin-i18n-guard`. Queued, not dispatched; it needs
-           a decision (are those three `qDebug` trace literals really user-facing prose, or is
-           the guard's heuristic misfiring?) plus an independent second opinion first.
+           and to 12 by the builder, which found a selector the grep missed.
+           **B-STAGE9-15** — the guard-correctness half committed `d9ba4faad` 2026-09-15 by
+           `garmin_inspector_v1_22`: `is_technical()` now recognises the developer-trace SHAPE
+           as a category per DEC-053, so the three `qDebug` triage literals are exempt without
+           touching the call sites. Sequencing worth keeping: two reviewer rounds, the first a
+           real defect (the event-name rule matched any lower-case word, so `warning disk=full`
+           was exempt), the second filed blocking and OVERRULED after `s915_i18n_second_opinion`
+           independently sided with the Inspector — an all-`key=value` literal staying exempt is
+           the irreducible consequence of a shape-based exemption, not a bug, and is now pinned
+           as an accepted false negative so the boundary cannot move silently. The Inspector also
+           closed a Unicode normalisation defect it found itself, and re-ran both mutations rather
+           than relaying them. **B-STAGE9-16** — the gate-coverage half, split out of -15 rather
+           than folded into its repair, and the reason a RED test survived two days: the
+           verification ritual is opt-in. `garmin-i18n-guard` is outside `garmin-fast`, and the
+           ruff/mypy hooks are scoped to `src/Python/garminconnect/` only, so nothing linted this
+           unit's own Python — confirmed empirically when every hook skipped `d9ba4faad`. Not
+           dispatched; it owes a scored decision (change the label, or change the ritual) and a
+           DEC id, not a patch. Every `garmin-fast 40/40` claim in this ledger, the Inspectors'
+           own re-runs included, is narrower than it reads. Two findings remain open, both
+           blocking: B-STAGE9-12 and B-STAGE9-16.
            **THE HARD HOLD ON `src/Core/main.cpp` REMAINS IN FORCE**, and with it all of
            B-STAGE9-12's production fix: no edit to that file, no qmake, no `make` against
            `src.pro`. **THE ONE REAL HUMAN-IN-THE-LOOP GATE IS UNCHANGED AND STILL OPEN:** the
