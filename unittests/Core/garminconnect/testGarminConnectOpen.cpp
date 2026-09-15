@@ -274,8 +274,12 @@ class TestGarminConnectOpen : public QObject
         // never the last field and the following " duration_ms=" is a reliable
         // terminator. Without it, an implementation emitting error_code=empty_corrupt
         // would satisfy a bare contains("error_code=empty").
-        const QStringList trace = capture.snapshot().filter(QStringLiteral("gc_obs op=auth"));
-        QCOMPARE(trace.size(), 1);
+        const QStringList trace = capture.snapshot().filter(QStringLiteral("gc_obs op=auth outcome="));
+        QVERIFY2(trace.size() == 1, qPrintable(QStringLiteral("expected exactly ONE gc_obs line for this op, got %1. "
+                                                              "A wrong op name yields 0 here because the filter pins "
+                                                              "the op field. Captured: [%2]")
+                                                   .arg(trace.size())
+                                                   .arg(capture.snapshot().join(QStringLiteral(" | ")))));
         QVERIFY2(trace.first().contains(QStringLiteral("error_code=empty duration_ms=")),
                  qPrintable(QStringLiteral("expected exact field error_code=empty in: %1").arg(trace.first())));
     }
@@ -363,6 +367,26 @@ class TestGarminConnectOpen : public QObject
     // error_code (empty on success, the GC-stable kind on failure), duration_ms.
     // prd.md:112's verification method is log-format review; this pins the
     // format as executable review.
+    //
+    // B-STAGE9-14 — EXACT-FIELD ANCHORING. A bare contains("k=v") is a PREFIX
+    // match: an implementation emitting k=v_suffix satisfies it, so the
+    // assertion cannot fail and is worse than no assertion. gcObsTrace()
+    // (src/Cloud/GarminConnect.cpp) emits a fixed field order, verified by
+    // capturing a real line rather than by reading the format string:
+    //   gc_obs op=<op> outcome=<ok|fail> error_code=<code> duration_ms=<ms>[ activity_count=<n>]
+    // Two anchoring rules follow from that shape:
+    //   * a field with a field AFTER it is matched together with the next
+    //     key, e.g. "error_code=rate_limit duration_ms=" — the following
+    //     " <key>=" is the delimiter that pins the value's end.
+    //   * activity_count is LAST when present, so it has no following key to
+    //     anchor against and uses endsWith(" activity_count=<n>") instead.
+    //     The captured QString was checked byte-wise (cat -A) and ends exactly
+    //     at the digit — Qt hands the message handler no trailing newline or
+    //     space. If a field is ever appended after activity_count, these
+    //     endsWith assertions SHOULD break loudly; that is intended.
+    // The op field is pinned by the snapshot().filter() selector carrying its
+    // own " outcome=" delimiter, so a wrong op name yields zero matched lines
+    // rather than silently validating a different op's trace.
     void openEmitsStructuredObsTraceOnSuccess()
     {
         QTemporaryDir tmp;
@@ -377,10 +401,14 @@ class TestGarminConnectOpen : public QObject
         QStringList errors;
         QVERIFY(gc.open(errors));
 
-        const QStringList trace = capture.snapshot().filter(QStringLiteral("gc_obs op=auth"));
-        QCOMPARE(trace.size(), 1);
-        QVERIFY2(trace.first().contains(QStringLiteral("outcome=ok")),
-                 qPrintable(QStringLiteral("expected outcome=ok in: %1").arg(trace.first())));
+        const QStringList trace = capture.snapshot().filter(QStringLiteral("gc_obs op=auth outcome="));
+        QVERIFY2(trace.size() == 1, qPrintable(QStringLiteral("expected exactly ONE gc_obs line for this op, got %1. "
+                                                              "A wrong op name yields 0 here because the filter pins "
+                                                              "the op field. Captured: [%2]")
+                                                   .arg(trace.size())
+                                                   .arg(capture.snapshot().join(QStringLiteral(" | ")))));
+        QVERIFY2(trace.first().contains(QStringLiteral("outcome=ok error_code=")),
+                 qPrintable(QStringLiteral("expected exact field outcome=ok in: %1").arg(trace.first())));
         // error_code present but EMPTY on success — the field set is fixed so a
         // log parser can rely on the shape.
         QVERIFY2(trace.first().contains(QStringLiteral("error_code= ")),
@@ -405,12 +433,17 @@ class TestGarminConnectOpen : public QObject
             QStringList errors;
             QVERIFY(!gc.open(errors));
 
-            const QStringList trace = capture.snapshot().filter(QStringLiteral("gc_obs op=auth"));
-            QCOMPARE(trace.size(), 1);
-            QVERIFY2(trace.first().contains(QStringLiteral("outcome=fail")),
-                     qPrintable(QStringLiteral("expected outcome=fail in: %1").arg(trace.first())));
-            QVERIFY2(trace.first().contains(QStringLiteral("error_code=not_found")),
-                     qPrintable(QStringLiteral("expected error_code=not_found in: %1").arg(trace.first())));
+            const QStringList trace = capture.snapshot().filter(QStringLiteral("gc_obs op=auth outcome="));
+            QVERIFY2(trace.size() == 1,
+                     qPrintable(QStringLiteral("expected exactly ONE gc_obs line for this op, got %1. "
+                                               "A wrong op name yields 0 here because the filter pins "
+                                               "the op field. Captured: [%2]")
+                                    .arg(trace.size())
+                                    .arg(capture.snapshot().join(QStringLiteral(" | ")))));
+            QVERIFY2(trace.first().contains(QStringLiteral("outcome=fail error_code=")),
+                     qPrintable(QStringLiteral("expected exact field outcome=fail in: %1").arg(trace.first())));
+            QVERIFY2(trace.first().contains(QStringLiteral("error_code=not_found duration_ms=")),
+                     qPrintable(QStringLiteral("expected exact field error_code=not_found in: %1").arg(trace.first())));
         }
 
         // (b) restore failure -> the actual GarminRestoreFailure::Kind
@@ -428,10 +461,16 @@ class TestGarminConnectOpen : public QObject
             QStringList errors;
             QVERIFY(!gc.open(errors));
 
-            const QStringList trace = capture.snapshot().filter(QStringLiteral("gc_obs op=auth"));
-            QCOMPARE(trace.size(), 1);
-            QVERIFY2(trace.first().contains(QStringLiteral("error_code=session_expired")),
-                     qPrintable(QStringLiteral("expected error_code=session_expired in: %1").arg(trace.first())));
+            const QStringList trace = capture.snapshot().filter(QStringLiteral("gc_obs op=auth outcome="));
+            QVERIFY2(trace.size() == 1,
+                     qPrintable(QStringLiteral("expected exactly ONE gc_obs line for this op, got %1. "
+                                               "A wrong op name yields 0 here because the filter pins "
+                                               "the op field. Captured: [%2]")
+                                    .arg(trace.size())
+                                    .arg(capture.snapshot().join(QStringLiteral(" | ")))));
+            QVERIFY2(trace.first().contains(QStringLiteral("error_code=session_expired duration_ms=")),
+                     qPrintable(
+                         QStringLiteral("expected exact field error_code=session_expired in: %1").arg(trace.first())));
         }
 
         // (c) B-STAGE9-13 — present but EMPTY token file -> a SPECIFIC
@@ -451,8 +490,13 @@ class TestGarminConnectOpen : public QObject
             QStringList errors;
             QVERIFY(!gc.open(errors));
 
-            const QStringList trace = capture.snapshot().filter(QStringLiteral("gc_obs op=auth"));
-            QCOMPARE(trace.size(), 1);
+            const QStringList trace = capture.snapshot().filter(QStringLiteral("gc_obs op=auth outcome="));
+            QVERIFY2(trace.size() == 1,
+                     qPrintable(QStringLiteral("expected exactly ONE gc_obs line for this op, got %1. "
+                                               "A wrong op name yields 0 here because the filter pins "
+                                               "the op field. Captured: [%2]")
+                                    .arg(trace.size())
+                                    .arg(capture.snapshot().join(QStringLiteral(" | ")))));
             // The EXACT code, not merely "isn't not_found/unknown": a
             // counter-implementation emitting error_code=token_permissions_rejected
             // would also pass a merely-negative assertion here. The trailing

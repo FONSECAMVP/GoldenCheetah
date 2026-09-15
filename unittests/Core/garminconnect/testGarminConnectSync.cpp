@@ -458,6 +458,26 @@ class TestGarminConnectSync : public QObject
     // outcome, error_code (empty on success, the GC-stable kind on failure,
     // the stable guard label on local rejections), duration_ms, and
     // activity_count (entries returned on success, 0 on failure).
+    //
+    // B-STAGE9-14 — EXACT-FIELD ANCHORING. A bare contains("k=v") is a PREFIX
+    // match: an implementation emitting k=v_suffix satisfies it, so the
+    // assertion cannot fail and is worse than no assertion. gcObsTrace()
+    // (src/Cloud/GarminConnect.cpp) emits a fixed field order, verified by
+    // capturing a real line rather than by reading the format string:
+    //   gc_obs op=<op> outcome=<ok|fail> error_code=<code> duration_ms=<ms>[ activity_count=<n>]
+    // Two anchoring rules follow from that shape:
+    //   * a field with a field AFTER it is matched together with the next
+    //     key, e.g. "error_code=rate_limit duration_ms=" — the following
+    //     " <key>=" is the delimiter that pins the value's end.
+    //   * activity_count is LAST when present, so it has no following key to
+    //     anchor against and uses endsWith(" activity_count=<n>") instead.
+    //     The captured QString was checked byte-wise (cat -A) and ends exactly
+    //     at the digit — Qt hands the message handler no trailing newline or
+    //     space. If a field is ever appended after activity_count, these
+    //     endsWith assertions SHOULD break loudly; that is intended.
+    // The op field is pinned by the snapshot().filter() selector carrying its
+    // own " outcome=" delimiter, so a wrong op name yields zero matched lines
+    // rather than silently validating a different op's trace.
     void readdirEmitsStructuredObsTraceOnSuccessFailureAndGuard()
     {
         // (a) success — activity_count carries the returned entry count.
@@ -484,14 +504,20 @@ class TestGarminConnectSync : public QObject
             QList<CloudServiceEntry*> entries = gc.readdir(QString(), errors, QDateTime(), QDateTime());
             QCOMPARE(entries.size(), 2);
 
-            const QStringList trace = capture.snapshot().filter(QStringLiteral("gc_obs op=sync_incremental"));
-            QCOMPARE(trace.size(), 1);
-            QVERIFY2(trace.first().contains(QStringLiteral("outcome=ok")),
-                     qPrintable(QStringLiteral("expected outcome=ok in: %1").arg(trace.first())));
+            const QStringList trace = capture.snapshot().filter(QStringLiteral("gc_obs op=sync_incremental outcome="));
+            QVERIFY2(trace.size() == 1,
+                     qPrintable(QStringLiteral("expected exactly ONE gc_obs line for this op, got %1. "
+                                               "A wrong op name yields 0 here because the filter pins "
+                                               "the op field. Captured: [%2]")
+                                    .arg(trace.size())
+                                    .arg(capture.snapshot().join(QStringLiteral(" | ")))));
+            QVERIFY2(trace.first().contains(QStringLiteral("outcome=ok error_code=")),
+                     qPrintable(QStringLiteral("expected exact field outcome=ok in: %1").arg(trace.first())));
             QVERIFY2(trace.first().contains(QStringLiteral("error_code= ")),
                      qPrintable(QStringLiteral("expected empty error_code in: %1").arg(trace.first())));
-            QVERIFY2(trace.first().contains(QStringLiteral("activity_count=2")),
-                     qPrintable(QStringLiteral("expected activity_count=2 in: %1").arg(trace.first())));
+            QVERIFY2(trace.first().endsWith(QStringLiteral(" activity_count=2")),
+                     qPrintable(QStringLiteral("expected line to END with exact field activity_count=2, got: %1")
+                                    .arg(trace.first())));
             QVERIFY2(trace.first().contains(QStringLiteral("duration_ms=")),
                      qPrintable(QStringLiteral("expected duration_ms=<n> in: %1").arg(trace.first())));
         }
@@ -514,14 +540,21 @@ class TestGarminConnectSync : public QObject
             QList<CloudServiceEntry*> entries = gc.readdir(QString(), errors, QDateTime(), QDateTime());
             QCOMPARE(entries.size(), 0);
 
-            const QStringList trace = capture.snapshot().filter(QStringLiteral("gc_obs op=sync_incremental"));
-            QCOMPARE(trace.size(), 1);
-            QVERIFY2(trace.first().contains(QStringLiteral("outcome=fail")),
-                     qPrintable(QStringLiteral("expected outcome=fail in: %1").arg(trace.first())));
-            QVERIFY2(trace.first().contains(QStringLiteral("error_code=rate_limit")),
-                     qPrintable(QStringLiteral("expected error_code=rate_limit in: %1").arg(trace.first())));
-            QVERIFY2(trace.first().contains(QStringLiteral("activity_count=0")),
-                     qPrintable(QStringLiteral("expected activity_count=0 on failure in: %1").arg(trace.first())));
+            const QStringList trace = capture.snapshot().filter(QStringLiteral("gc_obs op=sync_incremental outcome="));
+            QVERIFY2(trace.size() == 1,
+                     qPrintable(QStringLiteral("expected exactly ONE gc_obs line for this op, got %1. "
+                                               "A wrong op name yields 0 here because the filter pins "
+                                               "the op field. Captured: [%2]")
+                                    .arg(trace.size())
+                                    .arg(capture.snapshot().join(QStringLiteral(" | ")))));
+            QVERIFY2(trace.first().contains(QStringLiteral("outcome=fail error_code=")),
+                     qPrintable(QStringLiteral("expected exact field outcome=fail in: %1").arg(trace.first())));
+            QVERIFY2(
+                trace.first().contains(QStringLiteral("error_code=rate_limit duration_ms=")),
+                qPrintable(QStringLiteral("expected exact field error_code=rate_limit in: %1").arg(trace.first())));
+            QVERIFY2(trace.first().endsWith(QStringLiteral(" activity_count=0")),
+                     qPrintable(QStringLiteral("expected line to END with exact field activity_count=0, got: %1")
+                                    .arg(trace.first())));
         }
 
         // (c) local guard rejection — no connected account: carries its stable
@@ -539,15 +572,22 @@ class TestGarminConnectSync : public QObject
             QList<CloudServiceEntry*> entries = gc.readdir(QString(), errors, QDateTime(), QDateTime());
             QCOMPARE(entries.size(), 0);
 
-            const QStringList trace = capture.snapshot().filter(QStringLiteral("gc_obs op=sync_incremental"));
-            QCOMPARE(trace.size(), 1);
-            QVERIFY2(trace.first().contains(QStringLiteral("outcome=fail")),
-                     qPrintable(QStringLiteral("expected outcome=fail in: %1").arg(trace.first())));
-            QVERIFY2(trace.first().contains(QStringLiteral("error_code=no_connected_account")),
-                     qPrintable(QStringLiteral("expected error_code=no_connected_account in: %1").arg(trace.first())));
+            const QStringList trace = capture.snapshot().filter(QStringLiteral("gc_obs op=sync_incremental outcome="));
+            QVERIFY2(trace.size() == 1,
+                     qPrintable(QStringLiteral("expected exactly ONE gc_obs line for this op, got %1. "
+                                               "A wrong op name yields 0 here because the filter pins "
+                                               "the op field. Captured: [%2]")
+                                    .arg(trace.size())
+                                    .arg(capture.snapshot().join(QStringLiteral(" | ")))));
+            QVERIFY2(trace.first().contains(QStringLiteral("outcome=fail error_code=")),
+                     qPrintable(QStringLiteral("expected exact field outcome=fail in: %1").arg(trace.first())));
             QVERIFY2(
-                trace.first().contains(QStringLiteral("activity_count=0")),
-                qPrintable(QStringLiteral("expected activity_count=0 on guard rejection in: %1").arg(trace.first())));
+                trace.first().contains(QStringLiteral("error_code=no_connected_account duration_ms=")),
+                qPrintable(
+                    QStringLiteral("expected exact field error_code=no_connected_account in: %1").arg(trace.first())));
+            QVERIFY2(trace.first().endsWith(QStringLiteral(" activity_count=0")),
+                     qPrintable(QStringLiteral("expected line to END with exact field activity_count=0, got: %1")
+                                    .arg(trace.first())));
         }
     }
 
