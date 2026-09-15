@@ -600,6 +600,40 @@ STAGE-9-CURSOR (2026-09-15, written by `garmin_inspector_v1_21` — this superse
            the buffered `gc_obs` lines flush — which is B-STAGE9-12 itself. Release the hold
            once that test concludes.
 
+STAGE-9-CURSOR (2026-09-16, written by `garmin_inspector_v1_25` — this supersedes the
+           2026-09-15 block above, which should now be read as history. Per-id status lives
+           only in findings.md; this section carries sequencing and the live gate only):
+           **B-STAGE9-16 Part A landed `8611fb2d0`** 2026-09-16 (4 files, +2111/-7): the
+           routine ctest gate is now `ctest -LE gate-exclude`, default-include, so enrolment
+           is no longer the verification step and excusing a test requires a recorded reason
+           plus an alternate tier that really selects it — both machine-checked by the new
+           `testGarminGateCoverageGuard` / `testGarminGateCoverageGuardUnits`. `dod.md`'s
+           "registered under the `garmin-fast` label" item, which was the defect written down
+           as a rule, is replaced with the superseded text kept visible. Sequencing worth
+           keeping: FOUR independent reviewer rounds, and every one of the first three found a
+           real blocking defect — a shlex-executed CMake property (the Inspector proved
+           `ctest -S evil.cmake -N` EXECUTES the dashboard script, so `-N` is not a capability
+           boundary), the two skip properties that make ctest count a failing test as PASSED,
+           and a basename match that certified a non-existent ctest binary as reachable. Round
+           4 was a scoped sweep for other assertions shaped around the code's own blind spot
+           and came back clean. This is the project's strongest evidence yet for
+           re-reviewing until a round is genuinely clean rather than stopping at the first
+           plausible pass.
+           **B-STAGE9-16 Part B is the remaining work and is unassigned:** widen the
+           `.pre-commit-config.yaml` `files:` regexes to every Garmin-owned path plus a
+           lint-ownership guard. NOT a whole-tree widening — DEC-010's scoping principle
+           stands, only its enumeration is stale. It must first resolve **B-STAGE9-18** (a
+           committed, pre-existing ruff F841 at
+           `unittests/buildguard/garmin_sec_source_guard.py:271`) or the widened gate is red
+           on arrival, which is exactly the shape DEC-054 refuses. Part A's own commit
+           demonstrated the Part B gap once more: all five pre-commit hooks reported no files
+           to check and skipped, on a commit staging two brand-new Python files.
+           Two findings remain outstanding, both blocking: B-STAGE9-12 and B-STAGE9-16.
+           **THE HARD HOLD ON `src/Core/main.cpp` REMAINS IN FORCE** and the one real
+           human-in-the-loop gate below is UNCHANGED AND STILL OPEN — re-verified 2026-09-16:
+           GoldenCheetah not running, activities still 1145 files, `tokens.json` still the
+           0-byte file from 2026-09-13 20:53.
+
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md
 (## Decision index, then entries) · validations/archive/ + cycles/archive/ (historical
