@@ -8,16 +8,40 @@
 # build tree (gitignored): first run configures + builds the GoldenCheetah app
 # target from scratch (slow — hence the 5400s TIMEOUT, the repo's missing-TIMEOUT
 # lesson), subsequent runs are incremental ninja rebuilds that only recompile
-# what a regression actually touched. Not part of the `garmin-fast` gate label:
-# run via `ctest -L garmin-build-guard`.
+# what a regression actually touched.
+#
+# These two are the ONLY tests excused from the routine gate (DEC-054). The
+# gate is `ctest -LE gate-exclude`: default-include, so a newly registered test
+# is gated without anyone remembering to enrol it. Opting out is therefore a
+# deliberate, visible act and, per DEC-054, an opt-out without a recorded
+# reason is itself a defect — so the reason and the alternate tier are carried
+# as test PROPERTIES below, not merely as prose, which is what makes them
+# checkable by garmin_gate_coverage_guard.py.
 
+# Only the two flag-build guards below need bash; every other test in this file
+# is pure Python. This used to be a bare `return()`, which aborts the WHOLE
+# FILE — so on a host without bash, CMake emitted one WARNING and silently
+# registered NONE of the static guards (sec-source, i18n-source, i18n-predicate
+# and, once it was added, the gate-coverage guard itself). Configure still
+# succeeded and `ctest -LE gate-exclude` then ran green having never loaded a
+# single guard. That is precisely the silent-non-execution defect DEC-054
+# exists to abolish, one level up, and it would have disarmed the coverage
+# guard before the coverage guard could notice — GATE-SELF cannot fire from a
+# test that was never registered. Scope the requirement to the two tests that
+# actually have it; never let it gate the file.
 find_program(BASH_EXECUTABLE bash)
 if(NOT BASH_EXECUTABLE)
-    message(WARNING "bash not found — T-202 REQ-NF-Build-001 build-guard tests not registered")
-    return()
+    message(WARNING
+        "bash not found — the two T-202 REQ-NF-Build-001 flag-build guards "
+        "(testGarminBuildGuardFlagOFF/ON) are NOT registered. Every other "
+        "guard in unittests/buildguard/ IS registered and will run; only the "
+        "shell-driven pair is missing. Install bash to restore them.")
 endif()
 
 foreach(_gc_garmin_mode OFF ON)
+    if(NOT BASH_EXECUTABLE)
+        continue()
+    endif()
     add_test(
         NAME testGarminBuildGuardFlag${_gc_garmin_mode}
         COMMAND "${BASH_EXECUTABLE}"
@@ -26,8 +50,36 @@ foreach(_gc_garmin_mode OFF ON)
                 "${CMAKE_BINARY_DIR}/guard/gc_want_garminconnect-${_gc_garmin_mode}"
                 "${CMAKE_SOURCE_DIR}"
     )
+    # REASON for the gate-exclude opt-out: each of these does a full
+    # from-scratch CMake configure + app build in a scratch directory.
+    # Measured, not estimated — build/Testing/Temporary/CTestCostData.txt
+    # records 247.048s (OFF) and 256.081s (ON), ~503s added to every routine
+    # run in the GOOD case, and the 5400s TIMEOUT above is the ceiling on a
+    # hang. A gate that expensive gets bypassed, which would reintroduce the
+    # opt-in defect operationally (DEC-054, option 3's ranking).
+    # TIER under which they are run WHEN they are run: `ctest -L
+    # garmin-build-guard`. Stated precisely because the honest version matters:
+    # NO MECHANISM IN THIS REPOSITORY CURRENTLY INVOKES THAT COMMAND. There is
+    # no CI workflow (DEC-054) and no scheduler, so today these two are excused
+    # to a tier that runs only when a human types it. They were equally unrun
+    # under the previous `ctest -L garmin-fast` gate, so this unit does not
+    # create the gap — but it must not paper over it either. The missing
+    # scheduling mechanism is tracked as its own ledger row.
+    # What IS enforced: garmin_gate_coverage_guard.py checks that this tier
+    # string is a ctest command that really SELECTS these tests, so "excused to
+    # nowhere" is a finding rather than decoration. It cannot check that
+    # anything runs it.
+    # Excluded from the routine gate, NOT disabled: the label keeps them
+    # discoverable and runnable, which DISABLED would not — and a DISABLED test
+    # would stay in the gate's selection while never running, which the
+    # coverage guard now treats as a finding in its own right.
     set_tests_properties(testGarminBuildGuardFlag${_gc_garmin_mode} PROPERTIES
-        LABELS "garmin-build-guard"
+        LABELS "garmin-build-guard;gate-exclude"
+        GATE_EXCLUDE_REASON
+            "Full from-scratch CMake configure + app build per test; measured \
+247.048s/256.081s (CTestCostData.txt), 5400s timeout ceiling on a hang. Too \
+slow for a per-unit gate; a gate that expensive gets bypassed (DEC-054)."
+        GATE_EXCLUDE_TIER "ctest -L garmin-build-guard"
         TIMEOUT 5400
         ENVIRONMENT "CMAKE_COMMAND=${CMAKE_COMMAND}")
 endforeach()
@@ -87,4 +139,67 @@ add_test(
 )
 set_tests_properties(testGarminI18nGuardPredicate PROPERTIES
     LABELS "garmin-i18n-guard"
+    TIMEOUT 300)
+
+# --- B-STAGE9-16 / DEC-054: the routine gate covers every registered test ----
+# DEC-054 flipped the routine gate from opt-in (`ctest -L garmin-fast`, which
+# could only ever see tests someone remembered to label) to default-include
+# (`ctest -LE gate-exclude`). These two are the DETECTION half of that change:
+# the protection is the default itself, and a guard is only the complement.
+#
+# testGarminGateCoverageGuard reads the real configured registry via
+# `ctest --show-only=json-v1` — the artifact that actually describes what
+# ctest will do, not the CMakeLists text that merely looks like it — and
+# asserts that every registered test is selected by the gate unless it carries
+# `gate-exclude`, and that every exclusion records a reason and an alternate
+# tier that SELECTS it.
+#
+# "Selects", not "runs", and the distinction is the whole point rather than
+# pedantry: nothing in this repository invokes any alternate tier (see the
+# comment on the two excused guards above). What the guard establishes is that
+# the recorded command would reach the test if someone ran it. It cannot
+# establish that anyone does.
+#
+# It also asserts that no unexcused test carries one of the result-masking
+# properties DISABLED, SKIP_RETURN_CODE or SKIP_REGULAR_EXPRESSION. All three
+# leave a test in the gate's SELECTION while removing its result from the
+# verdict, and the two skip properties are worse than DISABLED: ctest COUNTS
+# SKIPPED AS PASSED, so a genuinely failing test inflates the pass rate
+# instead of failing the gate (measured, ctest 3.31.6). That is a bypass of
+# the opt-out protocol which touches no label, records no reason and names no
+# tier.
+#
+# NEITHER of these may ever carry `gate-exclude`: a coverage guard outside the
+# gate it polices is the original bug wearing a new hat. The guard asserts
+# that about its own registration (rule GATE-SELF), so an attempt to excuse it
+# makes it fail rather than go quiet.
+#
+# Nor may either carry the masking properties above, or WILL_FAIL. The
+# self-neutering case is the sharpest in this file and is measured, not
+# theorised: put `SKIP_RETURN_CODE 1` on testGarminGateCoverageGuard, and the
+# moment it DETECTS an exclusion defect and exits 1, ctest reports
+# `***Skipped` / `100% tests passed` and exits 0. The gate stays green while
+# the instrument screams into a void. WILL_FAIL is the inverse — a clean run
+# fails, a detected defect passes — so it is prohibited here specifically,
+# though not for ordinary tests, where it is a legitimate expected-failure
+# semantic that turns red immediately rather than hiding.
+add_test(
+    NAME testGarminGateCoverageGuard
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/garmin_gate_coverage_guard.py"
+            "${CMAKE_BINARY_DIR}"
+)
+set_tests_properties(testGarminGateCoverageGuard PROPERTIES
+    LABELS "garmin-gate-guard"
+    TIMEOUT 300)
+
+add_test(
+    NAME testGarminGateCoverageGuardUnits
+    COMMAND "${Python3_EXECUTABLE}" -m pytest
+            "${CMAKE_CURRENT_SOURCE_DIR}/test_garmin_gate_coverage_guard.py"
+            -v
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+set_tests_properties(testGarminGateCoverageGuardUnits PROPERTIES
+    LABELS "garmin-gate-guard"
     TIMEOUT 300)

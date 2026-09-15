@@ -11,8 +11,41 @@ to be considered "done." Phase 2 exit CLV (Check 1, Check 4) will check against 
 A requirement is not "done" until **every** item below is true:
 
 - [ ] One or more `TEST-NNN` files cover the acceptance criterion (RED → GREEN → REFACTOR).
-- [ ] The test is registered under the `garmin-fast` CTest label (C++) or under
-      `src/Python/garminconnect/tests/` (Python), so pre-commit and CI pick it up.
+- [ ] The test is REGISTERED with CTest (`add_test`), or lives under
+      `src/Python/garminconnect/tests/` (Python). Registration is now sufficient:
+      per **DEC-054** the routine gate is `ctest -LE gate-exclude`, which is
+      DEFAULT-INCLUDE, so a registered test is gated whether or not anyone
+      remembers to label it. A label is still useful for running a suite in
+      isolation; it is no longer what puts the test in the gate.
+      **This item used to read "registered under the `garmin-fast` CTest label
+      ... so pre-commit and CI pick it up", and that was the defect, written
+      down as a rule.** It made enrolment the verification step: a test that
+      was registered but unlabelled was invisible to the habitual gate and its
+      absence was silent, which is how `testGarminI18nSourceGuard` sat RED in
+      HEAD from `c1948b513` (2026-09-13) to 2026-09-15 across two Inspectors'
+      own independent re-runs. The "so pre-commit and CI pick it up" clause was
+      additionally false in both halves: `.pre-commit-config.yaml` contains no
+      ctest hook (DEC-054 ratifies that, superseding DEC-010's cascade prose),
+      and this repository contains no checked-in CI workflow.
+- [ ] The routine gate `ctest -LE gate-exclude` is GREEN, and evidence lines
+      cite THAT command. A bare `ctest` remains the exhaustive audit and is not
+      weakened; `ctest -L garmin-build-guard` is the slower tier under which the
+      two flag-build guards are run WHEN they are run (~503s of scratch
+      configure+build, measured — DEC-054).
+      **Say it precisely: nothing in this repository invokes that command.**
+      There is no CI workflow and no scheduler, so those two tests run only when
+      a human types it. They were equally unrun under the previous
+      `ctest -L garmin-fast` gate, so this is not a regression introduced here —
+      but calling it a "scheduled" tier, as an earlier draft of this line did,
+      would be a claim nothing backs. The missing scheduling mechanism has its
+      own ledger row.
+      Excusing a test from the routine gate means giving it the `gate-exclude`
+      label PLUS `GATE_EXCLUDE_REASON` and `GATE_EXCLUDE_TIER` test properties;
+      an opt-out without a recorded reason is itself a defect, and
+      `testGarminGateCoverageGuard` enforces exactly that.
+      **Caveat, stated rather than implied:** enforcement today is this
+      documented command plus the coverage guard. There is no CI job requiring
+      it, so "required merge validation" is an aspiration, not a mechanism.
 - [ ] `traceability.md` REQ row has TEST and COMMIT columns populated.
 - [ ] Commit message cites `REQ-NNN`, `TEST-NNN`, and the relevant `DEC-NNN`(s)
       (convention, not hook-enforced — see `.pre-commit-config.yaml` rationale).
