@@ -728,6 +728,43 @@ STAGE-9-CURSOR (2026-09-16, written by `garmin_inspector_v1_26` — supersedes t
            distinct false-positive root cause under LSN-036, whose counters are now miss:5
            and whose index/cold drift was repaired in the same edit.
 
+STAGE-9-CURSOR (2026-09-16, written by `garmin_inspector_v1_27` — supersedes the
+           `garmin_inspector_v1_26` block above for SEQUENCING; that block's record stands.
+           Per-id status lives only in findings.md):
+           **B-STAGE9-16 IS CLOSED — BOTH HALVES.** Part B landed at `8ea19e8e5` (10 files,
+           +2665/-24) through the full pre-commit gate with NO `--no-verify`, carrying the
+           accumulated ledger work of three Inspector sessions with it. The gate's own output
+           on that commit is the finding's proof: `ruff-check` and `ruff-format` printed
+           **Passed** on buildguard Python, where every prior commit printed
+           "(no files to check)Skipped". The defect proved its own fix in the commit that
+           closed it. The commit-blocking condition described in the block above is therefore
+           LIFTED: `.pre-commit-config.yaml` is committed and ordinary commits work again.
+           Verified after landing: findings register 424 rows, 0 malformed,
+           **OUTSTANDING 3 -> 2**; `ledger_drift_lint.py` rc=0.
+           **Sequencing that the next Inspector must not lose:**
+           (1) The next atomic unit is **B-STAGE9-19** — give `GarminListFailure` a distinct
+           kind and code. It is now the sole blocker on the whole feature apart from
+           B-STAGE9-12. It touches `src/`, so **THE HARD HOLD ON `src/Core/main.cpp` AND ITS
+           SCOPE NEED A DECISION FROM THE USER BEFORE THAT UNIT IS DISPATCHED**; the Inspector
+           does not release the hold itself. The hold was verified INTACT through Part B's
+           landing — nothing in that commit touches `src/`.
+           (2) Recommendation on the record, unchanged: **no sixth attended live run** until
+           B-STAGE9-19 lands, or it will produce the same uninterpretable
+           `error_code=unknown activity_count=0` line fifteen more times.
+           (3) B-STAGE9-23's retrofit now explicitly OWES two files that Part B shipped at
+           high comment density before the briefing-template fix propagated:
+           `.pre-commit-config.yaml` (83 comment lines to 35 config) and
+           `unittests/buildguard/CMakeLists.txt` (~46 to ~20). They were landed rather than
+           re-opened because round 3 had certified them clean and a hand-edit by the Inspector
+           would have invalidated that certification for a style defect. **The retrofit must
+           NOT strip the `Gap(reason=...)` or `MODELLED_TOP_LEVEL_KEYS` strings — those are
+           runtime DATA, printed and length-checked, not commentary.**
+           **Roster note (USER INSTRUCTION, 2026-09-16):** when
+           `garmin_builder_stage9_v10` (`w1:pM`, Claude, ~209k/250k and due a soft-landing)
+           is next refreshed, its Claude session is to be CLOSED and the builder replaced with
+           a **Codex** pane, not another Claude one. The reviewer stays
+           `garmin_codex_reviewer` (`w1:pD`).
+
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md
 (## Decision index, then entries) · validations/archive/ + cycles/archive/ (historical
