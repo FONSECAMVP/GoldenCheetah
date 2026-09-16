@@ -1,6 +1,24 @@
 # Per DEC-010: pre-commit framework, scoped to new Garmin Connect paths only.
-# Does NOT retrofit legacy GoldenCheetah files — `files:` regex restricts every
-# hook to src/Cloud/Garmin*, src/Python/garminconnect/, unittests/Core/garminconnect/.
+# Does NOT retrofit legacy GoldenCheetah files — every hook carries a `files:`
+# regex and the legacy tree is outside all of them. DEC-010's SCOPING PRINCIPLE
+# stands; only its ENUMERATION was stale (DEC-054, B-STAGE9-16 Part B).
+#
+# THE ENUMERATION IS THE THING THAT ROTS — read this before editing a regex.
+# The list below was accurate on 2026-05-17 and then never grew, so when
+# `unittests/buildguard/` appeared it was linted by NOTHING. That was not
+# noticed by review; it was noticed because commits `d9ba4faad` and `8611fb2d0`
+# staged buildguard Python and EVERY hook printed "(no files to check)Skipped".
+# A skipped hook and a passing hook look the same in a terminal, which is the
+# whole defect class B-STAGE9-16 exists to abolish: enrolment was the
+# verification step, so forgetting to enrol produced a GREEN result.
+#
+# So adding a new Garmin-owned directory is now a CHECKED act, not a remembered
+# one. `unittests/buildguard/garmin_lint_ownership_guard.py` reads THIS FILE,
+# evaluates the real `files:` regexes below, and fails if any tracked file under
+# a declared managed root is matched by no hook. If you add a directory here,
+# add it to that guard's MANAGED_ROOTS too — and if you deliberately leave
+# something unlinted, DECLARE it there with a reason rather than leaving it
+# silent. A declared gap is fine; silence is the defect.
 #
 # Contributor onboarding:  pip install pre-commit && pre-commit install
 # CI parity:               pre-commit run --files <changed-files>
@@ -14,7 +32,27 @@ repos:
     hooks:
       - id: clang-format
         name: clang-format (Garmin C++)
-        files: '^(src/Cloud/Garmin[^/]*\.(cpp|h)|unittests/Core/garminconnect/.*\.(cpp|h))$'
+        # unittests/Core/stderrbuf/ is armed DELIBERATELY EARLY (DEC-054): it is
+        # B-STAGE9-12's deliverable and has no tracked file yet, so this branch
+        # of the alternation matches nothing today and costs exactly zero. That
+        # is the point — coverage that arrives WITH the directory cannot be the
+        # thing someone forgets. The lint-ownership guard reports that root as
+        # EMPTY rather than as covered, so "armed" is never mistaken for
+        # "proven".
+        #
+        # IGarmin*.h and PyEmbeddedAdapter.h were a THIRD instance of the same
+        # stale-enumeration defect, found by the lint-ownership guard's very
+        # first run rather than by review: they are Garmin-owned (DEC-012 and
+        # DEC-013 created them) but `Garmin[^/]*` never matched a leading "I",
+        # so four production headers were linted by nothing. All four measured
+        # CLEAN against clang-format 18.1.8 --style=file before being added
+        # here, so this widening is not red on arrival.
+        #
+        # PyEmbeddedAdapter.cpp and AddCloudWizard.{cpp,h} are deliberately NOT
+        # here and are declared as reasoned gaps in the lint-ownership guard —
+        # all three measured RED, and AddCloudWizard is a legacy GoldenCheetah
+        # file that DEC-010's no-retrofit principle keeps out on purpose.
+        files: '^(src/Cloud/(Garmin[^/]*\.(cpp|h)|IGarmin[^/]*\.h|PyEmbeddedAdapter\.h)|unittests/Core/garminconnect/.*\.(cpp|h)|unittests/Core/stderrbuf/.*\.(cpp|h))$'
         args: [--style=file]
 
   # -------- Python (DEC-009) ---------------------------------------------
@@ -23,15 +61,38 @@ repos:
     hooks:
       - id: ruff
         name: ruff-check (Garmin Python)
-        files: '^src/Python/garminconnect/.*\.py$'
+        files: '^(src/Python/garminconnect|unittests/buildguard)/.*\.py$'
         args: [--fix]
       - id: ruff-format
         name: ruff-format (Garmin Python)
-        files: '^src/Python/garminconnect/.*\.py$'
+        files: '^(src/Python/garminconnect|unittests/buildguard)/.*\.py$'
 
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.11.2
     hooks:
+      # DELIBERATELY NARROWER than ruff above, and this asymmetry is the point.
+      # unittests/buildguard/ is NOT type-checked, and NO type coverage is
+      # claimed for it. DEC-054 wrote this branch in advance: mypy there is
+      # required "only if a dedicated config for pytest-style guard tests is
+      # demonstrated clean, and if not then Ruff coverage is still required and
+      # no type coverage is claimed." It is not clean — MEASURED with the pinned
+      # mypy 1.11.2 and this exact config: 43 errors in 4 of 5 files (25 in
+      # test_garmin_gate_coverage_guard.py, 10 in garmin_gate_coverage_guard.py,
+      # 7 in test_garmin_i18n_source_guard.py, 2 in garmin_i18n_source_guard.py;
+      # garmin_sec_source_guard.py alone is clean). The bulk are "untyped
+      # decorator makes function untyped" from pytest decorators and
+      # unparameterised `dict` — systemic, a typing project of its own, not a
+      # config tweak.
+      #
+      # The rejected alternative is worth naming so nobody re-proposes it:
+      # widen mypy but draw the regex to exclude the files that fail it. That
+      # is a gate shaped around its own blind spot — green because it was aimed
+      # away from the problem. An honestly DECLARED gap beats a gerrymandered
+      # green, so the gap is recorded as a machine-checked tool_gap in
+      # garmin_lint_ownership_guard.py's MANAGED_ROOTS and printed in its
+      # output. If this regex is ever widened, that declaration goes STALE and
+      # the guard fails until it is removed — the declaration cannot outlive
+      # its own truth.
       - id: mypy
         name: mypy --strict (Garmin Python)
         files: '^src/Python/garminconnect/.*\.py$'

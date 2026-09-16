@@ -629,10 +629,104 @@ STAGE-9-CURSOR (2026-09-16, written by `garmin_inspector_v1_25` — this superse
            demonstrated the Part B gap once more: all five pre-commit hooks reported no files
            to check and skipped, on a commit staging two brand-new Python files.
            Two findings remain outstanding, both blocking: B-STAGE9-12 and B-STAGE9-16.
-           **THE HARD HOLD ON `src/Core/main.cpp` REMAINS IN FORCE** and the one real
-           human-in-the-loop gate below is UNCHANGED AND STILL OPEN — re-verified 2026-09-16:
-           GoldenCheetah not running, activities still 1145 files, `tokens.json` still the
-           0-byte file from 2026-09-13 20:53.
+
+STAGE-9-LIVE-TEST (2026-09-16 05:20-05:33, user-attended, supervised by
+           `garmin_inspector_v1_25`): **THE LIVE SYNC RE-TEST HAS NOW RUN — attempt #5. It is
+           NO LONGER THE PENDING GATE.** Run against `build/src/GoldenCheetah` (CMake,
+           2026-09-15 05:42) on the user's own decision, after the Inspector established that
+           the qmake binary predates `1ae49a196` and so lacks B-STAGE9-13's empty-token fix.
+           No rebuild was performed; the `src/Core/main.cpp` hard hold was verified INTACT
+           throughout and is NOT released by this test concluding.
+           **AUTHENTICATION SUCCEEDED — the first time in this project.**
+           `gc_obs op=auth outcome=ok duration_ms=35`, and `tokens.json` went from the 0-byte
+           file it had been since 2026-09-13 to a real 2189-byte session. Two fixes are thereby
+           CONFIRMED LIVE for the first time: B-STAGE9-13 (the 0-byte restore emitted the
+           distinct `error_code=empty`, not the old `unknown` fold) and B-STAGE9-09's root-cause
+           reading (strategies 1-2 still 429, strategy 3 succeeds and returns early).
+           **THE FEATURE STILL FAILED, and the defect has moved downstream:** fifteen
+           `gc_obs op=sync_incremental outcome=fail error_code=unknown activity_count=0` lines,
+           zero files downloaded (activities 1145 -> 1145, diffed against a pre-launch
+           snapshot). Filed as **B-STAGE9-19**, blocking. Localised to
+           `GarminConnect.cpp:825` — all five guarded early-returns emit distinct codes and none
+           fired, so the list call itself ran and failed, and `garminListKindCode` (`:100-111`)
+           proves it was NEITHER network NOR rate-limit. Same undiagnosable-Unknown-fold class
+           as B-STAGE9-09, one layer down. Recommendation recorded: do NOT schedule a sixth
+           attended run until `GarminListFailure` gains a distinct kind and code, or it will
+           produce the same uninterpretable line.
+           Two process facts worth keeping: the `gc_obs` evidence exists ONLY because the user
+           exited via File > Quit (B-STAGE9-12 reproducing itself live, second independent
+           confirmation), and GoldenCheetah TRUNCATES `goldencheetah.log` on launch, so
+           attempt #4's evidence survived only because it had been snapshotted first.
+           Three findings now outstanding, all blocking: B-STAGE9-12, B-STAGE9-16, B-STAGE9-19.
+           **THE HARD HOLD ON `src/Core/main.cpp` REMAINS IN FORCE.**
+           CORRECTION by `garmin_inspector_v1_26` 2026-09-16: this block previously closed by
+           re-verifying the gate markers as "`tokens.json` still the 0-byte file from
+           2026-09-13 20:53", which CONTRADICTED its own paragraph above and was left over
+           from a pre-test reading. Re-measured now: GoldenCheetah not running, activities
+           still 1145 files, and `tokens.json` is the **2189-byte session blob written
+           2026-09-16 05:21:24** — i.e. the auth artefact of attempt #5, exactly as the
+           paragraph above reports. The marker set no longer describes a PENDING gate; what
+           remains open is the downstream sync defect, not the connect step.
+
+STAGE-9-CURSOR (2026-09-16, written by `garmin_inspector_v1_26` — supersedes the
+           `garmin_inspector_v1_25` block above for SEQUENCING; that block's live-test record
+           stands. Per-id status lives only in findings.md):
+           **B-STAGE9-16 Part B is built and in review, not landed.** The builder delivered
+           the lint-ownership guard (`unittests/buildguard/garmin_lint_ownership_guard.py`,
+           +895, and its 683-line test file, both now staged) plus the widened
+           `.pre-commit-config.yaml` regexes and the `garmin_sec_source_guard.py` cleanup that
+           B-STAGE9-18 required so the widening is not red on arrival. Reviewer round 1 filed
+           four findings; the builder's repair round closed all four and the Inspector
+           re-verified three of them with its OWN probes rather than by relaying the report:
+           `check_not_vacuous` is reached from `main()` (`:854`), a scratch repo with zero
+           managed files now exits 1 with `LINT-VACUOUS` where it previously exited 0, and
+           `check_model_is_faithful` fails closed on both a known narrowing key and an
+           invented one. `ctest -R testGarminLintOwnership` is 2/2 green and the registered
+           command really does pass `--build-dir`, so LINT-SELF's registry half is live rather
+           than silently dead — checked specifically because that would have been round 1's
+           vacuity defect a third time.
+           UPDATE by `garmin_inspector_v1_27`: review rounds 2 and 3 have since completed.
+           Round 2 filed ONE blocking finding — the guard modelled pre-commit's top-level
+           `files:`/`exclude:` as a DEFAULT when pre-commit INTERSECTS three layers — which
+           `garmin_inspector_v1_26` confirmed against the installed `pre_commit` 4.2.0 source
+           before ordering the repair, then extended itself to `default_stages` and the
+           nine-key top-level schema. Round 3 came back **CLEAN: no new blocking or
+           non-blocking defect**, with a full selection-layer audit table
+           (`/tmp/reviewer_s916_partB_round3_findings.md`). `garmin_inspector_v1_27`
+           re-verified the deliverable independently before landing rather than relaying the
+           reports: the guard is `PASS — 101/111` with all ten declared gaps intact, its unit
+           suite is 86/86, and the `garmin_sec_source_guard.py` delta is ruff reflow plus one
+           dead-variable removal (`raw_lines`, confirmed unreferenced) and nothing else.
+           The ONE remaining unmodelled selection layer is the upstream hook manifest, which
+           is the accepted follow-up held out in the brief's §8, not a defect: all 102 owned
+           candidates are type-compatible with the pinned manifests today, and a hook revision
+           bump must re-check it.
+           **Sequencing that the next Inspector must not lose:**
+           (1) Every commit in this tree is blocked until Part B lands, because pre-commit
+           refuses to run while `.pre-commit-config.yaml` is itself unstaged and the builder
+           owns that file. The pending ledger edits therefore ride WITH Part B's commit. Do
+           not reach for `--no-verify`; the manual lint runs are green, which makes the bypass
+           tempting and is exactly why it is refused.
+           (2) Part B's commit must EXCLUDE `unittests/CMakeLists.txt` and the three untracked
+           `unittests/Core/stderrbuf/*` files. Verified 2026-09-16: that hunk registers only
+           `add_subdirectory(Core/stderrbuf)` and belongs to B-STAGE9-12, a different unit.
+           (3) After Part B, the next atomic unit is B-STAGE9-19 — give `GarminListFailure` a
+           distinct kind and code. That is the blocker on the whole feature now. It touches
+           `src/`, so the `src/Core/main.cpp` hold and its scope need a decision from the user
+           BEFORE that unit is dispatched; the Inspector does not release the hold itself.
+           **Roster note:** `garmin_builder_stage9_v9` was soft-landed at 224k/250k while idle
+           and clean, and replaced by `garmin_builder_stage9_v10` (`w1:pM`, auto mode verified
+           from the status line). The old session is resumable as
+           `claude --resume d16853cf-7b13-4544-9391-4449fc36b03d` if its reasoning is ever
+           needed; its full report is `/tmp/builder_v9_report_s916_partB_repair1.md`. The
+           reviewer pane `w1:pD` was anonymous and is now named `garmin_codex_reviewer`.
+           Six findings now carry open work; three of them are the blocking set
+           (B-STAGE9-12, B-STAGE9-16, B-STAGE9-19) and three are the non-blocking lint-gap
+           follow-ups filed this session out of Part B's declared gaps (B-STAGE9-20,
+           B-STAGE9-21, B-STAGE9-22), each re-measured with the PINNED tools before filing.
+           ORCH-063 was also filed against the `anti_duplication_guard.py` hook — the fifth
+           distinct false-positive root cause under LSN-036, whose counters are now miss:5
+           and whose index/cold drift was repaired in the same edit.
 
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md

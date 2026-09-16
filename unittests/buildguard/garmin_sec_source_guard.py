@@ -88,7 +88,11 @@ SEC1_PERSIST_RULE = (
 # Sec-001: the classic remember-password settings key, forbidden outright.
 SEC1_KEY_RULE = ("SEC1-PASSWORD-SETTINGS-KEY", r"GARMIN_PASSWORD")
 
-RULES: dict[str, str] = {**SEC3_RULES, SEC1_PERSIST_RULE[0]: SEC1_PERSIST_RULE[1], SEC1_KEY_RULE[0]: SEC1_KEY_RULE[1]}
+RULES: dict[str, str] = {
+    **SEC3_RULES,
+    SEC1_PERSIST_RULE[0]: SEC1_PERSIST_RULE[1],
+    SEC1_KEY_RULE[0]: SEC1_KEY_RULE[1],
+}
 ALLOW_MARKER = "T203-ALLOW:"
 
 
@@ -149,7 +153,11 @@ def strip_cpp_comments(text: str) -> dict[int, str]:
                 cur.append("  ")
                 i += 2
                 continue
-            prev = cur[-1] if cur and cur[-1].strip() else (out[-1].rstrip()[-1:] if out and out[-1].rstrip() else "")
+            prev = (
+                cur[-1]
+                if cur and cur[-1].strip()
+                else (out[-1].rstrip()[-1:] if out and out[-1].rstrip() else "")
+            )
             if c == '"' and prev in ("R", "r"):
                 # crude raw-string detect: scan delimiter up to '('
                 j = i + 1
@@ -191,8 +199,8 @@ def strip_cpp_comments(text: str) -> dict[int, str]:
             i += 1
         elif state == "raw":
             cur.append(c)
-            if c == ")" and text.startswith(f"{delim}\"", i + 1):
-                tail = f"{delim}\""
+            if c == ")" and text.startswith(f'{delim}"', i + 1):
+                tail = f'{delim}"'
                 cur.append(tail)
                 i += len(tail) + 1
                 state = "code"
@@ -225,14 +233,22 @@ def blank_docstrings(text: str, code: dict[int, str]) -> dict[int, str]:
     except SyntaxError:
         return code
     for node in ast.walk(tree):
-        if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+        if not isinstance(
+            node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+        ):
             continue
         body = node.body
         if not body:
             continue
         first = body[0]
-        if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) and isinstance(first.value.value, str):
-            for ln in range(first.lineno, getattr(first, "end_lineno", first.lineno) + 1):
+        if (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            for ln in range(
+                first.lineno, getattr(first, "end_lineno", first.lineno) + 1
+            ):
                 code[ln] = ""
     return code
 
@@ -249,7 +265,9 @@ def in_scope_files(root: Path) -> list[Path]:
             sorted(
                 p
                 for p in pyroot.rglob("*.py")
-                if not any(part.startswith(".") or part == "__pycache__" for part in p.parts)
+                if not any(
+                    part.startswith(".") or part == "__pycache__" for part in p.parts
+                )
             )
         )
     return files
@@ -268,9 +286,12 @@ def main(argv: list[str]) -> int:
         if not path.is_file():
             continue
         n_files += 1
-        raw_lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         text = path.read_text(encoding="utf-8", errors="replace")
-        code = strip_python_comments(text) if path.suffix == ".py" else strip_cpp_comments(text)
+        code = (
+            strip_python_comments(text)
+            if path.suffix == ".py"
+            else strip_cpp_comments(text)
+        )
         if path.suffix == ".py":
             code = blank_docstrings(text, code)
         for lineno, codeline in sorted(code.items()):
@@ -288,7 +309,9 @@ def main(argv: list[str]) -> int:
             print(f"  {rule} {path.relative_to(root)}:{lineno}: {line[:160]}")
         return 1
 
-    print(f"garmin-sec-source-guard: PASS — {n_files} files scanned, {len(RULES)} rules, 0 findings")
+    print(
+        f"garmin-sec-source-guard: PASS — {n_files} files scanned, {len(RULES)} rules, 0 findings"
+    )
     return 0
 
 

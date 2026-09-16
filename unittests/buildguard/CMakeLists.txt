@@ -203,3 +203,66 @@ add_test(
 set_tests_properties(testGarminGateCoverageGuardUnits PROPERTIES
     LABELS "garmin-gate-guard"
     TIMEOUT 300)
+
+# --- B-STAGE9-16 Part B / DEC-054: every managed file is linted by something --
+# The LINT half of the same finding, and the same defect one layer over.
+# `.pre-commit-config.yaml` scopes each hook with an enumerated `files:` regex
+# that was accurate on 2026-05-17 and then never grew, so when this very
+# directory appeared it was linted by NOTHING — commits d9ba4faad and 8611fb2d0
+# each staged new buildguard Python and every hook printed "(no files to
+# check)Skipped", ~1,950 unlinted lines in the latter. A skipped hook and a
+# passing hook look identical in a terminal, which is what made four months of
+# it invisible.
+#
+# Part A could invert the ctest default to default-include. This half CANNOT
+# take that route: DEC-010 scoped pre-commit to new Garmin paths precisely so
+# as not to retrofit the legacy GoldenCheetah tree, and that principle stands —
+# only its ENUMERATION was stale. So the enumeration stays and this guard makes
+# forgetting to grow it LOUD, asserting that every tracked file under the
+# declared managed roots is matched by at least one hook's real regex.
+#
+# It reads the two artifacts that actually run — `.pre-commit-config.yaml`
+# parsed with PyYAML and evaluated with `re`, and `git ls-files` for the
+# inventory (THE INDEX, which is exactly pre-commit's input domain; a directory
+# walk would sweep in the __pycache__/.mypy_cache/.pytest_cache dirs sitting in
+# this directory right now). It does NOT keep a second hand-written list of
+# what is covered; that would reintroduce the two-lists-that-drift defect being
+# fixed.
+#
+# Gaps are DECLARED, not silent, and re-checked every run: mypy deliberately
+# does not cover this directory (43 measured errors under --strict, DEC-054's
+# own sanctioned branch, no type coverage claimed) and no shell linter exists
+# for garmin_flag_build_guard.sh. A gap that quietly becomes false — someone
+# widens mypy and leaves the declaration behind — fails as STALE, so the
+# declaration cannot outlive its own truth.
+#
+# SOURCE dir AND BINARY dir are both passed, and the distinction burned v7:
+# the config and the index live in the SOURCE tree, but LINT-SELF's registry
+# half needs the BUILD tree, because that is where ctest's registry is. Without
+# --build-dir the guard still runs and says plainly that the registry half did
+# not run, rather than implying it passed.
+#
+# Like the gate-coverage guard above, NEITHER of these may ever carry
+# `gate-exclude`: a coverage guard outside the gate it polices is the original
+# bug wearing a new hat. The guard asserts that about its own registration.
+add_test(
+    NAME testGarminLintOwnershipGuard
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/garmin_lint_ownership_guard.py"
+            "${CMAKE_SOURCE_DIR}"
+            --build-dir "${CMAKE_BINARY_DIR}"
+)
+set_tests_properties(testGarminLintOwnershipGuard PROPERTIES
+    LABELS "garmin-lint-guard"
+    TIMEOUT 300)
+
+add_test(
+    NAME testGarminLintOwnershipGuardUnits
+    COMMAND "${Python3_EXECUTABLE}" -m pytest
+            "${CMAKE_CURRENT_SOURCE_DIR}/test_garmin_lint_ownership_guard.py"
+            -v
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+set_tests_properties(testGarminLintOwnershipGuardUnits PROPERTIES
+    LABELS "garmin-lint-guard"
+    TIMEOUT 300)
