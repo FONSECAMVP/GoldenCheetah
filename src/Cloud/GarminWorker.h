@@ -67,7 +67,10 @@ Q_DECLARE_METATYPE(GarminRestoreFailure)
 // boundary via a queued connection.
 struct GarminListFailure
 {
-    enum Kind { Network, RateLimit, Unknown };
+    // B-STAGE9-19: NoClient/Timeout are synthesised by GarminConnect's
+    // blockingList() local exits (no worker round trip); Unknown stays the
+    // genuine adapter-reported last resort.
+    enum Kind { Network, RateLimit, Unknown, NoClient, Timeout };
     Kind kind = Unknown;
     QString rawMessage;
 };

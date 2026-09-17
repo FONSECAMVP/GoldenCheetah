@@ -742,12 +742,41 @@ STAGE-9-CURSOR (2026-09-16, written by `garmin_inspector_v1_27` — supersedes t
            Verified after landing: findings register 424 rows, 0 malformed,
            **OUTSTANDING 3 -> 2**; `ledger_drift_lint.py` rc=0.
            **Sequencing that the next Inspector must not lose:**
-           (1) The next atomic unit is **B-STAGE9-19** — give `GarminListFailure` a distinct
-           kind and code. It is now the sole blocker on the whole feature apart from
-           B-STAGE9-12. It touches `src/`, so **THE HARD HOLD ON `src/Core/main.cpp` AND ITS
-           SCOPE NEED A DECISION FROM THE USER BEFORE THAT UNIT IS DISPATCHED**; the Inspector
-           does not release the hold itself. The hold was verified INTACT through Part B's
-           landing — nothing in that commit touches `src/`.
+           (1) **THE HARD HOLD ON `src/Core/main.cpp` IS RELEASED, BY THE USER, 2026-09-16.**
+           `garmin_inspector_v1_27` put the question to the user rather than deciding it,
+           because the record CONTRADICTED ITSELF: the hold as written by `_v1_25` says in its
+           own text "Release the hold once that test concludes" (the 2026-09-15 block above),
+           and the test concluded as attempt #5 on 2026-09-16 — yet `_v1_26` recorded that
+           "the test concluding did NOT release it" and carried it forward as in force. The
+           Inspector also established that only the qmake/make half of the hold constrained
+           the next unit at all, since B-STAGE9-19 edits `src/Cloud/GarminConnect.cpp` and not
+           `src/Core/main.cpp`. **The user chose release.** So `src/` is open and qmake against
+           `src.pro` is permitted again, which also unblocks B-STAGE9-12's production fix and
+           allows a rebuilt binary to carry new error codes into a future live run.
+           The hold had been verified INTACT through Part B's landing; nothing in `8ea19e8e5`
+           touches `src/`.
+           (1b) The next atomic unit is **B-STAGE9-19** — give the list path distinct kinds and
+           codes. It is now the sole blocker on the whole feature apart from B-STAGE9-12, and
+           it is **DISPATCHED** to `garmin_builder_stage9_v11` (brief:
+           `/tmp/builder_v11_brief_s919.md`). The Inspector EXTENDED the finding when briefing
+           it, and the extension should be reviewed on its merits rather than inherited: the
+           row says "give `GarminListFailure` a distinct kind plus code", but reading
+           `blockingList()` line by line shows **THREE structurally different failure exits all
+           reporting `Unknown`**, and one of them — `if (!client) return res;` at
+           `GarminConnect.cpp:413-414` — **never constructs a `GarminListFailure` at all**, so
+           no addition to that enum can reach it. The other two are the 60s timeout lambda
+           (`:438-443`, which inherits the `:411` initialiser) and a genuine `listFailed`
+           carrying `Unknown` (`:430-436`). `kListTimeoutMs` is 60000 (`:45`), so **none of the
+           fifteen live failures was a timeout** — 643ms is two orders of magnitude short —
+           which leaves the twelve 0-3ms failures matching the `!client` early return and the
+           three sub-second ones matching a real adapter failure. That is a HYPOTHESIS the
+           builder was explicitly asked to try to disprove, not a conclusion. Second defect
+           found in the same reading: `GarminListFailure::rawMessage` is **discarded** at
+           `:435` — `blockingList` copies only `failure.kind` — so the most diagnostic value
+           in the path never reaches anyone. Ruling recorded: extend the enum and synthesize
+           the kind at the local exits, REJECTING a parallel `failureCode` channel because two
+           lists that must be kept in step is the exact defect class B-STAGE9-16 just spent
+           three reviewer rounds abolishing one layer up.
            (2) Recommendation on the record, unchanged: **no sixth attended live run** until
            B-STAGE9-19 lands, or it will produce the same uninterpretable
            `error_code=unknown activity_count=0` line fifteen more times.
@@ -759,11 +788,87 @@ STAGE-9-CURSOR (2026-09-16, written by `garmin_inspector_v1_27` — supersedes t
            would have invalidated that certification for a style defect. **The retrofit must
            NOT strip the `Gap(reason=...)` or `MODELLED_TOP_LEVEL_KEYS` strings — those are
            runtime DATA, printed and length-checked, not commentary.**
-           **Roster note (USER INSTRUCTION, 2026-09-16):** when
-           `garmin_builder_stage9_v10` (`w1:pM`, Claude, ~209k/250k and due a soft-landing)
-           is next refreshed, its Claude session is to be CLOSED and the builder replaced with
-           a **Codex** pane, not another Claude one. The reviewer stays
-           `garmin_codex_reviewer` (`w1:pD`).
+           **Roster note (2026-09-16): the builder runtime changed TWICE, and the dead end in
+           the middle is the part worth keeping.** `garmin_builder_stage9_v10` (Claude,
+           209k/250k and due a soft-landing) was exited cleanly; it remains resumable as
+           `claude --resume 1cf9a230-ca31-43b0-9cb1-f8c7c733221d`.
+           **Attempt 1 — a CODEX builder, on the user's instruction, FAILED AND SHOULD NOT BE
+           RETRIED WITHOUT SOLVING THIS FIRST.** Codex came up in `w1:pM`, read the brief, and
+           correctly REFUSED to do any work: `.codex/WORKFLOW.md` in this repo declares
+           `LDW_CODEX_WORKTREE_REQUIRED` and mandates that a Codex agent create a dedicated
+           linked git worktree plus a `codex/<task>` branch before any implementation, stating
+           explicitly "do not implement in the checkout as a workaround". The builder was RIGHT
+           to stop and its refusal was a correct policy read, not a malfunction. The policy is
+           Codex-specific, which is exactly why four Claude builders never hit it. Honouring it
+           is expensive here: `./build` is a **2.9 GB** CMake tree bound to the integration
+           checkout's path, so a worktree needs a full from-scratch Qt/CMake configure+build
+           before it can run one test. Two lesser Codex traps were also measured and are worth
+           recording: plain `codex` defaults to a **read-only sandbox** (it needs
+           `-s workspace-write` or it cannot write at all, and the resulting error looks like a
+           read-only MOUNT — `findmnt` proved the mount is `rw`), and Codex 0.154.0 accepts
+           only `on-request` or `never` for `--ask-for-approval`, with the Claude Code auto-mode
+           classifier BLOCKING any launch that passes `-a never`.
+           **Attempt 2 — ADOPTED, and this is the live roster.** On the user's revised
+           instruction the pane was relaunched with **`claude-sr --permission-mode auto`**, a
+           local wrapper that runs Claude Code against **glm-5.3** (z.ai Anthropic-compatible
+           endpoint). This resolves the impasse structurally: it is Claude Code, so the `.codex`
+           worktree policy does not apply, `./build` is reused, and real auto mode means no
+           approval dialogs to babysit. Verified from the pane's own status line before
+           dispatch: `glm-5.3[1m]`, effort high, `auto mode on`, `tok 0k/0k`. **NOTE it came up
+           on the `glm-5.3-flash` slot and had to be raised with `/model opus`** — the wrapper
+           maps the haiku slot to flash, so a fresh pane is on the WEAKEST model until moved.
+           Check the status line; do not assume.
+           **Supervision consequence:** this is a different model family from every previous
+           builder on this stage. Verify its evidence rather than relaying it, which is the
+           standing rule anyway but matters more here.
+           The reviewer stays `garmin_codex_reviewer` (`w1:pD`, Codex, 213k/250k — **due a
+           `/new` before its next round**). `s915_i18n_second_opinion` (`w1:pR`) idle, reusable.
+
+STAGE-9-CURSOR (2026-09-17, written by `garmin_inspector_v1_28` — supersedes the
+           `garmin_inspector_v1_27` block above for SEQUENCING; that block's record stands.
+           Per-id status lives only in findings.md):
+           **B-STAGE9-19 IS CLOSED — two builder rounds, two independent reviewer passes, NO
+           BLOCKING FINDING IN EITHER.** The list path now reports distinct codes
+           (`no_client`, `timeout`) at exits that previously all folded to `unknown`, and the
+           adapter's untranslated message reaches its own `gc_obs_raw` line instead of being
+           discarded. Verified by the Inspector directly, not relayed: the suite ran
+           **15 passed / 0 failed**, and an Inspector-authored mutation (removing the
+           `NoClient` assignment) produced exactly ONE failure, in the right slot, folding back
+           to kind 2 — then reverted to an md5 byte-identical file with the suite back to 15/15.
+           **THE HEADLINE IS NOT THIS UNIT — IT IS WHAT THE BUILDER FOUND WHILE DISPROVING THE
+           BRIEF.** `garmin_inspector_v1_27` asked the builder to try to prove its hypothesis
+           wrong, and the builder did. The claim that the twelve 0-3ms live failures were
+           `blockingList()`'s `!client` early return is **REFUTED**: that exit is unreachable
+           from `readdir()`, which pre-guards a null client at `GarminConnect.cpp:759` and
+           emits `no_session` — and ZERO `no_session` lines appear in the live log. The real
+           cause is now **B-STAGE9-25** (filed this session, blocking): `garminconnect` 0.3.15
+           validates `startdate` as date-ONLY, our `kGarminTimeFormat` is a full datetime, and
+           `garmin_client.py:386` forwards it verbatim while catching only the two Garmin
+           exception classes — so the `ValueError` propagates unclassified and folds to
+           Unknown. The Inspector re-executed the wheel's own validator to confirm this rather
+           than accepting the report. ONE cause explains all four measured symptoms. This is
+           DEC-014 OQ1's deferred risk landing exactly where that comment said it might.
+           **Sequencing the next Inspector must not lose:**
+           (1) **B-STAGE9-25 is the next atomic unit, and it is the one that actually unblocks
+           the live run.** B-STAGE9-19 only made the failure legible; -25 makes it stop
+           failing. It needs BOTH halves: normalise sinceGmt to date-only, AND update the
+           fakes/pystub so the stub rejects what the real wheel rejects — without the second
+           half the same defect class stays invisible to the suite. Decide explicitly whether
+           dropping time-of-day needs same-day re-filtering.
+           (2) **NO SIXTH ATTENDED LIVE RUN until BOTH -19 and -25 have landed.** Running with
+           -19 alone would produce fifteen newly-legible lines that all still fail.
+           (3) Two non-blocking follow-ups are OWED and not yet filed as rows: (a) the
+           exhaustiveness guard added in round 2 uses `#pragma GCC diagnostic error "-Wswitch"`,
+           which is GCC/Clang-only and **silently degrades to no guard on MSVC** — the reviewer
+           dissented from the Inspector's provisional acceptance and was right; the portable fix
+           is a `KindCount` sentinel plus a `static_assert` on the table's row count. The
+           runtime table still pins every current mapping on every compiler, which is why this
+           is non-blocking. (b) `blockingDownload`'s two local exits BOTH fold to
+           `GarminDownloadFailure::Network` (a 0-initialiser, no explicit init) and the download
+           op emits **no gc_obs trace at all** — worse than the list path's version, since it is
+           a WRONG code rather than merely an unhelpful one.
+           (4) Measured operational constraint: ~20 parallel `cc1plus` thrash this 11.6 GB
+           machine into swap and cost an hour of wall clock. Cap builds at `-j4`.
 
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md

@@ -69,8 +69,11 @@ class GarminConnect : public CloudService
     // so open()/readFile()/readdir() are exercisable without the embedded-Python
     // host. The injected client is NOT owned. `garminUserIdOverride` defaults to
     // empty (production resolves the uid from tokens.json — see resolveGarminUserId).
+    // B-STAGE9-19: `listTimeoutOverrideMs` bounds blockingList()'s wait so the
+    // timeout exit is reachable in tests (0 — the default — means
+    // kListTimeoutMs; production never passes it).
     GarminConnect(Context* context, IGarminDownloadClient* injectedClient, const QString& configDirOverride,
-                  const QString& garminUserIdOverride = QString());
+                  const QString& garminUserIdOverride = QString(), int listTimeoutOverrideMs = 0);
 
     ~GarminConnect();
 
@@ -212,6 +215,10 @@ class GarminConnect : public CloudService
     // GarminRestoreFailure::Kind when the restore fails (Unknown on timeout).
     bool blockingRestore(const QString& tokenBlob, int* failureKindOut = nullptr);
 
+    // B-STAGE9-19 — the sync suite drives blockingList()'s !client exit, which
+    // is unreachable through readdir(); everything else stays private.
+    friend class TestGarminConnectSync;
+
     // REQ-008 Slice C — one blocking list op (since→summaries); bridges the async
     // client to a sync result via a local QEventLoop keyed on a fresh requestId,
     // mirroring blockingDownload/blockingRestore.
@@ -220,8 +227,19 @@ class GarminConnect : public CloudService
         bool ok = false;
         QVector<GarminActivitySummary> summaries;
         int failureKind = 0; // GarminListFailure::Kind when !ok (mirrors DownloadResult)
+        // B-STAGE9-19 — the untranslated library message when the failure came
+        // from the adapter (empty on the local no-client/timeout exits).
+        QString rawMessage;
     };
     ListResult blockingList(const QString& sinceGmt);
+
+    // B-STAGE9-19 — GC-stable error_code vocabulary for a GarminListFailure::Kind
+    // (REQ-NF-Obs-001); private static so the friend test can pin the mapping.
+    static const char* garminListKindCode(int kind);
+
+    // B-STAGE9-19 — test override for blockingList()'s timeout (ctor seam).
+    // 0 means the production kListTimeoutMs applies.
+    int m_listTimeoutOverrideMs = 0;
 
     // Resolve the active garmin_user_id that keys the per-account sidecar
     // (DES-002). The test override wins; otherwise it is read from tokens.json

@@ -211,6 +211,7 @@ class FakeSyncClient : public IGarminDownloadClient
     QVector<GarminActivitySummary> listResult;
     bool listOk = true;
     GarminListFailure::Kind listKind = GarminListFailure::Network;
+    bool neverReply = false; // B-STAGE9-19: emit nothing — force blockingList()'s timeout
     QHash<QString, QByteArray> originalBytesById;
 
     void restoreSession(const QString&, QUuid id) override
@@ -220,6 +221,8 @@ class FakeSyncClient : public IGarminDownloadClient
 
     void listActivities(const QString&, QUuid id) override
     {
+        if (neverReply)
+            return; // no emission at all — the caller's timeout is the only exit
         const bool ok = listOk;
         const GarminListFailure::Kind kind = listKind;
         const QVector<GarminActivitySummary> res = listResult;
@@ -300,6 +303,26 @@ class ReentrantListClient : public IGarminDownloadClient
             Qt::QueuedConnection);
     }
 };
+
+// B-STAGE9-19 — the production mapping switch is on raw int and this build
+// sets no -W flags, so the test TU re-arms -Wswitch over the enum itself:
+// a Kind appended without a case here is a compile ERROR, forcing the table
+// below to grow with the enum.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic error "-Wswitch"
+bool listKindRowExists(GarminListFailure::Kind kind)
+{
+    switch (kind) {
+    case GarminListFailure::Network:
+    case GarminListFailure::RateLimit:
+    case GarminListFailure::Unknown:
+    case GarminListFailure::NoClient:
+    case GarminListFailure::Timeout:
+        return true;
+    }
+    return false;
+}
+#pragma GCC diagnostic pop
 
 class TestGarminConnectSync : public QObject
 {
@@ -589,6 +612,186 @@ class TestGarminConnectSync : public QObject
                      qPrintable(QStringLiteral("expected line to END with exact field activity_count=0, got: %1")
                                     .arg(trace.first())));
         }
+    }
+
+    // =====================================================================
+    // B-STAGE9-19 — every failure exit of the list path carries its own
+    // GC-stable error_code; only a genuine adapter-reported Unknown may still
+    // say "unknown", and its raw library message reaches its own trace line.
+    // =====================================================================
+
+    // The `!client` exit of blockingList() is unreachable through readdir()
+    // (readdir pre-guards a null client and emits no_session), so the distinct
+    // kind is asserted at the blockingList + vocabulary level.
+    void blockingListNullClientEmitsNoClientKindAndCode()
+    {
+        // 4-arg form: the 1-arg and defaulted 5-arg ctors would be ambiguous.
+        GarminConnect gc(nullptr, nullptr, QString(), QString());
+
+        auto res = gc.blockingList(QStringLiteral("2026-09-09 05:21:24"));
+        QVERIFY2(!res.ok, "a null client must fail the list op");
+        QVERIFY2(res.failureKind == static_cast<int>(GarminListFailure::NoClient),
+                 qPrintable(QStringLiteral("expected failureKind NoClient(%1), got %2")
+                                .arg(static_cast<int>(GarminListFailure::NoClient))
+                                .arg(res.failureKind)));
+        QVERIFY2(QStringLiteral("no_client") == QLatin1String(GarminConnect::garminListKindCode(res.failureKind)),
+                 qPrintable(QStringLiteral("expected code no_client for kind %1, got %2")
+                                .arg(res.failureKind)
+                                .arg(QLatin1String(GarminConnect::garminListKindCode(res.failureKind)))));
+    }
+
+    // A client that never replies must hit the (test-shortened) timeout and
+    // emit the distinct timeout code — not the :411 Unknown initialiser — with
+    // no detail line (a timeout carries no library message).
+    void blockingListTimeoutEmitsDistinctTimeoutCodeAndNoDetailLine()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QVERIFY2(connectAccount(tmp.path()), "pre-condition: the account must be connected (DEC-garmin-020)");
+
+        FakeSyncClient client;
+        client.neverReply = true;
+        GarminConnect gc(nullptr, &client, tmp.path(), kUid, /*listTimeoutOverrideMs*/ 50);
+
+        ObsCapture capture;
+        QStringList errors;
+        QList<CloudServiceEntry*> entries = gc.readdir(QString(), errors, QDateTime(), QDateTime());
+        QCOMPARE(entries.size(), 0);
+
+        const QStringList trace = capture.snapshot().filter(QStringLiteral("gc_obs op=sync_incremental outcome="));
+        QVERIFY2(trace.size() == 1,
+                 qPrintable(QStringLiteral("expected exactly ONE gc_obs line for this op, got %1. Captured: [%2]")
+                                .arg(trace.size())
+                                .arg(capture.snapshot().join(QStringLiteral(" | ")))));
+        QVERIFY2(trace.first().contains(QStringLiteral("outcome=fail error_code=")),
+                 qPrintable(QStringLiteral("expected exact field outcome=fail in: %1").arg(trace.first())));
+        QVERIFY2(trace.first().contains(QStringLiteral("error_code=timeout duration_ms=")),
+                 qPrintable(QStringLiteral("expected exact field error_code=timeout in: %1, got unknown fold?")
+                                .arg(trace.first())));
+        QVERIFY2(
+            trace.first().endsWith(QStringLiteral(" activity_count=0")),
+            qPrintable(
+                QStringLiteral("expected line to END with exact field activity_count=0, got: %1").arg(trace.first())));
+
+        QVERIFY2(capture.snapshot().filter(QStringLiteral("gc_obs_raw")).isEmpty(),
+                 qPrintable(QStringLiteral("a timeout carries no library message, so no detail line may fire. "
+                                           "Captured: [%1]")
+                                .arg(capture.snapshot().join(QStringLiteral(" | ")))));
+    }
+
+    // The genuine adapter-reported failure keeps its own code ("unknown" for a
+    // real Unknown; rate_limit/network are pinned by the existing cases above)
+    // AND its untranslated library message reaches a SEPARATE detail line —
+    // never the parsed gc_obs record's error_code field.
+    void listFailureRawMessageReachesItsOwnDetailLineNotErrorCode()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QVERIFY2(connectAccount(tmp.path()), "pre-condition: the account must be connected (DEC-garmin-020)");
+
+        FakeListPyAdapter adapter;
+        adapter.scriptedListOutcome.kind = PyListOutcome::Unknown;
+        // The exact message attempt #5's fold would have surfaced (the wheel's
+        // startdate validation, B-STAGE9-19 round-1 report).
+        adapter.scriptedListOutcome.rawMessage =
+            QStringLiteral("startdate must be in format 'YYYY-MM-DD', got: 2026-09-09 05:21:24");
+
+        GarminDownloadChain chain(&adapter);
+        GarminConnect gc(nullptr, chain.client(), tmp.path(), kUid);
+
+        ObsCapture capture;
+        QStringList errors;
+        QList<CloudServiceEntry*> entries = gc.readdir(QString(), errors, QDateTime(), QDateTime());
+        QCOMPARE(entries.size(), 0);
+
+        const QStringList trace = capture.snapshot().filter(QStringLiteral("gc_obs op=sync_incremental outcome="));
+        QVERIFY2(trace.size() == 1,
+                 qPrintable(QStringLiteral("expected exactly ONE gc_obs line for this op, got %1. Captured: [%2]")
+                                .arg(trace.size())
+                                .arg(capture.snapshot().join(QStringLiteral(" | ")))));
+        // the genuine-unknown contract did not change (anchored per B-STAGE9-14)
+        QVERIFY2(trace.first().contains(QStringLiteral("error_code=unknown duration_ms=")),
+                 qPrintable(QStringLiteral("expected exact field error_code=unknown in: %1").arg(trace.first())));
+        QVERIFY2(
+            trace.first().endsWith(QStringLiteral(" activity_count=0")),
+            qPrintable(
+                QStringLiteral("expected line to END with exact field activity_count=0, got: %1").arg(trace.first())));
+
+        // ...and the message must NOT be folded into the parsed record
+        QVERIFY2(
+            !trace.first().contains(QStringLiteral("YYYY-MM-DD")),
+            qPrintable(
+                QStringLiteral("error_code must stay a vocabulary token; message leaked into: %1").arg(trace.first())));
+
+        const QStringList detail = capture.snapshot().filter(QStringLiteral("gc_obs_raw op=sync_incremental detail="));
+        QVERIFY2(detail.size() == 1,
+                 qPrintable(QStringLiteral("expected exactly ONE gc_obs_raw detail line, got %1. Captured: [%2]")
+                                .arg(detail.size())
+                                .arg(capture.snapshot().join(QStringLiteral(" | ")))));
+        QVERIFY2(
+            detail.first().contains(QStringLiteral("startdate must be in format")),
+            qPrintable(QStringLiteral("detail line must carry the library message verbatim: %1").arg(detail.first())));
+    }
+
+    // The detail line is ONE bounded line: embedded newlines are flattened (a
+    // raw newline would forge log records) and the message is truncated.
+    void listFailureRawMessageDetailIsSanitisedToOneBoundedLine()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QVERIFY2(connectAccount(tmp.path()), "pre-condition: the account must be connected (DEC-garmin-020)");
+
+        QString longMessage(500, QChar('x'));
+        longMessage.insert(0, QStringLiteral("line1\nline2\tend "));
+        longMessage += QStringLiteral("tail");
+
+        FakeListPyAdapter adapter;
+        adapter.scriptedListOutcome.kind = PyListOutcome::Unknown;
+        adapter.scriptedListOutcome.rawMessage = longMessage;
+
+        GarminDownloadChain chain(&adapter);
+        GarminConnect gc(nullptr, chain.client(), tmp.path(), kUid);
+
+        ObsCapture capture;
+        QStringList errors;
+        gc.readdir(QString(), errors, QDateTime(), QDateTime());
+
+        const QStringList detail = capture.snapshot().filter(QStringLiteral("gc_obs_raw op=sync_incremental detail="));
+        QVERIFY2(detail.size() == 1,
+                 qPrintable(QStringLiteral("a newline in the message must not forge extra records; got %1 lines: [%2]")
+                                .arg(detail.size())
+                                .arg(capture.snapshot().join(QStringLiteral(" | ")))));
+        QVERIFY2(detail.first().size() <= 250, // truncation bound + fixed prefix
+                 qPrintable(QStringLiteral("detail line must be bounded, got %1 chars").arg(detail.first().size())));
+    }
+
+    // No -Wswitch guards the production mapping (switch on raw int, no warning
+    // flags — B-STAGE9-19 round 1), so this table pins every declared Kind's
+    // code, and listKindRowExists() makes a new Kind a compile error until this
+    // table grows with it. The individual codes are separately pinned by the
+    // round-1 tests above and the existing network/rate_limit cases.
+    void garminListKindCodePinsEveryDeclaredKindAndFallback()
+    {
+        const struct
+        {
+            GarminListFailure::Kind kind;
+            const char* code;
+        } rows[] = {
+            {GarminListFailure::Network, "network"}, {GarminListFailure::RateLimit, "rate_limit"},
+            {GarminListFailure::Unknown, "unknown"}, {GarminListFailure::NoClient, "no_client"},
+            {GarminListFailure::Timeout, "timeout"},
+        };
+        for (const auto& row : rows) {
+            QVERIFY2(listKindRowExists(row.kind), "table row out of step with the exhaustiveness switch");
+            QVERIFY2(QLatin1String(GarminConnect::garminListKindCode(static_cast<int>(row.kind))) ==
+                         QLatin1String(row.code),
+                     qPrintable(QStringLiteral("kind %1 maps to %2, expected %3")
+                                    .arg(static_cast<int>(row.kind))
+                                    .arg(QLatin1String(GarminConnect::garminListKindCode(static_cast<int>(row.kind))))
+                                    .arg(row.code)));
+        }
+        // An out-of-range raw int keeps the deliberate switch-on-int fallback.
+        QCOMPARE(QLatin1String(GarminConnect::garminListKindCode(9999)), QLatin1String("unknown"));
     }
 
     // REQ-NF-Perf-002: a second sync/readdir while one is in progress is REJECTED

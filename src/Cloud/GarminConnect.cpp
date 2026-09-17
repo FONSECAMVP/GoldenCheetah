@@ -79,6 +79,25 @@ void gcObsTrace(const char* op, bool ok, const char* errorCode, qint64 durationM
     qDebug().noquote() << line;
 }
 
+// B-STAGE9-19 — the untranslated library failure message, on its OWN line: the
+// gc_obs record's field list is closed (B-STAGE9-14 anchors activity_count as
+// last) and error_code is a fixed vocabulary, so free text must never enter
+// either. Flattened to one bounded line — a raw newline would forge log
+// records, and an unbounded library message can carry a URL or path.
+constexpr int kMaxRawDetailChars = 200;
+void gcObsTraceRaw(const char* op, const QString& rawMessage)
+{
+    if (rawMessage.isEmpty())
+        return;
+    QString detail = rawMessage;
+    detail.replace(QLatin1Char('\n'), QLatin1Char(' '));
+    detail.replace(QLatin1Char('\r'), QLatin1Char(' '));
+    detail.replace(QLatin1Char('\t'), QLatin1Char(' '));
+    if (detail.size() > kMaxRawDetailChars)
+        detail.truncate(kMaxRawDetailChars);
+    qDebug().noquote() << QStringLiteral("gc_obs_raw op=%1 detail=%2").arg(QString::fromLatin1(op), detail);
+}
+
 // GC-stable kind names (DES-008 addendum: keyed on the Kind enums, never on a
 // raw exception-class string). Switches on the raw int (not a cast-first
 // static_cast<Kind>(kind)) — an out-of-range int converted to an unscoped enum
@@ -92,19 +111,6 @@ const char* garminRestoreKindCode(int kind)
     case static_cast<int>(GarminRestoreFailure::Network):
         return "network";
     case static_cast<int>(GarminRestoreFailure::Unknown):
-        break;
-    }
-    return "unknown";
-}
-
-const char* garminListKindCode(int kind)
-{
-    switch (kind) {
-    case static_cast<int>(GarminListFailure::Network):
-        return "network";
-    case static_cast<int>(GarminListFailure::RateLimit):
-        return "rate_limit";
-    case static_cast<int>(GarminListFailure::Unknown):
         break;
     }
     return "unknown";
@@ -162,9 +168,9 @@ GarminConnect::GarminConnect(Context* c) : CloudService(c)
 }
 
 GarminConnect::GarminConnect(Context* c, IGarminDownloadClient* injectedClient, const QString& configDirOverride,
-                             const QString& garminUserIdOverride)
+                             const QString& garminUserIdOverride, int listTimeoutOverrideMs)
     : CloudService(c), m_client(injectedClient), m_injectedClient(true), m_configDirOverride(configDirOverride),
-      m_garminUserIdOverride(garminUserIdOverride)
+      m_garminUserIdOverride(garminUserIdOverride), m_listTimeoutOverrideMs(listTimeoutOverrideMs)
 {
     downloadCompression = none;
 }
@@ -405,13 +411,36 @@ GarminConnect::DownloadResult GarminConnect::blockingDownload(const QString& fmt
     return res;
 }
 
+// GC-stable kind names for the list path (see the anonymous-namespace
+// garminRestoreKindCode above for the switch-on-raw-int rationale — an
+// out-of-range int never re-holes through the enum, so no compiler -Wswitch
+// guard exists here; the vocabulary is pinned by tests instead, B-STAGE9-19).
+const char* GarminConnect::garminListKindCode(int kind)
+{
+    switch (kind) {
+    case static_cast<int>(GarminListFailure::Network):
+        return "network";
+    case static_cast<int>(GarminListFailure::RateLimit):
+        return "rate_limit";
+    case static_cast<int>(GarminListFailure::NoClient):
+        return "no_client";
+    case static_cast<int>(GarminListFailure::Timeout):
+        return "timeout";
+    case static_cast<int>(GarminListFailure::Unknown):
+        break;
+    }
+    return "unknown";
+}
+
 GarminConnect::ListResult GarminConnect::blockingList(const QString& sinceGmt)
 {
     ListResult res;
-    res.failureKind = static_cast<int>(GarminListFailure::Unknown); // REQ-NF-Obs-001 (T-207): timeout stays Unknown
+    res.failureKind = static_cast<int>(GarminListFailure::Unknown); // B-STAGE9-19: overridden at every exit below
     IGarminDownloadClient* client = m_client;
-    if (!client)
+    if (!client) {
+        res.failureKind = static_cast<int>(GarminListFailure::NoClient);
         return res;
+    }
 
     const QUuid reqId = QUuid::createUuid();
     QEventLoop loop;
@@ -433,11 +462,13 @@ GarminConnect::ListResult GarminConnect::blockingList(const QString& sinceGmt)
             done = true;
             res.ok = false;
             res.failureKind = static_cast<int>(failure.kind); // REQ-NF-Obs-001 (T-207)
+            res.rawMessage = failure.rawMessage;
             loop.quit();
         });
-    QTimer::singleShot(kListTimeoutMs, &loop, [&]() {
+    QTimer::singleShot(m_listTimeoutOverrideMs > 0 ? m_listTimeoutOverrideMs : kListTimeoutMs, &loop, [&]() {
         if (!done) {
             done = true;
+            res.failureKind = static_cast<int>(GarminListFailure::Timeout);
             loop.quit();
         }
     });
@@ -823,6 +854,8 @@ QList<CloudServiceEntry*> GarminConnect::readdir(QString path, QStringList& erro
     if (!listed.ok) {
         errors << tr("Garmin Connect: could not list activities; please try again.");
         gcObsTrace("sync_incremental", false, garminListKindCode(listed.failureKind), obsTimer.elapsed(), 0);
+        // B-STAGE9-19 — the library's own message, one separate diagnostic line.
+        gcObsTraceRaw("sync_incremental", listed.rawMessage);
         return returning;
     }
 
