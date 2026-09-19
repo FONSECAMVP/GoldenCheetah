@@ -1382,6 +1382,68 @@ STAGE-9-CURSOR-ADDENDUM (2026-09-19, `garmin_inspector_v1_35`, written before se
            working), reviewer `garmin_codex_reviewer` (`w1:pD`, 158k, idle), investigator
            `s925_tz_investigator` (`w1:pR`, 23k, idle).
 
+STAGE-9-CURSOR (2026-09-19, `garmin_inspector_v1_36` — supersedes the `v1_35` blocks above
+           for SEQUENCING. Per-id status lives only in findings.md / traceability.md):
+           **The run-7 traceability cascade the ADDENDUM called the biggest owed item is
+           DONE.** Five rows written once each from the LIVE-RUN-7 block: REQ-002 (LIVE
+           VERIFIED, via the RECONNECT leg only — the first leg ran off the stored token and
+           is not SSO evidence), REQ-006 (LIVE VERIFIED, real `tokens.json` mode 600;
+           load-refusal half still seam), REQ-012 (LIVE VERIFIED, both halves), REQ-017 (LIVE
+           CORROBORATED, NOT a full pass — no sync was in flight at disconnect), REQ-003
+           (**LIVE LEG UNEXECUTABLE** — no two-factor on this account; not a pass, and the
+           successful reconnect must never be read as one).
+           **Sequencing:**
+           (1) B-STAGE9-36 builder-GREEN collected (spill `/tmp/insp-exchange/B-STAGE9-36.md`,
+           now transcribed). `pre_armed_by` gains a shape gate (`^DEC-\d{3}$`) plus an
+           existence check against `decisions.md`, failing loudly on an unreadable ledger.
+           Reviewer dispatched on the COMBINED B-STAGE9-28+36 diff (+221/-5 over the two
+           `unittests/buildguard/` files) as unit `B-STAGE9-36-review`. Nothing commits until
+           that verdict lands — the two units touch the same two files and must ship as one.
+           (2) Stage 9's one remaining non-live gap is REQ-NF-Pkg-001's Phase-1 smoke
+           checklist (prd.md:115). CONTRIBUTING.md still has zero Garmin content.
+           `s925_tz_investigator` dispatched as unit `REQ-NF-Pkg-001-linux-smoke` on the real
+           question: `src.pro:274` points `GARMIN_PY_MODULE_DIR` at the SOURCE TREE, so an
+           installed Linux package may reach a user with no Garmin Python at all. Win/macOS
+           legs stay unexecutable on this Linux-only machine.
+           (3) **B-STAGE9-38 opened and it is the biggest thing found today.** The
+           investigator's packaging answer came back NO and the Inspector re-read every
+           recipe claim rather than relay it: `src/src.pro` has ZERO `INSTALLS` entries and
+           no recipe on any platform copies `src/Python/garminconnect/garmin_client.py` —
+           this project's own adapter module, which `PyEmbeddedAdapter.cpp` imports by bare
+           name and which is NOT the upstream wheel beside it. Separately `src.pro:274`
+           compiles `GARMIN_PY_MODULE_DIR` as a build-machine absolute path that
+           `appveyor/linux/after_build.sh:18`'s bare `cp` never rewrites. `e609215f0`, the
+           commit REQ-NF-Pkg-001 was closed on, added two lines to `requirements.txt` and
+           nothing else. Every green ctest run and all seven live runs used the source tree,
+           so no existing evidence touches the packaged path. REQ-NF-Pkg-001's row is
+           REOPENED. **Decided the same pass as DEC-058** over the investigator's four
+           researched options: the adapter ships as a real installable distribution under a
+           NEW import namespace, carried by the `pip install -r requirements.txt` step all
+           three platforms already run, so the build-machine macro stops being consulted
+           rather than being rewritten. Two constraints the option report missed are pinned
+           in the DEC — Windows's `--only-binary :all:` (`appveyor.yml:143`) rejects a local
+           sdist outright, and Linux runs pip from `src/` while macOS/Windows run it from the
+           repo root, so a relative path resolves differently per platform. NOT YET BUILT.
+           Stage 9 cannot close on the live evidence alone.
+           (4) **B-STAGE9-39 opened, SUSPECTED and not yet reproduced:** `main.cpp:523-552`
+           initialises CPython on the Garmin-only path without `PythonEmbed.cpp:236-254`'s
+           deployed-`PYTHONHOME` setup. Invisible in a source-tree run; likely fatal inside a
+           bundle. Same class as B-STAGE9-01. Verify it through DEC-058's bundle-import smoke
+           step rather than a new harness; `main.cpp` is under the hard hold, so it owes its
+           own unit and its own commit.
+           (5) Still open and non-blocking: B-STAGE9-30, -33, -34, -35, -37.
+           (6) `clv_findings.py` FAIL / OUTSTANDING=3 is CORRECT — B-STAGE9-36, -38 and -39
+           are all genuinely open and blocking with proper effect sets. `ledger_drift_lint.py`
+           EXIT=0. WIKI DEC registry bumped to `next:garmin-059`.
+           (7) Export `SELF_PANE` when arming `insp_wake.sh`. Cap builds at `-j4`. The qmake
+           binary at `src/GoldenCheetah` still carries `ce2b3402d`; no rebuild owed.
+           **Roster:** builder **`garmin_builder_stage9_v17`** (`w1:pM`) — soft-landed at 242k
+           while idle and clean rather than after a repair round pushed it past the bar;
+           relaunched on Sonnet in auto mode, 0k, UNBRIEFED and awaiting the reviewer verdict.
+           Reviewer `garmin_codex_reviewer` (`w1:pD`, 158k, working), investigator
+           `s925_tz_investigator` (`w1:pR`, 37k, working). `garmin_inspector_v1_35` retired,
+           pane `w1:p22` and tab `w1:t1T` closed (3→2 tabs).
+
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md
 (## Decision index, then entries) · validations/archive/ + cycles/archive/ (historical
