@@ -1283,6 +1283,78 @@ STAGE-9-CURSOR (2026-09-19, `garmin_inspector_v1_34` — supersedes the `v1_33` 
            `s925_tz_investigator` (`w1:pR`, ~155k). `garmin_inspector_v1_33` retired and its
            pane and tab closed this pass (5→4 panes, 3→2 tabs).
 
+STAGE-9-CURSOR (2026-09-19, `garmin_inspector_v1_35` — supersedes the `v1_34` block above
+           for SEQUENCING. Per-id status lives only in findings.md):
+           **The qmake relink owed before the live run is DONE and independently verified.**
+           `v1_34` reported its own `make` finished but said plainly it had never captured
+           make's exit code. The Inspector re-ran `make -j4` in `src/` rather than inherit
+           that: it was NOT a no-op — `GarminConnect.o` and four moc units recompiled and
+           the binary relinked again. Real exit 0; `make -q` then exit 0 (up to date);
+           `src/GoldenCheetah` 18:32:53, 27,400,336 bytes; `nm -uC | grep -c setvbuf` = 1.
+           `src.pro:274` points `GARMIN_PY_MODULE_DIR` at the source tree, so the Python
+           half needs no build step. The shipped binary now carries `ce2b3402d`.
+           **B-STAGE9-33 does not block the live run.** `s925_tz_investigator` (unit
+           `B-STAGE9-33-confirm`) falsified it for the primary path: DEC-056 names via
+           `parseGarminLocalTime` (`GarminConnect.cpp:129`, `:885`, `:893`), which never
+           calls `setTimeSpec(Qt::UTC)`. The relabelling risk survives only on the C++
+           fallback (`:887-889`) and only if Garmin sends an offset-bearing `startTimeGMT`
+           while `startTimeLocal` is absent — conditional, never observed. The wheel types
+           both fields as bare optional `str` (`garminconnect/typed.py:406-407`), so no
+           stronger claim is available from source.
+           **B-STAGE9-28 (DEC-057) is built in the working tree, unreviewed, uncommitted.**
+           Footprint is exactly the two allowed paths, +96/-5. The builder's reply exceeded
+           the pane cap and was re-requested as a verbatim spill.
+           **Sequencing:**
+           (1) **THE SEVENTH ATTENDED LIVE RUN IS THE NEXT UNIT AND IS THE ONE REAL
+           HUMAN-IN-THE-LOOP GATE.** Every precondition is now met. The user enters
+           credentials into the app's own dialog, never into chat. Success is a NEW file
+           under `~/.goldencheetah/Andy/activities/` (1145 at last check), not the UI.
+           (2) B-STAGE9-28 owes a reviewer delta-check before any commit. B-STAGE9-30, -33,
+           -34, -35 remain open and non-blocking.
+           (3) Export `SELF_PANE` when arming `insp_wake.sh` — the wake block reports the
+           Inspector's own context as `unknown` without it.
+           (4) Cap builds at `-j4`.
+           **Roster, verified live:** builder `garmin_builder_stage9_v16` (`w1:pM`, ~146k),
+           reviewer `garmin_codex_reviewer` (`w1:pD`, ~131k, idle), investigator
+           `s925_tz_investigator` (`w1:pR`, ~228k — nearest the 250k soft-landing bar).
+           `garmin_inspector_v1_34` retired, pane `w1:p21` and tab `w1:t1S` closed this pass
+           (4→3 panes, 2 tabs remain).
+
+STAGE-9-LIVE-RUN-7 (2026-09-19, `garmin_inspector_v1_35`, attended — **THE SYNC HALF OF
+           STAGE 9'S ACCEPTANCE CRITERION IS MET FOR THE FIRST TIME**):
+           A real activity reached disk from the real account. Inspector-read, not relayed:
+           `~/.goldencheetah/Andy/activities/2026_09_13_20_33_17.json`, 2299 bytes, written
+           18:38:31; the directory went 1145 → 1146. Traces: `gc_obs op=auth outcome=ok
+           error_code= duration_ms=330` and `gc_obs op=sync_incremental outcome=ok
+           error_code= duration_ms=1314 activity_count=1`. Sidecars written the same second:
+           `backfill-state-ee9c52d8-….json`, `imported-ee9c52d8-….json`.
+           **What this discharges that six prior runs could not:** DEC-056's local-start-time
+           naming survived `CloudService.cpp:2164`'s `parseRideFileName` gate against the
+           live server — the gate that silently dropped 100% of entries in run 6. Auth ran
+           off the stored token, so the credential and MFA dialogs were NOT exercised.
+           Evidence snapshot (the log truncates on every launch): `/tmp/gc-run7-evidence-*.log`.
+           **Token baseline captured before the Disconnect leg:**
+           `Andy/config/garminconnect/tokens.json` 2189 bytes, md5
+           `b081b6d123e3ee88401e98696d3ad7f0`, mtime 2026-09-16 05:21:24.
+           **DISCONNECT LEG — PASSED, both halves of REQ-012's own row title.** Against the
+           baseline above: `tokens.json` and `active-account.json` both absent at 18:44:28
+           with the app STILL RUNNING (immediate, no quit needed); the two sidecars survived
+           byte-identical at their 18:38:31 mtimes. The `Trust Tokens` files under
+           `Andy/temp/` are QtWebEngine's own Chromium storage, not ours.
+           **RECONNECT LEG — PASSED, and proved a clause nobody had evidence for.**
+           `tokens.json` recreated 18:49:27, 2189 bytes, **mode 600** — REQ-006's owner-only
+           requirement confirmed against a real file for the first time. Three subsequent
+           `gc_obs op=sync_incremental outcome=ok activity_count=0` with the activities
+           directory holding at 1146: after a full credential cycle the sync did NOT
+           re-download the already-imported activity, so REQ-012's "sidecars preserved" is
+           functionally load-bearing, not just a file-existence claim.
+           **MFA IS NOT EXECUTABLE ON THIS ACCOUNT — the user has no two-factor enabled.**
+           REQ-003's live leg is therefore UNEXECUTABLE here, not passed. It stays at its
+           seam verdict; do not infer a live pass from the successful reconnect.
+           **B-STAGE9-37 opened from this run's own traces** (non-blocking): `gc_obs op=auth`
+           times the token RESTORE, not the SSO, so no `duration_ms` figure it emits may be
+           used to close REQ-NF-Perf-001's first-connect clause.
+
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md
 (## Decision index, then entries) · validations/archive/ + cycles/archive/ (historical
