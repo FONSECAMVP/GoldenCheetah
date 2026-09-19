@@ -832,9 +832,11 @@ PyListOutcome PyEmbeddedAdapter::listActivitiesSince(const QString& sinceGmt)
         }
         PyObject* aid = PyDict_GetItemString(item.get(), "activityId"); // borrowed
         PyObject* stg = PyDict_GetItemString(item.get(), "startTimeGMT"); // borrowed
+        PyObject* stl = PyDict_GetItemString(item.get(), "startTimeLocal"); // borrowed; may be null (DEC-056: optional)
         GarminActivitySummary s;
         s.activityId = toQString(aid);
         s.startTimeGMT = toQString(stg);
+        s.startTimeLocal = toQString(stl); // a borrowed null yields QString() — never a crash
         summaries.append(s);
     }
 

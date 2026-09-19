@@ -98,19 +98,23 @@ struct PyDownloadOutcome
 
 // ---------------------------------------------------------------------------
 // GarminActivitySummary — the minimal per-activity record carried by
-// PyListOutcome (REQ-008 Slice A). Each summary carries at least the two fields
-// the incremental-sync flow (DES-010) keys off: `activityId` (the stable Garmin
-// activity id, used by the Tier-1 imported-<uid>.json dedup in a later slice)
-// and `startTimeGMT` (Garmin's SERVER-SIDE timestamp — NOT the local clock,
-// DES-010 — the "newer than" comparison basis). Both are marshalled as strings
-// across the DES-012/DES-013 seam. Later slices may widen this struct additively
-// without re-shaping the listing op.
+// PyListOutcome (REQ-008 Slice A). Each summary carries the fields the
+// incremental-sync flow (DES-010) and entry naming (DEC-056) key off:
+// `activityId` (the stable Garmin activity id, used by the Tier-1
+// imported-<uid>.json dedup in a later slice), `startTimeGMT` (Garmin's
+// SERVER-SIDE timestamp — NOT the local clock, DES-010 — the "newer than"
+// comparison basis), and `startTimeLocal` (the activity's own LOCAL start
+// time, OPTIONAL per the installed wheel — empty when the library omitted it,
+// DEC-056). All three are marshalled as strings across the DES-012/DES-013
+// seam. Later slices may widen this struct additively without re-shaping the
+// listing op.
 // ---------------------------------------------------------------------------
 
 struct GarminActivitySummary
 {
     QString activityId;
     QString startTimeGMT;
+    QString startTimeLocal;
 };
 
 // ---------------------------------------------------------------------------

@@ -335,6 +335,83 @@ def test_list_response_timestamp_breach_raises_typed_response_invalid(
         assert "startTimeGMT" in excinfo.value.message, "the message must name the offending field"
 
 
+def test_list_missing_activity_id_raises_typed_response_invalid_naming_the_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-STAGE9-26 (DEC-055) — activityId is validated by the SAME typed
+    contract as its sibling startTimeGMT (round 3, above). A record carrying a
+    valid startTimeGMT but no activityId key is a library-contract breach and
+    must raise GarminError(kind='response_invalid') naming 'activityId' — NOT
+    a bare KeyError, which with_retry cannot classify (it is not a
+    GarminError) and which classifyListException then folds to Unknown
+    (PyEmbeddedAdapter.cpp:485-497), the exact unclassified fold B-STAGE9-25
+    exists to abolish."""
+    library_activities: list[dict[str, Any]] = [{"startTimeGMT": "2026-09-09 19:00:00"}]
+
+    class _MissingIdGarmin(_FakeGarminBase):
+        def _get_activities_by_date_impl(self, *args: Any, **kwargs: Any) -> Any:
+            return library_activities
+
+    _install_fake_gc(monkeypatch, _MissingIdGarmin)
+    client = GarminClient("u@x.com", "p")
+
+    with pytest.raises(GarminError) as excinfo:
+        list(client.list_activities_since("2026-09-09 18:00:00"))
+    assert (
+        excinfo.value.kind == "response_invalid"
+    ), f"a record missing activityId must classify as kind='response_invalid', got {excinfo.value.kind!r}"
+    assert "activityId" in excinfo.value.message, "the message must name the missing key"
+
+
+def test_list_marshals_start_time_local_when_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T-210 / DEC-056 — the summary carries a third key, startTimeLocal, so
+    GarminConnect.cpp can name listing entries from the activity's own LOCAL
+    start time (peer-service house pattern, Strava.cpp:258) instead of the
+    server-side startTimeGMT, which parseGarminTime stamps UTC."""
+    library_activities: list[dict[str, Any]] = [
+        {"activityId": 1, "startTimeGMT": "2026-07-01 06:30:00", "startTimeLocal": "2026-07-01 08:30:00"},
+    ]
+
+    class _LocalGarmin(_FakeGarminBase):
+        def _get_activities_by_date_impl(self, *args: Any, **kwargs: Any) -> Any:
+            return library_activities
+
+    _install_fake_gc(monkeypatch, _LocalGarmin)
+    client = GarminClient("u@x.com", "p")
+
+    result = list(client.list_activities_since("2026-06-30 00:00:00"))
+
+    assert result[0]["startTimeLocal"] == "2026-07-01 08:30:00"
+
+
+def test_list_missing_or_none_start_time_local_marshals_to_empty_string_not_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T-210 / DEC-056 — the installed wheel declares startTimeLocal as
+    `str | None` (garminconnect/typed.py:396-407): OPTIONAL. Absence or None
+    must fall back to an empty string and the listing must still succeed —
+    raising here would reproduce the exact blank-dialog defect DEC-056 exists
+    to fix, one key over from the one DEC-055 just closed."""
+    library_activities: list[dict[str, Any]] = [
+        {"activityId": 1, "startTimeGMT": "2026-07-01 06:30:00"},  # key absent entirely
+        {"activityId": 2, "startTimeGMT": "2026-07-02 06:30:00", "startTimeLocal": None},
+    ]
+
+    class _NoLocalGarmin(_FakeGarminBase):
+        def _get_activities_by_date_impl(self, *args: Any, **kwargs: Any) -> Any:
+            return library_activities
+
+    _install_fake_gc(monkeypatch, _NoLocalGarmin)
+    client = GarminClient("u@x.com", "p")
+
+    result = list(client.list_activities_since("2026-06-30 00:00:00"))
+
+    assert result[0]["startTimeLocal"] == "", "missing startTimeLocal must marshal to empty, not raise"
+    assert result[1]["startTimeLocal"] == "", "a None startTimeLocal must marshal to empty, not raise"
+
+
 def test_list_iso_form_cursor_does_not_drop_space_form_newer_activities(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

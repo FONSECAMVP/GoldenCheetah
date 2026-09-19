@@ -126,6 +126,18 @@ QDateTime parseGarminTime(const QString& s)
     return dt;
 }
 
+// DEC-056 — startTimeLocal (unlike startTimeGMT) is already the activity's own
+// local wall-clock time, so it is parsed and reformatted without stamping a
+// timeSpec; an empty or unparseable value returns an invalid QDateTime for the
+// caller to fall back on.
+QDateTime parseGarminLocalTime(const QString& s)
+{
+    QDateTime dt = QDateTime::fromString(s, QString::fromLatin1(kGarminTimeFormat));
+    if (!dt.isValid())
+        dt = QDateTime::fromString(s, Qt::ISODate);
+    return dt;
+}
+
 // FIT signature: the ASCII bytes ".FIT" live at offset 8 in the FIT file header
 // (DEC-016). A shorter buffer, an HTML error page, or a TCX/GPX payload all fail
 // this and route to the TCX fallback.
@@ -866,11 +878,20 @@ QList<CloudServiceEntry*> GarminConnect::readdir(QString path, QStringList& erro
         if (imported.isOk() && imported.contains(s.activityId))
             continue; // found → short-circuit, no download
 
+        // DEC-056 — name from the activity's own LOCAL start time (the
+        // yyyy_MM_dd_HH_mm_ss shape parseRideFileName gates on); an empty or
+        // unparseable startTimeLocal falls back to startTimeGMT converted to
+        // local time. e->id and e->modified are unaffected — the download
+        // (remoteid) and dedup keys do not move.
+        QDateTime localStart = parseGarminLocalTime(s.startTimeLocal);
+        if (!localStart.isValid())
+            localStart = parseGarminTime(s.startTimeGMT).toLocalTime();
+
         CloudServiceEntry* e = newCloudServiceEntry();
         e->isDir = false;
-        e->id = s.activityId;                                        // remoteid → readFile
-        e->name = QStringLiteral("garmin-%1.fit").arg(s.activityId); // natural staging name
-        e->modified = parseGarminTime(s.startTimeGMT);               // server-side timestamp
+        e->id = s.activityId; // remoteid → readFile
+        e->name = localStart.toString(QStringLiteral("yyyy_MM_dd_HH_mm_ss")) + QStringLiteral(".fit");
+        e->modified = parseGarminTime(s.startTimeGMT); // server-side timestamp
         returning << e;
 
         // Remember the server-side startTimeGMT so the subsequent readFile can

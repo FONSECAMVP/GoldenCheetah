@@ -384,9 +384,10 @@ class GarminClient:
         #
         # Error translation mirrors download_activity(): classify by exception
         # TYPE, then re-raise as a GC-stable GarminError kind (LSN-006). Only the
-        # known-transient listing errors become kinds; anything else (a foreign
-        # exception, or a malformed activity record → KeyError) propagates
-        # unchanged rather than inheriting a Garmin kind. Translation is EAGER
+        # known-transient listing errors become kinds; a foreign exception
+        # propagates unchanged rather than inheriting a Garmin kind, and a
+        # malformed activity record raises a typed response_invalid (DEC-055),
+        # never a bare KeyError. Translation is EAGER
         # (the summaries are built here, not lazily inside a generator) so a
         # caller sees connection/rate_limit at call time exactly like the sibling
         # methods; the return is still a true Iterator (DES-012 signature).
@@ -411,14 +412,29 @@ class GarminClient:
         # cursor (the response's separator shape is the server's choice; a
         # breach raises typed, never coerced/sorted), and '>=' keeps a
         # same-second sibling reachable — Tier-1 activityId dedup
-        # (GarminConnect.cpp:862-867) owns de-duplication, not this boundary. A
-        # record missing activityId is a library contract breach whose KeyError
-        # propagates unclassified.
+        # (GarminConnect.cpp:862-867) owns de-duplication, not this boundary.
+        # DEC-055 — activityId is validated by the SAME typed contract as its
+        # sibling: a record missing it raises GarminError(kind='response_invalid')
+        # naming the key, never a bare KeyError.
+        # DEC-056 — startTimeLocal is a third, OPTIONAL key (the installed wheel
+        # declares it `str | None`, typed.py:396-407): missing or non-string
+        # falls back to an empty string, never GarminError.
         summaries: list[dict[str, Any]] = []
         for a in raw:
+            if "activityId" not in a:
+                raise GarminError("response_invalid", "activity record is missing required key 'activityId'")
             ts_value = a.get("startTimeGMT")
+            local_value = a.get("startTimeLocal")
+            if not isinstance(local_value, str):
+                local_value = ""
             if _as_utc_instant(ts_value, "startTimeGMT", "response_invalid") >= cursor:
-                summaries.append({"activityId": str(a["activityId"]), "startTimeGMT": ts_value})
+                summaries.append(
+                    {
+                        "activityId": str(a["activityId"]),
+                        "startTimeGMT": ts_value,
+                        "startTimeLocal": local_value,
+                    }
+                )
         return iter(summaries)
 
     # DES-005/DEC-007 — paced (REQ-NF-Perf-002) and retried (REQ-NF-Reliab-001)

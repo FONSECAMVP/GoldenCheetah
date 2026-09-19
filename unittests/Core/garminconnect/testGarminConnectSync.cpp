@@ -53,6 +53,7 @@
 #include <QHash>
 #include <QMetaObject>
 #include <QMutex>
+#include <QRegularExpression>
 #include <QString>
 #include <QStringList>
 #include <QTemporaryDir>
@@ -98,6 +99,27 @@ QByteArray makeZip(const QString& entryName, const QByteArray& content)
     const QByteArray z = f.readAll();
     f.close();
     return z;
+}
+
+// T-211 / DEC-056 — mirrors RideFile::parseRideFileName's own regex exactly
+// (RideFile.cpp:2434-2451) rather than linking RideFile.cpp: this target has
+// no QtWidgets (RideFile.h drags in GoldenCheetah.h's QMenu) and pulling that
+// in for one gate check is out of this unit's scope. Kept byte-for-byte
+// identical to the real pattern so a divergence there is caught by re-copying,
+// not silently missed.
+bool parseRideFileNameLikeTheRealGate(const QString& name, QDateTime* dt)
+{
+    static const QRegularExpression rx(QStringLiteral("^((\\d\\d\\d\\d)_(\\d\\d)_(\\d\\d)"
+                                                      "_(\\d\\d)_(\\d\\d)_(\\d\\d))\\.(.+)$"));
+    const QRegularExpressionMatch m = rx.match(name);
+    if (!m.hasMatch())
+        return false;
+    const QDate date(m.captured(2).toInt(), m.captured(3).toInt(), m.captured(4).toInt());
+    const QTime time(m.captured(5).toInt(), m.captured(6).toInt(), m.captured(7).toInt());
+    if (!date.isValid() || !time.isValid())
+        return false;
+    *dt = QDateTime(date, time);
+    return true;
 }
 
 const QString kUid = QStringLiteral("123456789");
@@ -336,22 +358,29 @@ class TestGarminConnectSync : public QObject
 
     // readdir drives the worker list op (through the REAL chain, off the caller
     // thread) and returns one CloudServiceEntry per activity with
-    // remoteid==activityId, the natural garmin-<id>.fit name, and the
-    // startTimeGMT carried as the entry timestamp (DES-010 step 4).
+    // remoteid==activityId, the yyyy_MM_dd_HH_mm_ss name derived from
+    // startTimeLocal (DEC-056), and the startTimeGMT carried as the entry
+    // timestamp (DES-010 step 4).
     void readdirBuildsOneEntryPerActivityCarryingIdAndTimestampOffCallerThread()
     {
         QTemporaryDir tmp;
         QVERIFY(tmp.isValid());
         QVERIFY2(connectAccount(tmp.path()), "pre-condition: the account must be connected (DEC-garmin-020)");
 
+        // DEC-056 — named from startTimeLocal (the activity's OWN local start
+        // time), never the machine's current timezone: startTimeLocal is set
+        // explicitly here so the expected name is deterministic regardless of
+        // the timezone the test happens to run in.
         FakeListPyAdapter adapter;
         adapter.scriptedListOutcome.kind = PyListOutcome::Success;
         GarminActivitySummary a1;
         a1.activityId = QStringLiteral("1001");
         a1.startTimeGMT = QStringLiteral("2026-07-10 08:30:00");
+        a1.startTimeLocal = QStringLiteral("2026-07-10 10:30:00");
         GarminActivitySummary a2;
         a2.activityId = QStringLiteral("1002");
         a2.startTimeGMT = QStringLiteral("2026-07-11 18:05:11");
+        a2.startTimeLocal = QStringLiteral("2026-07-11 20:05:11");
         adapter.scriptedListOutcome.activities = {a1, a2};
 
         GarminDownloadChain chain(&adapter);
@@ -364,9 +393,9 @@ class TestGarminConnectSync : public QObject
         QCOMPARE(entries.size(), 2);
 
         QCOMPARE(entries.at(0)->id, QStringLiteral("1001"));
-        QCOMPARE(entries.at(0)->name, QStringLiteral("garmin-1001.fit"));
+        QCOMPARE(entries.at(0)->name, QStringLiteral("2026_07_10_10_30_00.fit"));
         QCOMPARE(entries.at(1)->id, QStringLiteral("1002"));
-        QCOMPARE(entries.at(1)->name, QStringLiteral("garmin-1002.fit"));
+        QCOMPARE(entries.at(1)->name, QStringLiteral("2026_07_11_20_05_11.fit"));
 
         // startTimeGMT carried as the entry's timestamp (Garmin's server-side
         // time, parsed to a UTC QDateTime).
@@ -379,6 +408,76 @@ class TestGarminConnectSync : public QObject
         QCOMPARE(int(adapter.listCallCount.load()), 1);
         QVERIFY2(adapter.listThreadSeen != nullptr && adapter.listThreadSeen != QThread::currentThread(),
                  "listActivitiesSince must run off the caller thread (REQ-NF-Threads-001)");
+    }
+
+    // T-211 / DEC-056 — the emitted name is not just SOME string: it must
+    // actually satisfy RideFile::parseRideFileName (the real gate CloudService
+    // enumeration loops apply, RideFile.cpp:2434-2451) and round-trip back to
+    // the exact local datetime startTimeLocal encoded.
+    void readdirEmittedNameSatisfiesParseRideFileNameAndRoundTripsLocalDatetime()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QVERIFY2(connectAccount(tmp.path()), "pre-condition: the account must be connected (DEC-garmin-020)");
+
+        FakeListPyAdapter adapter;
+        adapter.scriptedListOutcome.kind = PyListOutcome::Success;
+        GarminActivitySummary a1;
+        a1.activityId = QStringLiteral("4001");
+        a1.startTimeGMT = QStringLiteral("2026-08-02 04:00:00");
+        a1.startTimeLocal = QStringLiteral("2026-08-02 06:00:00");
+        adapter.scriptedListOutcome.activities = {a1};
+
+        GarminDownloadChain chain(&adapter);
+        GarminConnect gc(nullptr, chain.client(), tmp.path(), kUid);
+
+        QStringList errors;
+        QList<CloudServiceEntry*> entries = gc.readdir(QString(), errors, QDateTime(), QDateTime());
+        QCOMPARE(errors.size(), 0);
+        QCOMPARE(entries.size(), 1);
+
+        QDateTime parsed;
+        QVERIFY2(parseRideFileNameLikeTheRealGate(entries.at(0)->name, &parsed),
+                 qPrintable(QStringLiteral("emitted name %1 must satisfy parseRideFileName's "
+                                           "leading yyyy_MM_dd_HH_mm_ss gate")
+                                .arg(entries.at(0)->name)));
+        QCOMPARE(parsed, QDateTime(QDate(2026, 8, 2), QTime(6, 0, 0)));
+    }
+
+    // T-211 / DEC-056 — when startTimeLocal is absent (the OPTIONAL wheel
+    // field), the name falls back to startTimeGMT converted to local time,
+    // never a raise and never the discarded garmin-<id>.fit shape.
+    void readdirNameFallsBackToGmtConvertedToLocalWhenStartTimeLocalIsMissing()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QVERIFY2(connectAccount(tmp.path()), "pre-condition: the account must be connected (DEC-garmin-020)");
+
+        FakeListPyAdapter adapter;
+        adapter.scriptedListOutcome.kind = PyListOutcome::Success;
+        GarminActivitySummary a1;
+        a1.activityId = QStringLiteral("5001");
+        a1.startTimeGMT = QStringLiteral("2026-07-15 12:00:00");
+        // startTimeLocal deliberately left default-constructed (empty).
+        adapter.scriptedListOutcome.activities = {a1};
+
+        GarminDownloadChain chain(&adapter);
+        GarminConnect gc(nullptr, chain.client(), tmp.path(), kUid);
+
+        QStringList errors;
+        QList<CloudServiceEntry*> entries = gc.readdir(QString(), errors, QDateTime(), QDateTime());
+        QCOMPARE(errors.size(), 0);
+        QCOMPARE(entries.size(), 1);
+
+        QDateTime expectedGmt = QDateTime::fromString(a1.startTimeGMT, QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+        expectedGmt.setTimeSpec(Qt::UTC);
+        const QString expectedName =
+            expectedGmt.toLocalTime().toString(QStringLiteral("yyyy_MM_dd_HH_mm_ss")) + QStringLiteral(".fit");
+        QCOMPARE(entries.at(0)->name, expectedName);
+
+        QDateTime parsed;
+        QVERIFY2(parseRideFileNameLikeTheRealGate(entries.at(0)->name, &parsed),
+                 "the GMT-fallback name must still satisfy parseRideFileName");
     }
 
     // When `from` is null, the "since" timestamp comes from backfill-state's
@@ -856,6 +955,7 @@ class TestGarminConnectSync : public QObject
         GarminActivitySummary aBBB;
         aBBB.activityId = QStringLiteral("BBB");
         aBBB.startTimeGMT = QStringLiteral("2026-07-05 09:15:00");
+        aBBB.startTimeLocal = QStringLiteral("2026-07-05 11:15:00"); // DEC-056 — deterministic name, tz-independent
         client.listResult = {aAAA, aBBB};
         client.originalBytesById[QStringLiteral("BBB")] = makeZip(QStringLiteral("BBB.fit"), makeFitBytes());
 
@@ -869,7 +969,7 @@ class TestGarminConnectSync : public QObject
         QCOMPARE(errors.size(), 0);
         QCOMPARE(entries.size(), 1);
         QCOMPARE(entries.at(0)->id, QStringLiteral("BBB"));
-        QCOMPARE(entries.at(0)->name, QStringLiteral("garmin-BBB.fit"));
+        QCOMPARE(entries.at(0)->name, QStringLiteral("2026_07_05_11_15_00.fit"));
 
         // The base machinery now downloads BBB via the existing readFile (REQ-007).
         QByteArray data;
@@ -883,6 +983,10 @@ class TestGarminConnectSync : public QObject
         QVERIFY(imported.isOk());
         QVERIFY2(imported.contains(QStringLiteral("BBB")), "the fresh download must be recorded");
         QCOMPARE(imported.value(QStringLiteral("BBB")).startTimeGMT, QStringLiteral("2026-07-05 09:15:00"));
+        // DEC-056 confirmed (Inspector, this pass): readFile() computes its own
+        // staged filename from remoteid alone (GarminConnect.cpp:~684/~747),
+        // independent of the entry->name this unit changed — NOT a dependent
+        // of this DEC, so the staged/recorded name is unaffected.
         QCOMPARE(imported.value(QStringLiteral("BBB")).localFilename, QStringLiteral("garmin-BBB.fit"));
         // The pre-existing AAA record is preserved (read-modify-write merge).
         QVERIFY(imported.contains(QStringLiteral("AAA")));

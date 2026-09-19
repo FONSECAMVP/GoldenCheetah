@@ -45,12 +45,14 @@ LAST_MFA_CODE = None
 # T-043 / REQ-008 Slice A — list_activities_since() records the since-timestamp
 # it saw so the C++ side can assert verbatim forwarding through the REAL bridge
 # (PyEmbeddedAdapter.listActivitiesSince → m_client.list_activities_since). The
-# canned summaries carry activityId + startTimeGMT (the two keys the C++ marshaller
-# reads); an int activityId proves the marshaller str()-normalizes non-unicode.
+# canned summaries carry activityId + startTimeGMT + startTimeLocal (T-210 /
+# DEC-056 — the three keys the C++ marshaller reads); an int activityId proves
+# the marshaller str()-normalizes non-unicode. startTimeLocal is deliberately
+# offset from startTimeGMT so a C++ test that reads the wrong one is caught.
 LAST_SINCE_GMT = None
 LIST_SUMMARIES = [
-    {"activityId": 1001, "startTimeGMT": "2026-07-01 06:30:00"},
-    {"activityId": 1002, "startTimeGMT": "2026-07-03 18:05:11"},
+    {"activityId": 1001, "startTimeGMT": "2026-07-01 06:30:00", "startTimeLocal": "2026-07-01 08:30:00"},
+    {"activityId": 1002, "startTimeGMT": "2026-07-03 18:05:11", "startTimeLocal": "2026-07-03 20:05:11"},
 ]
 
 
@@ -416,7 +418,30 @@ class GarminClient:
             # (a valid dict first, then an int). PyEmbeddedAdapter's per-item
             # PyDict_Check guard must fold the WHOLE listing to Unknown, never a
             # partial Success carrying a phantom empty-id/empty-timestamp row.
-            return iter([{"activityId": 1001, "startTimeGMT": "2026-07-01 06:30:00"}, 42])
+            return iter(
+                [
+                    {
+                        "activityId": 1001,
+                        "startTimeGMT": "2026-07-01 06:30:00",
+                        "startTimeLocal": "2026-07-01 08:30:00",
+                    },
+                    42,
+                ]
+            )
+        if SCENARIO == "list_missing_start_time_local":
+            # T-211 / DEC-056 — startTimeLocal is OPTIONAL (typed.py:396-407):
+            # its absence must not fail the listing, and the C++ naming fallback
+            # (GarminConnect.cpp) must derive the entry name from startTimeGMT
+            # instead. This summary carries no startTimeLocal key at all.
+            return iter([{"activityId": 1001, "startTimeGMT": "2026-07-01 06:30:00"}])
+        if SCENARIO == "list_missing_activity_id":
+            # B-STAGE9-26 (DEC-055) — the real adapter now validates activityId
+            # by the SAME typed contract as its sibling startTimeGMT (a missing
+            # key raises GarminError(kind='response_invalid') naming it, never a
+            # bare KeyError). This double must reject the same shape the real
+            # path now rejects, or this suite stays green while the contract
+            # differs (the B-STAGE9-25 failure class).
+            raise GarminError("response_invalid", "stub: activity record is missing required key 'activityId'")
         if SCENARIO == "list_connection":
             raise GarminError("connection", "stub: listing connection refused")
         if SCENARIO == "list_rate_limit":

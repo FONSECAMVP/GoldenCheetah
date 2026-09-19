@@ -860,9 +860,32 @@ class TestGarminConnectPyAdapter : public QObject
         QCOMPARE(out.activities.size(), 2);
         QCOMPARE(out.activities.at(0).activityId, QStringLiteral("1001"));
         QCOMPARE(out.activities.at(0).startTimeGMT, QStringLiteral("2026-07-01 06:30:00"));
+        // T-210 / DEC-056 — startTimeLocal marshals through DISTINCT from
+        // startTimeGMT, proving the adapter reads the right dict key.
+        QCOMPARE(out.activities.at(0).startTimeLocal, QStringLiteral("2026-07-01 08:30:00"));
         QCOMPARE(out.activities.at(1).activityId, QStringLiteral("1002"));
         QCOMPARE(out.activities.at(1).startTimeGMT, QStringLiteral("2026-07-03 18:05:11"));
+        QCOMPARE(out.activities.at(1).startTimeLocal, QStringLiteral("2026-07-03 20:05:11"));
         QCOMPARE(stubAttr("LAST_SINCE_GMT"), QStringLiteral("2026-06-30 00:00:00"));
+    }
+
+    // T-210 / DEC-056 — startTimeLocal is OPTIONAL: a summary dict that omits
+    // the key entirely must marshal to an empty QString (toQString's borrowed-
+    // null branch), never crash and never fail the listing.
+    void listMissingStartTimeLocalMarshalsToEmptyStringNotCrash()
+    {
+        PyEmbeddedAdapter adapter(kStubsDir);
+        setScenario("success");
+        adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        setScenario("list_missing_start_time_local");
+        const PyListOutcome out = adapter.listActivitiesSince(QStringLiteral("2026-06-30 00:00:00"));
+
+        QCOMPARE(out.kind, PyListOutcome::Success);
+        QCOMPARE(out.activities.size(), 1);
+        QCOMPARE(out.activities.at(0).activityId, QStringLiteral("1001"));
+        QVERIFY2(out.activities.at(0).startTimeLocal.isEmpty(),
+                 "a summary dict with no startTimeLocal key must marshal to an empty QString");
     }
 
     // (b) empty listing → Success with an empty vector (DES-009/DES-010: a normal
