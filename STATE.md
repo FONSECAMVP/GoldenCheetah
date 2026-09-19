@@ -1444,6 +1444,36 @@ STAGE-9-CURSOR (2026-09-19, `garmin_inspector_v1_36` — supersedes the `v1_35` 
            `s925_tz_investigator` (`w1:pR`, 37k, working). `garmin_inspector_v1_35` retired,
            pane `w1:p22` and tab `w1:t1T` closed (3→2 tabs).
 
+STAGE-9-CURSOR-ADDENDUM (2026-09-19, `garmin_inspector_v1_36`, written before self-
+           succession at ~180k/210k. Sequencing only; per-id status lives in findings.md):
+           Everything above is committed `925328f75` (governance only — run-7 cascade,
+           DEC-058, B-STAGE9-38/-39, B-STAGE9-36 round 1). **What the next Inspector owes,
+           in order:**
+           (1) `garmin_builder_stage9_v17` (`w1:pM`) is mid-round-2 on B-STAGE9-36. Collect
+           with `dispatch.py --mode collect --target w1:pM --unit B-STAGE9-36-r2`. Round 1's
+           reply overflowed the pane twice, so expect to re-request a verbatim spill to
+           `/tmp/insp-exchange/B-STAGE9-36-r2.md`. On GREEN, the reviewer (`w1:pD`) MUST
+           delta-check round 2 before any commit — round 1 came back NOT-CLOSED and the same
+           reviewer has now found a real defect in this unit twice.
+           (2) B-STAGE9-28 still stays UNCOMMITTED until -36 closes; same two files, one
+           commit. Nothing else may touch those two paths.
+           (3) **DEC-058 is decided and NOT built** — this is the largest open piece of work
+           and it is what Stage 9 now blocks on, not the live account. Read the DEC's
+           "Constraints the build must honour" section before dispatching: three of the six
+           are things the option research got wrong or missed.
+           (4) B-STAGE9-39 is SUSPECTED, not reproduced. Do not dispatch a harness for it —
+           it is verified through DEC-058's bundle-import smoke step or not at all, and
+           `main.cpp` is under the standing hard hold.
+           (5) `clv_findings.py` FAIL / OUTSTANDING=3 is CORRECT (B-STAGE9-36, -38, -39).
+           `ledger_drift_lint.py` EXIT=0.
+           (6) Export `SELF_PANE=<your pane>` when arming `insp_wake.sh`. Cap builds at `-j4`.
+           GoldenCheetah is no longer running; the live gate is discharged and does not need
+           reopening.
+           **Roster, verified live:** builder `garmin_builder_stage9_v17` (`w1:pM`, 157k,
+           working — soft-landed once already this session at 242k), reviewer
+           `garmin_codex_reviewer` (`w1:pD`, 178k, idle — nearest the 250k bar), investigator
+           `s925_tz_investigator` (`w1:pR`, 106k, idle).
+
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md
 (## Decision index, then entries) · validations/archive/ + cycles/archive/ (historical
