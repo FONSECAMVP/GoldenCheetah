@@ -73,6 +73,7 @@ Compact schema per `references/formats.md` § `decisions.md`. **The recap source
 | DEC-056 | B-STAGE9-29 remedy → Garmin listing entries are named from the activity's own LOCAL start time in the project-wide `yyyy_MM_dd_HH_mm_ss` form, marshalled from the library's `startTimeLocal`, with `startTimeGMT`-converted-to-local as the documented fallback; the shared dialog's filename gate is left untouched | accepted (Inspector, Three-Options Doctrine — ordinary implementation decision inside REQ-002/REQ-012's accepted scope, not a human-in-the-loop gate) | 2026-09-19 |
 | DEC-057 | B-STAGE9-28 remedy → an EMPTY managed root must be DECLARED pre-armed (naming the DEC that armed its regexes) or the lint-ownership guard goes RED; the finding's own option A is VOID, `git ls-files` already reads the index and already sees staged-but-uncommitted files | accepted (Inspector, Three-Options Doctrine — ordinary tooling decision on a project-owned guard, not a human-in-the-loop gate) | 2026-09-19 |
 | DEC-058 | B-STAGE9-38 remedy → the Garmin adapter ships as an installable distribution under a new import namespace, carried by the existing `pip install -r requirements.txt` step on all three platforms; `GARMIN_PY_MODULE_DIR`'s build-machine absolute path stops being consulted in package mode, and the Linux `--version` smoke becomes a real import check | accepted (Inspector, Three-Options Doctrine — ordinary packaging decision, not a human-in-the-loop gate) | 2026-09-19 |
+| DEC-059 | B-STAGE9-36 round 3 → a DEC arms a managed root by an explicit machine-readable `- Arms:` bullet naming the exact `patterns` globs, matched by whole-entry set membership inside the resolved entry body; amends DEC-057's proof mechanism, whose rule is unchanged, after two rounds of grepping prose were each defeated by a narrower instance of the same class | accepted (Inspector, Three-Options Doctrine — ordinary tooling decision, not a human-in-the-loop gate) | 2026-09-19 |
 
 ### Dormant index
 
@@ -2638,6 +2639,7 @@ grep -c "garmin_auth_unknown" src/Resources/translations/gc_de.ts   # expect: 0 
 - Serves: B-STAGE9-16 (the gate-coverage half split out of B-STAGE9-15; the reason a RED `testGarminI18nSourceGuard` survived in HEAD from `c1948b513` 2026-09-13 to 2026-09-15 unseen)
 - Dependents: `unittests/buildguard/CMakeLists.txt` (the two flag-build guards' labels); `.pre-commit-config.yaml` (DEC-009's tool set, DEC-010's scoping); every future "gate GREEN" evidence line in this ledger; DEC-010 (whose recorded cascade prose is corrected below); B-STAGE9-12 (whose deliberately-RED stderr-buffering test becomes visible to the routine gate the moment it is registered — see Cascade impact)
 - Origin: found 2026-09-15 by `garmin_inspector_v1_22` during B-STAGE9-15, then widened the same day by a second instance of the identical shape found while gating its own commit `d9ba4faad`.
+- Arms: `unittests/Core/stderrbuf/*` — added 2026-09-19 per DEC-059. This bullet, not the prose below it, is what `garmin_lint_ownership_guard.py` reads to confirm a `pre_armed_by` claim; it lists the exact `ManagedRoot.patterns` globs this decision armed while that directory had no tracked files.
 
 ### The problem
 This project's verification ritual is OPT-IN at two independent layers, and both have now been caught failing in the same way: a thing that is not deliberately enrolled is invisible, and its absence is silent.
@@ -2785,3 +2787,35 @@ Two independent mechanisms, either one fatal on a user machine. `src/src.pro` ha
 
 ### Cascade impact
 `REQ-NF-Pkg-001`'s traceability row is already REOPENED and cites B-STAGE9-38. `DES-007`'s packaging text and `prd.md:115`'s Phase-1 checklist both move: the checklist becomes the executable smoke step of constraint 6 plus a documented `CONTRIBUTING.md` section, with the Win/macOS legs DECLARED unexecutable on this Linux-only machine rather than silently dropped. Stage 9 cannot close until this is built. Separately flagged by the same investigation and NOT covered here: `src/Core/main.cpp:523-552` initializes CPython on the Garmin-only path without `PythonEmbed.cpp:236-254`'s deployed-`PYTHONHOME` setup, so bundled-Python search paths need their own verification — `main.cpp` is under the standing hard hold, so it gets its own finding and its own unit, not a hunk in this one.
+
+## DEC-059 — B-STAGE9-36 round 3: a DEC arms a managed root by an explicit `Arms:` declaration, never by prose a guard greps
+
+- Status: accepted (Inspector `garmin_inspector_v1_37`, Three-Options Doctrine — ordinary tooling decision, not a human-in-the-loop gate)
+- Reversibility: high — one resolver function, its tests, and one bullet added to DEC-054's own entry. No production code, no shipped surface.
+- Decided / last-reviewed: 2026-09-19
+- Serves: B-STAGE9-36 (blocking, NOT-CLOSED after two repair rounds), DEC-057 (whose mechanism this amends)
+- Dependents: `unittests/buildguard/garmin_lint_ownership_guard.py` (`_pattern_directory_prefixes`, `check_empty_roots_are_declared`), `unittests/buildguard/test_garmin_lint_ownership_guard.py`, DEC-054's entry body, every future `pre_armed_by` declaration
+- Origin: `garmin_codex_reviewer`, unit `B-STAGE9-36-r2-review`, item 1 BLOCKING; the Inspector confirmed the mechanism by reading `:933-941`, not by relaying the report
+
+### The problem
+
+DEC-057 requires an empty managed root to name "the DEC that armed **its** regexes." Two repair rounds have tried to decide that question by reading the ledger's prose, and each was defeated by a narrower instance of the same class. Round 1 scanned the whole ledger for `\bDEC-\d+\b`, so a bare mention counted as existence. Round 2 anchored on a real `^## DEC-ddd` heading and then required the entry's own body to contain one of the root's pattern prefixes — but `prefix in entry` is a raw substring test, so a DEC body saying "does not arm `pkg/`", or carrying the prefix inside a fenced example or an unrelated aside, authorizes the root exactly as a genuine arming statement would. Mention is still being read as authorization; only the haystack got smaller.
+
+The class does not close by narrowing further, because "does this prose entry ARM this root" is not decidable from prose. `LSN-083`'s shape — a gate whose PASS proves nothing — survives every round that keeps grepping.
+
+### Options scored (reliability / scalability / maintainability / best practices)
+
+- **Option A — the DEC entry carries an explicit machine-readable `- Arms:` bullet listing the exact `patterns` globs it armed; the guard parses that bullet and requires exact set membership, never a substring over prose (CHOSEN): 5/5/5/5.** Exact match, so negation, fenced examples and quoted asides cannot authorize — the failure class is removed rather than narrowed. `- Arms:` is the same `- Key: value` shape the entries already use for `Status:`/`Serves:`/`Dependents:`, so it is a convention this ledger already reads, not a new format. Any future pre-armed root costs one bullet. Cost is one ledger edit: DEC-054 gains `- Arms: unittests/Core/stderrbuf/*`.
+- **Option B — keep the substring test, exclude negation/fenced/quoted contexts: 2/2/2/1.** This is round 3 of the same move. The reviewer's negation example is one instance of an unbounded natural-language problem, and each exclusion rule is a new place for the next instance to hide.
+- **Option C — accept the residual as a declared false negative and close, as B-STAGE9-15 did for its all-`key=value` literal: 2/3/3/2.** Rejected on the distinction that makes B-STAGE9-15's precedent inapplicable: that residual was the irreducible consequence of a shape-based exemption. This one is not irreducible — Option A removes it exactly, at the cost of one bullet — so accepting it would be accepting a defect that has a cheap exact fix.
+
+### Constraints the build must honour
+
+1. `- Arms:` is matched on a line-anchored bullet inside the resolved entry body only, never anywhere in the file, or Option A inherits round 1's defect at a different scope.
+2. A root's `patterns` must be matched as whole entries against the parsed list, not as substrings of it: `pkg/*` must not be satisfied by an `Arms:` naming `pkg/sub/*`.
+3. An entry with no `- Arms:` bullet is a finding with its own message — silent on the distinction is what DEC-057 exists to stop.
+4. `_pattern_directory_prefixes`'s empty-tuple case (reviewer item 2, NON-BLOCKING, fail-closed) is superseded: matching is against `patterns` themselves, so a root with no `*`-suffixed pattern is no longer a special case.
+
+### Cascade impact
+
+DEC-057's mechanism is amended, not superseded — its rule ("an empty managed root must be DECLARED pre-armed or go RED") stands unchanged; only the proof that a declaration is true changes. DEC-054's entry gains the `- Arms:` bullet in this same pass, so the live record satisfies the new rule with no test-fixture special case. B-STAGE9-28 stays frozen and ships in the same commit. The reviewer's items 2, 3 and 4 are NON-BLOCKING and recorded as such; item 3 (the `## DEC-040` amendment heading truncating that entry's body early) can only produce a false finding, never a false PASS, and gets no unit of its own.

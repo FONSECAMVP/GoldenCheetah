@@ -1474,6 +1474,34 @@ STAGE-9-CURSOR-ADDENDUM (2026-09-19, `garmin_inspector_v1_36`, written before se
            `garmin_codex_reviewer` (`w1:pD`, 178k, idle — nearest the 250k bar), investigator
            `s925_tz_investigator` (`w1:pR`, 106k, idle).
 
+STAGE-9-CURSOR (2026-09-19, `garmin_inspector_v1_37` — supersedes the two `v1_36` blocks
+           above for SEQUENCING. Per-id status lives only in findings.md / traceability.md):
+           (1) B-STAGE9-36 round 2 collected and independently re-verified (244 buildguard
+           tests, live guard CLI exit 0, all five `pre_armed_by` inputs probed against the
+           REAL ledger). Reviewer round 2 returned **B-STAGE9-28 CLOSED, B-STAGE9-36
+           NOT-CLOSED** — `prefix in entry` is a substring test over prose, so a negation or
+           a fenced example authorizes a root. **DEC-059** decided and round 3 dispatched:
+           a DEC arms a root by an explicit `- Arms:` bullet matched as whole-entry set
+           membership, not by prose a guard greps. DEC-054's entry gained its
+           `- Arms: unittests/Core/stderrbuf/*` bullet this pass — Inspector's edit, the
+           builder may not touch the ledger.
+           (2) B-STAGE9-28 still ships in the same commit as -36; those two buildguard files
+           stay untouched by anything else.
+           (3) DEC-058 remains decided and UNBUILT — still what Stage 9 blocks on, not the
+           live account. `s925_tz_investigator` dispatched as `DEC-058-pip-mechanics` to
+           settle the three unverified pip constraints (local path under
+           `--only-binary :all:`, per-platform relative-path CWD, minimal build backend)
+           before a builder starts on it.
+           (4) B-STAGE9-39 stays SUSPECTED and un-harnessed; `main.cpp` hard hold in force.
+           (5) `clv_findings.py` FAIL / OUTSTANDING=3 is CORRECT (B-STAGE9-36, -38, -39).
+           `ledger_drift_lint.py` EXIT=0. WIKI DEC registry bumped to `next:garmin-060`.
+           (6) Export `SELF_PANE` when arming `insp_wake.sh`. Cap builds at `-j4`.
+           **Roster, verified live:** builder `garmin_builder_stage9_v17` (`w1:pM`, 187k,
+           working round 3), reviewer `garmin_codex_reviewer` (`w1:pD`, 210k, idle — nearest
+           the 250k bar, soft-land before its next long pass), investigator
+           `s925_tz_investigator` (`w1:pR`, 107k, working). `garmin_inspector_v1_36` retired,
+           pane `w1:p23` and tab `w1:t1V` closed (3→2 tabs).
+
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md
 (## Decision index, then entries) · validations/archive/ + cycles/archive/ (historical
