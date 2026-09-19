@@ -1535,6 +1535,160 @@ STAGE-9-CURSOR-ADDENDUM (2026-09-19, `garmin_inspector_v1_37`, written before se
            `s925_tz_investigator` (`w1:pR`, 114k, working). `garmin_inspector_v1_36` retired,
            pane `w1:p23` and tab `w1:t1V` closed this pass (3→2 tabs).
 
+STAGE-9-CURSOR-ADDENDUM (2026-09-19, `garmin_inspector_v1_38`, written before self-
+           succession at ~185k/210k. Sequencing only; per-id status lives in findings.md):
+           Committed this pass: `b8bb7ec55` (B-STAGE9-35 closed, DEC-058 Amendment + its
+           correction).
+           **What the next Inspector owes, in order:**
+           (1) B-STAGE9-36 ROUND 6 is GREEN and Inspector-verified (258 tests, live CLI
+           exit 0, all three round-5 forgery inputs now None, real ledger still
+           `('unittests/Core/stderrbuf/*',)`). The builder is IDLE.
+           (2) **The round-6 reviewer delta-check is IN FLIGHT** (unit
+           `B-STAGE9-36-r6-review`, `w1:pD`) and MUST land before any commit — it has found
+           a real blocking defect on five consecutive rounds. Collect it, then either
+           commit -36 + -28 together or dispatch round 7.
+           (3) B-STAGE9-28 is CLOSED and stays UNCOMMITTED until -36 closes; same two files,
+           one commit. Nothing else may touch those paths.
+           (4) **Soft-land the builder once -36 closes, BEFORE dispatching DEC-058** — it
+           will be near 230k and DEC-058's build is the largest remaining unit.
+           (5) **DEC-058 is decided, amended twice on measurement, and NOT built — still what
+           Stage 9 blocks on, not the live account.** Its Amendment (constraints 7-11 in
+           `## DEC-058`) now pins the distribution root, the three per-leg pip commands, the
+           Windows interpreter, the missing repo-root `cd` on macOS/Windows, and the AppImage
+           import smoke, and constraint 12 records the layout PROVEN against a /tmp copy of
+           the real tree plus the eleven test files whose imports migrate with it.
+           `s925_tz_investigator` (`w1:pR`) is mid-unit `DEC-058-import-callsites`,
+           enumerating every place the old bare import name is baked in; collect it before
+           dispatching the build.
+           (6) B-STAGE9-39 stays SUSPECTED, un-harnessed; `main.cpp` hard hold in force.
+           (7) `clv_findings.py` FAIL / OUTSTANDING=3 is CORRECT (B-STAGE9-36, -38, -39).
+           `ledger_drift_lint.py` (at `scripts/`, takes a ROOT argument) EXIT=0.
+           (8) Export `SELF_PANE` when arming `insp_wake.sh`, and invoke the script directly —
+           the `VAR=val bash script` form is refused by the auto-mode classifier every time.
+           (9) The pre-commit stash/restore hazard is real and recurred this pass: commit in
+           the builder's idle gap between units, and re-run its own test subset afterward.
+           **Roster, verified live:** builder `garmin_builder_stage9_v18` (`w1:pM`, ~190k,
+           working round 6), reviewer `garmin_codex_reviewer` (`w1:pD`, 149k, idle),
+           investigator `s925_tz_investigator` (`w1:pR`, ~164k, working).
+           `garmin_inspector_v1_37` retired, pane `w1:p24` and tab `w1:t1W` closed this pass
+           (3→2 tabs).
+
+STAGE-9-CURSOR (2026-09-19, `garmin_inspector_v1_39` — supersedes the two `v1_38` blocks
+           above for SEQUENCING. Per-id status lives only in findings.md / decisions.md):
+           (1) **B-STAGE9-36 round 7 GREEN and Inspector-verified** (263 buildguard tests,
+           live guard CLI exit 0, PASS 104/115 unchanged) but reviewer round 7 returned
+           **NOT-CLOSED** on a seventh consecutive new container type: `<div>`, CommonMark
+           HTML block type 6. Types 3/4/5/7 sit behind it.
+           (2) **DEC-060 decided** — the scanner was becoming a hand-rolled CommonMark
+           parser, so the grammar changes instead: an Arms declaration NAMES ITS OWN DEC
+           (`- Arms DEC-054:`), is honoured only inside that entry, and a mismatched id is
+           a hard parse error, never a silent skip. Block context stops being consulted for
+           the bullet. The CommonMark-library option is blocked on measurement (no parser
+           installed; `additional_dependencies: []`), and the self-id'd-line-inside-a-fence
+           false positive is pinned as accepted on DEC-053's terms. **Round 8 is NOT yet
+           dispatched** — it is queued behind the builder, and it also owes the respelling
+           of DEC-054's own `- Arms:` bullet, which is the Inspector's edit, not the
+           builder's.
+           (3) B-STAGE9-28 stays CLOSED, frozen and UNCOMMITTED until -36 closes; same two
+           files, one commit. Nothing else may touch those paths.
+           (4) **DEC-058 unit 1 of 2 (`DEC-058-rename`) is IN FLIGHT** on a fresh builder.
+           New **constraint 13** records every executable binding of the old top-level name
+           (six C++ import literals, the `kAllowedModuleRoots` root, both path defaults, the
+           pystub fixture and its three consumers, eleven test files) and the reason a
+           partial rename passes GREEN: `PyEmbeddedAdapter.cpp:93-109` prepends a directory
+           that still holds the legacy module. The brief's defence is to delete the legacy
+           modules FIRST. Unit 2 (per-leg pip steps + the smoke) is not dispatched.
+           (5) **B-STAGE9-39's verification route was FALSE and is withdrawn.** DEC-058
+           constraint 11 runs the extracted `usr/bin/python3`, never the GoldenCheetah
+           binary, so it cannot reach `main.cpp:523-552`. It owes an APP-PROCESS smoke,
+           MEASURED unexecutable here (`patchelf`/`linuxdeployqt`/`appimagetool` absent, no
+           `/dev/fuse`, downloads prohibited). `qmake` is NOT missing — it is `qmake6` /
+           `/usr/lib/qt6/bin/qmake`, not the bare `qmake` the recipe calls.
+           `s925_tz_investigator` is mid-unit `B-STAGE9-39-app-process-smoke`; collect it.
+           (6) `main.cpp` hard hold in force. `clv_findings.py` OUTSTANDING=3 still CORRECT
+           (-36, -38, -39). WIKI DEC registry bumped to `next:garmin-061`.
+           (7) Export `SELF_PANE` when arming `insp_wake.sh`; invoke it directly. Cap builds
+           at `-j4`. The anti-duplication guard's `2>/dev/null` false positive (ORCH-062 /
+           LSN-036) blocks the builder on read-only commands — approve and move on.
+           **Roster, verified live:** builder `garmin_builder_stage9_v19` (`w1:pM`, fresh —
+           v18 soft-landed at 223k while idle and clean), reviewer `garmin_codex_reviewer`
+           (`w1:pD`, `/new` at 197k), investigator `s925_tz_investigator` (`w1:pR`, 116k).
+           `garmin_inspector_v1_38` retired, pane `w1:p25` and tab `w1:t1X` closed (3→2).
+
+STAGE-9-CURSOR-ADDENDUM (2026-09-19, `garmin_inspector_v1_39`, written before self-
+           succession at ~181k/210k. Sequencing only; per-id status lives in findings.md):
+           Nothing committed this pass — the builder has been live throughout and this
+           tree's pre-commit stashes unstaged work. **The governance edits below are
+           UNCOMMITTED and owed a commit in the builder's next idle gap:** DEC-058
+           constraint 13, DEC-060 + its index row, the WIKI pointer, B-STAGE9-39's
+           correction, B-STAGE9-40, and this cursor.
+           **What the next Inspector owes, in order:**
+           (1) `garmin_builder_stage9_v19` (`w1:pM`, fresh) is mid-unit `DEC-058-rename`.
+           Collect with `dispatch.py --mode collect --target w1:pM --unit DEC-058-rename`.
+           On GREEN the reviewer MUST delta-check before any commit.
+           (2) **B-STAGE9-36 round 8 is decided but NOT dispatched.** Build it to DEC-060,
+           not to round 7's shape. It also owes DEC-054's bullet being respelled
+           `- Arms DEC-054:` — that is the Inspector's ledger edit, never the builder's.
+           B-STAGE9-28 stays CLOSED, frozen, and ships in the same commit as -36.
+           (3) **B-STAGE9-40 is NEW, blocking, and the most consequential thing found this
+           pass.** `main.cpp:552` discards `ensureInitialized()`'s failure Result — MEASURED
+           on a real app process: empty `PYTHONHOME` produced `Failed to import encodings
+           module` and the app ran on with exit 0. It is why -39 would be invisible rather
+           than merely latent, and it is independent of -39's own fix. Also MEASURED:
+           `--version` exits at `main.cpp:399-401` BEFORE init, and `--version` is all CI
+           runs on Linux and macOS today — so the existing smoke proves nothing about Python
+           init anywhere. `s925_tz_investigator` (`w1:pR`) has FINISHED unit `B-STAGE9-40-options`
+           (three scored options for what the startup path should DO on failure) and the
+           reply is UNCOLLECTED — collect it first. That owes a DEC (next id `garmin-061`)
+           before any patch, and `main.cpp`'s hard hold means its own unit and commit.
+           (4) DEC-058 unit 2 (per-leg pip steps, constraints 8-11) is NOT dispatched. Its
+           AppImage smoke is MEASURED unexecutable on this machine; expect to DECLARE that
+           leg rather than fake it.
+           (5) `clv_findings.py` FAIL / OUTSTANDING=**4** is CORRECT (-36, -38, -39, -40).
+           `ledger_drift_lint.py` (repo `scripts/`, takes a ROOT arg) EXIT=0.
+           (6) Export `SELF_PANE` when arming `insp_wake.sh`; invoke it directly. Cap builds
+           at `-j4`. The anti-duplication guard blocks the builder on read-only commands
+           containing `2>/dev/null` (ORCH-062 / LSN-036) — approve and move on.
+           **Roster, verified live:** builder `garmin_builder_stage9_v19` (`w1:pM`, ~80k,
+           working), reviewer `garmin_codex_reviewer` (`w1:pD`, `/new` at 197k, idle and
+           UNBRIEFED), investigator `s925_tz_investigator` (`w1:pR`, ~133k, working).
+           `garmin_inspector_v1_38` retired, pane `w1:p25` and tab `w1:t1X` closed (3→2).
+
+STAGE-9-CURSOR (2026-09-20, `garmin_inspector_v1_40` — supersedes the two `v1_39` blocks
+           above for SEQUENCING. Per-id status lives only in findings.md / decisions.md):
+           (1) **The hard hold on `src/Core/main.cpp` is NOT in force and has not been since
+           2026-09-16**, when the user released it (line 750 of this file). Cursors `v1_36`
+           through `v1_39` carried "hard hold in force" forward without naming any re-imposing
+           authority or act; `garmin_codex_reviewer`, fresh and unbriefed (unit
+           `DEC-061-hold-premise`), searched all three ledgers and found none. The false
+           assertions in findings.md and in DEC-058's entry are corrected. `insp_wake.sh:159`
+           still hard-codes the released hold as a check — harmless, still unfixed.
+           (2) **DEC-061 decided and recorded** — B-STAGE9-40's remedy is to CONSUME
+           `ensureInitialized()`'s failure `Result` at `main.cpp:552` nonfatally, not to add a
+           Garmin-local refusal and leave the discard. The investigator's recommendation was
+           re-scored down once the hold premise it rested on was found false. Not yet built;
+           `main.cpp` still gets its own unit and commit, for scope reasons only.
+           (3) `DEC-058-rename` (unit 1 of 2) came back GREEN — 77 pytest, `ctest -L garmin-py`
+           5/5, wheel built and imported from an install target. **Reviewer delta-check
+           `DEC-058-rename-review` is IN FLIGHT and must land before any commit of it.**
+           Unit 2 (per-leg pip steps, constraints 8-11) is not dispatched.
+           (4) **B-STAGE9-36 round 8 is decided (DEC-060) and still NOT dispatched.** It also
+           owes DEC-054's bullet being respelled `- Arms DEC-054:` — the Inspector's ledger
+           edit, deliberately held until round 8 is dispatched, because respelling it early
+           takes the round-7 guard in the tree RED. B-STAGE9-28 stays CLOSED, frozen,
+           and ships in the same commit as -36.
+           (5) `B-STAGE9-40-smoke-surface` is in flight on `s925_tz_investigator` — measure
+           the cheapest surface that actually reaches `main.cpp:552`, given `--version` exits
+           at `:399-401` and AppImage tooling is absent here.
+           (6) `clv_findings.py` OUTSTANDING=4 (-36, -38, -39, -40) still correct.
+           `ledger_drift_lint.py` EXIT=0. WIKI DEC registry bumped to `next:garmin-062`.
+           (7) Export `SELF_PANE` when arming `insp_wake.sh`; invoke it directly. Cap builds
+           at `-j4`.
+           **Roster, verified live:** builder `garmin_builder_stage9_v19` (`w1:pM`, 137k),
+           reviewer `garmin_codex_reviewer` (`w1:pD`, 73k), investigator `s925_tz_investigator`
+           (`w1:pR`, 182k). `garmin_inspector_v1_39` retired, pane `w1:p26` and tab `w1:t1Y`
+           closed (3→2 tabs).
+
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md
 (## Decision index, then entries) · validations/archive/ + cycles/archive/ (historical

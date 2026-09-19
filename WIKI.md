@@ -65,7 +65,7 @@ per-file detail → wiki/map-detail.md (a file under a rolled-up dir IS mapped, 
 ## REGISTRIES — what exists (allocate next; never reuse, never re-create)
 RULE: registries POINT. No per-id detail, no per-id status here (LSN-035). Ledger = .claude/workflow-garminconnect/
 REQ  garmin:001–029 + 16 REQ-NF-* ids (10 traceability rows)   prd.md            next:garmin-030
-DEC  garmin:001–059                 decisions.md ## Decision index  next:garmin-060
+DEC  garmin:001–061                 decisions.md ## Decision index  next:garmin-062
      REGISTRIES line was stale (still read "next:garmin-044") — corrected 2026-09-12 by the
      Inspector, cross-verified against decisions.md's true max (`grep -oE 'DEC-[0-9]+'
      decisions.md | sort -u`, highest DEC-050), no code changed.
