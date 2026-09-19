@@ -6,7 +6,16 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/anti_duplication_guard.py\""
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/skills/quality-gated-dev-workflow/scripts/anti_duplication_guard.py\""
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|NotebookEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/skills/inspector-cycle/hooks/guard_exchange_paths.py\""
           }
         ]
       }

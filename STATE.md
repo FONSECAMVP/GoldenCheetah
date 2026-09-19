@@ -904,8 +904,13 @@ STAGE-9-CURSOR (2026-09-19, written by `garmin_inspector_v1_30` — supersedes t
            (3) Two tooling gaps found while working, NOT yet owed to a row: `.claude/settings.json`
            pointed its anti-duplication PreToolUse hook at a path that does not exist, which
            blocked every Write/Edit/Bash until repaired (the guard had therefore been dead, not
-           merely noisy); and `ledger_drift_lint.py` is absent from the tree, so that gate did
-           not run this pass and its EXIT=0 claims elsewhere in this file cannot be reproduced.
+           merely noisy). Related and subtler: the whole `.claude/hooks/` directory is deleted in
+           the working tree but still present in HEAD, as an UNSTAGED, unexplained deletion. The
+           `ledger status drift (DEC-015)` gate still reports Passed at commit time only because
+           pre-commit stashes unstaged changes and thereby restores the file it invokes
+           (`.claude/hooks/ledger_drift_lint.py`) for the duration of the run — so that gate
+           cannot be reproduced by hand in this tree, and any claim resting on running it
+           manually is unverifiable until the deletion is resolved one way or the other.
            (4) The three repair rounds of 2026-09-18 were never given a STATE cursor; they are
            reconstructed only inside findings.md's B-STAGE9-25 row.
 
