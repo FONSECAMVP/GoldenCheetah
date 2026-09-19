@@ -904,13 +904,16 @@ STAGE-9-CURSOR (2026-09-19, written by `garmin_inspector_v1_30` — supersedes t
            (3) Two tooling gaps found while working, NOT yet owed to a row: `.claude/settings.json`
            pointed its anti-duplication PreToolUse hook at a path that does not exist, which
            blocked every Write/Edit/Bash until repaired (the guard had therefore been dead, not
-           merely noisy). Related and subtler: the whole `.claude/hooks/` directory is deleted in
-           the working tree but still present in HEAD, as an UNSTAGED, unexplained deletion. The
-           `ledger status drift (DEC-015)` gate still reports Passed at commit time only because
-           pre-commit stashes unstaged changes and thereby restores the file it invokes
-           (`.claude/hooks/ledger_drift_lint.py`) for the duration of the run — so that gate
-           cannot be reproduced by hand in this tree, and any claim resting on running it
-           manually is unverifiable until the deletion is resolved one way or the other.
+           merely noisy). RESOLVED, and the deletion was DELIBERATE, not drift: the user removed
+           `.claude/hooks/` because each guard belongs to the package that owns it — the
+           anti-duplication guard to the QGDW skill (`skills/quality-gated-dev-workflow/scripts/`,
+           where settings.json now points) and the ledger-drift lint to the project's own
+           `scripts/ledger_drift_lint.py`, which is tracked and has a test beside it. One real
+           loose end came with it: `.pre-commit-config.yaml` still invoked the deleted synced copy,
+           so that gate passed at commit time ONLY because pre-commit stashes unstaged changes and
+           restored the file for the run, and it could not be reproduced by hand. Repointed to the
+           canonical `scripts/` path (verified byte-identical to the deleted copy, rc=0 run
+           directly), and the deletions staged, so the gate no longer depends on a stash.
            (4) The three repair rounds of 2026-09-18 were never given a STATE cursor; they are
            reconstructed only inside findings.md's B-STAGE9-25 row.
 

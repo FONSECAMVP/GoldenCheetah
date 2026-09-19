@@ -108,7 +108,7 @@ repos:
     hooks:
       - id: ledger-drift-lint
         name: ledger status drift (DEC-015)
-        entry: python3 .claude/hooks/ledger_drift_lint.py .
+        entry: python3 scripts/ledger_drift_lint.py .
         language: system
         pass_filenames: false
         files: '^(STATE\.md|WIKI\.md|wiki/.*\.md|\.claude/workflow-[^/]+/(design|traceability|decisions)\.md)$'
