@@ -1355,6 +1355,33 @@ STAGE-9-LIVE-RUN-7 (2026-09-19, `garmin_inspector_v1_35`, attended — **THE SYN
            times the token RESTORE, not the SSO, so no `duration_ms` figure it emits may be
            used to close REQ-NF-Perf-001's first-connect clause.
 
+STAGE-9-CURSOR-ADDENDUM (2026-09-19, `garmin_inspector_v1_35`, written before self-
+           succession at ~193k/210k. Sequencing only; per-id status lives in findings.md):
+           Run 7 is committed `ebe194a32`. **What the next Inspector owes, in order:**
+           (1) **The traceability.md per-id cascade for run 7 is NOT done** — this is the
+           single biggest owed item. REQ-002, REQ-006, REQ-012 and REQ-017 all now have LIVE
+           evidence recorded only in STATE.md's LIVE-RUN-7 block; their rows still carry
+           seam-only or pre-live wording. REQ-003 must be marked live-UNEXECUTABLE (no
+           two-factor on this account), NOT passed. Read the LIVE-RUN-7 block, then write
+           each row once.
+           (2) `garmin_builder_stage9_v16` is mid-repair on B-STAGE9-36 (unit `B-STAGE9-36`,
+           collect with `dispatch.py --mode collect --target w1:pM --unit B-STAGE9-36`). It
+           was at 206k when dispatched — **check it against the 250k bar before dispatching
+           anything further; it is the nearest agent to a soft landing.** B-STAGE9-28 stays
+           UNCOMMITTED until -36 closes and the reviewer re-checks; the two units touch the
+           same two files and splitting a file's hunks across commits is a hazard already
+           paid for here.
+           (3) CLV FAIL with OUTSTANDING=1 is CORRECT — B-STAGE9-36 is genuinely open with a
+           proper effect set. `ledger_drift_lint.py` EXIT=0.
+           (4) Still open and non-blocking: B-STAGE9-30, -33, -34, -35, -37.
+           (5) `insp_wake.sh` needs `SELF_PANE=<your pane>` exported when arming or it reports
+           the Inspector's own context as `unknown`. Cap builds at `-j4`.
+           (6) The qmake binary at `src/GoldenCheetah` (18:32:53) is current and carries
+           `ce2b3402d`; no rebuild is owed. GoldenCheetah was still RUNNING at handoff.
+           **Roster, verified live:** builder `garmin_builder_stage9_v16` (`w1:pM`, 206k,
+           working), reviewer `garmin_codex_reviewer` (`w1:pD`, 158k, idle), investigator
+           `s925_tz_investigator` (`w1:pR`, 23k, idle).
+
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md
 (## Decision index, then entries) · validations/archive/ + cycles/archive/ (historical
