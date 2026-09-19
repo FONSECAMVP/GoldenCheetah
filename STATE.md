@@ -870,6 +870,45 @@ STAGE-9-CURSOR (2026-09-17, written by `garmin_inspector_v1_28` — supersedes t
            (4) Measured operational constraint: ~20 parallel `cc1plus` thrash this 11.6 GB
            machine into swap and cost an hour of wall clock. Cap builds at `-j4`.
 
+STAGE-9-CURSOR (2026-09-19, written by `garmin_inspector_v1_30` — supersedes the
+           `garmin_inspector_v1_28` block above for SEQUENCING; that block's record stands.
+           Per-id status lives only in findings.md):
+           **B-STAGE9-25 IS CLOSED — the date-only cursor defect that actually broke the live
+           sync is fixed.** Reviewer round 4 returned no blocking defect and closed (a)-(f).
+           Round-1 (c) had survived three rounds unanswered and was settled this pass: an
+           isolated investigator established from the installed wheel that the listing sends no
+           timezone parameter at all, so Garmin's UTC-vs-local day choice is NOT establishable
+           from source and was not measured. Ruled closed on a conditional-coverage argument
+           that holds under either interpretation, with the unmeasured server behaviour recorded
+           as an accepted residual — not as proof. Independently re-verified here, not relayed:
+           pytest 74/74, mypy --strict clean, two mutations RED in the predicted slots with
+           byte-identical restores, ctest 4/4. One builder self-report was FALSE (claimed
+           gate-pinned ruff clean; it was not) and was repaired. Non-blocking residual split out
+           as B-STAGE9-26.
+           **THE SUPERVISION LOOP ITSELF WAS BROKEN, and that is the bigger finding of this
+           pass — ORCH-064/065/066, all fixed.** `insp_wake.sh` had never once fired on its
+           success path (a bare `wait` deadlocked on the `tee` from its own stdout redirect), and
+           `dispatch.py` classified EVERY Codex reply as `truncated` because that TUI bullets the
+           opening sentinel — which is the likely reason a previous round-3 review was recorded
+           as never returning a verdict. Both were found only because the USER asked why no wake
+           had fired; the Inspector had reported the wake armed on the absence of an error.
+           **Sequencing the next Inspector must not lose:**
+           (1) **B-STAGE9-12 is now the only outstanding blocking finding** and the next atomic
+           unit: stderr buffering hides `gc_obs` traces in the real qmake binary. Its RED is
+           already delivered and reviewer-reviewed; the production fix was frozen under the
+           `src/Core/main.cpp` hold, and that hold was RELEASED by the user 2026-09-16, so the
+           repair is permitted now.
+           (2) Both preconditions for a sixth attended live run (-19 and -25 landed) are now MET.
+           It is worth scheduling once B-STAGE9-12 lands, so the run's traces actually flush
+           without depending on File > Quit.
+           (3) Two tooling gaps found while working, NOT yet owed to a row: `.claude/settings.json`
+           pointed its anti-duplication PreToolUse hook at a path that does not exist, which
+           blocked every Write/Edit/Bash until repaired (the guard had therefore been dead, not
+           merely noisy); and `ledger_drift_lint.py` is absent from the tree, so that gate did
+           not run this pass and its EXIT=0 claims elsewhere in this file cannot be reproduced.
+           (4) The three repair rounds of 2026-09-18 were never given a STATE cursor; they are
+           reconstructed only inside findings.md's B-STAGE9-25 row.
+
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md
 (## Decision index, then entries) · validations/archive/ + cycles/archive/ (historical

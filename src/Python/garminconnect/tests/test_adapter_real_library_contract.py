@@ -226,6 +226,107 @@ def test_adapter_contract_matches_real_garminconnect_library() -> None:
     )
 
 
+def test_adapter_listing_contract_matches_real_garminconnect_library() -> None:
+    """B-STAGE9-25 close — this file's OWN stated purpose (module docstring:
+    "pin ... both attribute EXISTENCE and ... signature ... against the real
+    wheel") never covered get_activities_by_date's argument SHAPE, only
+    login/MFA/token surfaces (_GARMIN_IDENTITY_ATTRS above). That gap is why
+    this file did not catch B-STAGE9-25: a hasattr/signature check would not
+    have caught it either, since get_activities_by_date's signature never
+    changed — the defect is in the VALUE (datetime vs date-only) accepted by
+    the library's first-statement validator, not the call shape. Pins that
+    directly: the real `_validate_date_format` (__init__.py:63-74) rejects a
+    full datetime and accepts date-only, confirmed interactively against the
+    installed 0.3.15 wheel."""
+    try:
+        real_gc = _import_real_garminconnect()
+    except ModuleNotFoundError:
+        pytest.skip(
+            "python-garminconnect not installed in this environment (the dev "
+            ".venv intentionally lacks it; production bundles it under "
+            "DEC-011/REQ-NF-Pkg-001) — this contract only runs where the "
+            "real wheel is present."
+        )
+
+    assert hasattr(real_gc.Garmin, "get_activities_by_date"), (
+        "garminconnect.Garmin.get_activities_by_date no longer exists — "
+        "garmin_client.py's _list_activities_since_impl (DES-012) depends on it"
+    )
+    listing_params = [p for p in inspect.signature(real_gc.Garmin.get_activities_by_date).parameters if p != "self"]
+    startdate_param = listing_params[0]
+    assert startdate_param == "startdate", (
+        f"get_activities_by_date's first parameter is {startdate_param!r}, not "
+        "'startdate' — B-STAGE9-25's fix forwards the query positionally, "
+        "assuming this is the startdate slot"
+    )
+
+    with pytest.raises(ValueError, match="startdate"):
+        real_gc._validate_date_format("2026-09-09 05:21:24", "startdate")
+    assert real_gc._validate_date_format("2026-09-09", "startdate") == "2026-09-09", (
+        "the real library's own validator must accept the date-only shape "
+        "B-STAGE9-25's fix now sends — if this fails, the truncation in "
+        "garmin_client.py's _list_activities_since_impl no longer satisfies "
+        "the real wheel's contract"
+    )
+
+
+def test_adapter_listing_response_shape_passthrough_matches_real_garminconnect_library() -> None:
+    """B-STAGE9-25 round 3 — regression evidence for the RESPONSE side.
+
+    The installed wheel's get_activities_by_date validates only its
+    startdate/enddate INPUTS, then pages connectapi() results with
+    ``activities.extend(act)`` and returns them — no per-record transformation
+    exists between the server JSON and what this adapter receives, so the
+    ``startTimeGMT`` separator shape (space or 'T') is the SERVER's choice,
+    pinned by nothing on our side. This pins the passthrough itself by serving
+    a canned connectapi page (both separator shapes, int activityId, extra
+    keys) to the real method and asserting the records come back verbatim.
+
+    This is regression evidence, NOT the safety net: an authenticated server
+    response cannot be made safe by a test. The runtime instant
+    validation/comparison in _list_activities_since_impl is the actual guard
+    (findings.md B-STAGE9-25 round 3)."""
+    try:
+        real_gc = _import_real_garminconnect()
+    except ModuleNotFoundError:
+        pytest.skip(
+            "python-garminconnect not installed in this environment (the dev "
+            ".venv intentionally lacks it; production bundles it under "
+            "DEC-011/REQ-NF-Pkg-001) — this contract only runs where the "
+            "real wheel is present."
+        )
+
+    real = real_gc.Garmin("probe@example.invalid", "probe-password")
+    page = [
+        {"activityId": 1001, "startTimeGMT": "2026-09-08 21:14:00", "activityName": "space-form"},
+        {"activityId": 1002, "startTimeGMT": "2026-09-08T21:14:00.0", "activityName": "iso-form"},
+    ]
+    remaining: list[list[dict[str, Any]]] = [page, []]  # one page, then empty → pagination breaks
+
+    def fake_connectapi(path: str, **kwargs: Any) -> Any:
+        assert kwargs.get("params", {}).get("startDate") == "2026-09-08", (
+            f"get_activities_by_date must forward the validated startdate as the "
+            f"startDate query param, got {kwargs.get('params')!r}"
+        )
+        return remaining.pop(0)
+
+    real.connectapi = fake_connectapi
+
+    result = real.get_activities_by_date("2026-09-08")
+
+    assert result == page, (
+        "the wheel must return the server's activity records verbatim — a "
+        "transformation step (key renaming, timestamp normalization) between "
+        "connectapi and the return would change what garmin_client.py's "
+        "startTimeGMT validation sees"
+    )
+    assert all(returned is original for returned, original in zip(result, page)), (
+        "the returned records must be the same objects connectapi produced, "
+        "not rebuilt copies — the passthrough is what makes the response shape "
+        "the server's contract rather than the wheel's"
+    )
+
+
 # =============================================================================
 # B-STAGE9-10 / B-STAGE9-11 — behavioral RED tests against real-shape fakes.
 #

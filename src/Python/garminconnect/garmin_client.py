@@ -23,7 +23,7 @@ with later slices (A2-005, REQ-003, REQ-015) — not this module's scope yet.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from gc_rate import rate_limited, with_retry
@@ -65,7 +65,8 @@ class GarminError(Exception):
     library's exception classes. See DES-008 error-translation table.
 
     kind ∈ {'auth', 'rate_limit', 'connection', 'captcha',
-            'mfa_required', 'token_permissions', 'unknown'}
+            'mfa_required', 'token_permissions', 'cursor_invalid',
+            'response_invalid', 'unknown'}
     """
 
     def __init__(self, kind: str, message: str, original: Exception | None = None) -> None:
@@ -73,6 +74,22 @@ class GarminError(Exception):
         self.message = message
         self.original = original
         super().__init__(message)
+
+
+def _as_utc_instant(value: Any, what: str, kind: str) -> datetime:
+    """B-STAGE9-25 round 3 — the ONE timestamp path shared by the cursor and
+    every response value: parse to a UTC instant, or raise the caller's typed
+    kind (findings.md B-STAGE9-25 round 3)."""
+    if not isinstance(value, str):
+        raise GarminError(kind, f"{what} must be a timestamp string, got {type(value).__name__}")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as e:
+        raise GarminError(kind, f"{what} is not a valid timestamp ({value!r}): {e}", e) from e
+    # A naive wall clock reads as UTC, mirroring parseGarminTime (GarminConnect.cpp:119).
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 class GarminClient:
@@ -361,10 +378,9 @@ class GarminClient:
     def _list_activities_since_impl(self, ts_gmt: str) -> Iterator[dict[str, Any]]:
         # REQ-008 Slice A (DES-010 step 4 / DES-012). List the activities whose
         # Garmin server-side startTimeGMT is newer than ts_gmt. `ts_gmt` is
-        # Garmin's SERVER-SIDE timestamp, NOT the local clock (DES-010 — protects
-        # against clock-skew duplicates), and it is forwarded to the library
-        # VERBATIM (no reformatting, no local-clock substitution). Dedup and
-        # download are later slices (B/C) — this is a thin list+translate.
+        # Garmin's SERVER-SIDE timestamp, NOT the local clock (DES-010 —
+        # protects against clock-skew duplicates). Dedup and download are
+        # later slices (B/C) — this is a thin list+translate.
         #
         # Error translation mirrors download_activity(): classify by exception
         # TYPE, then re-raise as a GC-stable GarminError kind (LSN-006). Only the
@@ -375,24 +391,34 @@ class GarminClient:
         # caller sees connection/rate_limit at call time exactly like the sibling
         # methods; the return is still a true Iterator (DES-012 signature).
         #
-        # NOTE(DEC-014 OQ1): the exact python-garminconnect listing signature
-        # (get_activities_by_date vs get_activities, and its date/paging bounds)
-        # is unconfirmed against the not-yet-bundled wheel (like dumps()/loads()
-        # elsewhere in this module); the since-timestamp is forwarded verbatim and
-        # the surface is pinned by the fakes/pystub until the wheel is bundled
-        # (DES-007/Pkg). Swapping it is a one-line change here (DES-012 is the
-        # single point of underlying-library knowledge).
+        # B-STAGE9-25 round 2/3 — malformed cursor fails closed, typed, not a bare ValueError.
+        cursor = _as_utc_instant(ts_gmt, "the incremental-sync cursor", "cursor_invalid")
+        # One day early: get_activities_by_date wants date-only and its
+        # startDate day-boundary timezone semantics are undocumented; the
+        # post-query filter below makes the query width irrelevant to
+        # correctness (findings.md B-STAGE9-25 round 2).
+        query_date = (cursor.date() - timedelta(days=1)).isoformat()
         try:
-            raw = self._garmin.get_activities_by_date(ts_gmt)
+            raw = self._garmin.get_activities_by_date(query_date)
         except _gc.exceptions.GarminConnectConnectionError as e:
             raise GarminError("connection", str(e) or "Could not reach Garmin Connect", e) from e
         except _gc.exceptions.GarminConnectTooManyRequestsError as e:
             raise GarminError("rate_limit", str(e) or "Garmin Connect is rate-limiting listing", e) from e
         # Normalize each library record to the GC-stable summary shape carrying at
         # least activityId + startTimeGMT (as strings, matching what the C++ seam
-        # marshals). Extra library keys are dropped; a record missing either key
-        # is a library contract breach whose KeyError propagates unclassified.
-        summaries = [{"activityId": str(a["activityId"]), "startTimeGMT": str(a["startTimeGMT"])} for a in raw]
+        # marshals). Extra library keys are dropped. B-STAGE9-25 round 3
+        # (findings.md): startTimeGMT goes through the SAME instant path as the
+        # cursor (the response's separator shape is the server's choice; a
+        # breach raises typed, never coerced/sorted), and '>=' keeps a
+        # same-second sibling reachable — Tier-1 activityId dedup
+        # (GarminConnect.cpp:862-867) owns de-duplication, not this boundary. A
+        # record missing activityId is a library contract breach whose KeyError
+        # propagates unclassified.
+        summaries: list[dict[str, Any]] = []
+        for a in raw:
+            ts_value = a.get("startTimeGMT")
+            if _as_utc_instant(ts_value, "startTimeGMT", "response_invalid") >= cursor:
+                summaries.append({"activityId": str(a["activityId"]), "startTimeGMT": ts_value})
         return iter(summaries)
 
     # DES-005/DEC-007 — paced (REQ-NF-Perf-002) and retried (REQ-NF-Reliab-001)
