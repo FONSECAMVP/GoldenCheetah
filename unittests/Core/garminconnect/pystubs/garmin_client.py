@@ -429,10 +429,8 @@ class GarminClient:
                 ]
             )
         if SCENARIO == "list_missing_start_time_local":
-            # T-211 / DEC-056 — startTimeLocal is OPTIONAL (typed.py:396-407):
-            # its absence must not fail the listing, and the C++ naming fallback
-            # (GarminConnect.cpp) must derive the entry name from startTimeGMT
-            # instead. This summary carries no startTimeLocal key at all.
+            # T-211 / DEC-056 — a summary for activityId 1001 with no
+            # startTimeLocal key at all.
             return iter([{"activityId": 1001, "startTimeGMT": "2026-07-01 06:30:00"}])
         if SCENARIO == "list_missing_activity_id":
             # B-STAGE9-26 (DEC-055) — the real adapter now validates activityId
