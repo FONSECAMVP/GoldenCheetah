@@ -69,6 +69,9 @@ Compact schema per `references/formats.md` § `decisions.md`. **The recap source
 | DEC-052 | B-STAGE9-01 fix → shared process-level CPython bootstrap owned by neither `PythonEmbed` nor `PyEmbeddedAdapter` alone, invoked once on the main thread before either feature's workers can run | accepted (Inspector, Three-Options Doctrine — ordinary architecture decision, not a human-in-the-loop gate; reviewer-researched options) | 2026-09-13 |
 | DEC-053 | B-STAGE9-15 remedy → developer-trace literals exempt from the i18n guard as a CATEGORY; the three flagged `qDebug` call sites are correct as written, the guard's heuristic is not | accepted (Inspector, Three-Options Doctrine — ordinary tooling-correctness decision, not a human-in-the-loop gate; standing-rule exception independently verified by a fresh unbriefed agent before recording) | 2026-09-15 |
 | DEC-054 | B-STAGE9-16 remedy → the project's default verification scope becomes FAIL-SAFE: the routine ctest gate is `ctest -LE gate-exclude` (default-include, explicit opt-out) instead of `ctest -L garmin-fast` (opt-in), the pre-commit `files:` regexes are widened to every new Garmin-owned path rather than three enumerated ones, and two static coverage guards make both boundaries self-policing | accepted (Inspector, Three-Options Doctrine — ordinary tooling/process decision, not a human-in-the-loop gate; three scored options researched by a fresh unbriefed agent, decisive timing facts re-verified by the Inspector before recording) | 2026-09-15 |
+| DEC-055 | B-STAGE9-26 remedy → the listing boundary's typed `response_invalid` contract covers EVERY key the GC-stable summary shape requires, `activityId` included; a missing key is a classified library-contract breach, not a bare `KeyError` | accepted (Inspector, Three-Options Doctrine — ordinary implementation-contract decision within REQ-NF-Obs-001/REQ-002's accepted scope, not a human-in-the-loop gate) | 2026-09-19 |
+| DEC-056 | B-STAGE9-29 remedy → Garmin listing entries are named from the activity's own LOCAL start time in the project-wide `yyyy_MM_dd_HH_mm_ss` form, marshalled from the library's `startTimeLocal`, with `startTimeGMT`-converted-to-local as the documented fallback; the shared dialog's filename gate is left untouched | accepted (Inspector, Three-Options Doctrine — ordinary implementation decision inside REQ-002/REQ-012's accepted scope, not a human-in-the-loop gate) | 2026-09-19 |
+| DEC-057 | B-STAGE9-28 remedy → an EMPTY managed root must be DECLARED pre-armed (naming the DEC that armed its regexes) or the lint-ownership guard goes RED; the finding's own option A is VOID, `git ls-files` already reads the index and already sees staged-but-uncommitted files | accepted (Inspector, Three-Options Doctrine — ordinary tooling decision on a project-owned guard, not a human-in-the-loop gate) | 2026-09-19 |
 
 ### Dormant index
 
@@ -2682,3 +2685,72 @@ cd build && ctest -N -LE gate-exclude | tail -1     # expect: every registered t
 grep -n "gate-exclude" unittests/buildguard/CMakeLists.txt   # expect: the two flag-build guards, each with GATE_EXCLUDE_REASON + GATE_EXCLUDE_TIER properties AND an adjacent prose comment
 grep -n "unittests/buildguard" .pre-commit-config.yaml       # expect: at least the ruff and ruff-format file regexes (Part B — not yet true)
 python3 unittests/buildguard/garmin_gate_coverage_guard.py build   # expect: 0 findings, and NOT because the check went vacuous. NOTE the argument is the BUILD directory, not the source root: the ctest registry lives in the build tree, and the ctest registration passes ${CMAKE_BINARY_DIR}. This probe originally said `.` — wrong, and corrected 2026-09-15 after `garmin_builder_stage9_v7` ran it as written, got exit 2 ("not a configured CMake build tree"), and declined to degrade a correct interface to match a wrong probe line. Recorded rather than silently amended because an alignment probe that does not run is the same disease this DEC is about.
+
+## DEC-055 — B-STAGE9-26 remedy: one typed contract for every key the summary shape requires
+
+- Status: accepted (Inspector, Three-Options Doctrine — ordinary implementation-contract decision inside the current REQ's accepted scope, not a human-in-the-loop gate)
+- Reversibility: high — one guard in one loop body in one Python module, plus its unit coverage. No C++ change, no shipped-binary surface, no user-visible string.
+- Decided / last-reviewed: 2026-09-19
+- Serves: B-STAGE9-26 (split out of B-STAGE9-25 round 4 as the one non-blocking residual)
+- Dependents: `src/Python/garminconnect/garmin_client.py` `_list_activities_since_impl`; the fakes/pystub listing double, which must reject what the real path rejects; `classifyListException` (`src/Cloud/PyEmbeddedAdapter.cpp:485-497`), whose still-open wiring gap is what currently hides the difference.
+- Origin: raised by `garmin_codex_reviewer` on B-STAGE9-25 round 4, filed as its own row by `garmin_inspector_v1_30`, decided by `garmin_inspector_v1_32` 2026-09-19.
+
+### The problem
+`garmin_client.py:421` builds each summary as `{"activityId": str(a["activityId"]), "startTimeGMT": ts_value}`. Its sibling key one line above goes through `_as_utc_instant(..., "response_invalid")` and raises a typed `GarminError` on a bad shape. `activityId` does not: a record carrying a valid `startTimeGMT` but no `activityId` raises a bare `KeyError`, which is not a `GarminError`, so `with_retry` does not treat it as transient and `classifyListException` maps it to `PyListOutcome::Unknown` — the exact unclassified fold B-STAGE9-25 exists to abolish, reintroduced one line away from its own fix.
+
+The code comment at `:414-416` asserts this is deliberate ("a library contract breach whose KeyError propagates unclassified"). That assertion is the thing being decided here, not evidence for it — this project does not accept a comment stating a checkable claim as a reason, whoever wrote it.
+
+### Options scored (reliability / scalability / maintainability / best practices)
+- **Option A — extend the typed contract to every required key (CHOSEN): 5/4/5/5.** Validate `activityId` the same way its sibling is validated and raise `GarminError("response_invalid", ...)` naming the missing key. One boundary, one contract, one classification path; a future required key joins it by construction rather than by memory.
+- **Option B — record the bare `KeyError` as a deliberate unrecoverable breach: 2/3/3/2.** Cheapest, and it is what the comment already claims. But it leaves two keys of the same shape treated differently for no reason a caller can act on, and it keeps a path into the `Unknown` fold alive. It becomes actively wrong the moment the `classifyListException` wiring gap closes and the two kinds start reaching an operator differently — which is a planned change, not a hypothetical.
+- **Option C — wrap the loop in `except KeyError` → `response_invalid`: 4/3/3/3.** Classifies correctly but discards which key was missing, and silently absorbs a future required key into the same bucket. A broad catch that hides its own cause is the shape this project has repeatedly been bitten by.
+
+### Cascade impact
+`traceability.md` REQ-002's listing row gains this contract. The fakes/pystub listing double must reject a record missing `activityId`, or the suite stays green while the real contract differs — the fifth-instance failure class B-STAGE9-25 already recorded once. No `STATE.md` stage boundary moves; B-STAGE9-26 is non-blocking and does not gate the attended live run.
+
+## DEC-056 — B-STAGE9-29 remedy: name Garmin entries from the activity's own local start time
+
+- Status: accepted (Inspector, Three-Options Doctrine — ordinary implementation decision inside the current REQs' accepted scope, not a human-in-the-loop gate)
+- Reversibility: high — one marshalled key in one Python module, one field on one struct, one `QString` construction. No schema, no stored state, no user-visible string; the download and dedup keys do not move.
+- Decided / last-reviewed: 2026-09-19
+- Serves: B-STAGE9-29 (blocking — the sixth attended live run listed six activities and the dialog selected 0 of 0)
+- Dependents: `src/Cloud/GarminConnect.cpp:869-878` (entry construction); `src/Python/garminconnect/garmin_client.py:407-425` (summary marshalling) and its pystub double; `GarminActivitySummary`. NOT dependents, verified this pass: `readFile` keys by `remoteid` (`GarminConnect.cpp:649-681`) and `recordImport` keys the sidecar by the same id (`:677-680`, `:898-910`), so renaming moves no download or dedup key.
+- Origin: found by `garmin_inspector_v1_32` on the sixth attended live run; root cause falsification-tested by `s925_tz_investigator` (unit `B-STAGE9-29-confirm`) and confirmed on all counts; decided by `garmin_inspector_v1_33` 2026-09-19.
+
+### The problem
+`GarminConnect.cpp:872` names every entry `garmin-<id>.fit`. Both production consumers of that list gate on `RideFile::parseRideFileName`, which exact-matches a leading `yyyy_MM_dd_HH_mm_ss` (`src/FileIO/RideFile.cpp:2434-2451`) and `continue`s past anything else — the sync dialog's Download loop at `CloudService.cpp:2160-2172` (and therefore its Synchronize tab too, whose rows are built only inside that loop's post-parse branch at `:2224-2268`) and the auto-downloader at `CloudService.cpp:4254-4279`. `garmin-` cannot match. The service layer is correct and 100% of it is discarded, silently: six successful listings, `0 of 0 selected`, `activities/` unchanged at 1145. The dialog also never reads `e->modified`, which we do populate — it derives every date from the name it just parsed.
+
+Every peer service names from LOCAL start time (Strava: `start_date_local` → `yyyy_MM_dd_HH_mm_ss` + suffix, `src/Cloud/Strava.cpp:258`). We marshal only `startTimeGMT`, and `parseGarminTime` stamps it `Qt::UTC` (`GarminConnect.cpp:119-127`).
+
+### Options scored (reliability / scalability / maintainability / best practices)
+- **Option A — marshal `startTimeLocal` and name from it (CHOSEN): 5/4/4/5.** The activity's own local start time is what every peer uses and what the athlete directory is already written in, so sorting, the dialog's date-range filter and its `Exists` check all agree with files GoldenCheetah wrote itself. The installed wheel declares the key at `garminconnect/typed.py:396-407` as `str | None` — optional, so absence must fall back, never fail the listing (failing it would reproduce the very blank dialog being fixed). Cost: one more marshalled key, one struct field, one pystub update.
+- **Option B — convert the existing `startTimeGMT` to local in C++: 2/4/5/2.** Cheapest and touches no Python. But it names by the *machine's current* timezone rather than the activity's, so an activity recorded in another timezone gets a name off by the offset — it mis-sorts, falls outside the date-range filter at the boundary, and silently misses the `Exists` dedup check against the local-time file GoldenCheetah itself wrote. A wrong answer that is data-dependent and invisible is worse than the blank dialog it replaces.
+- **Option C — relax or bypass the filename gate for Garmin: 3/2/2/2.** Requires editing two enumeration loops in `CloudService.cpp` that every provider runs, plus the auto-downloader, for one provider's benefit — the largest blast radius on the most shared code in the seam. It also leaves the staging name still non-conforming for everything downstream that parses names.
+
+### Cascade impact
+`traceability.md` REQ-002/REQ-012's listing rows gain the naming contract. The pystub listing double must carry `startTimeLocal` or the C++ suite proves nothing about the new field. `design.md`'s listing prose names `garmin-<id>.fit` as the entry name and must be corrected. No stage boundary moves, but this unblocks the seventh attended live run, which is Stage 9's acceptance criterion.
+
+## DEC-057 — B-STAGE9-28 remedy: an empty managed root must be DECLARED empty, not silently passed
+
+- Status: accepted (Inspector, Three-Options Doctrine — ordinary tooling decision on a project-owned guard, not a human-in-the-loop gate)
+- Reversibility: high — one declaration field on a managed-root record, one branch in the empty-root report path, one amended unit test. No product code.
+- Decided / last-reviewed: 2026-09-19
+- Serves: B-STAGE9-28 (non-blocking — the lint-ownership guard passed 101/111 while proving nothing about a brand-new directory)
+- Dependents: `unittests/buildguard/garmin_lint_ownership_guard.py` (`tracked_files` :703-723, `check_ownership` :789-819, `format_root_report` :1108-1119, the LINT-VACUOUS aggregate :1084-1102); `unittests/buildguard/test_garmin_lint_ownership_guard.py:702-711`. NOT dependents, verified: the other four guards in that directory enumerate by filesystem glob or the CTest registry, not the git index — `garmin_sec_source_guard.py:256-273`, `garmin_i18n_source_guard.py:280-292`, `garmin_gate_coverage_guard.py:735-752`, `garmin_flag_build_guard.sh:68-89`. This is one guard's rule, not a family bug.
+- Origin: found by `garmin_inspector_v1_31`, measured on both sides of `git add` by `garmin_inspector_v1_32`, option space researched by `s925_tz_investigator` (unit `B-STAGE9-28-options`) and the finding's own option A falsified by `garmin_inspector_v1_34` 2026-09-19.
+
+### The problem, restated — B-STAGE9-28's own option A is VOID
+
+The finding proposed "teach the guard to consider untracked-but-staged files (`git status --porcelain` rather than `git ls-files`)". **It already does.** `git ls-files` reads the INDEX, so a `git add`ed never-committed file is in scope immediately, and `test_tracked_files_sees_a_newly_staged_never_committed_file` (`test_garmin_lint_ownership_guard.py:612-635`) pins exactly that, in those words, against a fixture with no HEAD at all. Option A is a no-op on an already-correct mechanism.
+
+The investigator also killed the literal swap independently: on a clean tree `git diff --cached --name-only` and `git status --porcelain` yield no paths at all, and the guard's CTest invocation (`unittests/buildguard/CMakeLists.txt:248-257`) runs against the full source root with no staging set — so a status/diff-only inventory would trip LINT-VACUOUS (`:1084-1102`) rather than pass. It trades one blind window for a larger one.
+
+So the blind window is NARROWER than the finding states, and it is not an enumeration bug. It is only this: between the files existing on disk and `git add`, a managed root reports `EMPTY — 0 tracked files. Regexes may be armed for it, but nothing is proven here.` — an honest line — and the run still PASSes. A gate whose PASS proves nothing is [[LSN-083]]'s shape.
+
+### Options scored (reliability / scalability / maintainability / best practices)
+- **Option A — an empty root must be DECLARED pre-armed, else RED (CHOSEN): 5/4/4/5.** The guard's stated philosophy is already "declared rather than hidden" (`:76`), and it already carries a declared-gap mechanism for known-uncovered things. This extends it one level: a managed root may report EMPTY only if its record declares it pre-armed and names the DEC that armed the regexes; an undeclared empty root is a finding. `unittests/Core/stderrbuf/` is the legitimate case and is declared, not exempted by accident. Cost: one field, one branch, and amending `test_an_empty_root_does_not_crash_and_does_not_go_red:702-711`, which currently pins the silent-green contract.
+- **Option B — keep EMPTY green; make staging-time re-verification an Inspector obligation: 3/2/3/3.** This is already the de facto practice and it is what caught B-STAGE9-12 — but only because a supervisor remembered. It does not survive the supervisor, which is precisely the failure mode, and it does not scale past one attentive reader.
+- **Option C — no change; document that the EMPTY line is the signal: 1/3/5/1.** Free, and buys nothing. The line was already printed and already read past once, under a guard built to prevent this defect class.
+
+### Cascade impact
+No product code, no stage boundary, no acceptance criterion moves. `findings.md`'s B-STAGE9-28 row must record that its own option A was falsified, so a later reader does not re-propose it. Sequencing: this is NON-BLOCKING and queues behind the B-STAGE9-26+29 slice and the seventh attended live run — it must not take a builder turn away from Stage 9's acceptance criterion.

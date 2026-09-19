@@ -1068,6 +1068,206 @@ STAGE-9-CURSOR (2026-09-19, `garmin_inspector_v1_32` — supersedes the two `v1_
            routed around; it is still owed.
            (5) Cap builds at `-j4` — ~20 parallel `cc1plus` swap this 11.6 GB machine.
 
+STAGE-9-CURSOR-ADDENDUM (2026-09-19, `garmin_inspector_v1_32`, written immediately before
+           self-succession at 229,356/210,000 — over threshold. Sequencing only; per-id status
+           lives in findings.md):
+           **THE SIXTH ATTENDED LIVE RUN HAPPENED AND IT CHANGED THE PICTURE. Read this before
+           dispatching anything.**
+           **What the live run PROVED (first time, all three):** `gc_obs op=auth outcome=ok`
+           in 243ms against the real account off the stored token — authentication works.
+           `gc_obs op=sync_incremental outcome=ok activity_count=1`, six consecutive times —
+           B-STAGE9-25's cursor fix works against the live server. And every one of those lines
+           was readable WHILE THE APP RAN, which is B-STAGE9-12 earning its commit on its first
+           live use. Evidence snapshots (the log truncates on every launch, so these are the
+           only copies): /tmp/gc-log-before-run6.log, /tmp/gc-run6-evidence-141416.log,
+           /tmp/gc-run6-final.log.
+           **WHAT IT FOUND — B-STAGE9-29, blocking, filed, NOT yet dispatched.** The service
+           layer is correct and the DIALOG discards 100% of it, silently. `readdir` names
+           entries `garmin-<id>.fit`; `CloudService.cpp:2164` skips anything failing
+           `RideFile::parseRideFileName`, which exact-matches `yyyy_MM_dd_HH_mm_ss.<ext>`. Six
+           successful listings, `0 of 0 selected` in the dialog, `activities/` still 1145.
+           Every peer service (Strava, Xert, Nolio, Azum, CyclingAnalytics, SportTracks,
+           SixCycle) names from LOCAL start time; we marshal only `startTimeGMT`. **The fix
+           needs a DEC first** — naming from UTC would mis-sort, mis-filter and break the
+           dialog's `Exists` check against a local-time athlete directory. Allocate DEC-056;
+           WIKI pointer `next:garmin-055` was consumed by DEC-055 this pass, so advance it.
+           **THE APP CRASHED on exit: SIGTRAP, exit 133, core dumped.** The core is PRESENT
+           and preserved — `coredumpctl` PID 956840, 81.8M, 2026-09-19 14:50:13. Nobody has
+           looked at it. Get a backtrace before it is rotated away; it is not yet filed as a
+           row because its cause is unknown and a row asserting one would be a guess. Note the
+           crash is itself evidence FOR B-STAGE9-12: an abnormal termination preserved every
+           trace line, which is exactly the 0/30-bytes case the isolated measurement predicted
+           would have been lost before the fix.
+           **IN FLIGHT, both dispatched, neither collected:**
+           (1) `s925_tz_investigator` (`w1:pR`) — unit `B-STAGE9-29-confirm`, asked to FALSIFY
+           the root cause above and to read the installed wheel for the local-start-time key
+           that decides the fix shape. Its answer to question 4 is the input to DEC-056.
+           (2) `garmin_codex_reviewer` (`w1:pD`) — unit `B-STAGE9-26`, delta-check on the
+           builder's diff.
+           **B-STAGE9-26 is GREEN in the working tree, UNREVIEWED-UNTIL-(2)-RETURNS,
+           UNCOMMITTED.** DEC-055 Option A: typed `response_invalid` naming the missing key,
+           pystub double updated to match, RED shown first, mutation RED at the predicted point
+           with byte-identical md5 restore, pinned ruff/mypy clean. Builder report:
+           /tmp/insp-exchange/B-STAGE9-26.md. Do not commit it on that report alone.
+           **CLV is FAIL — OUTSTANDING=1, and that is CORRECT, not drift:** B-STAGE9-29 is a
+           genuinely open blocking row carrying a proper effect set (MISSING-EFFECT=0).
+           `ledger_drift_lint.py` EXIT=0.
+           **Roster, verified live:** builder `garmin_builder_stage9_v15` (`w1:pM`, Sonnet 5,
+           auto mode, ~111k) — refreshed this session from `_v14` at 219,750. Reviewer
+           `w1:pD` ~160k. Investigator `w1:pR` ~64k. All under 250k.
+           **Do not re-run the live test until B-STAGE9-29 lands** — the dialog will show
+           nothing again, and that wastes an attended session.
+
+STAGE-9-CURSOR (2026-09-19, `garmin_inspector_v1_33` — supersedes the two `v1_32` blocks
+           above for SEQUENCING. Per-id status lives only in findings.md):
+           **B-STAGE9-29's root cause is confirmed and its remedy is decided and building.**
+           `s925_tz_investigator` was asked to falsify the diagnosis and could not; it added
+           three things the finding did not have (the Synchronize tab shares the Download
+           loop, so one `continue` drops both; the auto-downloader at
+           `CloudService.cpp:4254-4279` is a second independent dropping consumer; neither
+           tab ever reads `e->modified`, which we do populate). DEC-056 accepted, Option A:
+           name entries from the activity's own local start time via the library's
+           `startTimeLocal`, `startTimeGMT`-converted-to-local as the fallback, shared dialog
+           gate untouched. Renaming is safe because `readFile` fetches by `remoteid` and
+           `recordImport` keys the sidecar by the same id — verified, not assumed.
+           **Two findings opened from the Inspector's own read of B-STAGE9-26's diff**, which
+           the reviewer's delta-check did not surface: B-STAGE9-30 (the pystub gained a
+           `list_missing_activity_id` scenario no C++ test selects — dead coverage) and
+           B-STAGE9-31 (the reviewer's own non-blocking item, contract prose at
+           `garmin_client.py:385-389` that DEC-055 made false). -31 rides in B-STAGE9-29's
+           dispatch; -30 is the next unit after it.
+           **B-STAGE9-26 is FIXED and deliberately UNCOMMITTED.** Reviewer delta-check found
+           no blocking defect; the Inspector read the diff independently and agrees. It stays
+           in the tree because B-STAGE9-29 edits the same two files — one file's hunks split
+           across two commits is a hazard this project has already paid for.
+           **Sequencing the next Inspector must not lose:**
+           (1) The seventh attended live run is still the acceptance criterion, and is still
+           BLOCKED until B-STAGE9-29 lands. Do not schedule it before then — the dialog will
+           show nothing again and an attended session is wasted. Success is a NEW file under
+           `~/.goldencheetah/Andy/activities/` (1145 at last check), not the UI.
+           (2) Run 6's abort is ANSWERED and is not ours — B-STAGE9-32, `not-a-defect` on
+           disassembly evidence: a QtWebEngineCore `int3` on a Wayland screen-removal event,
+           no Garmin or CloudService frame in any of 44 threads. Two corrections to the run-6
+           narrative fell out of it: it was not "on exit" (the main thread was still in
+           `QCoreApplication::exec`), and WebEngine debug symbols are absent so no further
+           precision is available. Backtrace preserved at `/tmp/gc-core-956840-gdb-bt.txt`.
+           (3) CLV is FAIL — OUTSTANDING=1, and that is CORRECT, not drift: B-STAGE9-29 is a
+           genuinely open blocking row with a proper effect set (MISSING-EFFECT=0).
+           `ledger_drift_lint.py` EXIT=0. Live row count 435; the carried-forward NOTE about
+           this file's counts not reconciling against other counts still applies.
+           (4) `insp_wake.sh:159` still hard-codes the released `src/Core/main.cpp` hold and
+           prints `hold: VIOLATED`. It reports dirtiness, not permission. Still owed.
+           (5) Cap builds at `-j4` — ~20 parallel `cc1plus` swap this 11.6 GB machine.
+           **Roster, verified live:** builder `garmin_builder_stage9_v16` (`w1:pM`, Sonnet 5,
+           auto mode, fresh) — `_v15` soft-landed at 221k after reporting honestly, exited,
+           pane relaunched with `--permission-mode auto --model sonnet` and both confirmed on
+           its status line. Reviewer `garmin_codex_reviewer` (`w1:pD`) `/new`-refreshed at
+           182k while idle. Investigator `s925_tz_investigator` (`w1:pR`, 155k) idle.
+           `garmin_inspector_v1_32` retired and its pane closed this pass.
+
+STAGE-9-CURSOR-ADDENDUM (2026-09-19, `garmin_inspector_v1_33`, written before self-
+           succession. Sequencing only; per-id status lives in findings.md):
+           **B-STAGE9-29's implementation is COMPLETE ON DISK, passing, and UNPROVEN.**
+           8 files, +299/-27. Do not re-implement any of it.
+           **What is established:** builder `_v15` reported honestly rather than forcing a
+           a pass — Python 77 passed, T-210 shown failing first; `testGarminConnectPyAdapter`
+           and `testGarminConnectSync` both pass; four further Garmin targets link clean
+           against the changed struct. `garmin_codex_reviewer` delta-check returned NO
+           BLOCKING finding and answered the central question: every path by which
+           `startTimeLocal` can be absent, None, empty or non-str lands on the documented
+           GMT-to-local fallback, so no path reinstates the blank dialog. It also confirmed
+           the edited `garmin-BBB.fit` assertion was retargeted, not weakened, and that the
+           new tests would fail against pre-fix bytes.
+           **What is NOT established, and is the next thing to collect:** T-211's C++ tests
+           were written AFTER the production change and were never shown RED, and NEITHER
+           mutation was run. Mutation 1 (revert `e->name` to the `garmin-%1.fit` form) is
+           therefore the only evidence those tests detect the defect at all — if it does not
+           go RED the tests are vacuous and this unit is not done. `garmin_builder_stage9_v16`
+           is running exactly this as unit `B-STAGE9-29-proof`, plus mutation 2 (blank
+           `startTimeLocal`, the fallback assertion must EXECUTE, not skip) and a Python
+           re-run that a late comment-only edit invalidated. Collect with
+           `dispatch.py --mode collect --target w1:pM --unit B-STAGE9-29-proof`.
+           **Two non-blocking rows opened from the reviewer's read:** B-STAGE9-33
+           (`parseGarminTime` relabels an offset-bearing timestamp instead of converting it —
+           latent and pre-existing, but DEC-056 moved it onto a live path) and B-STAGE9-34
+           (the C++ boundary stringifies a non-str `startTimeLocal` instead of rejecting it;
+           safe only because production Python normalises first). Neither blocks the commit.
+           **Commit shape when the proof lands:** B-STAGE9-26 and B-STAGE9-29 go in as ONE
+           slice — they edit the same two files and splitting a file's hunks across two
+           commits is a hazard already paid for here. Verify each path's diff before staging;
+           the tree carries several unrelated workstreams. Expect pre-commit (clang-format,
+           ruff, `mypy --strict`, ledger-drift-lint) to be the real bar, not ctest green.
+           **Still owed and NOT done:** DEC-056's cascade on `design.md`'s listing prose,
+           which still says `garmin-<id>.fit` — the builder was correctly out of paths for it.
+
+STAGE-9-CURSOR (2026-09-19, `garmin_inspector_v1_34` — supersedes the `v1_33` blocks above
+           for SEQUENCING. Per-id status lives only in findings.md):
+           **B-STAGE9-29's tests are proven non-vacuous. One mutation is still owed.**
+           Mutation 1 (revert `e->name` to `garmin-%1.fit`) went RED on four slots in
+           `testGarminConnectSync`, restored byte-identical (md5
+           `e5c5145ca4d5d18fd58eeb5635cb49f3`); pytest 77/77.
+           Mutation 2 as briefed by `v1_33` could not reach the branch it targeted and the
+           builder said so instead of banking the green — the pystub feeds only
+           `testGarminConnectPyAdapter`, while every `testGarminConnectSync` slot uses
+           `FakeListPyAdapter`. Filed as B-STAGE9-35. Re-dispatched as unit
+           `B-STAGE9-29-proof2`: delete the C++ fallback at `GarminConnect.cpp:886-888`;
+           ONLY `readdirNameFallsBackToGmtConvertedToLocalWhenStartTimeLocalIsMissing` may
+           go RED.
+           **DEC-056's design.md cascade is DONE and was narrower than `v1_33` recorded.**
+           Only the LISTING name moved. `readFile` still stages `garmin-<id>.<ext>`
+           (`GarminConnect.cpp:690`, `:752`) and that name never reaches disk — `saveRide`
+           names from the parsed RideFile. design.md gained a section stating both names and
+           why they differ; its four staging-name references were correct and left alone.
+           **`B-STAGE9-29-proof2` LANDED — the unit's evidence is now complete.** Deleting
+           the C++ fallback at `GarminConnect.cpp:887-888` made EXACTLY ONE slot go RED
+           (`readdirNameFallsBackToGmtConvertedToLocalWhenStartTimeLocalIsMissing`, expected
+           `2026_07_15_22_00_00.fit`, got `.fit`); the other three naming slots and
+           `testGarminConnectPyAdapter` were unaffected — exactly the branch isolation the
+           decision describes.
+           Restored byte-identical, md5 `e5c5145ca4d5d18fd58eeb5635cb49f3` — Inspector
+           re-checked the md5 against the live file, not the report. Both mutations now
+           proven; T-211 is not vacuous on either the primary or the fallback path.
+           **B-STAGE9-28 is DECIDED as DEC-057, and its own option A was FALSIFIED.**
+           `git ls-files` reads the index, so the guard already sees staged-but-uncommitted
+           files — `test_garmin_lint_ownership_guard.py:612-635` pins exactly that. Nothing
+           to widen. DEC-057 instead requires an empty managed root to be DECLARED pre-armed
+           or go RED. Non-blocking; queues behind the live run. WIKI DEC pointer advanced to
+           `next:garmin-058`.
+           **Inspector's own independent re-verification of the slice, not the builder's:**
+           `cmake --build . -j4` exit 0 (561 targets, `src/GoldenCheetah` relinked),
+           `ctest -LE gate-exclude` **56/56, 0 failed**, 319.51s; `pytest tests -q` 77/77.
+           **THE SLICE IS COMMITTED `ce2b3402d`** (8 files, +299/-27). `garmin_codex_reviewer`
+           (unit `B-STAGE9-26-29-commit`) answered the commit-readiness question NO — no
+           real-wheel record reaching `readdir` is silently discarded by the filename gate or
+           shadows an athlete file — and filed nothing blocking. Five non-blocking
+           observations, all already-filed rows. All five pre-commit hooks passed on the
+           second attempt; clang-format reflowed two columns of continuation alignment inside
+           a regex string literal in `testGarminConnectSync.cpp`, which the Inspector
+           confirmed cosmetic by rebuilding and re-running that target (1/1) before
+           re-staging. B-STAGE9-26, -29 and -31 are closed against that hash.
+           **CLV is PASS for the first time this stage — 0 OUTSTANDING / 439 OK.**
+           `ledger_drift_lint.py` EXIT=0 (it caught one violation in this Inspector's own
+           STATE edit — DEC-056 paired with `GREEN` — since fixed).
+           **Sequencing:**
+           (1) **THE SEVENTH ATTENDED LIVE RUN IS THE NEXT UNIT AND IT IS THE ONE REAL
+           HUMAN-IN-THE-LOOP GATE.** Every stated precondition is now met: -19, -25, -12 and
+           -29 have all landed. The user enters credentials into the app's own dialog, never
+           into chat. Success is a NEW file under `~/.goldencheetah/Andy/activities/` (1145 at
+           last check), not the UI. A qmake relink is owed first — `ce2b3402d` is CMake-built
+           only, and the shipped binary is the qmake one.
+           (2) The seventh attended live run is still Stage 9's acceptance criterion and is
+           still blocked until that slice commits. It is the one human-in-the-loop gate.
+           Success is a NEW file under `~/.goldencheetah/Andy/activities/` (1145 at last
+           check), not the UI.
+           (3) B-STAGE9-28's option research is dispatched to `s925_tz_investigator` (unit
+           `B-STAGE9-28-options`); it owes a scored DEC, not a patch.
+           (4) `insp_wake.sh:159` still prints a false `hold: VIOLATED`. Still owed.
+           (5) Cap builds at `-j4`.
+           **Roster, verified live:** builder `garmin_builder_stage9_v16` (`w1:pM`, ~91k),
+           reviewer `garmin_codex_reviewer` (`w1:pD`, ~97k, idle), investigator
+           `s925_tz_investigator` (`w1:pR`, ~155k). `garmin_inspector_v1_33` retired and its
+           pane and tab closed this pass (5→4 panes, 3→2 tabs).
+
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md
 (## Decision index, then entries) · validations/archive/ + cycles/archive/ (historical

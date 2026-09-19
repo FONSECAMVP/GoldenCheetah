@@ -440,7 +440,8 @@ These stay one level below the interface so the page tests need not stand any of
 
 `CloudService`'s ctor defaults `downloadCompression` to `zip` (CloudService.cpp:54), and `uncompressRide` rejects,
 as its FIRST guard, any name not ending `.zip` (CloudService.cpp:239-241, `tr("expected compressed activity file.")`).
-GarminConnect stages and lists UNCOMPRESSED names — `garmin-<id>.fit` and the DEC-016 `.tcx` fallback — so **both
+GarminConnect stages and lists UNCOMPRESSED names — `garmin-<id>.fit` staged (and the DEC-016 `.tcx` fallback),
+`yyyy_MM_dd_HH_mm_ss.fit` listed since DEC-056; neither is a `.zip` — so **both
 ctors set `downloadCompression = none`** (GarminConnect.cpp:102, :110). Without it every *successful* download is
 rejected at that guard and the whole feature is inert.
 
@@ -493,6 +494,24 @@ public:
     bool readFile(QByteArray *data, QString remotename, QString remoteid) override;
 };
 ```
+
+### Listing entry name vs staging name — two different names (DEC-056)
+
+They are set in different places, from different sources, and only one of them moved:
+
+- **`readdir`'s entry name (`e->name`) is the activity's own LOCAL start time**,
+  `yyyy_MM_dd_HH_mm_ss.fit`, from the library's `startTimeLocal` with
+  `startTimeGMT`-converted-to-local as the documented fallback. It must match what
+  `RideFile::parseRideFileName` accepts, because both production consumers of the list —
+  the sync dialog's Download loop and the auto-downloader — `continue` past any name that
+  does not parse. This is the shape every peer service already uses.
+- **`readFile`'s staging name is still `garmin-<id>.<ext>`** and is unchanged by DEC-056.
+  It is passed to `postReadComplete`, reaches `uncompressRide` only to select a parser by
+  extension, and never reaches disk under that name — `saveRide` names the imported ride
+  from the parsed `RideFile`'s own start time, as for every provider.
+
+`e->id` (the `remoteid` `readFile` fetches by) and the `recordImport` sidecar key are both
+the activity id and are unaffected, so no download or dedup key moves with the rename.
 
 ### Registration
 
