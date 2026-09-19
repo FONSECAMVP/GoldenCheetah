@@ -1031,7 +1031,8 @@ STAGE-9-CURSOR (2026-09-19, `garmin_inspector_v1_32` — supersedes the two `v1_
            finding on Stage 9's code is gone.** One `#ifdef WIN32`-selected `setvbuf` in
            `nostderr()` (`src/Core/main.cpp:188-195`), T-209's two tests, the
            `unittests/Core/stderrbuf/` directory, and a three-line
-           `.pre-commit-config.yaml` widening.
+           `.pre-commit-config.yaml` widening. Committed `a0f9045e6` (11 files, +532/-10;
+           all five pre-commit hooks passed).
            **Evidence that did not exist before this pass, and is the point of it:**
            (1) qmake `make -j8` capped to `-j4` against `src.pro` exit 0, binary relinked,
            `nm -uC src/GoldenCheetah` shows `U setvbuf@GLIBC_2.2.5` — the release build
