@@ -26,7 +26,7 @@ from collections.abc import Iterator
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from gc_rate import rate_limited, with_retry
+from .gc_rate import rate_limited, with_retry
 
 try:
     import os

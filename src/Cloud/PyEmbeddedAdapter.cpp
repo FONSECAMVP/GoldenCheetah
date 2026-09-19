@@ -196,7 +196,7 @@ bool isSafeDottedName(const QString& s)
 // severe threat than a logging leak, and outside what this function can or
 // should defend against.
 const char* const kAllowedModuleRoots[] = {
-    "builtins", "garmin_client", "garminconnect", "curl_cffi", "requests",
+    "builtins", "gc_garmin_adapter", "garminconnect", "curl_cffi", "requests",
     "urllib3",  "socket",        "ssl",           "http",      "json",
 };
 
@@ -552,7 +552,7 @@ PyAuthOutcome PyEmbeddedAdapter::authenticate(const QString& email, const QStrin
 
     // Step 3 — path policy + import.
     prependToSysPathIfAbsent(modulePath);
-    PyRef module(PyImport_ImportModule("garmin_client"));
+    PyRef module(PyImport_ImportModule("gc_garmin_adapter.garmin_client"));
     if (!module)
         return classifyPendingException(nullptr);
 
@@ -663,7 +663,7 @@ PyAuthOutcome PyEmbeddedAdapter::submitMfa(const QString& code)
     // garmin_client is needed only to resolve the GarminError type for
     // classification; it is already imported/cached from authenticate().
     prependToSysPathIfAbsent(modulePath);
-    PyRef module(PyImport_ImportModule("garmin_client"));
+    PyRef module(PyImport_ImportModule("gc_garmin_adapter.garmin_client"));
 
     // Resume the pending MFA session on the SAME retained client. A bad/expired
     // code surfaces as GarminError kind 'auth' (classified by TYPE, LSN-006);
@@ -733,7 +733,7 @@ PyDownloadOutcome PyEmbeddedAdapter::downloadActivity(const QString& activityId,
     // garmin_client is needed only to resolve the GarminError type for
     // classification; it is already imported/cached from authenticate().
     prependToSysPathIfAbsent(modulePath);
-    PyRef module(PyImport_ImportModule("garmin_client"));
+    PyRef module(PyImport_ImportModule("gc_garmin_adapter.garmin_client"));
 
     PyRef result(PyObject_CallMethod(m_client, "download_activity", "ss",
                                      activityId.toUtf8().constData(),
@@ -793,7 +793,7 @@ PyListOutcome PyEmbeddedAdapter::listActivitiesSince(const QString& sinceGmt)
     // garmin_client is needed only to resolve the GarminError type for
     // classification; it is already imported/cached from authenticate().
     prependToSysPathIfAbsent(modulePath);
-    PyRef module(PyImport_ImportModule("garmin_client"));
+    PyRef module(PyImport_ImportModule("gc_garmin_adapter.garmin_client"));
 
     // Forward the since-timestamp VERBATIM (DES-010 — Garmin's server-side
     // timestamp, never the local clock). The adapter returns an iterator of
@@ -868,7 +868,7 @@ PyLoadTokensOutcome PyEmbeddedAdapter::loadTokens(const QString& tokenBlob)
 
     // Path policy + import.
     prependToSysPathIfAbsent(modulePath);
-    PyRef module(PyImport_ImportModule("garmin_client"));
+    PyRef module(PyImport_ImportModule("gc_garmin_adapter.garmin_client"));
     if (!module)
         return classifyLoadTokensException(nullptr);
 
@@ -923,7 +923,7 @@ PyProfileOutcome PyEmbeddedAdapter::fetchProfile()
     // garmin_client is needed only to resolve the GarminError type for
     // classification; it is already imported/cached from authenticate().
     prependToSysPathIfAbsent(modulePath);
-    PyRef module(PyImport_ImportModule("garmin_client"));
+    PyRef module(PyImport_ImportModule("gc_garmin_adapter.garmin_client"));
 
     PyRef result(PyObject_CallMethod(m_client, "get_profile", nullptr));
     if (!result)

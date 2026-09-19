@@ -22,7 +22,7 @@ from collections.abc import Callable
 
 import pytest
 
-from gc_rate import _BUCKET, rate_limited, with_retry
+from gc_garmin_adapter.gc_rate import _BUCKET, rate_limited, with_retry
 
 
 @pytest.fixture(autouse=True)  # type: ignore[misc]
@@ -167,7 +167,7 @@ def test_every_network_calling_GarminClient_method_is_rate_limited_and_retried()
     paced (rate_limited) AND retried (with_retry), not just list_activities_since/
     download_activity. A method added/left without both decorators would bypass
     the single pacing chokepoint DES-005 exists to enforce."""
-    from garmin_client import GarminClient
+    from gc_garmin_adapter.garmin_client import GarminClient
 
     for name in ("login", "submit_mfa", "list_activities_since", "download_activity"):
         fn = getattr(GarminClient, name)
@@ -210,7 +210,7 @@ def test_with_retry_backoff_is_exponential_and_capped(monkeypatch: pytest.Monkey
 
 def _transient_failer(counter: dict[str, int]) -> Callable[..., object]:
     """An impl that fails with a transient GarminError forever, counting tries."""
-    from garmin_client import GarminError
+    from gc_garmin_adapter.garmin_client import GarminError
 
     def fail(*_args: object, **_kwargs: object) -> object:
         counter["n"] += 1
@@ -258,7 +258,7 @@ def test_production_GarminClient_retry_binds_the_spec_schedule(
     be reached and the test would exercise nothing. This way the REAL
     with_retry+rate_limited chain stays fully in the path under test.
     """
-    from garmin_client import GarminClient, GarminError
+    from gc_garmin_adapter.garmin_client import GarminClient, GarminError
 
     sleeps: list[float] = []
     monkeypatch.setattr(time, "sleep", lambda s: sleeps.append(s))

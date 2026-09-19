@@ -33,7 +33,7 @@ import pytest
 # Intentional: imports the stub adapter. RED-for-the-right-reason is the
 # NotImplementedError raised from GarminClient.__init__/login, not an import
 # failure — the stub exists precisely so the import succeeds.
-from garmin_client import GarminClient, GarminError
+from gc_garmin_adapter.garmin_client import GarminClient, GarminError
 
 
 class _FakeAuthError(Exception):
@@ -83,7 +83,7 @@ def _install_fake_gc(monkeypatch: pytest.MonkeyPatch, garmin_cls: type) -> None:
     """Replace garmin_client._gc with a fake module exposing the same surface
     the adapter touches: Garmin class + exceptions.GarminConnectAuthenticationError.
     """
-    import garmin_client
+    import gc_garmin_adapter.garmin_client as garmin_client
 
     fake_mod = types.ModuleType("garminconnect_fake")
     fake_mod.Garmin = garmin_cls  # type: ignore[attr-defined]

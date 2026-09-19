@@ -349,7 +349,7 @@ class _FakeAuthErrorReal(Exception):
 
 
 def _install_fake_gc(monkeypatch: pytest.MonkeyPatch, garmin_cls: type) -> None:
-    import garmin_client
+    import gc_garmin_adapter.garmin_client as garmin_client
 
     fake_mod = types.ModuleType("garminconnect_fake")
     fake_mod.Garmin = garmin_cls  # type: ignore[attr-defined]
@@ -398,7 +398,7 @@ def test_mfa_required_account_must_surface_two_step_sentinel_not_generic_auth_fa
     MFA-required account is misreported as a bad password, and REQ-003's
     two-step flow is currently UNREACHABLE against the real library.
     """
-    from garmin_client import GarminClient
+    from gc_garmin_adapter.garmin_client import GarminClient
 
     _install_fake_gc(monkeypatch, _RealShapeMfaRequiredGarmin)
     client = GarminClient("u@x.com", "p")
@@ -454,7 +454,7 @@ def test_login_after_return_on_mfa_must_still_populate_identity_on_success(
     identity dict comes back empty today — exactly the silent breakage the
     eventual fix must not reintroduce.
     """
-    from garmin_client import GarminClient
+    from gc_garmin_adapter.garmin_client import GarminClient
 
     _install_fake_gc(monkeypatch, _EarlyReturnGarmin)
     client = GarminClient("u@x.com", "p")
@@ -509,7 +509,7 @@ def test_login_when_compensation_profile_load_fails_must_raise_classified_error(
     reaching PyEmbeddedAdapter, folded to the generic "code: unknown" UI
     copy) reintroduced on a new line by this very fix.
     """
-    from garmin_client import GarminClient, GarminError
+    from gc_garmin_adapter.garmin_client import GarminClient, GarminError
 
     _install_fake_gc(monkeypatch, _CompensationLoadFailsGarmin)
     client = GarminClient("u@x.com", "p")
@@ -575,7 +575,7 @@ def test_submit_mfa_correct_code_must_succeed_against_real_argument_order(
     `_RealShapeResumeLoginGarmin` above), a correct code is wrongly rejected
     as invalid today.
     """
-    from garmin_client import GarminClient
+    from gc_garmin_adapter.garmin_client import GarminClient
 
     _install_fake_gc(monkeypatch, _RealShapeResumeLoginGarmin)
     client = GarminClient("u@x.com", "p")
@@ -635,7 +635,7 @@ def test_dump_tokens_must_use_the_real_inner_client_surface(monkeypatch: pytest.
     own on the real installed library, so today's `self._garmin.dumps()`
     raises AttributeError against a faithful fake.
     """
-    from garmin_client import GarminClient
+    from gc_garmin_adapter.garmin_client import GarminClient
 
     _install_fake_gc(monkeypatch, _RealShapeTokenGarmin)
     client = GarminClient("u@x.com", "p")
@@ -658,7 +658,7 @@ def test_load_tokens_must_use_the_real_inner_client_surface(monkeypatch: pytest.
     today's `self._garmin.loads(...)` raises AttributeError against a
     faithful fake.
     """
-    from garmin_client import GarminClient
+    from gc_garmin_adapter.garmin_client import GarminClient
 
     _install_fake_gc(monkeypatch, _RealShapeTokenGarmin)
 

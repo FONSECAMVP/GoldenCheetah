@@ -35,7 +35,7 @@ from typing import Any
 
 import pytest
 
-from garmin_client import GarminClient, GarminError
+from gc_garmin_adapter.garmin_client import GarminClient, GarminError
 
 
 class _FakeAuthError(Exception):
@@ -96,7 +96,7 @@ def _install_fake_gc(monkeypatch: pytest.MonkeyPatch, garmin_cls: type) -> None:
     touches: Garmin class + the exception types resume_login() can raise
     (auth/connection/rate_limit — B-STAGE9-10 repair BLOCKING-3).
     """
-    import garmin_client
+    import gc_garmin_adapter.garmin_client as garmin_client
 
     fake_mod = types.ModuleType("garminconnect_fake")
     fake_mod.Garmin = garmin_cls  # type: ignore[attr-defined]

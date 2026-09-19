@@ -176,9 +176,10 @@ AddCloudWizard::ensureGarminAuthPage()
 {
     if (garminChain) return;
 
-    // modulePath (DES-013): where the garmin_client module lives. Runtime
-    // env override first, else the build-time dev default. The installed
-    // location is DES-007 / REQ-NF-Pkg-001 territory (later slice).
+    // modulePath (DES-013): the directory containing the gc_garmin_adapter
+    // package (DEC-058). Runtime env override first, else the build-time dev
+    // default. The installed location is DES-007 / REQ-NF-Pkg-001 territory
+    // (later slice).
     QString modulePath = QString::fromLocal8Bit(qgetenv("GC_GARMIN_PYPATH"));
     if (modulePath.isEmpty()) modulePath = QStringLiteral(GARMIN_PY_MODULE_DIR);
 

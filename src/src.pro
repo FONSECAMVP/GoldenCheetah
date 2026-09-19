@@ -263,8 +263,9 @@ contains(DEFINES, "GC_WANT_GARMINCONNECT") {
     # relative includes instead, so this path isn't in the default INCLUDEPATH.
     INCLUDEPATH += ../contrib/qzip
 
-    # Dev default for the garmin_client module directory; the runtime env var
-    # GC_GARMIN_PYPATH overrides it (see AddCloudWizard::ensureGarminAuthPage).
+    # Dev default for the directory CONTAINING the gc_garmin_adapter package
+    # (DEC-058); the runtime env var GC_GARMIN_PYPATH overrides it (see
+    # AddCloudWizard::ensureGarminAuthPage).
     # The installed/bundled location is DES-007 / REQ-NF-Pkg-001 step 2 territory.
     # shell_quote (not a plain \\\"-escaped string) because $$PWD may contain a
     # space (this repo's own working copy does) — a plain escape survives

@@ -2,11 +2,22 @@
 # Per DEC-008: pytest + coverage.py for the Python adapter (DES-005, DES-012).
 # This config is intentionally narrow so it does not touch legacy src/Python/* scripts.
 
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "gc-garminconnect"
 version = "0.0.1"
 description = "Embedded Python adapter for Garmin Connect download (Phase 1)."
 requires-python = ">=3.9"
+
+# DEC-058 constraint 7: distribution root stays src/Python/garminconnect/ (where
+# this file already lives); the installable package is the gc_garmin_adapter/
+# subdirectory, discovered by name rather than by adding a src/ nesting level.
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["gc_garmin_adapter*"]
 
 [tool.ruff]
 line-length = 120
@@ -25,9 +36,10 @@ python_version = "3.9"
 files = ["."]
 # mypy_path is resolved against cwd, not the config-file directory. Pre-commit
 # invokes mypy from the repo root, so spell the path out explicitly. Adapter
-# modules (garmin_client.py, gc_rate.py) are top-level — explicit_package_bases
-# stops mypy from also treating them as `garminconnect.*` (a name collision
-# with the upstream `garminconnect` PyPI package the adapter wraps).
+# modules live under the gc_garmin_adapter/ package rooted here —
+# explicit_package_bases stops mypy from instead walking up to this
+# directory's own __init__.py and resolving them as `garminconnect.*` (a name
+# collision with the upstream `garminconnect` PyPI package the adapter wraps).
 mypy_path = ["src/Python/garminconnect"]
 explicit_package_bases = true
 # Third-party stubs we accept as untyped:
@@ -39,8 +51,9 @@ ignore_missing_imports = true
 minversion = "7.0"
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
-# Adapter modules live at the package root (garmin_client.py, gc_rate.py);
-# adding "." to pythonpath lets tests import them directly without a build step.
+# Adapter modules live under gc_garmin_adapter/ (garmin_client.py, gc_rate.py);
+# adding "." to pythonpath lets tests import gc_garmin_adapter.* directly
+# without a build step.
 pythonpath = ["."]
 
 [tool.coverage.run]

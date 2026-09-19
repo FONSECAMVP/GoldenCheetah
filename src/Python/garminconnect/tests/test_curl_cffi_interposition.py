@@ -63,7 +63,7 @@ _REPRO = textwrap.dedent(
     ctypes.CDLL("libcurl-gnutls.so.4", mode=ctypes.RTLD_GLOBAL)
 
     sys.path.insert(0, {adapter_dir!r})
-    import garmin_client  # noqa: F401 -- import for its curl_cffi side effect
+    import gc_garmin_adapter.garmin_client  # noqa: F401 -- import for its curl_cffi side effect
 
     import curl_cffi
 

@@ -88,8 +88,8 @@ void setScenario(const char* scenario)
                        "_d = %1\n"
                        "if _d not in sys.path:\n"
                        "    sys.path.insert(0, _d)\n"
-                       "import garmin_client\n"
-                       "garmin_client.SCENARIO = '%2'\n")
+                       "import gc_garmin_adapter.garmin_client\n"
+                       "gc_garmin_adapter.garmin_client.SCENARIO = '%2'\n")
             .arg(QStringLiteral("r'''") + QString::fromUtf8(GARMIN_PYSTUBS_DIR) + QStringLiteral("'''"),
                  QString::fromUtf8(scenario));
     runPy(code.toUtf8().constData());

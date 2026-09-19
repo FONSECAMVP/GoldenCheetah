@@ -90,7 +90,7 @@ QString stubAttr(const char* name)
 {
     PyGILState_STATE st = PyGILState_Ensure();
     QString out;
-    PyObject* mod = PyImport_ImportModule("garmin_client");
+    PyObject* mod = PyImport_ImportModule("gc_garmin_adapter.garmin_client");
     if (mod) {
         PyObject* v = PyObject_GetAttrString(mod, name);
         if (v && PyUnicode_Check(v)) {
@@ -113,8 +113,8 @@ void setScenario(const char* scenario)
                        "_d = %1\n"
                        "if _d not in sys.path:\n"
                        "    sys.path.insert(0, _d)\n"
-                       "import garmin_client\n"
-                       "garmin_client.SCENARIO = '%2'\n")
+                       "import gc_garmin_adapter.garmin_client\n"
+                       "gc_garmin_adapter.garmin_client.SCENARIO = '%2'\n")
             .arg(QStringLiteral("r'''") + QString::fromUtf8(GARMIN_PYSTUBS_DIR) + QStringLiteral("'''"),
                  QString::fromUtf8(scenario));
     runPy(code.toUtf8().constData());
@@ -204,8 +204,8 @@ class TestGarminConnectPasswordPersistence : public QObject
         // Prove the redirect reached the interpreter's own environment view.
         // (After setScenario: the stub module is importable only once its dir
         // is on sys.path.)
-        runPy("import os, garmin_client\n"
-              "garmin_client.T203_PY_HOME = os.environ.get('HOME', '')\n");
+        runPy("import os, gc_garmin_adapter.garmin_client\n"
+              "gc_garmin_adapter.garmin_client.T203_PY_HOME = os.environ.get('HOME', '')\n");
         QCOMPARE(stubAttr("T203_PY_HOME"), homeDir);
     }
 

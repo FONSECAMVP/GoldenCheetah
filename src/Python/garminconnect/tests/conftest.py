@@ -11,7 +11,7 @@ from collections.abc import Iterator
 
 import pytest
 
-import gc_rate
+from gc_garmin_adapter import gc_rate
 
 
 @pytest.fixture(autouse=True)  # type: ignore[misc]

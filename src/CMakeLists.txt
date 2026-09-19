@@ -1463,8 +1463,9 @@ if(GC_WANT_GARMINCONNECT)
     find_package(Python3 REQUIRED COMPONENTS Development.Embed)
     target_link_libraries(GoldenCheetah PRIVATE Python3::Python)
 
-    # Dev default for the garmin_client module directory; the runtime env var
-    # GC_GARMIN_PYPATH overrides it (see AddCloudWizard::ensureGarminAuthPage).
+    # Dev default for the directory CONTAINING the gc_garmin_adapter package
+    # (DEC-058); the runtime env var GC_GARMIN_PYPATH overrides it (see
+    # AddCloudWizard::ensureGarminAuthPage).
     # The installed/bundled location is DES-007 / REQ-NF-Pkg-001 territory.
     target_compile_definitions(GoldenCheetah PRIVATE
         "GARMIN_PY_MODULE_DIR=\"${CMAKE_SOURCE_DIR}/src/Python/garminconnect\"")
