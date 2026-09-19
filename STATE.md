@@ -1253,8 +1253,23 @@ STAGE-9-CURSOR (2026-09-19, `garmin_inspector_v1_34` — supersedes the `v1_33` 
            HUMAN-IN-THE-LOOP GATE.** Every stated precondition is now met: -19, -25, -12 and
            -29 have all landed. The user enters credentials into the app's own dialog, never
            into chat. Success is a NEW file under `~/.goldencheetah/Andy/activities/` (1145 at
-           last check), not the UI. A qmake relink is owed first — `ce2b3402d` is CMake-built
-           only, and the shipped binary is the qmake one.
+           last check), not the UI. **A qmake relink is owed FIRST and is NOT done** —
+           `ce2b3402d` is CMake-verified only and the shipped binary is the qmake one.
+           `garmin_inspector_v1_34` started `make -j4` in `src/` at 18:11; `IGarminPyAdapter.h`
+           changed, so it is regenerating moc widely and is slow. It was NOT verified before
+           that Inspector handed off and must be re-run (make resumes; it is idempotent).
+           Verify by mtime on `src/GoldenCheetah` AND `nm -uC src/GoldenCheetah | grep
+           setvbuf` before scheduling the run. `src.pro:274` points `GARMIN_PY_MODULE_DIR` at
+           the source tree, so the Python half needs no build step.
+           (2) B-STAGE9-28 is decided (DEC-057) but NOT built. B-STAGE9-30, -33, -34, -35
+           remain open and non-blocking. None blocks the live run.
+           (3) `insp_wake.sh:159`'s hold check reported `main.cpp: CLEAN` correctly this pass
+           — the false `hold: VIOLATED` was dirtiness, as recorded. Nothing owed unless it
+           misreports again.
+           (4) Cap builds at `-j4`.
+           **Roster, verified live:** builder `garmin_builder_stage9_v16` (`w1:pM`, 108k),
+           reviewer `garmin_codex_reviewer` (`w1:pD`, 131k), investigator
+           `s925_tz_investigator` (`w1:pR`, 189k) — all idle, all under 250k.
            (2) The seventh attended live run is still Stage 9's acceptance criterion and is
            still blocked until that slice commits. It is the one human-in-the-loop gate.
            Success is a NEW file under `~/.goldencheetah/Andy/activities/` (1145 at last
