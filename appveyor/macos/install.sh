@@ -2,6 +2,8 @@
 set -ev
 
 date
+# DEC-058 constraint 10: explicit repo-root CWD for every relative path below
+cd "$APPVEYOR_BUILD_FOLDER"
 # Don't update or cleanup
 export HOMEBREW_NO_AUTO_UPDATE=1
 export HOMEBREW_NO_INSTALL_CLEANUP=1
@@ -52,5 +54,8 @@ python3 --version
 python3 -m pip install --upgrade pip
 # Install your project's dependencies from a requirements.txt file
 python3 -m pip install -r src/Python/requirements.txt
+# DEC-058 constraint 8: adapter's own step, after requirements.txt, from this
+# script's CWD (repo root); --no-deps because third-party deps stay above
+python3 -m pip install --no-deps ./src/Python/garminconnect
 
 exit

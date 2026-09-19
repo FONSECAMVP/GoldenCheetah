@@ -135,12 +135,19 @@ install:
       Start-FileDownload "https://bootstrap.pypa.io/get-pip.py" "get-pip.py"
       C:\Python\python.exe get-pip.py --no-warn-script-location
     }
+# DEC-058 constraint 10: explicit repo-root CWD for every relative path below
+- cmd: cd /d %APPVEYOR_BUILD_FOLDER%
 - cmd: set PATH=C:\Python311-x64\Scripts\;C:\Python311-x64\;%PATH%
 - cmd: python --version
 # Upgrade pip to ensure you have the latest version
 - cmd: python -m pip install --upgrade pip
 # Install your project's dependencies from a requirements.txt file
 - cmd: "python -m pip install --only-binary :all: -r src/Python/requirements.txt -t C:/Python/lib/site-packages"
+# DEC-058 constraints 8,9,15: adapter's own step, after requirements.txt, using
+# the BUNDLED interpreter (the embedded C:\Python created above and xcopy'd
+# wholesale into src\release in after_build), not the build-time
+# C:\Python311-x64 `python`; --no-deps, deps stay above
+- cmd: "C:/Python/python.exe -m pip install --no-deps ./src/Python/garminconnect -t C:/Python/lib/site-packages"
 
 # Linux / macOS - install dependencies first (including Python 3.11)
 - sh: bash appveyor/$OS_NAME/install.sh
