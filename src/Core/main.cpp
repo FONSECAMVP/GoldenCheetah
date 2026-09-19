@@ -549,7 +549,17 @@ main(int argc, char *argv[])
         // uses it on this particular run.
         bootCfg.preInitHook = &registerGoldenCheetahInittab;
 #endif
-        PyProcessBootstrap::ensureInitialized(bootCfg);
+        // DEC-061 (B-STAGE9-40): nonfatal, matching this same block's own
+        // R (:511) and Python-embedding (PythonEmbed.cpp:397) precedents.
+        // isInitialized() and bootResult.error stay the observable record
+        // of a failure here instead of the prior silent discard. qDebug()
+        // reaches the process's PRE-redirect stderr: nostderr()'s
+        // freopen()/_IOLBF setup (:611-614 below) has not run yet at this
+        // point in startup.
+        PyProcessBootstrap::Result bootResult = PyProcessBootstrap::ensureInitialized(bootCfg);
+        if (!bootResult.ok) {
+            qDebug() << "GoldenCheetah: Garmin/Python process bootstrap failed:" << bootResult.error;
+        }
 #endif
 
         //this is the path within the current directory where GC will look for

@@ -61,6 +61,7 @@
 
 #include <QCoreApplication>
 #include <QProcess>
+#include <QProcessEnvironment>
 #include <QString>
 #include <QtTest/QtTest>
 
@@ -129,6 +130,31 @@ int runGilOwnershipChild()
 
     PyGILState_Release(st); // ours to release — the same scope that acquired it
     return (result.ok && stillHeld) ? 0 : 1;
+}
+
+// DEC-061 (B-STAGE9-40) — same re-exec escape hatch as
+// runGilOwnershipChild(): ensureInitialized() caches its first-ever result
+// for the rest of any process, and initTestCase() already forced a SUCCESS
+// into that cache for THIS binary's normal test process, so a real failure
+// can only be observed in a fresh one. The parent sets PYTHONHOME to a
+// nonexistent directory on the CHILD's environment only; MEASURED (a
+// standalone probe against this build's CPython 3.13) to make
+// Py_InitializeFromConfig() return a PyStatus_Exception ("Failed to import
+// encodings module") rather than crash, hang, or call Py_ExitStatusException
+// itself — CPython's own documented non-aborting failure path, which
+// PyProcessBootstrap.cpp already handles without invoking that call.
+const char* kBootstrapFailureChildFlag = "--bootstrap-failure-child";
+const char* kBootstrapFailureResultPrefix = "BOOTSTRAP_FAILURE_CHILD_RESULT=";
+
+int runBootstrapFailureChild()
+{
+    const PyProcessBootstrap::Result result = PyProcessBootstrap::ensureInitialized();
+    const bool cleanFailure = !result.ok && !result.error.isEmpty() && !PyProcessBootstrap::isInitialized();
+
+    fprintf(stderr, "%s%s\n", kBootstrapFailureResultPrefix, cleanFailure ? "failed-as-expected" : "unexpected");
+    fflush(stderr);
+
+    return cleanFailure ? 0 : 1;
 }
 
 } // namespace
@@ -279,17 +305,49 @@ class TestPyProcessBootstrap : public QObject
         QCOMPARE(child.exitCode(), 0);
         QCOMPARE(child.exitStatus(), QProcess::NormalExit);
     }
+
+    // DEC-061 (B-STAGE9-40) — PROVE IT: a failed ensureInitialized() must
+    // leave isInitialized() false and Result.error non-empty — the exact
+    // predicate/diagnostic pair main.cpp:552 now consumes instead of
+    // discarding. main.cpp itself is the app entry point and links into no
+    // CTest target (ground truth #2: no app-process smoke exists yet), so
+    // this pins the contract main.cpp's fix relies on, in a fresh re-exec'd
+    // process (runBootstrapFailureChild() above) with an invalid PYTHONHOME
+    // on the CHILD's environment only — this process's own successful
+    // bootstrap (initTestCase()) is untouched.
+    void bootstrapFailureLeavesUninitializedWithADiagnostic()
+    {
+        QProcess child;
+        child.setProgram(QCoreApplication::applicationFilePath());
+        child.setArguments(QStringList() << QString::fromLatin1(kBootstrapFailureChildFlag));
+        QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+        env.insert(QStringLiteral("PYTHONHOME"), QStringLiteral("/definitely/does/not/exist-gc-test"));
+        child.setProcessEnvironment(env);
+        child.start();
+
+        QVERIFY2(child.waitForStarted(10000), "child process failed to start");
+        QVERIFY2(child.waitForFinished(10000), "child process timed out");
+
+        const QString err = QString::fromUtf8(child.readAllStandardError());
+        QVERIFY2(
+            err.contains(QString::fromLatin1(kBootstrapFailureResultPrefix) + QStringLiteral("failed-as-expected")),
+            qPrintable(QStringLiteral("child did not report a clean bootstrap failure; stderr=%1").arg(err)));
+        QCOMPARE(child.exitCode(), 0);
+        QCOMPARE(child.exitStatus(), QProcess::NormalExit);
+    }
 };
 
-// Custom main (replaces QTEST_APPLESS_MAIN) so the B-STAGE9-05 child-mode
-// flag can be intercepted and dispatched to runGilOwnershipChild() BEFORE
-// QCoreApplication/QTest ever see it or touch Python — see
-// externallyInitializedGilIsNotStolen() above.
+// Custom main (replaces QTEST_APPLESS_MAIN) so the B-STAGE9-05 and DEC-061
+// child-mode flags can be intercepted and dispatched BEFORE QCoreApplication/
+// QTest ever see them or touch Python — see runGilOwnershipChild() and
+// runBootstrapFailureChild() above.
 int main(int argc, char* argv[])
 {
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], kGilOwnershipChildFlag) == 0)
             return runGilOwnershipChild();
+        if (std::strcmp(argv[i], kBootstrapFailureChildFlag) == 0)
+            return runBootstrapFailureChild();
     }
 
     QCoreApplication app(argc, argv); // gives applicationFilePath() a real path to report
