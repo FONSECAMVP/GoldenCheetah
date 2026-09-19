@@ -1502,6 +1502,39 @@ STAGE-9-CURSOR (2026-09-19, `garmin_inspector_v1_37` — supersedes the two `v1_
            `s925_tz_investigator` (`w1:pR`, 107k, working). `garmin_inspector_v1_36` retired,
            pane `w1:p23` and tab `w1:t1V` closed (3→2 tabs).
 
+STAGE-9-CURSOR-ADDENDUM (2026-09-19, `garmin_inspector_v1_37`, written before self-
+           succession at ~189k/210k. Sequencing only; per-id status lives in findings.md):
+           Committed this pass: `ee998e6b8` (DEC-059) and `dc12db32b` (its Amendment).
+           **What the next Inspector owes, in order:**
+           (1) `garmin_builder_stage9_v18` (`w1:pM`, fresh, Sonnet/auto) is mid-ROUND 4 on
+           B-STAGE9-36. Collect with `dispatch.py --mode collect --target w1:pM --unit
+           B-STAGE9-36-r4`; expect a spill to `/tmp/insp-exchange/B-STAGE9-36-r4.md`.
+           Round 4 closes four parse defects in the `- Arms:` bullet reader: prose on the
+           bullet line being harvested, a second bullet silently ignored, `\s*` crossing a
+           newline, and a fenced-block bullet counting. Two were found by the Inspector, two
+           by the reviewer.
+           (2) **On GREEN the reviewer MUST delta-check round 4 before any commit.** This
+           reviewer has now found a real blocking defect in this unit on three consecutive
+           rounds, and the Inspector found two more it had missed. Do not shorten this loop.
+           (3) B-STAGE9-28 is CLOSED on the reviewer's own verdict but stays UNCOMMITTED
+           until -36 closes; same two files, one commit. Nothing else may touch those paths.
+           (4) **DEC-058 is decided and NOT built — still the largest open piece and what
+           Stage 9 blocks on, not the live account.** `s925_tz_investigator` (`w1:pR`) is
+           mid-unit `DEC-058-pip-mechanics`, settling the three unverified pip constraints
+           before a builder starts. Collect it before dispatching any DEC-058 build.
+           (5) B-STAGE9-39 stays SUSPECTED, un-harnessed; `main.cpp` hard hold in force.
+           (6) `clv_findings.py` FAIL / OUTSTANDING=3 is CORRECT (B-STAGE9-36, -38, -39).
+           `ledger_drift_lint.py` EXIT=0. WIKI DEC registry at `next:garmin-060`.
+           (7) Export `SELF_PANE` when arming `insp_wake.sh`. Cap builds at `-j4`.
+           (8) Inspector-tooling note, not a project lesson: committing governance while the
+           builder is live makes pre-commit stash and restore its unstaged work. It survived
+           twice this pass, but re-check the builder's diff after every such commit.
+           **Roster, verified live:** builder `garmin_builder_stage9_v18` (`w1:pM`, fresh 0k,
+           working round 4 — v17 soft-landed at 227k while idle and clean), reviewer
+           `garmin_codex_reviewer` (`w1:pD`, 61k after a `/new` at 210k, idle), investigator
+           `s925_tz_investigator` (`w1:pR`, 114k, working). `garmin_inspector_v1_36` retired,
+           pane `w1:p23` and tab `w1:t1V` closed this pass (3→2 tabs).
+
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md
 (## Decision index, then entries) · validations/archive/ + cycles/archive/ (historical
