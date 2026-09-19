@@ -185,7 +185,16 @@ void nostderr(QString file)
         return;
     }
 
-    fd = fileno(stderr); 
+#ifdef WIN32
+    int vbuf_ret = setvbuf(stderr, nullptr, _IONBF, 0);
+#else
+    int vbuf_ret = setvbuf(stderr, nullptr, _IOLBF, 0);
+#endif
+    if (vbuf_ret != 0) {
+        qDebug() << "GoldenCheetah: setvbuf failed to set stderr buffering mode, return value " << vbuf_ret;
+    }
+
+    fd = fileno(stderr);
     if (fd < 0) {
         qDebug() << "GoldenCheetah: invalid handle obtained from stderr " << fd;
         return;
@@ -204,7 +213,7 @@ void nostderr(QString file)
     std::ios::sync_with_stdio();
 
 #ifdef WIN32
-    // Redirect STD_ERROR_HANDLE to the new file   
+    // Redirect STD_ERROR_HANDLE to the new file
     HANDLE fileHandle = (HANDLE)_get_osfhandle(fd_stderr);
     if(fileHandle == INVALID_HANDLE_VALUE) qDebug() << "GoldenCheetah: cannot get Win32 HANDLE for stderr";
     

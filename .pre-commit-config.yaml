@@ -61,11 +61,11 @@ repos:
     hooks:
       - id: ruff
         name: ruff-check (Garmin Python)
-        files: '^(src/Python/garminconnect|unittests/buildguard)/.*\.py$'
+        files: '^(src/Python/garminconnect|unittests/buildguard|unittests/Core/stderrbuf)/.*\.py$'
         args: [--fix]
       - id: ruff-format
         name: ruff-format (Garmin Python)
-        files: '^(src/Python/garminconnect|unittests/buildguard)/.*\.py$'
+        files: '^(src/Python/garminconnect|unittests/buildguard|unittests/Core/stderrbuf)/.*\.py$'
 
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.11.2
@@ -95,7 +95,7 @@ repos:
       # its own truth.
       - id: mypy
         name: mypy --strict (Garmin Python)
-        files: '^src/Python/garminconnect/.*\.py$'
+        files: '^(src/Python/garminconnect|unittests/Core/stderrbuf)/.*\.py$'
         args: [--strict, --config-file=src/Python/garminconnect/pyproject.toml]
         additional_dependencies: []
 

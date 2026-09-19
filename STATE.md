@@ -54,7 +54,12 @@ OPEN:      **STAGE 6 CLOSED 2026-09-08, COMMITTED `4a72d2279`** — all six REQs
            Stage 8, the current next gate.**
 BLOCKING:  — (none; B-R025-01/A3-R021b-F2/B-R029-01 all closed 2026-09-08, see above)
 CASCADE:   — (DEC-015 fully propagated; ledger_drift_lint.py EXIT=0)
-LAST_CLV:  clv_findings.py 2026-09-13 (re-run post-B-STAGE9-08 closure — builder GREEN
+LAST_CLV:  clv_findings.py 2026-09-19 (post-B-STAGE9-12/-27 disposition, `garmin_inspector_v1_32`).
+           **PASS — 0 OUTSTANDING / 432 OK over 432 rows**, 0 MALFORMED, 0 MISSING-EFFECT.
+           `ledger_drift_lint.py` re-run clean (EXIT=0) against the edited files. No blocking
+           finding remains open on Stage 9's code; the two open rows are both non-blocking.
+           Prior:
+           clv_findings.py 2026-09-13 (re-run post-B-STAGE9-08 closure — builder GREEN
            on round 8, reviewer delta-check PASS after 8 fix rounds). **PASS — 0
            OUTSTANDING / 407 OK over 407 rows.** `ledger_drift_lint.py` re-run clean
            (EXIT=0) against both edited files (STATE.md/findings.md).
@@ -947,6 +952,120 @@ STAGE-9-CURSOR-ADDENDUM (2026-09-19, `garmin_inspector_v1_30`, written immediate
            **Do not schedule a sixth attended live run yet.** Both stated preconditions (-19 and -25
            landed) are now met, but land B-STAGE9-12 first or the run's `gc_obs` traces only survive
            if the user quits via File > Quit — which is B-STAGE9-12 itself.
+
+STAGE-9-CURSOR (2026-09-19, `garmin_inspector_v1_31` — supersedes the ADDENDUM above for
+           SEQUENCING. Per-id status lives only in findings.md):
+           **B-STAGE9-12 is DISPATCHED** to `garmin_builder_stage9_v14` (`w1:pM`, Sonnet 5,
+           auto mode and `tok 0k/0k` verified from the pane before dispatch). The brief asks for
+           the production repair plus the four repairs reviewer round 1 owed: the POSIX
+           `setvbuf`, a WIN32 `_IONBF` companion, removal of the `GC_STDERR_MIRROR_APPLY_FIX`
+           false-green channel in the mirror, and an executable source-contract check over
+           `nostderr()` that asserts call ORDER separately from the fix's presence. T-209
+           allocated to this unit (WIKI REGISTRIES pointer was already correct; grep-confirmed
+           unused). DEC-054's obligation is carried into the brief: the registered test may not
+           enter the default gate red and may not take `gate-exclude`.
+           **Succession done:** `garmin_inspector_v1_30` exited cleanly and its pane `w1:p1X`
+           and tab `w1:t1N` are closed; resumable as
+           `claude --resume 37dadd82-9863-4fab-9d46-c6886a7cacd6`. Two tabs remain: `w1:tE`
+           (builder/reviewer/investigator) and `w1:t1P` (Inspector).
+           **Ledger hygiene this pass:** WIKI.md's DEC registry read `next:garmin-054` while
+           DEC-054 already existed — corrected to `next:garmin-055`, no code changed.
+           **Sequencing the next Inspector must not lose:** after the builder reports, the
+           reviewer delta-check is mandatory BEFORE any Inspector rebuild, and this unit touches
+           `src/Core/main.cpp`, so a qmake build against `src.pro` is owed as Inspector-side
+           verification — the builder was told not to run one. Cap builds at `-j4`.
+           The sixth attended live run becomes schedulable once this unit lands.
+           **Round 1 outcome (2026-09-19):** the builder delivered, the reviewer's delta-check
+           filed one BLOCKING defect — **B-STAGE9-27**, the WIN32 half of the fix — and the
+           repair is DISPATCHED. Accepted from round 1 and not to be redone: the false-green
+           env toggle is gone, the test is renamed and ungated, the driver hardening landed, and
+           the builder's Qt finding (`qInstallMessageHandler(myMessageOutput)` at main.cpp:701
+           is inside the `GC_START_HTTP||server` branch at :692, so Qt's own self-flushing
+           default handler is what runs otherwise) was re-verified by the Inspector directly.
+           That narrows which configuration exhibited the live symptom and is worth a look
+           before the sixth attended run is designed.
+           **Wake-script label is STALE, do not act on it:** `insp_wake.sh:159` hard-codes the
+           released `src/Core/main.cpp` hold and prints `hold: VIOLATED` as soon as the builder
+           touches that file — which this unit's brief authorises. It reports dirtiness, not
+           permission. The neutral-wording repair was attempted 2026-09-19 and REFUSED by the
+           Claude Code auto-mode classifier; not routed around. Read the hold from this cursor.
+
+STAGE-9-CURSOR-ADDENDUM (2026-09-19, `garmin_inspector_v1_31`, written immediately before
+           self-succession at 197,564/210,000. Sequencing only; per-id status lives in findings.md):
+           **THE B-STAGE9-12 CODE FIX IS VERIFIED AND IS NOT THE OPEN QUESTION.** `nostderr()` now
+           makes ONE `setvbuf` call at the only position C11 7.21.5.6p2 allows, mode selected by
+           `#ifdef WIN32` (`_IONBF`) / `#else` (`_IOLBF`), return value checked with a `qDebug`.
+           Re-verified by the Inspector, not relayed: both registered tests 2/2, `src/Core/main.cpp`
+           md5 `f6f163a87c3bd40690711c2806c25210`, and an Inspector-authored mutation the builder was
+           never asked for — swapping the two modes between branches, i.e. B-STAGE9-27's defect
+           wearing the correct shape — went RED on exactly two lines and restored byte-clean.
+           **IN FLIGHT: the B-STAGE9-27b commit-readiness round**, dispatched to
+           `garmin_builder_stage9_v14`. Four items: clang-format the mirror (it is RED against the
+           pinned 18.1.8 and IS matched by the hook, so the commit fails as-is), `ruff format` the two
+           new `.py` files, widen `.pre-commit-config.yaml`'s ruff/ruff-format/mypy `files:` regexes to
+           `unittests/Core/stderrbuf/.*\.py$`, and re-run both coverage guards. Arrival state was
+           MEASURED with the pinned tools before the ruling — `ruff check` clean, `mypy --strict`
+           clean, `ruff format` reflow-only — so mypy is included and NO gap may be declared for this
+           directory. If widening mypy makes the buildguard tool_gap declaration go stale, the builder
+           was told to stop rather than delete it.
+           **Sequencing the next Inspector must not lose:**
+           (1) Collect `--unit B-STAGE9-27b`, then dispatch the reviewer for a delta-check on the FULL
+           diff — it has only ever seen the pre-repair version. Then the qmake rebuild against
+           `src.pro` is OWED and is the Inspector's own: the builder was forbidden to run one, so no
+           evidence yet exists that the real release binary compiles this change. Cap at `-j4`.
+           (2) The commit set is `src/Core/main.cpp`, `unittests/CMakeLists.txt`, the four
+           `unittests/Core/stderrbuf/*` files, `.pre-commit-config.yaml`, plus the ledgers. Verify each
+           diff; the Coach/Qt6.8 workstream is unrelated and must not ride along.
+           (3) `src/Core/main.cpp` is clang-format RED for PRE-EXISTING reasons and is deliberately
+           NOT in the hook's regex (DEC-010 no-retrofit). Do not reformat it.
+           (4) B-STAGE9-28 filed this session: the lint-ownership guard enumerates TRACKED files, so a
+           new managed directory is invisible to it exactly while it is being created. It printed
+           `garmin-cpp-stderrbuf: EMPTY` and still PASSed. Owes a decision, not a patch.
+           (5) The builder is at 212k/250k and is due a soft-landing after this round.
+           (6) T-209 is consumed by this unit; WIKI REGISTRIES advanced to `next:garmin-T-210`.
+           Also corrected this session: the DEC pointer read `next:garmin-054` while DEC-054 existed.
+
+STAGE-9-CURSOR (2026-09-19, `garmin_inspector_v1_32` — supersedes the two `v1_31` blocks
+           above for SEQUENCING. Per-id status lives only in findings.md):
+           **B-STAGE9-12 and B-STAGE9-27 are both fixed and committed; the last blocking
+           finding on Stage 9's code is gone.** One `#ifdef WIN32`-selected `setvbuf` in
+           `nostderr()` (`src/Core/main.cpp:188-195`), T-209's two tests, the
+           `unittests/Core/stderrbuf/` directory, and a three-line
+           `.pre-commit-config.yaml` widening.
+           **Evidence that did not exist before this pass, and is the point of it:**
+           (1) qmake `make -j8` capped to `-j4` against `src.pro` exit 0, binary relinked,
+           `nm -uC src/GoldenCheetah` shows `U setvbuf@GLIBC_2.2.5` — the release build
+           actually carries the fix, which no CMake run can tell you.
+           (2) `s925_tz_investigator` MEASURED the fix instead of arguing it (glibc 2.41,
+           isolated `/tmp` harness): 30/30 bytes on disk before exit and 30/30 surviving
+           SIGKILL with `_IOLBF`, versus 0 and 0/30 without. It also reported the boundary
+           rather than burying it — once `std::cerr` writes occur both variants flush, so
+           the distinguishing window is `fprintf`-style writes, which is Qt's default
+           handler path and therefore the live symptom.
+           (3) Full default gate `ctest -LE gate-exclude` 56/56.
+           **Sequencing the next Inspector must not lose:**
+           (1) **THE SIXTH ATTENDED LIVE RUN IS NOW SCHEDULABLE AND IS THE NEXT UNIT.** Every
+           stated precondition is met: -19, -25 and now -12 have all landed. `src.pro` points
+           `GARMIN_PY_MODULE_DIR` at the source tree, and the binary was relinked this pass,
+           so no further build is owed before it. Traces no longer depend on the user quitting
+           via File > Quit. This is the one real human-in-the-loop gate — the user enters
+           credentials into the app's own dialog, never into chat. Success criterion is a NEW
+           file under `~/.goldencheetah/Andy/activities/` (1145 at last check), not the UI.
+           (2) The two remaining open findings are B-STAGE9-26 and B-STAGE9-28, both
+           non-blocking; -28 owes a scored decision and a DEC id, not a patch. Neither blocks
+           the live run. Correction to the `v1_31`/`v1_30` cursors, which both named
+           B-STAGE9-16 as still open: it is not — both halves were already fixed
+           (`8611fb2d0`, `d9ba4faad`). Verified against findings.md this pass, not assumed.
+           (3) B-STAGE9-28's blind spot was confirmed by measurement on both sides of
+           `git add` this pass: the lint-ownership guard reports `EMPTY` and still passes
+           while a managed directory is untracked. Until that is decided, the Inspector must
+           re-run the guard AND `pre-commit run --files` at staging time — a new directory is
+           invisible to the gate exactly while it is being created.
+           (4) `insp_wake.sh:159` still hard-codes the released `src/Core/main.cpp` hold and
+           prints `hold: VIOLATED`. It reports dirtiness, not permission. The neutral-wording
+           repair was refused by the Claude Code auto-mode classifier 2026-09-19 and was not
+           routed around; it is still owed.
+           (5) Cap builds at `-j4` — ~20 parallel `cc1plus` swap this 11.6 GB machine.
 
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md

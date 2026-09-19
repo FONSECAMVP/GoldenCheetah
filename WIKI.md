@@ -65,7 +65,7 @@ per-file detail → wiki/map-detail.md (a file under a rolled-up dir IS mapped, 
 ## REGISTRIES — what exists (allocate next; never reuse, never re-create)
 RULE: registries POINT. No per-id detail, no per-id status here (LSN-035). Ledger = .claude/workflow-garminconnect/
 REQ  garmin:001–029 + 16 REQ-NF-* ids (10 traceability rows)   prd.md            next:garmin-030
-DEC  garmin:001–053                 decisions.md ## Decision index  next:garmin-054
+DEC  garmin:001–054                 decisions.md ## Decision index  next:garmin-055
      REGISTRIES line was stale (still read "next:garmin-044") — corrected 2026-09-12 by the
      Inspector, cross-verified against decisions.md's true max (`grep -oE 'DEC-[0-9]+'
      decisions.md | sort -u`, highest DEC-050), no code changed.
@@ -77,7 +77,7 @@ DEC  garmin:001–053                 decisions.md ## Decision index  next:garmi
      (Option A / Option C respectively) and BOTH BUILT + execution-verified 2026-09-05 (TEST-158;
      TEST-159+160) — both findings closed on executed evidence; see decisions.md entries for trade space.
 DES  garmin:001–014 (+001a,003a)    design.md                       next:garmin-015
-TEST garmin:T-001–T-208 (T-143–T-153 = DEC-040; T-161–T-163 = REQ-020 wizard; T-164–T-166 = REQ-022 OpenData; T-167–T-169 = REQ-023 store/uncompress; T-170–T-172 = REQ-024 Strava loop; T-176 REQ-009; T-177 REQ-014; T-179+T-194-196 REQ-010; T-201 REQ-013; T-202 REQ-NF-Build-001 (Stage 8 build-guard); T-203 REQ-NF-Sec-001+003 (Stage 8 sec-guard); T-204–T-206 REQ-NF-Reliab-001+002 (Stage 8 retry-schedule/torn-read/SIGKILL-write); T-207 REQ-NF-Obs-001 (Stage 8 structured qDebug trace); T-208 REQ-NF-i18n-001 (Stage 8 tr() coverage guard) — per-id build state → traceability.md)   next:garmin-T-209
+TEST garmin:T-001–T-209 (T-143–T-153 = DEC-040; T-161–T-163 = REQ-020 wizard; T-164–T-166 = REQ-022 OpenData; T-167–T-169 = REQ-023 store/uncompress; T-170–T-172 = REQ-024 Strava loop; T-176 REQ-009; T-177 REQ-014; T-179+T-194-196 REQ-010; T-201 REQ-013; T-202 REQ-NF-Build-001 (Stage 8 build-guard); T-203 REQ-NF-Sec-001+003 (Stage 8 sec-guard); T-204–T-206 REQ-NF-Reliab-001+002 (Stage 8 retry-schedule/torn-read/SIGKILL-write); T-207 REQ-NF-Obs-001 (Stage 8 structured qDebug trace); T-208 REQ-NF-i18n-001 (Stage 8 tr() coverage guard); T-209 B-STAGE9-12 (Stage 9 stderr-buffering fix + main.cpp source contract) — per-id build state → traceability.md)   next:garmin-T-210
      REGISTRIES line was stale (still read "next:garmin-T-173") — corrected 2026-09-12 by the
      Inspector during the inspector-cycle pilot run, cross-verified against the ledger's true
      max (grep for T-[0-9]+/TEST-[0-9]+ across traceability.md/decisions.md/findings.md/
