@@ -917,6 +917,37 @@ STAGE-9-CURSOR (2026-09-19, written by `garmin_inspector_v1_30` — supersedes t
            (4) The three repair rounds of 2026-09-18 were never given a STATE cursor; they are
            reconstructed only inside findings.md's B-STAGE9-25 row.
 
+STAGE-9-CURSOR-ADDENDUM (2026-09-19, `garmin_inspector_v1_30`, written immediately before
+           self-succession at 224,926/210,000 — over threshold. Sequencing only; per-id status
+           lives in findings.md):
+           **NOTHING IS IN FLIGHT. No agent is working, no wake is armed, nothing is dispatched.**
+           Three commits landed this session and the register is consistent (0 malformed, the one
+           OUTSTANDING row is genuinely open): `2ba7b500a` B-STAGE9-25, `3d4aa6168` the
+           supervision-loop repairs, `d4e282393` the hook consolidation.
+           **THE NEXT ATOMIC UNIT IS B-STAGE9-12 AND IT IS NOT DISPATCHED.** Successor: dispatch it,
+           do not re-derive whether it is next. Its RED is already delivered and reviewer-reviewed;
+           the `src/Core/main.cpp` hold that froze its production fix was RELEASED by the user
+           2026-09-16, so the repair is permitted. The untracked `unittests/Core/stderrbuf/*` files
+           plus the `unittests/CMakeLists.txt` hunk belong to THIS unit, not to any other — earlier
+           cursors correctly excluded them from other commits.
+           **A REAL SKILL DEFECT IS OPEN AGAINST THE LOOP ITSELF: ORCH-067.** The predecessor closed
+           a unit, named B-STAGE9-12, armed a wake and stopped — with every agent idle the wake waits
+           on a dispatch only the Inspector can make, so it was a no-op that read as supervision. The
+           user caught it, not the tooling. Do not repeat it: identifying the next unit and arming a
+           wake is stopping.
+           **UNCOMMITTED AND DELIBERATELY NOT LANDED:** the ORCH-067 partial fix (settled heartbeat
+           900000 -> 300000 in `insp_wake.sh`, plus the SKILL.md stall clause). `SKILL.md` and four
+           reference files under `skills/inspector-cycle/` were ALREADY modified by someone else
+           before this session, so committing them would have landed another workstream's in-flight
+           edits. Verify each diff before staging; do not assume the whole skill directory is yours.
+           **Roster, verified live:** `garmin_builder_stage9_v14` (`w1:pM`, Claude, Sonnet 5, auto
+           mode confirmed from the status line, 0 tokens — never yet dispatched),
+           `garmin_codex_reviewer` (`w1:pD`, ~74k), `s925_tz_investigator` (`w1:pR`, ~54k, idle and
+           reusable). All three well under 250k.
+           **Do not schedule a sixth attended live run yet.** Both stated preconditions (-19 and -25
+           landed) are now met, but land B-STAGE9-12 first or the run's `gc_obs` traces only survive
+           if the user quits via File > Quit — which is B-STAGE9-12 itself.
+
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md
 (## Decision index, then entries) · validations/archive/ + cycles/archive/ (historical
