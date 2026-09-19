@@ -2639,7 +2639,8 @@ grep -c "garmin_auth_unknown" src/Resources/translations/gc_de.ts   # expect: 0 
 - Serves: B-STAGE9-16 (the gate-coverage half split out of B-STAGE9-15; the reason a RED `testGarminI18nSourceGuard` survived in HEAD from `c1948b513` 2026-09-13 to 2026-09-15 unseen)
 - Dependents: `unittests/buildguard/CMakeLists.txt` (the two flag-build guards' labels); `.pre-commit-config.yaml` (DEC-009's tool set, DEC-010's scoping); every future "gate GREEN" evidence line in this ledger; DEC-010 (whose recorded cascade prose is corrected below); B-STAGE9-12 (whose deliberately-RED stderr-buffering test becomes visible to the routine gate the moment it is registered — see Cascade impact)
 - Origin: found 2026-09-15 by `garmin_inspector_v1_22` during B-STAGE9-15, then widened the same day by a second instance of the identical shape found while gating its own commit `d9ba4faad`.
-- Arms: `unittests/Core/stderrbuf/*` — added 2026-09-19 per DEC-059. This bullet, not the prose below it, is what `garmin_lint_ownership_guard.py` reads to confirm a `pre_armed_by` claim; it lists the exact `ManagedRoot.patterns` globs this decision armed while that directory had no tracked files.
+- Arms: `unittests/Core/stderrbuf/*`
+- Arms-note: added 2026-09-19 per DEC-059, and rewritten the same day per DEC-059's amendment — the `Arms:` line carries ONLY backtick-quoted globs, because every backticked token on it is parsed as an armed glob and prose there would arm whatever it happened to quote. This bullet, not the prose below it, is what the guard reads to confirm a `pre_armed_by` claim; it lists the exact `ManagedRoot.patterns` globs this decision armed while that directory had no tracked files.
 
 ### The problem
 This project's verification ritual is OPT-IN at two independent layers, and both have now been caught failing in the same way: a thing that is not deliberately enrolled is invisible, and its absence is silent.
@@ -2815,6 +2816,15 @@ The class does not close by narrowing further, because "does this prose entry AR
 2. A root's `patterns` must be matched as whole entries against the parsed list, not as substrings of it: `pkg/*` must not be satisfied by an `Arms:` naming `pkg/sub/*`.
 3. An entry with no `- Arms:` bullet is a finding with its own message — silent on the distinction is what DEC-057 exists to stop.
 4. `_pattern_directory_prefixes`'s empty-tuple case (reviewer item 2, NON-BLOCKING, fail-closed) is superseded: matching is against `patterns` themselves, so a root with no `*`-suffixed pattern is no longer a special case.
+
+### Amendment, 2026-09-19 (same day, `garmin_inspector_v1_37`, after round 3 was delivered GREEN)
+
+Round 3 implemented the above and the Inspector verified it closes the reviewer's blocking class — but re-probing the real ledger found the same class reappearing one line lower, in the bullet itself. `_armed_patterns` harvests EVERY backtick-quoted token on the `- Arms:` line, so prose sharing that line becomes armed globs. Measured, not theorised: this decision's own first draft of DEC-054's bullet carried explanatory prose after the glob and armed four things — `unittests/Core/stderrbuf/*`, `garmin_lint_ownership_guard.py`, `pre_armed_by`, `ManagedRoot.patterns` — and `- Arms: \`pkg/*\` but explicitly NOT \`evil/*\`` arms `evil/*`. A negation on the Arms line authorizes exactly as round 2's prose negation did. Separately, `_ARMS_BULLET.search` honours only the FIRST bullet, so a second one is silently ignored.
+
+Two further constraints, therefore:
+
+5. The `- Arms:` line is a glob list and nothing else. A line carrying any non-whitespace outside its backtick-quoted tokens is a finding, not a silent harvest — the guard must reject it rather than parse around it. Commentary goes on its own `- Arms-note:` line, which the guard never reads. DEC-054's bullet was rewritten to this shape in the same pass.
+6. More than one `- Arms:` bullet in a single entry is a finding. Silently honouring the first is the same failure as silently harvesting prose: the record says something the guard does not read.
 
 ### Cascade impact
 
