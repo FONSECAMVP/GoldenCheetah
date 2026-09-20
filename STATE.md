@@ -2529,3 +2529,86 @@ STAGE-9-CURSOR-AMENDMENT-9 (2026-09-20, `garmin_inspector_v1_46`; sequencing onl
            on `w1:pM` with `--permission-mode auto --model sonnet`, both confirmed at
            `tok 0k`. `B-STAGE9-38-u3-r4` is LIVE on it — the u3 repair under DEC-058 c17,
            which is the last thing standing between this branch and a commit-ready Garmin set.
+
+STAGE-9-CURSOR-AMENDMENT-10 (2026-09-20, `garmin_inspector_v1_46`; sequencing only):
+           (oo) **B-STAGE9-36 is CLOSED and COMMITTED `02cf0c23c`** — reviewer
+           `B-STAGE9-36-r3-review` PASS on BOTH halves (no authorization bypass survives,
+           and no legitimate decision is now wrongly rejected), and the Inspector re-ran
+           `ctest -L garmin-lint-guard` 2/2 and pytest 123 himself, then AGAIN after
+           ruff-format reformatted two files, to confirm the reformat was cosmetic.
+           B-STAGE9-49/-50/-51/-52/-53 all closed with it. Full pre-commit gate passed:
+           ruff-check, ruff-format, ledger-drift-lint.
+           (pp) Both builder deviations were adjudicated SAFE by the reviewer, not waved
+           through: the stricter literal `^## <id> — ` heading form rejects nothing
+           legitimate under the ledger's established contract, and the 0-headings-returns-
+           None path has no permissive caller. Recorded because a future ledger that stops
+           using the em-dash heading form would silently start failing closed.
+           (qq) Commit hygiene held: the staged set was 6 files, zero `src/`, zero Coach or
+           Qt6.8 contamination, and WIKI's DEC registry pointer was corrected from a
+           two-id-stale `next:garmin-063` in the same change.
+           (rr) **Pre-push work is now LIVE on both non-builder agents, because DEC-065 makes
+           the CI recipes the artifact that must be right:** `DEC-058-recipe-audit` on the
+           reviewer (do the three legs' adapter steps actually satisfy constraints 8-11 and
+           14-16 as COMMITTED, not as described) and `STAGE9-ci-blocker-sweep` on the
+           investigator (`/new`-ed, 187k -> 0; what would kill a CI run for reasons
+           unrelated to our code — FTDI 403 hotlink-vs-dead, other dead assets, dead PPAs,
+           and whether each leg's declared image still provides its pinned toolchain).
+           (ss) **SELF-SUCCESSION, and READ THIS BEFORE TRUSTING ANY CONTEXT NUMBER.**
+           `garmin_inspector_v1_46` crossed its 210k threshold unnoticed and ran to 300k
+           because `claude_context.py` reported a FROZEN 115701 for ~15 consecutive wakes:
+           the pane's session rotated (`60f24d0f` -> `a6d4d624`) and the reader kept
+           resolving the stale file, returning a confident wrong number rather than
+           `unknown`. Recorded as B-STAGE9-58. **Successor: cross-check your own pane's
+           script reading against the visible footer's `tok Nk` at least every few wakes,
+           and treat an unchanging number across wakes as STALE, not as stable.** The wake
+           block's own `--- context ---` line carries the same stale value, so it is not an
+           independent check.
+           (tt) Successor `garmin_inspector_v1_47` is LIVE on pane `w1:p2F`, tab `w1:t27`,
+           Opus, `auto mode on` confirmed on its own status line after the single
+           predecessor click the mechanism allows. `v1_46` does not retire itself and has
+           armed NO further wake — supervision is the successor's from here, and two armed
+           wakes would mean two Inspectors polling the same panes.
+           **In flight at handoff, all three dispatched, none collected:**
+           `B-STAGE9-38-u3-r4` on builder `garmin_builder_stage9_v25` (`w1:pM`, fresh);
+           `DEC-058-recipe-audit` on `garmin_codex_reviewer` (`w1:pD`);
+           `STAGE9-ci-blocker-sweep` on `s925_tz_investigator` (`w1:pR`, `/new`-ed).
+           **Builder queue after u3-r4:** DEC-063 (exact: `src/CMakeLists.txt` only, DELETE
+           `:1085`, ADD `target_compile_definitions(GoldenCheetah PRIVATE GC_WANT_PYTHON)`
+           after `:1403`) -> B-STAGE9-42 (exact patch in the B-STAGE9-56 row, digest
+           verified) -> DEC-062 (scoped, 4 binding corrections in its addendum).
+           **Then, and only then:** separate the Garmin set from the Coach/Qt6.8 work,
+           commit, and push for the AppVeyor run DEC-065 authorizes.
+
+STAGE-9-CURSOR (2026-09-20, `garmin_inspector_v1_47` — supersedes the `v1_46` block and its
+           ten amendments; sequencing only):
+           (a) Succession complete. `garmin_inspector_v1_46` retired at 309k; pane `w1:p2E` and
+           tab `w1:t26` closed (workspace now 4 panes / 2 tabs). Graceful `/exit` was
+           UNREACHABLE on that pane — every Enter landed in Claude Code's agents sidebar
+           ("describe a task for a new session") regardless of `agent send-keys`, `pane
+           send-keys`, `pane run` or double `ctrl+c`; the pane was closed only after the agent
+           was confirmed `idle`, handed off, and holding no armed wake.
+           (b) All three of `v1_46`'s in-flight results are COLLECTED.
+           (c) `B-STAGE9-38-u3-r4` GREEN on `garmin_builder_stage9_v25`. `hoistOverrideDirToFront`
+           replaces prepend-if-absent and fails CLOSED; `explicitOverrideCacheIsSafe` rejects an
+           import whose `sys.modules` entry is not proven under the override dir; two isolated
+           tests, each proven RED against its own targeted mutation (mutation B isolates the
+           cache guard alone). 3 files, +387/-75, unstaged. B-STAGE9-44/-45/-46/-47 stay `open`
+           until the reviewer's verdict — a builder self-report closes nothing.
+           (d) `DEC-058-recipe-audit` (reviewer) returned: Windows and macOS legs CORRECT by
+           recipe reading; Linux DEFECTIVE on two counts — the already-known 3.11.14 404
+           (B-STAGE9-42) and a NEW gap recorded as **B-STAGE9-59**: `appveyor.yml:255-264`
+           smoke-tests only `--version`, so DEC-058 C11's payload assertion is never made.
+           All three legs rely on pip build isolation for setuptools (DEC-058 C14, acknowledged).
+           (e) `STAGE9-ci-blocker-sweep` is IN FLIGHT on the investigator; its HEAD-request
+           probes need one approval each and `ftdichip.com` does not resolve from this host, so
+           the FTDI question may return unmeasurable rather than answered.
+           (f) IN FLIGHT: `B-STAGE9-38-u3-r4-review` on the reviewer (`w1:pD`);
+           `DEC-063-cmake-want-python` on the builder (`w1:pM`, scratch build dir
+           `/tmp/gc-build-pyon` so `./build` is not reconfigured under the other agents).
+           (g) Builder queue after DEC-063: B-STAGE9-42 (exact patch in the B-STAGE9-56 row) ->
+           DEC-062 (4 binding corrections in its addendum) -> B-STAGE9-59. Then separate the
+           Garmin set from the Coach/Qt6.8 work, commit, and push for the AppVeyor run DEC-065
+           authorizes.
+           (h) Context at handoff: builder 108k, reviewer 149k, investigator 47k, Inspector 64k.
+           Per B-STAGE9-58, the Inspector's own script reading is cross-checked against the
+           pane footer, and an unchanging number across wakes is treated as STALE.
