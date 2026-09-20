@@ -2612,3 +2612,39 @@ STAGE-9-CURSOR (2026-09-20, `garmin_inspector_v1_47` — supersedes the `v1_46` 
            (h) Context at handoff: builder 108k, reviewer 149k, investigator 47k, Inspector 64k.
            Per B-STAGE9-58, the Inspector's own script reading is cross-checked against the
            pane footer, and an unchanging number across wakes is treated as STALE.
+
+STAGE-9-CURSOR-AMENDMENT-1 (2026-09-20, `garmin_inspector_v1_47`, written before self-
+           succession; sequencing only):
+           (i) **`B-STAGE9-38-u3-r4` reviewed, NOT closed.** B-STAGE9-44 and -46 CLOSED;
+           **B-STAGE9-45 still blocking** — `PyEmbeddedAdapter.cpp:189` returns true on
+           `cleanFile == cleanDir`, so a seeded cache entry whose `__file__` is the override
+           DIRECTORY passes as proven provenance. B-STAGE9-47 partial (the `:34-38` half is
+           fixed; `PyEmbeddedAdapter.h:62-65` still claims one import while six operations call
+           `importAdapterModule`). Both classes are NEW, so the repair-round counter is 0, not 3.
+           Round 5 is the next builder unit after DEC-063.
+           (j) **The AppVeyor push has a second hard blocker: B-STAGE9-60.** `appveyor.yml:74,76`
+           point at `$HOME/Qt/6.8`, which has no `bin`; the leg dies at `:77`. Fix settled:
+           `QTDIR=$HOME/Qt/6.8/gcc_64`, `LD_LIBRARY_PATH=$QTDIR/lib` — the major link plus the
+           compiler suffix, which is what Windows `:59` and macOS `:81` already do. Pin and glob
+           both rejected, reasons in the row.
+           (k) B-STAGE9-59 (Linux payload smoke) is BUILDER-READY and pre-scoped clean by the
+           reviewer. B-STAGE9-61 (FTDI 403 = Cloudflare gating) and B-STAGE9-62 (image-layout
+           inventory) are recorded non-blocking so neither is re-investigated; B-STAGE9-62 was
+           deliberately not opened as blocking — long-standing macOS paths, no observed breakage,
+           and Stage 9's gate is the Linux leg.
+           (l) **Builder queue, all pre-settled, in order:** `B-STAGE9-38-u3-r5` -> B-STAGE9-42
+           -> B-STAGE9-60 -> B-STAGE9-59 -> DEC-062. Then separate the Garmin set from the
+           Coach/Qt6.8 work, commit, push.
+           (m) IN FLIGHT at handoff: `DEC-063-cmake-want-python` on the builder (`w1:pM`, ~40 min
+           in, mutation step approved, scratch build dir `/tmp/gc-build-pyon` — `./build` must NOT
+           be reconfigured); `DEC-062-scope` on the reviewer (`w1:pD`). Investigator (`w1:pR`)
+           idle, `/new`-ed, no unit.
+           (n) **Two operational facts the successor should not rediscover.** The predecessor's
+           pane could not be exited gracefully — every Enter landed in Claude Code's agents
+           sidebar — so it was closed after confirming idle; expect the same on `w1:p2F`. And the
+           background wake has twice been killed by the harness for low memory during the
+           builder's peak build, leaving supervision unarmed: check `herdr agent list` directly
+           when a wake dies rather than assuming it fired.
+           (o) **Ledger budgets are BREACHED** (state-cursor 217kB vs 12kB cap, findings-row
+           19.5kB vs 200B cap). A librarian COMPACTION is owed at the next seam with no builder
+           round in flight. It has been deferred, not forgotten.
