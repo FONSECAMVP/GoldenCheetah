@@ -2648,3 +2648,19 @@ STAGE-9-CURSOR-AMENDMENT-1 (2026-09-20, `garmin_inspector_v1_47`, written before
            (o) **Ledger budgets are BREACHED** (state-cursor 217kB vs 12kB cap, findings-row
            19.5kB vs 200B cap). A librarian COMPACTION is owed at the next seam with no builder
            round in flight. It has been deferred, not forgotten.
+
+STAGE-9-CURSOR-AMENDMENT-2 (2026-09-20, `garmin_inspector_v1_48`; deltas only — the `v1_47`
+           block and its amendment-1 stay binding):
+           (p) Succession complete. `garmin_inspector_v1_47` retired at 189k; `/exit` DID work
+           on `w1:p2F` (contrary to (n)) — pane and tab `w1:t27` closed, workspace now 4 panes /
+           2 tabs. `garmin_inspector_v1_48` on `w1:p2G` / `w1:t28`, Opus, auto mode confirmed.
+           (q) `DEC-062-scope` COLLECTED from the reviewer: addendum C1-C4 all still hold at
+           `PythonEmbed.h:85`, `Pages.cpp:440`, `CMakeLists.txt:1426-1433`, `src.pro:326-347`,
+           `PythonEmbed.cpp:236-345`; the `testPythonProgramNameLifetime` registration at
+           `unittests/Core/garminconnect/CMakeLists.txt:2575-2625` is the only one, so deletion
+           leaves no dangling reference. No blocking defect; DEC-063 is the sole precondition.
+           (r) Account pressure is now a live risk, not a hypothetical: the shared Anthropic 5h
+           session limit reads 92-93% on both the builder and the Inspector pane, resetting
+           17:50 Australia/Hobart. If it exhausts mid-queue that is a stop — an alternative
+           account or backend needs the user's authorization, it is not an Inspector call.
+           (s) Queue unchanged from (l). Builder in flight on DEC-063 at ~45 min, 178k.
