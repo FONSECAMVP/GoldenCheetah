@@ -1829,9 +1829,703 @@ STAGE-9-CURSOR (2026-09-20, `garmin_inspector_v1_42` — supersedes the two `v1_
            `DEC-062-locator-contract`). `garmin_inspector_v1_41` retired at 212k, pane
            `w1:p28` and tab `w1:t10` closed (3→2 tabs, 5→4 panes).
 
+STAGE-9-CURSOR-ADDENDUM (2026-09-20, `garmin_inspector_v1_42`, written before self-
+           succession at ~196k/210k. Sequencing only; per-id status lives in findings.md):
+           Committed this pass: **`933126d0a`** — DEC-061's build (main.cpp:552 consumes the
+           Result) plus this pass's governance. All pre-commit hooks passed; the builder's
+           unstaged round-10 work was stashed and restored intact, verified after.
+           **Two agents have UNCOLLECTED work — collect, do not re-dispatch:**
+           (1) `B-STAGE9-41-options` on `s925_tz_investigator` (`w1:pR`) is DONE and was
+           never collected. It answers whether `GC_HAVE_PYTHON` is a deliberate want-vs-have
+           distinction or drift — that answer decides the repair, and a DEC is owed.
+           (2) `B-STAGE9-36-r10-review` on `garmin_codex_reviewer` (`w1:pD`) was dispatched
+           at 04:08. Round 10 is builder-GREEN with real mutation proofs; the builder itself
+           flagged that the beside-a-valid-bullet leg of its 20 new tests can be satisfied by
+           an unrelated duplicate-bullet-count check, so some may be green for the wrong
+           reason. That is hunt item 5 in the reviewer's brief.
+           (3) Round 10 is NOT yet Inspector-verified and NOT committed. It touches only the
+           two `unittests/buildguard/` files.
+           (4) **DEC-062 gained TWO amendments this pass, both from measurement that
+           contradicted this Inspector.** The extraction surface is `PythonEmbed.cpp:85-210,
+           245-269,339-345`, not the `:237-255` first written — it also validates the home by
+           launching the interpreter, checks major/minor, does PATH discovery, and adds Linux
+           deployed site-packages conditionally. And "stops mutating `PYTHONHOME`" is NOT
+           "erases it": `:245-252` deliberately falls back to a user-supplied inherited value
+           and that must survive.
+           (5) **New finding B-STAGE9-41** — CMake selects Python sources on `GC_WANT_PYTHON`
+           but defines only `GC_HAVE_PYTHON` (`src/CMakeLists.txt:1056-1086`), so a CMake
+           Python-only build reaches neither initializer. It blocks DEC-062's same-home claim
+           and must be sequenced before that build. qmake has no gap (`src/src.pro:332`).
+           (6) `clv_findings.py` OUTSTANDING=5 (-36, -38, -39, -40, -41); `ledger_drift_lint.py`
+           EXIT=0. Note `ledger_drift_lint.py` lives at `scripts/`, NOT under
+           `.claude/workflow-garminconnect/scripts/` — only `clv_findings.py` is there.
+           (7) Mechanics worth not re-deriving: `clang-format` is NOT on PATH — use
+           `/home/andy/.cache/pre-commit/repolumxrndb/py_env-python3.13/bin/clang-format`. Its
+           pre-commit regex covers `unittests/Core/garminconnect/.*` but NOT `src/Core/main.cpp`.
+           A findings.md cell containing a literal `|` breaks the 6-column schema —
+           `clv_findings.py` reports MALFORMED; rephrase rather than escape. `dispatch.py`
+           caps briefs at 50 lines (builder), 40 (reviewer), 30 (adhoc) and rejects over.
+           A `send_failed: timeout` against an already-working pane is the ack-wait, not a
+           lost payload — read the pane before resending.
+           (8) **The 5h plan window is ACCOUNT-WIDE and hit 99% at 04:10**, on the
+           Inspector's own fresh pane as well as the builder's. Expect a rate-limit fallback
+           or stall on the next long unit; check each pane's model line before trusting a
+           context reading (a fallback rotates the transcript and reads as `unknown`).
+           (9) `garmin_codex_reviewer` went `done` on `B-STAGE9-36-r10-review` at ~04:10 —
+           that verdict is waiting and uncollected, alongside item (1).
+           **Roster, verified live:** builder `garmin_builder_stage9_v21` (`w1:pM`, 135k,
+           restarted fresh this pass after v20 soft-landed at 221k), reviewer
+           `garmin_codex_reviewer` (`w1:pD`, 127k, working), investigator
+           `s925_tz_investigator` (`w1:pR`, 93k, `/new`-refreshed from 213k this pass).
+           `garmin_inspector_v1_41` retired, pane `w1:p28` and tab `w1:t10` closed.
+
+STAGE-9-CURSOR (2026-09-20, `garmin_inspector_v1_43` — supersedes the two `v1_42` blocks
+           above for SEQUENCING. Per-id status lives only in findings.md / decisions.md):
+           (1) Both of `v1_42`'s uncollected results are COLLECTED; neither was re-dispatched.
+           (2) **B-STAGE9-36 round 10 is NOT committable.** The reviewer filed it blocking on
+           non-ASCII indentation, and the Inspector's own probe widened it: `_ARMS_MARKER`
+           (`unittests/buildguard/garmin_lint_ownership_guard.py:1017`) accepts only `[ \t]`, so
+           SIX whitespace characters — U+00A0, U+202F, U+2003, U+1680, U+000C, U+000B — silently
+           skip an Arms bullet, returning None alone and a neighbour's globs beside a valid
+           bullet. Same false-PASS shape round 10 closed for ASCII. Round 11 dispatched with one
+           directive: the loose recognizer's indent class must be Unicode-maximal, not an
+           enumerated list, proven by a codepoint SWEEP rather than a hand-written list — a list
+           of six repeats the defect and earns a round 12. Probe kept at
+           `/tmp/insp-exchange/probe_arms_unicode_indent.py`.
+           (3) **DEC-063 recorded, NOT built** — B-STAGE9-41's remedy. CMake defines
+           `GC_WANT_PYTHON` target-locally and `GC_HAVE_PYTHON` is deleted, not aliased. The
+           Inspector re-derived the census instead of relaying it, which surfaced a precedent the
+           option report missed: `src/CMakeLists.txt:1508` already does
+           `target_compile_definitions(GoldenCheetah PRIVATE GC_WANT_GARMINCONNECT)`, so the
+           Python block is the only one deviating in both spelling and scope. `WIKI.md` now reads
+           `next:garmin-064`. Its constraint 4 carries a real unmeasured risk — a CMake Python-on
+           build has never been run — now dispatched to the investigator as its own measurement.
+           (4) **Ledger drift corrected:** B-STAGE9-40's findings row still read `open` although
+           its fix landed in `933126d0a`. Flipped to fixed with the residual named, not buried:
+           `main.cpp` links into no CTest target, so the `qDebug()` emission is source-verified
+           only, and the app-process smoke stays owed under B-STAGE9-39.
+           (5) `clv_findings.py` OUTSTANDING=4 (-36, -38, -39, -41), down from 5 by (4) alone;
+           `ledger_drift_lint.py` EXIT=0. Nothing committed this pass — all three agents hold
+           uncommitted or unbuilt work.
+           (6) The anti-duplication hook still misreads a `2>/dev/null` redirect as a new file
+           and blocks the builder on it (ORCH-062/LSN-036, unfixed upstream). Expect to clear it
+           by hand each mutation round.
+           (7) **Round 11 is builder-GREEN, 200/200, awaiting reviewer verdict — not committed.**
+           `_ARMS_MARKER` went to `\s*`, and the builder did the thing the brief asked for
+           instead of the cheap version: it swept all of 0x0-0x10FFFF to confirm regex `\s` and
+           `str.isspace()` actually agree on this interpreter, then derived the 58 sweep cases
+           from `str.isspace()` so the two are cross-checked rather than assumed. Mutation RED
+           exactly on the 27 non-ASCII members, GREEN on space and tab. Report at
+           `/tmp/insp-exchange/B-STAGE9-36-r11.md`.
+           (8) **B-STAGE9-38's remaining scope is now exact, and it is two mechanisms, not the
+           whole finding** — see its findings.md row. Twelve of DEC-058's sixteen constraints are
+           discharged. What is left: `src/src.pro:275`'s absolute `$$PWD` path still PREPENDED at
+           `PyEmbeddedAdapter.cpp:554` (so source beats the installed package and a missing
+           payload is false-green), and `appveyor.yml:255`'s `--version` smoke that exits before
+           any adapter import. Dispatched as `B-STAGE9-38-u3`. The reviewer corrected one of this
+           Inspector's premises in the process: `GC_GARMIN_PYPATH` is no longer the masking path.
+           (9) Next after the reviewer's round-11 verdict: commit round 11 if CLOSED, else round
+           12. DEC-063's build stays BLOCKED until the investigator's CMake Python-on measurement
+           lands — do not dispatch it into unmeasured compile errors.
+           **Roster, verified live:** builder `garmin_builder_stage9_v21` (`w1:pM`, 169k, on
+           `B-STAGE9-38-u3`), reviewer `garmin_codex_reviewer` (`w1:pD`, `/new`-refreshed from
+           205k this pass, on `B-STAGE9-36-r11-review`), investigator `s925_tz_investigator`
+           (`w1:pR`, 100k, on `DEC-063-cmake-python-on`). `garmin_inspector_v1_42` retired at
+           203k, pane `w1:p29` and tab `w1:t21` closed (3→2 tabs, 5→4 panes).
+
+STAGE-9-CURSOR-ADDENDUM (2026-09-20, `garmin_inspector_v1_43`, written before self-
+           succession at 211k/210k. Sequencing only; per-id status lives in findings.md):
+           (1) **Nothing committed by this Inspector. Three uncommitted workstreams sit in the
+           tree at once and must NOT be mixed into one commit:** the two
+           `unittests/buildguard/` lint-ownership files (B-STAGE9-36 rounds 10+11),
+           `src/Cloud/PyEmbeddedAdapter.cpp` + `unittests/Core/garminconnect/
+           testGarminConnectPyAdapter.cpp` (B-STAGE9-38-u3 DO-1), and this pass's governance.
+           (2) **B-STAGE9-36 round 11 reviewed NOT-CLOSED; round 12 dispatched.** Round 12's
+           rule is the closed one: the loose recognizer's leading run is defined by Unicode
+           general CATEGORY (Zs/Zl/Zp/Cc/Cf via `unicodedata.category`), not `\s`, not a list.
+           Measured basis: that set is a strict superset of `str.isspace()` (254 vs 29, nothing
+           lost) and covers the Cf format controls `\s` misses. Probe at
+           `/tmp/insp-exchange/probe_invisible_prefix_classes.py`.
+           (3) **DEC-060 gained a round-11 amendment** retiring its own three-space indentation
+           cap. That cap contradicted the decision's own doctrine and was silently outrun by
+           rounds 10/11. The reviewer raised the conflict as blocking, was asked to adjudicate
+           it, argued both sides and WITHDREW its own finding — the independent second opinion
+           the skill requires before a DEC bends a standing rule. Rounds 9-11 need no
+           reclassification.
+           (4) **B-STAGE9-38-u3 is HALF done.** DO-1 (new `importAdapterModule()`: plain import
+           first, prepend-and-retry only on failure, six call sites) is builder-GREEN 51/51 with
+           a real mutation proof, and is under reviewer delta-check as `B-STAGE9-38-u3-review`.
+           **DO-2 (the `appveyor.yml:255` extracted-bundle import smoke) is entirely NOT
+           STARTED** — the builder soft-landed before reaching it. That is the next builder unit
+           after round 12.
+           (5) The central question on DO-1 is still open and is the reviewer's to answer: the
+           fallback still succeeds wherever the source tree exists, so verify the masking moved
+           rather than merely relocated before accepting it.
+           (6) **DEC-063's build stays BLOCKED** pending `s925_tz_investigator`'s
+           `DEC-063-cmake-python-on` measurement — a CMake Python-on build has never been run
+           and may surface pre-existing errors. Do not dispatch that build until it lands.
+           (7) `clv_findings.py` OUTSTANDING=4 (-36, -38, -39, -41); `ledger_drift_lint.py`
+           EXIT=0. Two schema breaks were made and repaired this pass: text appended PAST a
+           row's trailing `|`, and a literal `|` inside a cell (`Zs|Zl|...`). Rephrase, never
+           escape; re-run `clv_findings.py` after every findings.md edit.
+           (8) `dispatch.py` line caps bite constantly — builder 50, reviewer 40, adhoc 30.
+           Count before sending. A reply can come back under the WARN unit's sentinel rather
+           than the work unit's, so a `no_reply` may just mean you collected the wrong unit id.
+           **Roster, verified live:** builder `garmin_builder_stage9_v22` (`w1:pM`, fresh 0k —
+           v21 soft-landed at 223k and was relaunched with `--permission-mode auto --model
+           sonnet`, status line confirmed) on `B-STAGE9-36-r12`; reviewer `garmin_codex_reviewer`
+           (`w1:pD`, `/new`-refreshed from 205k this pass) on `B-STAGE9-38-u3-review`;
+           investigator `s925_tz_investigator` (`w1:pR`, 132k) on `DEC-063-cmake-python-on`.
+           (9) **THREE UNCOLLECTED RESULTS — collect all three first, do not re-dispatch.**
+           All settled at 08:20-08:22, after this cursor's roster line was written, so the
+           roster above reads as working and is stale on this point only:
+           - `dispatch.py --mode collect --target w1:pD --unit B-STAGE9-38-u3-review`
+             (reviewer). Its central question is item (5) above.
+           - `dispatch.py --mode collect --target garmin_builder_stage9_v22 --unit
+             B-STAGE9-36-r12` (builder, round 12).
+           - `dispatch.py --mode collect --target s925_tz_investigator --unit
+             DEC-063-cmake-python-on` (investigator). This is what unblocks item (6).
+           A reply can land under a WARN unit's sentinel instead of the work unit's, so a
+           `no_reply` may just mean the wrong unit id — read the pane before re-sending.
+           Flagged deliberately: an uncollected verdict is how the previous two handoffs each
+           lost a day.
+
+STAGE-9-CURSOR (2026-09-20, `garmin_inspector_v1_44` — supersedes the two `v1_43` blocks
+           above for SEQUENCING. Per-id status lives only in findings.md / decisions.md):
+           (1) Succession complete. `garmin_inspector_v1_43` retired at 221k; pane `w1:p2A`
+           and tab `w1:t22` closed (3→2 tabs, 5→4 panes).
+           (2) **`v1_43`'s uncollected result is COLLECTED.** `B-STAGE9-38-u3-review` is
+           NOT-CLOSED with two blocking mechanisms — the masking relocated instead of moving,
+           and `GC_GARMIN_PYPATH` lost the first-import precedence DEC-058 constraint 5 gives
+           it. Mechanisms and the repair shape are in the B-STAGE9-38 findings row. The repair
+           is not a new decision; it is constraints 5 and 13 as already written.
+           (3) **DEC-063's build is UNBLOCKED.** `DEC-063-cmake-python-on` measured a CMake
+           Python-on configure plus an 8-TU guarded compile sweep on both legs: zero
+           pre-existing errors, zero newly exposed. Two residuals are declared in the
+           B-STAGE9-41 row; the unmeasured link is covered by the builder's own build, so it
+           needs no separate pass.
+           (4) **B-STAGE9-36 round 12 is builder-done but its reply TRUNCATED on collect.**
+           Re-prompted for a verbatim spill at `/tmp/insp-exchange/B-STAGE9-36-r12.md` as unit
+           `B-STAGE9-36-r12-spill`. Collect that before judging round 12.
+           (5) Builder queue, in order, one unit per turn: round 12 verdict → commit or round
+           13 → `B-STAGE9-38-u3-r2` (the constraint 5/13 repair, plus the vacuous precedence
+           assertion the reviewer filed non-blocking) → `B-STAGE9-38-u3` DO-2 → DEC-063.
+           (6) Nothing committed this pass. Three uncommitted workstreams still sit in the
+           tree separately: the two `unittests/buildguard/` lint-ownership files, the
+           `PyEmbeddedAdapter.cpp` + `testGarminConnectPyAdapter.cpp` DO-1 pair (now known
+           NOT committable), and this pass's governance.
+           (7) `clv_findings.py` OUTSTANDING=4 (-36, -38, -39, -41) over 441 OK, MISSING-EFFECT=0;
+           `ledger_drift_lint.py` EXIT=0.
+           **Roster, verified live:** builder `garmin_builder_stage9_v22` (`w1:pM`, 87k) on
+           `B-STAGE9-36-r12-spill`; reviewer `garmin_codex_reviewer` (`w1:pD`, 131k) on
+           `B-STAGE9-38-u3-r2-scope`; investigator `s925_tz_investigator` (`w1:pR`, 151k) on
+           `B-STAGE9-38-DO2-measure`. Inspector `garmin_inspector_v1_44` (`w1:p2B`, Opus, auto).
+
+STAGE-9-CURSOR-ADDENDUM (2026-09-20, `garmin_inspector_v1_44`, written before self-
+           succession. Sequencing only; per-id status lives in findings.md / decisions.md):
+           (1) **B-STAGE9-36 stopped being a recognizer bug this pass.** Round 12 was
+           builder-GREEN 712/712 and reviewed NOT-CLOSED on two live bypasses; the inversion
+           the Inspector proposed for round 13 was then adjudicated and REJECTED on a concrete
+           counterexample. Rounds 9-12 each pinned one character class and each lost to the
+           next. No round 13, and no fifth character class.
+           (2) **DEC-064 recorded PENDING, deliberately not accepted.** It supersedes DEC-060
+           for one field, so the drafting agent's own recommendation cannot carry it. Options
+           A/B/C are in the entry; `s920_arms_second_opinion` (`w1:p2C`, tab `w1:t24`, fresh
+           Codex) holds the independent second opinion as unit `B-STAGE9-36-second-opinion`.
+           **Collect it, then accept or reject — do not dispatch a builder before that.**
+           `WIKI.md` now reads `next:garmin-065`.
+           (3) `B-STAGE9-38-u3-r2` is the builder's live unit — the constraint 5/13 repair.
+           The reviewer's scope pass corrected the Inspector's premise before it was built:
+           there are TWO production construction sites, and `AddCloudWizard.cpp:184` reads the
+           macro unguarded while `GarminConnect.cpp:218` guards it, so define-deletion and
+           refactor are one change or neither. No CTest goes RED from deleting the fallback —
+           which is itself the defect: the 57 stub-path constructor arguments pass only
+           because `setScenario()` preinserts the pystub.
+           (4) `B-STAGE9-38-DO2-measure` is in flight. Already surfaced: `appveyor/linux/
+           after_build.sh:5`'s pinned `PYTHON_APPIMAGE_VERSION=3.11.14` returns 404 upstream.
+           If the report confirms it, that is a separate CI defect and owes its own finding id
+           — it is not part of DO-2.
+           (5) Nothing committed. Four uncommitted workstreams, still not to be mixed: the two
+           `unittests/buildguard/` files (rounds 10-12, now blocked behind DEC-064), the
+           `PyEmbeddedAdapter.cpp` + `testGarminConnectPyAdapter.cpp` pair (being rewritten by
+           u3-r2), this pass's governance, and the unrelated Coach/Qt6.8 work.
+           (6) `clv_findings.py` OUTSTANDING=4 (-36, -38, -39, -41), MALFORMED=0,
+           MISSING-EFFECT=0; `ledger_drift_lint.py` EXIT=0 after every edit.
+           (7) The investigator blocks on a per-command approval roughly every two minutes
+           while it works in `/tmp/insp-exchange/bstage9-38-do2`. Approve the one-time option
+           only; the offered "don't ask again" scopes are wider than the visible command.
+           **Roster, verified live:** builder `garmin_builder_stage9_v22` (`w1:pM`, 158k) on
+           `B-STAGE9-38-u3-r2`; reviewer `garmin_codex_reviewer` (`w1:pD`, 63k) IDLE with no
+           unit — give it one; investigator `s925_tz_investigator` (`w1:pR`, 172k) on
+           `B-STAGE9-38-DO2-measure`; `s920_arms_second_opinion` (`w1:p2C`) on the DEC-064
+           second opinion, and it is short-lived — retire its pane and tab once collected.
+
+STAGE-9-CURSOR (2026-09-20, `garmin_inspector_v1_45` — supersedes the two `v1_44` blocks
+           above for SEQUENCING. Per-id status lives only in findings.md / decisions.md):
+           (1) Succession complete. `garmin_inspector_v1_44` retired at 192k; pane `w1:p2B`
+           and tab `w1:t23` closed. `s920_arms_second_opinion` collected and retired with it
+           (`w1:p2C`, tab `w1:t24`). 4→2 tabs, 6→4 panes.
+           (2) **DEC-064 is ACCEPTED — Option C.** The second opinion dissented (repair the
+           recognizer via a Default_Ignorable strip); the reviewer adjudicated NARROW and
+           recommended Option C, but that pane is DEC-064's own drafting agent, so neither
+           could carry the decision. The Inspector settled it by calling
+           `_is_arms_loose_shaped` directly at HEAD on eight inputs — the table is in the DEC
+           entry. Greek Alpha `- Αrms DEC-054:` is skipped under BOTH a DI strip and NFKC,
+           and DEC-060's own `Lo`/`So` fillers are not default-ignorable, so the recognizer
+           class is not closable. Three binding constraints are in the entry; the sentinel
+           REPLACES `decisions.md:2646` and the two loose-recognizer helpers are deleted.
+           (3) **The builder SOFT-LANDED at 250k on `B-STAGE9-38-u3-r2`; its report is
+           COLLECTED and transcribed here. This is the resume point — no file survives.**
+           NOT GREEN, and it stopped rather than forcing it. Both production sites are DONE
+           and compiled clean in their own targets: `AddCloudWizard.cpp:184` (was unguarded)
+           and `GarminConnect.cpp:218` (was guarded) now both build a `GarminPyModulePath`
+           from `GC_GARMIN_PYPATH` only; the `GARMIN_PY_MODULE_DIR` DEFINES are deleted from
+           `src/src.pro`, `src/CMakeLists.txt` and all 7 lines in
+           `unittests/Core/garminconnect/CMakeLists.txt` (grep-confirmed 0 remain).
+           `PyEmbeddedAdapter.{h,cpp}` complete; the no-override branch is one plain import,
+           fallback deleted. 50 + 5 + 2 ctor call sites rewrapped across
+           `testGarminConnectPyAdapter.cpp`, `testPyProcessBootstrap.cpp` and
+           `testGarminConnectPasswordPersistence.cpp`; two new tests written
+           (`explicitOverrideWinsOverAnAlreadyImportableModule` = DO-6,
+           `noOverrideNeverTouchesSysPathWhenPackageIsAbsent` = DO-2 proof).
+           BROKEN, diagnosed, NOT fixed: the 25-target batch failed at step 112/214,
+           `stubs/ImportSeamStubs.cpp:625`, `'constexpr GarminPyModulePath::
+           GarminPyModulePath()' is private within this context` — see B-STAGE9-43.
+           The fix the builder identified but did not apply: move
+           `GarminPyModulePath() = default;` from `private:` to `public:` in all three
+           declaring files (`PyEmbeddedAdapter.h`, `WizardStubPreamble.h`,
+           `ReadFileStubPreamble.h`), keeping the 1-arg ctor private behind
+           `explicitOverride()`.
+           **UNVERIFIED, carry forward:** that fix itself (diagnosed only);
+           `ProviderSeamStubs.cpp:720` never attempted; ~12 targets never reached after the
+           failure point; and **zero `ctest` runs this entire unit** — everything to date is
+           compile-only, so both new tests' runtime behaviour is completely unexercised.
+           (3b) **B-STAGE9-43 opened** from that report: four independent hand-written
+           `PyEmbeddedAdapter` fakes must each track any ctor-signature change or ~20 targets
+           stop compiling. Non-blocking, but it is why a change that built clean in four
+           standalone targets still broke the batch.
+           (3a) `B-STAGE9-36-optionC-scope` is COLLECTED and it corrected the shape before a
+           build round paid for it. Three cites in DEC-064 were wrong and are fixed in the
+           entry (declaration is `:2647`, not `:2646`; slot is `:2640`; the `- Status:`
+           example is `:2641`) — the Inspector re-verified all four at the origin rather than
+           relaying them. Four new binding constraints added: `ArmsBulletMalformed` is
+           RETAINED, the sentinel is raw `entry[1]` regardless of `masked=True`, the
+           `armed is None` branch must be deleted not left dead, and the old bullet is removed
+           in the same change. Minimal change set is three files.
+           (4) **`B-STAGE9-38-DO2-measure` is COLLECTED and fully MEASURED.** The version-
+           independent `squashfs-root/usr/bin/python3` import smoke is RED without the adapter
+           (exit 1) and GREEN after its pip step (exit 0); relocation preserves bundled
+           site-packages. The exact replacement lines for `appveyor.yml:255-259` are in the
+           reply and owe transcription into the B-STAGE9-38 row when its unit resumes.
+           (5) **`B-STAGE9-42` opened and CONFIRMED live.** `appveyor/linux/after_build.sh:5`'s
+           `PYTHON_APPIMAGE_VERSION=3.11.14` returns HTTP 404, measured. Blast radius measured
+           too and it is ONE: every other version-pinned CI asset HEADs 200. Two FTDI pins 403
+           on HEAD and are deliberately NOT classified — HEAD alone cannot separate a dead
+           asset from a hotlink block. Measured replacement (resolve from the release tag's
+           API listing, not a literal filename) is in the finding row. Not folded into
+           B-STAGE9-38; it needs its own unit and no CTest covers `appveyor/`.
+           (5a) **`DEC-063-scope` is COLLECTED and it stopped a build break.** Verdict SAFE,
+           with two BLOCKING corrections now binding in the DEC entry: the `GoldenCheetah`
+           target does NOT exist at `src/CMakeLists.txt:1085`, so rewriting `add_definitions()`
+           in place would fail CMake CONFIGURE — it is DELETE `:1085` plus ADD after
+           `add_executable()` at `:1398`, two edits; and the Inspector's "whole tree" acceptance
+           wording is wrong, since historical ledger prose (including DEC-063 itself) contains
+           the string — scope the check to live build inputs, where the count is exactly one
+           with zero readers. Ordering settled: DEC-063 precedes DEC-062, independent of
+           `B-STAGE9-38-u3`. Minimal change set is one file.
+           (5b) **B-STAGE9-42's fix direction is DECIDED: PIN-TO-A-LIVE-VERSION, not the API
+           resolver.** `B-STAGE9-42-fix-scope` rejected the investigator's own measured
+           replacement on three blocking grounds — curl/jq are never provisioned by
+           `appveyor/linux/install.sh:4-54`; the tag rotates its patch, so identical revisions
+           would fetch different interpreters unreviewed; and without `pipefail` a rate-limit
+           body yields an empty URL that fails opaquely. Decided repair: pin 3.11.16 plus a
+           hard-coded SHA-256 checked after download and before extraction. Full reasoning in
+           the finding row.
+           (6) **Builder queue, in order, one unit per turn:** `B-STAGE9-38-u3-r3` (LIVE now)
+           → B-STAGE9-36 Option C (fully scoped, DEC-064 constraints 1-7 are binding) →
+           DEC-063 (fully scoped, two edits in `src/CMakeLists.txt`, must precede DEC-062) →
+           B-STAGE9-42 (pin + SHA-256) → DEC-062.
+           (6a) **Everything in that queue except the live unit is already scope-passed.** Do
+           not re-scope them; dispatch and build.
+           (7) Nothing committed. Four uncommitted workstreams still unmixed: the two
+           `unittests/buildguard/` files, the `PyEmbeddedAdapter.cpp` +
+           `testGarminConnectPyAdapter.cpp` pair, governance, and the unrelated Coach/Qt6.8
+           work.
+           (8) The investigator blocks on a per-command approval every few minutes while it
+           works under `/tmp/insp-exchange/`. One-time option only — the offered "don't ask
+           again" scopes are wider than the visible command.
+           (9) Live gate markers moved since the 2026-09-15 cursor and are NOT yet explained:
+           `~/.goldencheetah/Andy/activities/` is 1146 files (was 1145) and `tokens.json` is
+           2189 bytes dated 2026-09-19 18:49 (was 0 bytes, 2026-09-13). Newest activity is
+           still dated 2026-09-13. Establish what wrote that token blob before reading the
+           live gate as passed or failed.
+           **Roster, verified live:** builder **`garmin_builder_stage9_v23`** (`w1:pM`, fresh
+           at 0k — v22 retired at 250k, relaunched with `--permission-mode auto --model
+           sonnet`, both confirmed on the new status line) on `B-STAGE9-38-u3-r3`; reviewer
+           `garmin_codex_reviewer` (`w1:pD`, 149k) idle after `B-STAGE9-36-optionC-scope` —
+           give it a unit; investigator `s925_tz_investigator` (`w1:pR`, 198k) on
+           `B-STAGE9-42-ci-pin-sweep`. Inspector `garmin_inspector_v1_45` (`w1:p2D`, tab
+           `w1:t25`, Opus, auto, 142k of 210k).
+
+STAGE-9-CURSOR-ADDENDUM (2026-09-20, `garmin_inspector_v1_45`, written before self-
+           succession. Sequencing only; per-id status lives in findings.md / decisions.md):
+           (1) **DEC-064 ACCEPTED (Option C) is this pass's one real decision.** Neither
+           supervised agent could carry it — the second opinion dissented, and the adjudicating
+           reviewer was DEC-064's own drafting agent. It was settled by running
+           `_is_arms_loose_shaped` at HEAD on eight inputs; the table is in the DEC entry.
+           Greek Alpha `- Αrms DEC-054:` survives both a DI strip and NFKC, which ends the
+           recognizer line. Constraints 1-7 are binding and three of its cites were corrected
+           at the origin (`:2647`, not `:2646`).
+           (2) **Four scope passes ran before any builder touched their code, and every one
+           found a real error in the Inspector's own premise.** That is the pattern worth
+           keeping, not a coincidence: `B-STAGE9-36-optionC-scope` (three wrong cites,
+           `ArmsBulletMalformed` nearly deleted), `DEC-063-scope` (a CMake CONFIGURE break —
+           the target does not exist at `:1085`), `B-STAGE9-42-fix-scope` (rejected the
+           API resolver outright). Scope-pass before dispatch, every time.
+           (3) The builder soft-landed at 250k and was relaunched as
+           `garmin_builder_stage9_v23`; its predecessor's mid-flight state is transcribed in
+           item (3) of the cursor above and nowhere else — the spill buffer was deleted.
+           **Zero ctest runs have happened on `B-STAGE9-38-u3` across its entire life.**
+           (4) Reviewer `garmin_codex_reviewer` (`w1:pD`) is at 211k and idle. **It needs a
+           `/new` before its next unit** — Codex reset keeps the process, pane and name.
+           Investigator was already reset this pass and is at 39k.
+           (5) `STAGE9-live-gate-forensics` is IN FLIGHT on the investigator and is the only
+           unit touching the human-in-the-loop gate. It answers what wrote the 2189-byte
+           `tokens.json` on 2026-09-19. Do not report the live gate as passed or failed until
+           it lands.
+           (6) Nothing committed, by design. Five uncommitted workstreams, still not to be
+           mixed: the two `unittests/buildguard/` files, the `B-STAGE9-38-u3` production+test
+           set, this pass's governance, the unrelated Coach/Qt6.8 work, and nothing else.
+           (7) `clv_findings.py` OUTSTANDING=5 (-36, -38, -39, -41, -42), MALFORMED=0,
+           MISSING-EFFECT=0; `ledger_drift_lint.py` EXIT=0 after every edit.
+           **Roster, verified live:** builder `garmin_builder_stage9_v23` (`w1:pM`, 114k) on
+           `B-STAGE9-38-u3-r3`; reviewer `garmin_codex_reviewer` (`w1:pD`, 211k) IDLE, needs
+           `/new` then a unit; investigator `s925_tz_investigator` (`w1:pR`, 39k) on
+           `STAGE9-live-gate-forensics`. Successor `garmin_inspector_v1_46` (`w1:p2E`, tab
+           `w1:t26`, Opus, auto mode confirmed) is live; `garmin_inspector_v1_45` (`w1:p2D`,
+           tab `w1:t25`) retired at ~190k and is the successor's to close.
+
 Detail lives in: traceability.md (per-id spine) · findings.md (finding disposition;
 archive/findings-detail.md for any row whose cell was capped this pass) · decisions.md
 (## Decision index, then entries) · validations/archive/ + cycles/archive/ (historical
 execution evidence) · archive/state-history.md (§ 1-10 pre-2026-09-06 history, § 11 = the
 complete pre-compaction STATE.md this draft replaces). workflow-aicoach/ is a retired ledger
 (provenance only — see .claude/workflow-INDEX.md).
+
+STAGE-9-CURSOR (2026-09-20, `garmin_inspector_v1_46` — supersedes the two `v1_45` blocks
+           above for SEQUENCING. Per-id status lives only in findings.md / decisions.md):
+           (1) Succession complete. `garmin_inspector_v1_45` retired at 198k; pane `w1:p2D`
+           and tab `w1:t25` closed. 3->2 tabs, 5->4 panes.
+           (2) **`B-STAGE9-38-u3-r3` reported GREEN and its report is COLLECTED.** The
+           compile break is fixed at `src/Cloud/PyEmbeddedAdapter.h:45` — the defaulted
+           `GarminPyModulePath()` ctor moved `private:`->`public:`, the 1-arg override ctor
+           stayed private; the same edit was mirrored into `stubs/ReadFileStubPreamble.h` and
+           `stubs/WizardStubPreamble.h`. `stubs/ProviderSeamStubs.cpp:720` needed no source
+           change of its own — the header fix covers it. Builder-measured: 37 garminconnect
+           targets, 231/231 steps exit 0, `grep -c error:` 0; first ctest of the unit 4/4 on
+           `testGarminConnectPyAdapter|testPyProcessBootstrap|
+           testGarminConnectPasswordPersistence|testGarminConnectWizardRouting`; both
+           mutate/revert cycles flipped only their own named case and reverted byte-clean.
+           NOT independently re-verified yet and NOT reviewed yet — see (3).
+           (3) **`B-STAGE9-38-u3-r3-review` is LIVE** on `garmin_codex_reviewer`, which was
+           `/new`-ed first (211k -> 0). Scope is `git diff -- src/Cloud
+           unittests/Core/garminconnect src/src.pro src/CMakeLists.txt`, ~430 lines, every
+           hunk in scope. Its central question is whether any path survives by which
+           `garmin_client` resolves from a directory `GC_GARMIN_PYPATH` did not name. Five
+           hazards named, two of them the Inspector's own reads of the diff: the new comment
+           block at `PyEmbeddedAdapter.h:34-44` asserts checkable behaviour ("collapse to the
+           same value", "exactly one plain import is attempted") against the project's own
+           no-checkable-comment rule; and the now-public defaulted ctor may let production
+           code build a path state outside `none()`/`explicitOverride()`.
+           (4) **`B-STAGE9-36-optionC-r1` is LIVE** on the builder, per DEC-064's binding
+           constraints 1-7 and its adopted minimal change set (decisions.md +
+           `unittests/buildguard/garmin_lint_ownership_guard.py` + its test file). DEC-064
+           constraint 1's four cites were re-verified at the origin before dispatch and all
+           four hold: heading 2639, sentinel slot 2640, `- Status:` 2641, the one live
+           `- Arms DEC-054:` 2647 with `- Arms-note:` 2648.
+           (5) Queue after these two, in order, all already scope-passed — do not re-scope:
+           DEC-063 (two edits in `src/CMakeLists.txt`, must precede DEC-062) -> B-STAGE9-42
+           (pin 3.11.16 + hard-coded SHA-256, per `B-STAGE9-42-fix-scope`) -> DEC-062.
+           (6) **DEBT: the exact `appveyor.yml:255-259` replacement lines measured by
+           `B-STAGE9-38-DO2-measure` were never transcribed into the B-STAGE9-38 row.** The
+           reply lived in a retired session; recover them from the investigator rollout
+           before B-STAGE9-38 closes, or re-measure. Do not close the row on memory of them.
+           (7) Nothing committed. Five uncommitted workstreams still unmixed.
+           (8) The live gate stays unread either way: `STAGE9-live-gate-forensics` is the only
+           unit touching it, and the 2189-byte `tokens.json` dated 2026-09-19 is still
+           unexplained. Nobody may call the live-account criterion passed or failed until it
+           lands.
+           **Roster, verified live:** builder `garmin_builder_stage9_v23` (`w1:pM`, 116k) on
+           `B-STAGE9-36-optionC-r1`; reviewer `garmin_codex_reviewer` (`w1:pD`, 0k post-`/new`)
+           on `B-STAGE9-38-u3-r3-review`; investigator `s925_tz_investigator` (`w1:pR`, 69k)
+           still working. Inspector `garmin_inspector_v1_46` (`w1:p2E`, tab `w1:t26`, Opus,
+           auto, 55k of 210k).
+
+STAGE-9-CURSOR-AMENDMENT (2026-09-20, `garmin_inspector_v1_46`, amends items (6) and (8)
+           of the `v1_46` block above; sequencing only):
+           (a) **Item (8) is CLOSED and its premise was wrong.** `STAGE9-live-gate-forensics`
+           came back EVIDENCE-OF-SYNC and independently corroborates this file's own
+           STAGE-9-LIVE-RUN-7 block: the 2189-byte `tokens.json` dated 2026-09-19 18:49:27 is
+           the reconnect leg's own recreated token, already recorded there, and the 1146th
+           activity's 2026_09_13 filename encodes activity date, not import time (real mtime
+           18:38:31, with a matching Garmin import sidecar). Nothing was unexplained; two
+           successive cursors carried the marker as open without reading run 7's block.
+           (b) **The real open question is PROVENANCE, not the markers.** Run 7's evidence
+           says a real account synced; it does not say which BUILD SYSTEM produced the binary
+           that did it, and Stage 9's criterion is an installer. `STAGE9-live-run7-provenance`
+           is LIVE on the investigator to settle INSTALLER vs DEV-BUILD and whether run 7's
+           evidence must be re-earned once B-STAGE9-38 lands.
+           (c) The builder hit the Claude Pro usage limit at 09:26 and auto-resumed at 12:50;
+           `B-STAGE9-36-optionC-r1` is running. Its pane came back in **manual mode**, not
+           auto — resolve the first permission dialog by selecting that dialog's own
+           switch-to-auto option; do not send shift+tab into a working pane.
+           (d) STATE.md is in cursor BREACH: the live cursor belongs in the head block, and
+           this file's body is archive. Librarian Job-3 COMPACTION is owed at the next seam
+           with no builder round in flight.
+
+STAGE-9-CURSOR-AMENDMENT-2 (2026-09-20, `garmin_inspector_v1_46`; sequencing only):
+           (e) **`B-STAGE9-38-u3-r3-review` came back BLOCKING — the builder's GREEN does
+           not hold.** Three blocking findings filed, B-STAGE9-44/-45/-46: first-import
+           precedence is not actually guaranteed on the explicit-override path, and neither
+           route is covered by the two new tests. B-STAGE9-47 (non-blocking) records the
+           unbacked checkable comment claims. The unit is NOT closable and nothing about it
+           may be committed until these clear.
+           (f) The reviewer's own literal correction is binding and narrows the repair: with
+           NO override, resolving from CPython's existing `sys.path` is INTENDED under
+           DEC-058, not a residual module-path input. Only the explicit-override path is
+           defective. The Inspector's review brief framed this too widely.
+           (g) `B-STAGE9-44-46-repair-scope` is LIVE on the reviewer, scoping the repair
+           before a build round pays for it. Its open design question is B-STAGE9-45: evict
+           `gc_garmin_adapter` from `sys.modules` under an explicit override, versus fail
+           closed on an already-cached module. That is an in-scope technical call the
+           Inspector settles on the scope pass's answer — not a user gate.
+           (h) Builder pane restored to **auto mode** by selecting the permission dialog's
+           own switch-to-auto option; `B-STAGE9-36-optionC-r1` still running, so the u3
+           repair round queues behind it — one unit per builder turn.
+           (i) Repair-round state for u3, for the next reviewer dispatch: stated class NONE,
+           consecutive-same count 0. Rounds r1-r3 were builder compile rounds, not reviewer
+           NOT-CLOSED rounds, and do not count against the step-5 bound.
+
+STAGE-9-CURSOR-AMENDMENT-3 (2026-09-20, `garmin_inspector_v1_46`; sequencing only):
+           (j) **The u3 repair is SETTLED and recorded as DEC-058 constraint 17** — the
+           scope pass refuted the Inspector's own two-option framing of B-STAGE9-45 and
+           supplied a third, correct shape: origin-validated reuse of the `sys.modules`
+           cache, neither eviction nor blanket rejection. sys.path gets first-exact-
+           occurrence-to-index-0 with no path canonicalization, and fail-closed on any
+           failed list op. Read constraint 17, not this line, before dispatching the repair.
+           That is the fifth consecutive scope pass to find a real error in a premise.
+           (k) Builder WARNED at 219k and is landing softly on `B-STAGE9-36-optionC-r1`; it
+           acknowledged mid-edit and will report rather than force GREEN. Expect a partial
+           report, not a verdict. Its `dispatch.py --mode send` returned `send_failed`
+           purely because the pane was already `working` so no ack transition fired — the
+           payload landed; do not re-send on that signal alone, read the pane.
+           (l) Builder queue, in order, one unit per turn: whatever `B-STAGE9-36-optionC-r1`
+           leaves unfinished -> **B-STAGE9-38 u3 repair under DEC-058 c17** (B-STAGE9-44/-45
+           /-46 are its acceptance) -> DEC-063 -> B-STAGE9-42 -> DEC-062.
+           (m) `DEC-062-scope` is LIVE on the reviewer — the queue tail is the one item never
+           scope-passed. It also asks whether DEC-062 conflicts with u3's own edits to
+           `src/Cloud/PyEmbeddedAdapter.cpp` and the interpreter startup path.
+
+STAGE-9-CURSOR-AMENDMENT-4 (2026-09-20, `garmin_inspector_v1_46`; sequencing only):
+           (n) **Stage 9's live-account criterion is further from met than any prior cursor
+           said, and B-STAGE9-48 records why.** `STAGE9-live-run7-provenance` returned
+           DEV-BUILD-PROVENANCE: run 7 came from a developer-tree binary, not an installer.
+           No AppImage or packaged artifact exists on this host at all. Both registered
+           launch routes resolve to `build/src/GoldenCheetah` (CMake/Ninja). A second,
+           previously unrecorded qmake binary exists at `src/GoldenCheetah` (mtime
+           2026-09-19 18:32:53, built with `GARMIN_PY_MODULE_DIR`), but it too is a direct
+           source-tree output, not installer provenance — and which of the two actually ran
+           is CANNOT-DETERMINE, because the log records no executable path or build id.
+           **Run 7's evidence must be RE-EARNED against a post-B-STAGE9-38 installer build.**
+           Do not carry "the sync half of the acceptance criterion is met" forward without
+           this qualifier.
+           (o) **`B-STAGE9-36-optionC-r1` soft-landed NOT GREEN at 221k; report transcribed
+           here, no file survives. This is the resume point.** DONE and consistent:
+           `decisions.md` carries the `<!-- gc-arms/v1 {...} -->` sentinel at 2640 with the
+           old 2647/2648 bullets deleted, no other ledger line touched; and
+           `garmin_lint_ownership_guard.py` has DO-1/2/3 complete — `_parse_arms_sentinel`
+           added reading `entry_lines[1]` raw, `ArmsBulletMalformed` retained, and
+           `_ARMS_SHAPED`/`_ARMS_DECLARATION`/`_BACKTICK_TOKEN`/`_ARMS_LEADING_CATEGORIES`/
+           `_ARMS_MARKER`/`_strip_arms_leading_run`/`_is_arms_loose_shaped`/the old
+           `_armed_patterns` and the `armed is None` branch all deleted (grep-confirmed zero
+           surviving references; `ast.parse` clean).
+           **BROKEN, and it is the next unit:** DO-4 never started, so
+           `test_garmin_lint_ownership_guard.py` still calls `guard._armed_patterns` (~1388,
+           1419, 1430, 1476, 1487, 1509, 1623, 1822) and names deleted symbols — the file
+           raises AttributeError on import and the whole `garmin-lint-guard` label cannot
+           collect. **ZERO ctest this unit; `_parse_arms_sentinel` has never executed against
+           the real ledger or any fixture, and the entire PROVE-IT set is unattempted.**
+           (p) Builder soft-landed and RESTARTED as **`garmin_builder_stage9_v24`** on the
+           same pane `w1:pM`, relaunched with `--permission-mode auto --model sonnet`; both
+           confirmed on the fresh status line at `tok 0k`. `B-STAGE9-36-optionC-r2` is LIVE
+           on it, scoped to DO-4 only — the test-file rewrite plus the first ctest.
+           (q) `B-STAGE9-38-appveyor-remeasure` is LIVE on the investigator, recovering the
+           debt in item (6): the lost `appveyor.yml:255-259` lines are re-measured from
+           scratch, not recalled.
+           (r) **`DEC-062-scope` is COLLECTED and it found three BLOCKING gaps plus an
+           ordering fact; all are now binding under DEC-062's own "Scope-pass corrections"
+           addendum.** Every file:line DEC-062 cited was re-verified at the origin and
+           holds. The gaps: `PyConfig.home`/`program_name` must be OPTIONAL, since setting
+           an empty home destroys CPython's normal discovery; `PythonEmbed::
+           pythonInstalled()` cannot be deleted because `src/Gui/Pages.cpp:428-440` calls
+           it; and the new locator must compile in the OR-bootstrap block of BOTH build
+           systems or Garmin-only builds fail to link. DEC-063 must land first —
+           `src/CMakeLists.txt:1085` still defines `GC_HAVE_PYTHON` live. The u3-vs-DEC-062
+           ordering worry is REFUTED: u3 edits `PyEmbeddedAdapter.cpp` after init and does
+           not touch interpreter startup.
+           (s) **Correction to this cursor's own briefing language: there is NO `src/Core/
+           main.cpp` hold.** The user RELEASED it 2026-09-16 (`STATE.md:750`); DEC-061
+           records the release and a fresh unbriefed agent found no re-imposing act.
+           Cursors `v1_36`-`v1_45` and this session's first two builder briefs all carried
+           "HARD HOLD" forward in error. Keeping a unit off `main.cpp` is a SCOPE choice —
+           say scope, not hold, and note DEC-062 legitimately needs `main.cpp` in its set.
+           (t) `B-STAGE9-36-guardhalf-review` is LIVE on the reviewer (`/new`-ed, 159k -> 0)
+           against the frozen guard half only; the test file is out of its scope while the
+           builder rewrites it.
+           (u) Inspector-verified directly, not relayed: the sentinel sits at 2640
+           immediately after the `## DEC-054` heading (so `entry_lines[1]` reaches it), is
+           pure ASCII with no trailing bytes under `cat -A`, opens and closes on one line,
+           names its own entry's id, and carries the same single glob the deleted bullet
+           declared. Both old bullets are gone and the block runs heading -> sentinel ->
+           `- Status:` .. `- Origin:` -> `### The problem`. Guard half agrees with its report.
+           (v) **Path to the GOAL, since B-STAGE9-48 changed it:** land B-STAGE9-38 u3 (repair
+           under DEC-058 c17) -> land the `appveyor.yml` adapter step -> BUILD A REAL
+           INSTALLER, which has never once been done on this host -> re-earn run 7's live sync
+           against that artifact. No installer exists here today, so no amount of ctest green
+           advances the acceptance criterion. Not a human-in-the-loop gate; no credentials are
+           needed until the live re-test itself.
+
+STAGE-9-CURSOR-AMENDMENT-5 (2026-09-20, `garmin_inspector_v1_46`; sequencing only):
+           (w) **The guard half of B-STAGE9-36 is BLOCKING — the sentinel is spoofable three
+           ways.** B-STAGE9-49/-50/-51, each re-confirmed by the Inspector at the origin, not
+           relayed: `json.loads` collapses duplicate `dec` keys; `line.strip()` strips Unicode
+           whitespace so a U+00A0-prefixed line still matches; and `^## <id>\b` resolves a
+           counterfeit `## DEC-054-shadow` heading, letting a sentinel under it authorize
+           while the real entry carries none. B-STAGE9-52 (non-blocking) is a stale docstring.
+           **The architecture is NOT implicated:** the reviewer found the rejection half
+           clean — no valid sentinel is wrongly rejected — so these are implementation bugs
+           inside a holding design, not another recognizer-narrowing round. The step-5
+           repair-round bound is therefore not tripped; record that judgment with the round,
+           because the bound exists for exactly this finding's history.
+           (x) **The `appveyor.yml:255-259` debt in item (6) is DISCHARGED, and it was
+           misconceived.** `B-STAGE9-38-appveyor-remeasure` corrected the premise: nothing
+           adapter-related belongs at those lines — they are the AppImage version-stamping
+           block, and a pip install there would mutate an already-built artifact. DEC-058
+           requires the step in `appveyor/linux/after_build.sh` after the requirements
+           install, and it is ALREADY THERE (`:49-53` puts requirements immediately before
+           it). Nothing was ever owed transcription. Proof measured this pass: extracted-
+           interpreter import RED exit 1 -> pip step -> GREEN exit 0 with `__file__` under the
+           extracted root, no host import accepted. One live fact for DEC-058 c14:
+           `setuptools>=61` is the isolated build backend (`pyproject.toml:5-7`) and was
+           ABSENT from the extracted payload, so the step is network-dependent on every leg.
+           (y) `B-STAGE9-49-51-repair-scope` LIVE on the reviewer; `STAGE9-installer-
+           feasibility` LIVE on the investigator, establishing whether an AppImage can be
+           produced on this host at all before anyone spends hours on a build.
+
+STAGE-9-CURSOR-AMENDMENT-6 (2026-09-20, `garmin_inspector_v1_46`; sequencing only):
+           (z) **`B-STAGE9-36-optionC-r2` GREEN, and independently useful:** `ctest -L
+           garmin-lint-guard` 2/2, pytest 117, 662 lines of recognizer-era test code deleted
+           with the symbols they tested, 9 sentinel tests written including one decoy case
+           that plants U+034F, U+200B, Greek-Alpha and fullwidth `Arms` bullets AFTER a valid
+           sentinel and proves none of them leaks into the armed set. Three real-ledger
+           mutations run and reverted byte-clean. Scope exactly the three DEC-064 files.
+           NOT approved as closing B-STAGE9-36 — see (aa).
+           (aa) **`B-STAGE9-49-51-repair-scope` found a FOURTH bypass, B-STAGE9-53**, and
+           confirmed the architecture is not implicated: `garmin_lint_ownership_guard.py:973`
+           `next(...)` takes the FIRST of several canonical `## DEC-ddd — ` headings, so an
+           earlier duplicate's sentinel authorizes while the intended entry carries none.
+           Resolution must require EXACTLY ONE. The ledger already carries amendment-style
+           duplicates for DEC-034/040, so "canonical" is the primary `## DEC-ddd — ` form —
+           that pair is the regression this repair can plausibly cause, and it is in the
+           builder's PROVE-IT list.
+           (bb) `B-STAGE9-36-optionC-r3` LIVE on the builder: all four repairs as one unit,
+           each stated as the predicate it must enforce rather than as a patch.
+           (cc) `DEC-063-cite-recheck` LIVE on the reviewer. DEC-063 was scope-passed against
+           `src/CMakeLists.txt` as it stood BEFORE u3 deleted `GARMIN_PY_MODULE_DIR` from
+           that same file, so its recorded line numbers are suspect and its repair may have
+           changed, not just moved. Queue-tail items scope-passed against a since-edited file
+           are not still scope-passed.
+
+STAGE-9-CURSOR-AMENDMENT-7 (2026-09-20, `garmin_inspector_v1_46`; sequencing only):
+           (dd) **`STAGE9-installer-feasibility` = FEASIBLE-AFTER-FIXES, recorded as
+           B-STAGE9-54.** Disk is ample (504 GiB free). Missing and merely FIXABLE-LOCALLY:
+           gcc-11, `$HOME/Qt/6.8/bin/qmake` (host has `qmake6` only), lupdate/lrelease,
+           patchelf, appimagetool, linuxdeployqt and ~8 -dev packages. Genuinely harder:
+           `python3.11-config` (host is 3.13) and an ABSENT `/dev/fuse` while
+           `appveyor/linux/after_build.sh:40,46,72` executes downloaded AppImages directly.
+           Asset states measured: FTDI 403 even to a wget UA, Python 3.11.14 the known 404,
+           linuxdeployqt/appimagetool/CRAN/deadsnakes/PyPI all 200.
+           (ee) **This is the shape of the eventual human-in-the-loop gate, and it is NOT
+           reached yet.** Installing system packages with sudo changes the user's machine
+           and is outside the codebase. Before asking for it, `STAGE9-installer-no-sudo-path`
+           is testing whether both hard items dissolve: `APPIMAGE_EXTRACT_AND_RUN=1` for the
+           three fuse-dependent call sites, and whether the Python 3.11 payload the recipe
+           ALREADY downloads can supply the build-time `python3.11-config` rather than a
+           system SDK. Do not raise the gate until that answers.
+           (ff) **`DEC-063-cite-recheck`: my drift suspicion was WRONG and DEC-063 is now
+           re-verified, which is the point of asking.** Coordinates hold — u3's
+           `GARMIN_PY_MODULE_DIR` deletions were in a separate Garmin block. Exact change
+           set is `src/CMakeLists.txt` ALONE: DELETE `:1085` `add_definitions(
+           -DGC_HAVE_PYTHON)` (no other args, no side effects), ADD
+           `target_compile_definitions(GoldenCheetah PRIVATE GC_WANT_PYTHON)` after `:1403`,
+           the closing paren of the `add_executable` opened at `:1398`. qmake already emits
+           and consumes `GC_WANT_PYTHON` and needs no matching edit. `GC_HAVE_PYTHON` has
+           exactly ONE live occurrence — its own definition — and zero readers of any kind.
+           B-STAGE9-55 records that DEC-063's "55 sites" census is 47/11 files today.
+           (gg) `B-STAGE9-42-recipe-recheck` LIVE on the reviewer (`/new`-ed, 118k -> 0).
+
+STAGE-9-CURSOR-AMENDMENT-8 (2026-09-20, `garmin_inspector_v1_46`; sequencing only):
+           (hh) **`STAGE9-installer-no-sudo-path` = STILL-BLOCKED, recorded as B-STAGE9-57.
+           One of the two hard items dissolved; the other is real.** FUSE dissolves:
+           `APPIMAGE_EXTRACT_AND_RUN=1` exported before `after_build.sh` is inherited by all
+           three call sites and needs NO recipe edit — measured at `:46` (exit 0,
+           `squashfs-root` created without `/dev/fuse`), with argument forwarding measured
+           too; `:40`/`:72` are unproven only because no local linuxdeployqt/appimagetool
+           copies exist. Qt is also local: `lupdate`/`lrelease` are already on disk at
+           `/usr/lib/qt6/bin/`, merely off PATH, and gcc-11 is a reproducibility pin, not a
+           source requirement (`src/src.pro:41` asks only C++17).
+           **The real blocker is the Python 3.11 SDK.** The runtime AppImage carries
+           `include/python3.11/Python.h` but NO `python3.11-config` and NO `libpython3.11*`,
+           and its interpreter has no NEEDED libpython entry — it is not linkable, so it
+           cannot serve the build that `before_build.sh:35-36` demands. Also outstanding:
+           a user-local `patchelf` (`after_build.sh:59`), the 3.11.14 404 replacement
+           (B-STAGE9-42, already fixed and verified), the FTDI 403, and the native -dev
+           packages `install.sh:4-9,39,42` installs.
+           (ii) **The human-in-the-loop gate is now CHARACTERIZED and has been put to the
+           user; it does NOT stop the loop.** Both routes to a real installer need the
+           user's own authority — sudo package installs on their machine, or a push to the
+           shared AppVeyor remote. Everything still queued (B-STAGE9-36 r3, the u3 repair,
+           DEC-063, B-STAGE9-42, DEC-062) is independent of that answer and continues.
+           (jj) **DEC-065 ACCEPTED (user, 2026-09-20): Stage 9's installer evidence is earned
+           on AppVeyor, not on a local build.** Four constraints bind and are in the entry —
+           the push is gated on separating the Garmin set from the other uncommitted
+           workstreams first; the code queue continues independently and must land before the
+           push is worth making; B-STAGE9-42's pin-and-verify MUST be in the pushed set or the
+           Linux leg fetches a 404 and proves nothing; and `APPIMAGE_EXTRACT_AND_RUN` is a
+           local-build artifact that must NOT be carried into the recipe.
+           (kk) **`DEC-062-lifetime-test-scope`: DELETE is correct, and the check was worth
+           making.** `testPythonProgramNameLifetime.cpp` proves only `Py_SetProgramName`'s
+           BORROWED-pointer contract; DEC-062's `PyConfig_SetString` copies, so no
+           caller-owned pointer survives and the hazard is removed rather than untested.
+           Recorded as a DEC-062 addendum, with the instruction not to rewrite or migrate it.
+
+STAGE-9-CURSOR-AMENDMENT-9 (2026-09-20, `garmin_inspector_v1_46`; sequencing only):
+           (ll) **`B-STAGE9-36-optionC-r3` GREEN** — `ctest -L garmin-lint-guard` 2/2, pytest
+           123 (117+6), all four bypasses closed, `decisions.md` byte-unchanged by the unit.
+           Five new tests verified RED against a hand-reverted r2 guard then GREEN, and the
+           named regression risk — the DEC-034/040 amendment duplicates — has its own test
+           that passed against BOTH baselines.
+           (mm) **The builder substituted a STRICTER predicate than was specified, and it is
+           now the reviewer's first hunt item.** For B-STAGE9-51 it used
+           `rf"^## {re.escape(dec_id)} — "` (space em-dash space) at `:983` instead of the
+           prescribed `(?= |$)`, and for B-STAGE9-53 it raises on >1 canonical heading but
+           returns None on 0 rather than raising. Inspector-verified against the live ledger
+           before accepting either: 67 `## DEC-` headings, 64 match the canonical form, zero
+           duplicate ids, and the 3 non-matching are exactly the DEC-034/036, DEC-038 and
+           DEC-040 amendment headings that MUST be excluded. Both deviations are fail-closed
+           here; whether they reject anything legitimate later is what `B-STAGE9-36-r3-review`
+           is for.
+           (nn) Builder soft-landed at 218k and restarted as **`garmin_builder_stage9_v25`**
+           on `w1:pM` with `--permission-mode auto --model sonnet`, both confirmed at
+           `tok 0k`. `B-STAGE9-38-u3-r4` is LIVE on it — the u3 repair under DEC-058 c17,
+           which is the last thing standing between this branch and a commit-ready Garmin set.

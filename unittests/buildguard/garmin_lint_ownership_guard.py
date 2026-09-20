@@ -101,6 +101,7 @@ cannot run, and the PASS line says so rather than implying it passed.
 from __future__ import annotations
 
 import fnmatch
+import json
 import re
 import subprocess
 import sys
@@ -110,6 +111,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 CONFIG_FILENAME = ".pre-commit-config.yaml"
+
+# DEC-057's `pre_armed_by` names a decision in THIS ledger, relative to
+# `source_root` — the same root `main()` is invoked against, never a path
+# baked into this module.
+DECISIONS_LEDGER_RELATIVE = Path(".claude") / "workflow-garminconnect" / "decisions.md"
+
+# Every id in decisions.md is 3 digits, zero-padded (DEC-001 .. DEC-057, no
+# exception found by `grep -oE 'DEC-[0-9]+' | sort -u`), so this is the real
+# convention, not an invented stricter rule.
+_DEC_ID_SHAPE = re.compile(r"^DEC-\d{3}$")
 
 # Same floor as Part A's GATE-EXCLUDE_REASON, and for the same reason: it is a
 # guard against `reason: "n/a"`, not a quality bar. No static check can decide
@@ -314,6 +325,10 @@ class ManagedRoot:
     `patterns` are fnmatch globs evaluated against repo-relative tracked
     paths. `owned` lists the FILE KINDS that MUST be matched by some hook — a
     file's kind is its suffix, or its bare name when it has none (".gitignore").
+
+    `pre_armed_by` names the DEC that armed this root while it has zero
+    tracked files (DEC-057). An empty root without one is a LINT-EMPTY-
+    UNDECLARED finding, not a silent pass.
     """
 
     name: str
@@ -321,6 +336,7 @@ class ManagedRoot:
     owned: tuple[str, ...]
     gaps: tuple[Gap, ...] = ()
     note: str = ""
+    pre_armed_by: str = ""
 
 
 def file_kind(path: str) -> str:
@@ -442,6 +458,7 @@ MANAGED_ROOTS: tuple[ManagedRoot, ...] = (
             "this entire guard exists to abolish. Reported as EMPTY, never as "
             "covered, so 'armed' can never be mistaken for 'proven'."
         ),
+        pre_armed_by="DEC-054",
     ),
     ManagedRoot(
         name="garmin-buildguard",
@@ -820,6 +837,398 @@ def check_ownership(
 
 
 # --------------------------------------------------------------------------
+# LINT-EMPTY-UNDECLARED / LINT-EMPTY-BOGUS-DEC (DEC-057, B-STAGE9-36)
+# --------------------------------------------------------------------------
+_DEC_HEADING_ANY = re.compile(r"^## DEC-\d{3}(?= |$)")
+
+# A fence delimiter is a HOMOGENEOUS run of one character — `` `{3,} `` OR
+# `~{3,}`, never a mixed class matching either — indented at most 3 spaces
+# (CommonMark; a 4-space indent makes it code CONTENT, not a fence line,
+# whether opener or closer). Round 5's `[`~]{3,}` matched a mixed run like
+# "`~~" and called it a fence of whichever character happened to come
+# first, and its `\s*` accepted unlimited indentation, so a 4-space-indented
+# backtick run inside a fence closed it early either way (round 6).
+_FENCE_MARKER = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+
+# HTML comment: opens at a literal `<!--` and closes at the first `-->`
+# after it, same line or a later one (DEC-059 amendment, round 7).
+_HTML_COMMENT_OPEN = "<!--"
+_HTML_COMMENT_CLOSE = "-->"
+
+# CommonMark type-1 raw HTML block: opens on a line (indented at most 3)
+# starting with one of these four tags, followed by whitespace, `>`, or
+# end of line — `<prefix` alone must not open (e.g. `<pretend>`). Closes on
+# ANY line containing one of the four close tags, case-insensitive, per
+# spec "need not match the start tag" (round 7, DO-2, reviewer's `<pre>`).
+_RAW_HTML_OPEN = re.compile(
+    r"^ {0,3}<(?:script|pre|style|textarea)(?=[ \t>]|$)", re.IGNORECASE
+)
+_RAW_HTML_CLOSE = re.compile(r"</(?:script|pre|style|textarea)>", re.IGNORECASE)
+
+
+def _read_ledger_text(ledger_path: Path) -> str:
+    """decisions.md's full text. ConfigError, never a partial read, on failure."""
+    try:
+        return ledger_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ConfigError(
+            f"cannot read {ledger_path} to verify a `pre_armed_by` "
+            f"declaration: {exc}. Without the ledger, no declared DEC can be "
+            f"confirmed to exist, and an unverifiable claim is not treated "
+            f"as true."
+        ) from exc
+
+
+def _masked_ledger_lines(ledger_text: str) -> list[tuple[str, bool]]:
+    """Every line of the WHOLE ledger, paired with whether it lies inside a
+    code fence, an HTML comment, or a CommonMark type-1 raw HTML block —
+    named `masked` rather than `fenced` because a fence is now only one of
+    three ways a line can be hidden from real declarations (round 7).
+    `_resolve_dec_entry` (heading matching) consults this ONE whole-ledger,
+    top-to-bottom result and never recomputes it itself (round 5, constraint
+    3). `_parse_arms_sentinel` (DEC-064) does NOT consult it — the sentinel
+    slot is read regardless of `masked`, since an HTML comment necessarily
+    masks itself.
+
+    ONE state machine, mutually exclusive: at most one of {fence, comment,
+    raw-HTML} is open at a time, so a fence marker inside an open comment is
+    not a fence opener, and `<!--` inside an open fence is not a comment
+    opener — only the syntax that is CURRENTLY open is even checked for its
+    own closer. An opener with no closer before EOF masks every remaining
+    line, never re-synchronising on a guess (mirrors the fence rule rounds
+    5-6 already established for code fences).
+
+    Markdown fences open on EITHER three-or-more backticks or three-or-more
+    tildes (CommonMark), and CLOSE only on a line of the SAME character,
+    repeated AT LEAST as many times as the opener, with nothing else on the
+    line (round 5/6 constraints). An HTML comment opens at `<!--` and closes
+    at the first `-->` at or after it, same line or a later one. A raw HTML
+    block opens on a line starting `<pre`/`<script`/`<style`/`<textarea`
+    (indented at most 3) and closes on any line containing the matching
+    close tag, case-insensitive — the reviewer's own `<pre>` example.
+    """
+    marked: list[tuple[str, bool]] = []
+    state: str | None = None  # None | "fence" | "comment" | "html"
+    fence_char = ""
+    fence_len = 0
+    for line in ledger_text.splitlines():
+        if state == "fence":
+            marked.append((line, True))
+            marker = _FENCE_MARKER.match(line)
+            if (
+                marker is not None
+                and marker.group(1)[0] == fence_char
+                and len(marker.group(1)) >= fence_len
+                and not marker.group(2).strip()
+            ):
+                state = None
+            continue
+        if state == "comment":
+            marked.append((line, True))
+            if _HTML_COMMENT_CLOSE in line:
+                state = None
+            continue
+        if state == "html":
+            marked.append((line, True))
+            if _RAW_HTML_CLOSE.search(line):
+                state = None
+            continue
+        marker = _FENCE_MARKER.match(line)
+        if marker is not None:
+            marked.append((line, True))
+            state = "fence"
+            fence_char = marker.group(1)[0]
+            fence_len = len(marker.group(1))
+            continue
+        if _HTML_COMMENT_OPEN in line:
+            marked.append((line, True))
+            after_open = line.split(_HTML_COMMENT_OPEN, 1)[1]
+            if _HTML_COMMENT_CLOSE not in after_open:
+                state = "comment"
+            continue
+        if _RAW_HTML_OPEN.match(line):
+            marked.append((line, True))
+            if not _RAW_HTML_CLOSE.search(line):
+                state = "html"
+            continue
+        marked.append((line, False))
+    return marked
+
+
+def _resolve_dec_entry(ledger_text: str, dec_id: str) -> list[tuple[str, bool]] | None:
+    """`dec_id`'s own entry (heading to next `## DEC-ddd` or EOF), as (line,
+    is_masked) pairs from `_masked_ledger_lines`, or None if no CANONICAL
+    heading names `dec_id`.
+
+    Anchored on a real, UNMASKED, CANONICAL `## {dec_id} — ` heading — never
+    a bare token match (B-STAGE9-36 round 2), never a heading only inside
+    someone else's fence/comment/raw-HTML block (rounds 5 and 7), and never
+    a heading that merely shares `dec_id` as a PREFIX: `\\b` matched between
+    a digit and a following `-`, so `## DEC-054-shadow` used to resolve as
+    DEC-054 (B-STAGE9-51); the id must be followed by a space, the em-dash
+    separator, and another space, or nothing else on the line counts.
+
+    That same "id, space, em-dash, space" requirement is also what excludes
+    an AMENDMENT heading that merely mentions `dec_id` — `## DEC-034 /
+    DEC-036 AMENDMENT ...` and `## DEC-040 STAGE-1 AMENDMENT ...` both carry
+    a real em-dash later in the line, but not immediately after the id, so
+    neither is canonical. DEC-034 and DEC-040 each have exactly one
+    canonical heading and one amendment heading; only the canonical one is
+    a second definition, and `next()` silently taking the FIRST of several
+    canonical headings (B-STAGE9-53) is now impossible: more than one
+    canonical heading is ambiguous and raises `ArmsBulletMalformed` rather
+    than picking one. Zero canonical headings is unchanged — the DEC simply
+    does not exist in the ledger, which the caller reports separately.
+
+    A masked heading (candidate or not) is skipped by both this search and
+    the next-heading boundary search, so a masked example entry is
+    swallowed into its enclosing real entry's body rather than cut it short
+    or masquerade as its own entry.
+    """
+    marked = _masked_ledger_lines(ledger_text)
+    canonical_heading = re.compile(rf"^## {re.escape(dec_id)} — ")
+    canonical_indices = [
+        i
+        for i, (line, masked) in enumerate(marked)
+        if not masked and canonical_heading.match(line)
+    ]
+    if len(canonical_indices) > 1:
+        raise ArmsBulletMalformed(
+            f"{len(canonical_indices)} canonical `## {dec_id} — ...` "
+            f"headings exist in {DECISIONS_LEDGER_RELATIVE} — DEC-064 "
+            f"requires exactly one, so an earlier duplicate's sentinel "
+            f"cannot silently authorize this claim"
+        )
+    if not canonical_indices:
+        return None
+    start = canonical_indices[0]
+    end = next(
+        (
+            i
+            for i in range(start + 1, len(marked))
+            if not marked[i][1] and _DEC_HEADING_ANY.match(marked[i][0])
+        ),
+        len(marked),
+    )
+    return marked[start:end]
+
+
+# DEC-064 (Option C): the Arms authorization is not discovered by scanning
+# an entry's bullets, at any indentation or Unicode width. It is a single
+# fixed-position sentinel — an HTML comment carrying a JSON object — that
+# must be the line immediately following the entry's own `## DEC-id`
+# heading and is validated nowhere else.
+_ARMS_SENTINEL_LINE = re.compile(r"^<!-- gc-arms/v1 (?P<payload>\{.*\}) -->$")
+
+
+class ArmsBulletMalformed(ValueError):
+    """DEC-064: `dec_id`'s `gc-arms/v1` sentinel is missing from the fixed
+    slot, is not well-formed JSON, does not carry exactly the two required
+    keys, names a `dec` other than its own entry's id, or its `patterns` is
+    not a non-empty list of strings. Every one of these is a loud refusal,
+    never a silently narrowed or skipped result.
+    """
+
+
+def _reject_duplicate_keys(dec_id: str, pairs: list[tuple[str, object]]) -> dict:
+    """`object_pairs_hook`: every JSON object in the sentinel, at EVERY
+    nesting level, must have pairwise-distinct keys. `json.loads`'s default
+    dict-building silently keeps the LAST of any repeated key
+    (`{"dec":"DEC-other","dec":"DEC-054",...}` authorizes as DEC-054), which
+    is exactly the ambiguity DEC-064 constraint 4 forbids for the record as
+    a whole (B-STAGE9-49). `object_pairs_hook` fires once per `{...}`
+    encountered, however deeply nested, so this closes every level without
+    a separate recursive walk.
+    """
+    seen: set[str] = set()
+    for key, _value in pairs:
+        if key in seen:
+            raise ArmsBulletMalformed(
+                f"{dec_id}'s `gc-arms/v1` sentinel repeats the key {key!r} "
+                f"in one JSON object — DEC-064 requires pairwise-distinct "
+                f"keys at every nesting level"
+            )
+        seen.add(key)
+    return dict(pairs)
+
+
+def _reject_numeric_literal(dec_id: str, text: str) -> None:
+    """`parse_int`/`parse_float` hook: DEC-064's sentinel schema has no
+    numeric field, so any bare number anywhere in the JSON is malformed
+    rather than silently accepted and ignored wherever it lands.
+    """
+    raise ArmsBulletMalformed(
+        f"{dec_id}'s `gc-arms/v1` sentinel contains a numeric literal "
+        f"({text!r}) — DEC-064's sentinel schema has no numeric field"
+    )
+
+
+def _reject_nonfinite_constant(dec_id: str, name: str) -> None:
+    """`parse_constant` hook: `NaN`/`Infinity`/`-Infinity` are a `json.loads`
+    extension beyond standard JSON, and DEC-064's schema has no use for a
+    non-finite value; refusing them here keeps the sentinel strict JSON.
+    """
+    raise ArmsBulletMalformed(
+        f"{dec_id}'s `gc-arms/v1` sentinel contains the non-finite constant "
+        f"{name!r} — not a valid DEC-064 sentinel value"
+    )
+
+
+def _parse_arms_sentinel(
+    entry_lines: list[tuple[str, bool]], dec_id: str
+) -> tuple[str, ...]:
+    """The exact glob list from `dec_id`'s own fixed-slot `gc-arms/v1`
+    sentinel (DEC-064). `entry_lines[0]` is the heading itself
+    (`_resolve_dec_entry`'s own return shape), so the sentinel slot is
+    `entry_lines[1]` — never any later line, and never re-derived by
+    scanning. `is_masked` on that line is ignored on purpose: the sentinel
+    is an HTML comment, which necessarily masks itself in
+    `_masked_ledger_lines`, so requiring `masked=False` would reject every
+    valid sentinel.
+
+    The RAW line is validated with `fullmatch`, never `.strip()`
+    (B-STAGE9-50): stripping absorbs Unicode whitespace along with ASCII,
+    so a U+00A0-prefixed line used to reach the strict grammar anyway. The
+    fixed slot is exactly `<!-- gc-arms/v1 ` + one JSON object + ` -->` —
+    `splitlines()` already removed the line terminator, so no leading or
+    trailing character is ever legitimate.
+
+    Raises `ArmsBulletMalformed` — never returns a silently-narrowed result.
+    """
+    if len(entry_lines) < 2:
+        raise ArmsBulletMalformed(
+            f"{dec_id}'s entry has no line immediately after its heading — "
+            f"DEC-064 requires the `<!-- gc-arms/v1 ... -->` sentinel there"
+        )
+    line, _is_masked = entry_lines[1]
+    match = _ARMS_SENTINEL_LINE.fullmatch(line)
+    if match is None:
+        raise ArmsBulletMalformed(
+            f"the line immediately after {dec_id}'s heading is not a "
+            f"`<!-- gc-arms/v1 {{...}} -->` sentinel ({line!r}) — "
+            f"DEC-064 validates that one fixed slot only, never a later line"
+        )
+    try:
+        payload = json.loads(
+            match.group("payload"),
+            object_pairs_hook=lambda pairs: _reject_duplicate_keys(dec_id, pairs),
+            parse_int=lambda text: _reject_numeric_literal(dec_id, text),
+            parse_float=lambda text: _reject_numeric_literal(dec_id, text),
+            parse_constant=lambda name: _reject_nonfinite_constant(dec_id, name),
+        )
+    except json.JSONDecodeError as exc:
+        raise ArmsBulletMalformed(
+            f"{dec_id}'s `gc-arms/v1` sentinel is not valid JSON: {exc}"
+        ) from exc
+    if not isinstance(payload, dict) or set(payload) != {"dec", "patterns"}:
+        raise ArmsBulletMalformed(
+            f"{dec_id}'s `gc-arms/v1` sentinel must be a JSON object with "
+            f'exactly the keys "dec" and "patterns", got {payload!r}'
+        )
+    sentinel_dec, patterns = payload["dec"], payload["patterns"]
+    if sentinel_dec != dec_id:
+        raise ArmsBulletMalformed(
+            f"{dec_id}'s `gc-arms/v1` sentinel names {sentinel_dec!r}, not "
+            f"its own entry's id"
+        )
+    if (
+        not isinstance(patterns, list)
+        or not patterns
+        or not all(isinstance(p, str) for p in patterns)
+    ):
+        raise ArmsBulletMalformed(
+            f"{dec_id}'s `gc-arms/v1` sentinel's \"patterns\" must be a "
+            f"non-empty list of strings, got {patterns!r}"
+        )
+    return tuple(patterns)
+
+
+def check_empty_roots_are_declared(
+    source_root: Path, reports: list[RootReport]
+) -> list[str]:
+    """A managed root with zero tracked files must NAME the DEC that ARMS it.
+
+    `unittests/Core/stderrbuf/` reporting EMPTY was, on its own, indistinguishable
+    from a managed root whose patterns had simply stopped matching anything —
+    both PASS, both print the same honest-looking line, and only a reader who
+    remembers B-STAGE9-12 tells them apart. DEC-057 makes that distinction a
+    property of the record instead of a reader's memory: `pre_armed_by` names
+    the DEC, or the emptiness is a finding.
+
+    B-STAGE9-36 round 2 found that naming an EXISTING decision is still not
+    enough (any real id satisfied round 1's check), and tried requiring the
+    entry's own body to contain one of the root's pattern prefixes — but that
+    was a substring test over prose, so a negation or a fenced example could
+    satisfy it too. Round 3 (DEC-059) removed prose from the proof entirely,
+    and DEC-064 replaced that bullet with a fixed-slot `gc-arms/v1` sentinel
+    read from the line immediately after the entry's canonical heading; its
+    glob list must contain the root's pattern EXACTLY, not as a substring.
+    The ledger is read AT MOST ONCE per call, lazily.
+    """
+    findings: list[str] = []
+    ledger_text: str | None = None
+    for report in reports:
+        if not report.is_empty:
+            continue
+        claim = report.root.pre_armed_by
+        if not claim:
+            findings.append(
+                f"LINT-EMPTY-UNDECLARED {report.root.name}: 0 tracked files "
+                f"and no `pre_armed_by` declaration naming the DEC that armed "
+                f"this root for legitimate emptiness (DEC-057). Either the "
+                f"patterns no longer match anything this root was meant to "
+                f"cover, or this is a deliberately early-armed root that must "
+                f"declare the DEC that armed it."
+            )
+            continue
+        if not _DEC_ID_SHAPE.match(claim):
+            findings.append(
+                f"LINT-EMPTY-BOGUS-DEC {report.root.name}: pre_armed_by="
+                f"{claim!r} is not shaped like a decision id (DEC- followed "
+                f"by exactly 3 digits, e.g. 'DEC-057') — DEC-057 requires the "
+                f"DEC that armed a root to be NAMED, and an unparseable "
+                f"string names nothing (B-STAGE9-36)."
+            )
+            continue
+        if ledger_text is None:
+            ledger_text = _read_ledger_text(source_root / DECISIONS_LEDGER_RELATIVE)
+        try:
+            entry = _resolve_dec_entry(ledger_text, claim)
+        except ArmsBulletMalformed as exc:
+            findings.append(
+                f"LINT-EMPTY-BOGUS-DEC {report.root.name}: pre_armed_by="
+                f"{claim!r}'s entry {exc} (B-STAGE9-36, DEC-064)."
+            )
+            continue
+        if entry is None:
+            findings.append(
+                f"LINT-EMPTY-BOGUS-DEC {report.root.name}: pre_armed_by="
+                f"{claim!r} names no entry in {DECISIONS_LEDGER_RELATIVE} — "
+                f"no `## {claim}` heading exists there, so the name resolves "
+                f"to nothing (DEC-057, B-STAGE9-36)."
+            )
+            continue
+        try:
+            armed = _parse_arms_sentinel(entry, claim)
+        except ArmsBulletMalformed as exc:
+            findings.append(
+                f"LINT-EMPTY-BOGUS-DEC {report.root.name}: pre_armed_by="
+                f"{claim!r}'s entry {exc} (B-STAGE9-36, DEC-064)."
+            )
+            continue
+        if not any(pattern in armed for pattern in report.root.patterns):
+            findings.append(
+                f"LINT-EMPTY-BOGUS-DEC {report.root.name}: pre_armed_by="
+                f"{claim!r}'s `gc-arms/v1` sentinel lists {armed!r}, which "
+                f"does not contain any of this root's own patterns "
+                f"{report.root.patterns!r} — DEC-059 requires an EXACT match "
+                f"against the declared list, not a substring "
+                f"(B-STAGE9-36)."
+            )
+    return findings
+
+
+# --------------------------------------------------------------------------
 # LINT-GAP
 # --------------------------------------------------------------------------
 def check_declared_gaps(
@@ -1107,6 +1516,12 @@ def check_not_vacuous(reports: list[RootReport]) -> list[str]:
 # --------------------------------------------------------------------------
 def format_root_report(report: RootReport) -> str:
     if report.is_empty:
+        if report.root.pre_armed_by:
+            return (
+                f"  {report.root.name}: EMPTY — 0 tracked files. Declared "
+                f"pre-armed by {report.root.pre_armed_by}; nothing is proven "
+                f"here, but the emptiness itself is expected."
+            )
         return (
             f"  {report.root.name}: EMPTY — 0 tracked files. Regexes may be "
             f"armed for it, but nothing is proven here."
@@ -1133,6 +1548,7 @@ def main(argv: list[str]) -> int:
         parsed = load_config(source_root / CONFIG_FILENAME)
         hooks = list(parsed.hooks)
         findings, reports = check_ownership(source_root, MANAGED_ROOTS, hooks)
+        findings += check_empty_roots_are_declared(source_root, reports)
         all_files = [f for r in reports for f in r.all_files]
         owners_by_file = {f: hooks_owning(f, hooks) for f in all_files}
         findings += check_declared_gaps(MANAGED_ROOTS, all_files, owners_by_file)

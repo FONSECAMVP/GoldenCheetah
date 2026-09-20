@@ -28,6 +28,7 @@ Three consequences for how this file is written:
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -47,7 +48,9 @@ from garmin_lint_ownership_guard import (  # noqa: E402
     Hook,
     ManagedRoot,
     RootReport,
+    DECISIONS_LEDGER_RELATIVE,
     check_declared_gaps,
+    check_empty_roots_are_declared,
     check_model_is_faithful,
     check_not_vacuous,
     check_ownership,
@@ -98,6 +101,34 @@ def make_git_repo(tmp_path: Path, files: dict[str, str]) -> Path:
         target.write_text(body, encoding="utf-8")
         subprocess.run(["git", "add", "--", rel], cwd=root, check=True)
     return root
+
+
+def _ledger_naming(
+    root: Path, *dec_ids: str, arms: tuple[str, ...] | None = None
+) -> None:
+    """A scratch decisions.md, under `root`, declaring exactly `dec_ids`.
+
+    `arms`, when given, becomes EVERY listed id's own fixed-slot
+    `<!-- gc-arms/v1 {...} -->` sentinel (DEC-064) — the id is per-entry, so
+    each entry's sentinel names that entry's own id, never a shared one.
+    """
+    ledger = root / DECISIONS_LEDGER_RELATIVE
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(
+        "\n".join(
+            f"## {dec_id} — scratch fixture entry\n"
+            + (
+                "<!-- gc-arms/v1 "
+                + json.dumps({"dec": dec_id, "patterns": list(arms)})
+                + " -->\n"
+                if arms
+                else ""
+            )
+            for dec_id in dec_ids
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 # --------------------------------------------------------------------------
@@ -585,6 +616,7 @@ def test_main_fails_closed_on_a_bootstrap_index(tmp_path: Path) -> None:
     anywhere else would repeat the mistake.
     """
     root = make_git_repo(tmp_path, {"readme.txt": "x\n"})
+    _ledger_naming(root, "DEC-054")
     (root / ".pre-commit-config.yaml").write_text(
         (REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8"),
         encoding="utf-8",
@@ -699,16 +731,784 @@ def test_a_file_kind_that_is_neither_owned_nor_declared_is_reported(
 # --------------------------------------------------------------------------
 # the EMPTY declared root — the vacuity trap in miniature
 # --------------------------------------------------------------------------
-def test_an_empty_root_does_not_crash_and_does_not_go_red(tmp_path: Path) -> None:
-    """DEC-054 arms clang-format for a directory that has no tracked file yet.
+def test_an_empty_root_does_not_crash_and_does_not_go_red_at_the_ownership_layer(
+    tmp_path: Path,
+) -> None:
+    """check_ownership alone must not treat emptiness as a finding.
 
-    That must not be an error (the cost of arming early is meant to be zero)
-    and must not be silently counted as coverage either.
+    That is check_empty_roots_are_declared's job (DEC-057), so this layer must
+    not be an error and must not be silently counted as coverage either.
     """
     root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
     findings, report = check_ownership(root, [_root()], [])
     assert findings == []
     assert report[0].is_empty is True
+
+
+def test_a_declared_pre_armed_empty_root_produces_no_finding(
+    tmp_path: Path,
+) -> None:
+    """DEC-057: an empty root that NAMES an EXISTING DEC stays green.
+
+    `unittests/Core/stderrbuf/` is the live case (`pre_armed_by="DEC-054"`).
+    """
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    _ledger_naming(root, "DEC-054", arms=("pkg/*",))
+    _, report = check_ownership(root, [_root(pre_armed_by="DEC-054")], [])
+    assert check_empty_roots_are_declared(root, report) == []
+
+
+def test_an_undeclared_empty_root_is_a_finding(tmp_path: Path) -> None:
+    """DEC-057's negative twin: emptiness alone is not evidence of pre-arming.
+
+    Before DEC-057 this silently passed — the exact defect the finding names.
+    No decisions.md is written here — an undeclared root must never need one.
+    """
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    _, report = check_ownership(root, [_root()], [])
+    findings = check_empty_roots_are_declared(root, report)
+    assert len(findings) == 1
+    assert "LINT-EMPTY-UNDECLARED" in findings[0]
+    assert "demo" in findings[0]
+
+
+# --------------------------------------------------------------------------
+# B-STAGE9-36 — pre_armed_by is checked, not trusted
+# --------------------------------------------------------------------------
+def test_a_pre_armed_by_with_the_wrong_shape_is_a_bogus_dec_finding(
+    tmp_path: Path,
+) -> None:
+    """A typo like 'DEC-05' (2 digits, not 3) must not satisfy DEC-057.
+
+    No decisions.md is written — a malformed claim must be rejected on shape
+    alone, before the ledger is ever consulted.
+    """
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    _, report = check_ownership(root, [_root(pre_armed_by="DEC-05")], [])
+    findings = check_empty_roots_are_declared(root, report)
+    assert len(findings) == 1
+    assert "LINT-EMPTY-BOGUS-DEC" in findings[0]
+    assert "DEC-05" in findings[0]
+
+
+def test_a_well_formed_but_nonexistent_pre_armed_by_is_a_bogus_dec_finding(
+    tmp_path: Path,
+) -> None:
+    """DEC-999 is DEC-<3 digits>-shaped but names nothing in the ledger."""
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    _ledger_naming(root, "DEC-054", "DEC-057")
+    _, report = check_ownership(root, [_root(pre_armed_by="DEC-999")], [])
+    findings = check_empty_roots_are_declared(root, report)
+    assert len(findings) == 1
+    assert "LINT-EMPTY-BOGUS-DEC" in findings[0]
+    assert "DEC-999" in findings[0]
+
+
+def test_a_real_dec_that_does_not_arm_this_root_is_a_bogus_dec_finding(
+    tmp_path: Path,
+) -> None:
+    """Round 2/3: naming an EXISTING DEC is not enough — it must arm THIS root.
+
+    DEC-001 is a real entry in the live ledger, about the bidirectional-sync
+    delivery sequence, and carries no `gc-arms/v1` sentinel (DEC-064) in its
+    fixed slot — so it must not satisfy `_root()`'s claim. The real
+    decisions.md is read directly (`source_root=REPO_ROOT`); only the
+    tracked-files side is a scratch repo.
+    """
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    _, report = check_ownership(root, [_root(pre_armed_by="DEC-001")], [])
+    findings = check_empty_roots_are_declared(REPO_ROOT, report)
+    assert len(findings) == 1
+    assert "LINT-EMPTY-BOGUS-DEC" in findings[0]
+    assert "DEC-001" in findings[0]
+    assert "is not a" in findings[0] and "sentinel" in findings[0]
+
+
+def test_a_negated_or_fenced_mention_without_an_arms_bullet_is_a_finding(
+    tmp_path: Path,
+) -> None:
+    """DEC-059's own motivating case (reviewer's exact blocking input).
+
+    A DEC body can say "does NOT arm" this root's own pattern, or show it
+    inside a fenced example — round 2's substring test over prose would have
+    matched either. DEC-064 never reads prose at all; only the fixed-slot
+    `gc-arms/v1` sentinel counts, and this entry's fixed slot holds prose,
+    not a sentinel.
+    """
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    ledger = root / DECISIONS_LEDGER_RELATIVE
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(
+        "## DEC-054 — scratch fixture entry\n"
+        "This decision does NOT arm `pkg/*` for any purpose.\n"
+        "```\n"
+        "pkg/*\n"
+        "```\n",
+        encoding="utf-8",
+    )
+    _, report = check_ownership(root, [_root(pre_armed_by="DEC-054")], [])
+    findings = check_empty_roots_are_declared(root, report)
+    assert len(findings) == 1
+    assert "LINT-EMPTY-BOGUS-DEC" in findings[0]
+    assert "is not a" in findings[0] and "sentinel" in findings[0]
+
+
+def test_an_arms_bullet_naming_a_narrower_pattern_does_not_satisfy_this_root(
+    tmp_path: Path,
+) -> None:
+    """DEC-059 constraint 2, carried over into the sentinel (DEC-064):
+
+    EXACT match, so `pkg/*` != `pkg/sub/*`.
+    """
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    _ledger_naming(root, "DEC-054", arms=("pkg/sub/*",))
+    _, report = check_ownership(root, [_root(pre_armed_by="DEC-054")], [])
+    findings = check_empty_roots_are_declared(root, report)
+    assert len(findings) == 1
+    assert "LINT-EMPTY-BOGUS-DEC" in findings[0]
+    assert "EXACT match" in findings[0]
+
+
+# --------------------------------------------------------------------------
+# DEC-064 (Option C) — the Arms authorization is `_resolve_dec_entry`'s
+# `entry_lines[1]`, a fixed-position `<!-- gc-arms/v1 {...} -->` sentinel,
+# never a bullet discovered by scanning the entry's body at any width. Each
+# test below is one of DEC-064's PROVE IT mutations, run permanently rather
+# than by hand: delete the sentinel, move it one line later, mutate its
+# `dec` id, corrupt its JSON, and confirm the round 9-12 disguised-bullet
+# attack class (leading U+034F, interior U+200B, Greek-Alpha, fullwidth)
+# authorizes nothing now that nothing past `entry_lines[1]` is ever read.
+# --------------------------------------------------------------------------
+def test_no_sentinel_at_all_is_an_error_not_a_skip(tmp_path: Path) -> None:
+    """PROVE IT: delete the sentinel -> an ERROR finding, never a skip.
+
+    The entry has only its own heading line, so `entry_lines[1]` (the fixed
+    slot DEC-064 validates) does not exist at all.
+    """
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    ledger = root / DECISIONS_LEDGER_RELATIVE
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text("## DEC-054 — scratch fixture entry\n", encoding="utf-8")
+    _, report = check_ownership(root, [_root(pre_armed_by="DEC-054")], [])
+    findings = check_empty_roots_are_declared(root, report)
+    assert len(findings) == 1
+    assert "LINT-EMPTY-BOGUS-DEC" in findings[0]
+    assert "no line immediately after" in findings[0]
+
+
+def test_a_non_sentinel_line_in_the_fixed_slot_is_an_error_not_a_skip(
+    tmp_path: Path,
+) -> None:
+    """Constraint 6: the old 'no Arms bullet, therefore skip' branch is gone.
+
+    A `- Status:`-shaped line — legitimate metadata everywhere else in this
+    ledger — is still a loud error in THIS one fixed slot, because DEC-064
+    validates that slot only and never falls back to scanning for a bullet.
+    """
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    ledger = root / DECISIONS_LEDGER_RELATIVE
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(
+        "## DEC-054 — scratch fixture entry\n- Status: accepted\n",
+        encoding="utf-8",
+    )
+    _, report = check_ownership(root, [_root(pre_armed_by="DEC-054")], [])
+    findings = check_empty_roots_are_declared(root, report)
+    assert len(findings) == 1
+    assert "LINT-EMPTY-BOGUS-DEC" in findings[0]
+    assert "is not a" in findings[0] and "sentinel" in findings[0]
+
+
+def test_a_sentinel_naming_a_different_dec_is_an_id_mismatch_error(
+    tmp_path: Path,
+) -> None:
+    """PROVE IT: mutate its `dec` id -> id-mismatch error."""
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    ledger = root / DECISIONS_LEDGER_RELATIVE
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(
+        "## DEC-054 — scratch fixture entry\n"
+        '<!-- gc-arms/v1 {"dec": "DEC-057", "patterns": ["pkg/*"]} -->\n',
+        encoding="utf-8",
+    )
+    _, report = check_ownership(root, [_root(pre_armed_by="DEC-054")], [])
+    findings = check_empty_roots_are_declared(root, report)
+    assert len(findings) == 1
+    assert "LINT-EMPTY-BOGUS-DEC" in findings[0]
+    assert "names 'DEC-057', not its own entry's id" in findings[0]
+
+
+def test_a_sentinel_that_is_not_valid_json_is_an_error(tmp_path: Path) -> None:
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    ledger = root / DECISIONS_LEDGER_RELATIVE
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(
+        "## DEC-054 — scratch fixture entry\n" "<!-- gc-arms/v1 {not json} -->\n",
+        encoding="utf-8",
+    )
+    _, report = check_ownership(root, [_root(pre_armed_by="DEC-054")], [])
+    findings = check_empty_roots_are_declared(root, report)
+    assert len(findings) == 1
+    assert "LINT-EMPTY-BOGUS-DEC" in findings[0]
+    assert "not valid JSON" in findings[0]
+
+
+def test_a_sentinel_missing_the_patterns_key_is_an_error(tmp_path: Path) -> None:
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    ledger = root / DECISIONS_LEDGER_RELATIVE
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(
+        "## DEC-054 — scratch fixture entry\n"
+        '<!-- gc-arms/v1 {"dec": "DEC-054"} -->\n',
+        encoding="utf-8",
+    )
+    _, report = check_ownership(root, [_root(pre_armed_by="DEC-054")], [])
+    findings = check_empty_roots_are_declared(root, report)
+    assert len(findings) == 1
+    assert "LINT-EMPTY-BOGUS-DEC" in findings[0]
+    assert 'exactly the keys "dec" and "patterns"' in findings[0]
+
+
+def test_a_sentinel_with_an_empty_patterns_list_is_an_error(
+    tmp_path: Path,
+) -> None:
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    ledger = root / DECISIONS_LEDGER_RELATIVE
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(
+        "## DEC-054 — scratch fixture entry\n"
+        '<!-- gc-arms/v1 {"dec": "DEC-054", "patterns": []} -->\n',
+        encoding="utf-8",
+    )
+    _, report = check_ownership(root, [_root(pre_armed_by="DEC-054")], [])
+    findings = check_empty_roots_are_declared(root, report)
+    assert len(findings) == 1
+    assert "LINT-EMPTY-BOGUS-DEC" in findings[0]
+    assert "non-empty list of strings" in findings[0]
+
+
+def test_a_sentinel_with_a_non_string_pattern_is_an_error(tmp_path: Path) -> None:
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    ledger = root / DECISIONS_LEDGER_RELATIVE
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(
+        "## DEC-054 — scratch fixture entry\n"
+        '<!-- gc-arms/v1 {"dec": "DEC-054", "patterns": [true]} -->\n',
+        encoding="utf-8",
+    )
+    _, report = check_ownership(root, [_root(pre_armed_by="DEC-054")], [])
+    findings = check_empty_roots_are_declared(root, report)
+    assert len(findings) == 1
+    assert "LINT-EMPTY-BOGUS-DEC" in findings[0]
+    assert "non-empty list of strings" in findings[0]
+
+
+def test_a_sentinel_with_a_numeric_literal_is_an_error(tmp_path: Path) -> None:
+    """DEC-064's schema has no numeric field; a bare number anywhere in the
+
+    JSON is malformed rather than silently parsed and ignored.
+    """
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    ledger = root / DECISIONS_LEDGER_RELATIVE
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(
+        "## DEC-054 — scratch fixture entry\n"
+        '<!-- gc-arms/v1 {"dec": "DEC-054", "patterns": ["pkg/*"], '
+        '"extra": 1} -->\n',
+        encoding="utf-8",
+    )
+    _, report = check_ownership(root, [_root(pre_armed_by="DEC-054")], [])
+    findings = check_empty_roots_are_declared(root, report)
+    assert len(findings) == 1
+    assert "LINT-EMPTY-BOGUS-DEC" in findings[0]
+    assert "numeric literal" in findings[0]
+
+
+# --------------------------------------------------------------------------
+# B-STAGE9-49/-50/-51/-53 — four exact enforcement gaps inside the fixed-slot
+# sentinel design (DEC-064 C2/C4/C5), reviewer-found and Inspector-confirmed.
+# The fixed-slot architecture is not in question; each test below is the RED
+# case for one gap and must fail against the pre-repair guard.
+# --------------------------------------------------------------------------
+def test_a_sentinel_with_a_duplicate_json_key_is_an_error(
+    tmp_path: Path,
+) -> None:
+    """B-STAGE9-49: `json.loads`'s default dict-building silently keeps the
+
+    LAST of a repeated key, so `{"dec":"DEC-other","dec":"DEC-054",...}`
+    would authorize as DEC-054 under the naive parse. `object_pairs_hook`
+    must catch the duplicate before either value is ever chosen.
+    """
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    ledger = root / DECISIONS_LEDGER_RELATIVE
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(
+        "## DEC-054 — scratch fixture entry\n"
+        '<!-- gc-arms/v1 {"dec": "DEC-other", "dec": "DEC-054", '
+        '"patterns": ["pkg/*"]} -->\n',
+        encoding="utf-8",
+    )
+    _, report = check_ownership(root, [_root(pre_armed_by="DEC-054")], [])
+    findings = check_empty_roots_are_declared(root, report)
+    assert len(findings) == 1
+    assert "LINT-EMPTY-BOGUS-DEC" in findings[0]
+    assert "repeats the key" in findings[0]
+
+
+def test_a_nbsp_prefixed_sentinel_line_is_an_error_not_stripped_clean(
+    tmp_path: Path,
+) -> None:
+    """B-STAGE9-50: `.strip()` removes Unicode whitespace along with ASCII,
+
+    so a U+00A0 (NBSP) prefix on the sentinel line used to reach the strict
+    grammar anyway and authorize. Validating the RAW line with `fullmatch`
+    means any leading character at all is disqualifying.
+    """
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    ledger = root / DECISIONS_LEDGER_RELATIVE
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(
+        "## DEC-054 — scratch fixture entry\n"
+        ' <!-- gc-arms/v1 {"dec": "DEC-054", "patterns": ["pkg/*"]} -->\n',
+        encoding="utf-8",
+    )
+    _, report = check_ownership(root, [_root(pre_armed_by="DEC-054")], [])
+    findings = check_empty_roots_are_declared(root, report)
+    assert len(findings) == 1
+    assert "LINT-EMPTY-BOGUS-DEC" in findings[0]
+    assert "is not a" in findings[0] and "sentinel" in findings[0]
+
+
+def test_a_shadow_heading_carrying_a_sentinel_does_not_authorize_the_real_id(
+    tmp_path: Path,
+) -> None:
+    """B-STAGE9-51: `\\b` matches between a digit and a following `-`, so
+
+    `## DEC-054-shadow` used to resolve as DEC-054's own heading even though
+    it names a different entry entirely. The real `## DEC-054` entry here
+    carries no sentinel at all; only the counterfeit shadow heading does.
+    """
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    ledger = root / DECISIONS_LEDGER_RELATIVE
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(
+        "## DEC-054-shadow — a different entry that merely shares a prefix\n"
+        '<!-- gc-arms/v1 {"dec": "DEC-054", "patterns": ["pkg/*"]} -->\n'
+        "## DEC-054 — scratch fixture entry\n"
+        "- Status: accepted\n",
+        encoding="utf-8",
+    )
+    _, report = check_ownership(root, [_root(pre_armed_by="DEC-054")], [])
+    findings = check_empty_roots_are_declared(root, report)
+    assert len(findings) == 1
+    assert "LINT-EMPTY-BOGUS-DEC" in findings[0]
+    assert "DEC-054" in findings[0]
+
+
+def test_two_canonical_headings_for_one_id_is_an_ambiguity_error(
+    tmp_path: Path,
+) -> None:
+    """B-STAGE9-53: `next(...)` used to silently take the FIRST of several
+
+    canonical `## DEC-054 — ...` headings, so an earlier duplicate's
+    sentinel authorized while the intended (later) entry had none. Only the
+    EARLIER heading below carries a sentinel; if resolution still picked it
+    silently, this root would incorrectly pass.
+    """
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    ledger = root / DECISIONS_LEDGER_RELATIVE
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(
+        "## DEC-054 — an earlier duplicate heading\n"
+        '<!-- gc-arms/v1 {"dec": "DEC-054", "patterns": ["pkg/*"]} -->\n'
+        "## DEC-054 — the intended, later entry, with no sentinel\n"
+        "- Status: accepted\n",
+        encoding="utf-8",
+    )
+    _, report = check_ownership(root, [_root(pre_armed_by="DEC-054")], [])
+    findings = check_empty_roots_are_declared(root, report)
+    assert len(findings) == 1
+    assert "LINT-EMPTY-BOGUS-DEC" in findings[0]
+    assert "2 canonical" in findings[0]
+
+
+def test_the_real_amendment_duplicates_still_resolve_correctly() -> None:
+    """The regression this repair can plausibly cause: DEC-034 and DEC-040
+
+    each carry one canonical heading plus one AMENDMENT heading that merely
+    mentions the same id (`## DEC-034 / DEC-036 AMENDMENT ...`, `## DEC-040
+    STAGE-1 AMENDMENT ...`). Neither amendment heading may count as a second
+    canonical definition, or these two real, pre-existing ledger entries
+    would start raising `ArmsBulletMalformed` on every ctest run.
+    """
+    ledger_text = guard._read_ledger_text(REPO_ROOT / DECISIONS_LEDGER_RELATIVE)
+    for dec_id in ("DEC-034", "DEC-040"):
+        entry = guard._resolve_dec_entry(ledger_text, dec_id)
+        assert entry is not None, dec_id
+        assert entry[0][0].startswith(f"## {dec_id} — "), entry[0]
+
+
+def test_disguised_bullets_after_the_real_sentinel_authorize_nothing_extra(
+    tmp_path: Path,
+) -> None:
+    """PROVE IT: leading U+034F, interior U+200B, Greek-Alpha
+    `- \u0391rms DEC-054:` and fullwidth `- \uff21\uff52\uff4d\uff53
+    DEC-054:` must authorize NOTHING — round 9-12's whole disguised-bullet
+    attack class. A real, well-formed sentinel occupies the fixed slot;
+    every disguised line below sits later in the same entry, where DEC-064
+    constraint 2 says nothing is ever consulted again. If any of them were
+    still read, `evil/*` would leak into the armed set and this root's own
+    `pkg/*` match would stop being the only reason it passes.
+    """
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    ledger = root / DECISIONS_LEDGER_RELATIVE
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(
+        "## DEC-054 — scratch fixture entry\n"
+        '<!-- gc-arms/v1 {"dec": "DEC-054", "patterns": ["pkg/*"]} -->\n'
+        "\u034f- Arms DEC-054: `evil/*`\n"
+        "-\u200b Arms DEC-054: `evil/*`\n"
+        "- \u0391rms DEC-054: `evil/*`\n"
+        "- \uff21\uff52\uff4d\uff53 DEC-054: `evil/*`\n"
+        "- Status: accepted\n",
+        encoding="utf-8",
+    )
+    _, report = check_ownership(root, [_root(pre_armed_by="DEC-054")], [])
+    assert check_empty_roots_are_declared(root, report) == []
+
+
+# --------------------------------------------------------------------------
+# B-STAGE9-36 round 5/6 (DEC-059 amendment) — fence detection must be
+# faithful to Markdown, not a backtick-only naive toggle. DEC-060 retired
+# fence state as a question for Arms-bullet verdicts (above), but heading
+# resolution (`_resolve_dec_entry`) still depends on `_masked_ledger_lines`
+# getting these edge cases right (DEC-060 constraint 3), so each of the
+# following is re-pointed at heading resolution rather than dropped.
+# --------------------------------------------------------------------------
+
+
+def test_a_short_closer_does_not_end_a_longer_fence_hiding_a_heading(
+    tmp_path: Path,
+) -> None:
+    """DO-2 (repurposed for round 8): a closing fence must be the SAME
+
+    character and >= the opener's length. The opener here is 4 backticks;
+    the 3-backtick line right after it is NOT a valid closer, so a `##
+    DEC-054` heading placed after it must stay fenced — swallowed into
+    DEC-001's body — all the way to the genuine 4-backtick close, and must
+    not resolve as its own entry (DEC-060 constraint 3: heading resolution
+    still depends on `_masked_ledger_lines` getting this right, even though
+    Arms-bullet verdicts no longer do).
+    """
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    ledger = root / DECISIONS_LEDGER_RELATIVE
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(
+        "## DEC-001 — real entry\n"
+        "````\n"
+        "placeholder\n"
+        "```\n"
+        "## DEC-054 — the short closer above must not have ended the fence\n"
+        "````\n",
+        encoding="utf-8",
+    )
+    _, report = check_ownership(root, [_root(pre_armed_by="DEC-054")], [])
+    findings = check_empty_roots_are_declared(root, report)
+    assert len(findings) == 1
+    assert "LINT-EMPTY-BOGUS-DEC" in findings[0]
+    assert "no `## DEC-054` heading exists" in findings[0]
+
+
+def test_a_heading_inside_a_closed_fence_does_not_resolve_as_its_own_entry(
+    tmp_path: Path,
+) -> None:
+    """DO-3, first half: a `## DEC-ddd` heading inside a fenced illustrative
+
+    example is swallowed into the ENCLOSING entry's body, not treated as a
+    real entry of its own — a real `- Arms DEC-054:` bullet inside that
+    fenced example must not satisfy a claim naming the fenced id.
+    """
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    ledger = root / DECISIONS_LEDGER_RELATIVE
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(
+        "## DEC-001 — real entry showing a future entry's shape\n"
+        "```\n"
+        "## DEC-054 — inside the fence, not a real entry\n"
+        "- Arms DEC-054: `pkg/*`\n"
+        "```\n",
+        encoding="utf-8",
+    )
+    _, report = check_ownership(root, [_root(pre_armed_by="DEC-054")], [])
+    findings = check_empty_roots_are_declared(root, report)
+    assert len(findings) == 1
+    assert "LINT-EMPTY-BOGUS-DEC" in findings[0]
+    assert "no `## DEC-054` heading exists" in findings[0]
+
+
+def test_an_unclosed_fence_keeps_the_next_headings_entry_unresolved_too(
+    tmp_path: Path,
+) -> None:
+    """DO-3, second half: fence state must carry ACROSS entry boundaries.
+
+    DEC-001 opens a fence and never closes it. A per-entry recomputation
+    would start DEC-002's own scan believing it is outside any fence;
+    globally, the ledger is still inside the fence DEC-001 opened, so
+    DEC-002's heading — and its `- Arms:` bullet — must stay unresolved.
+    """
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    ledger = root / DECISIONS_LEDGER_RELATIVE
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(
+        "## DEC-001 — opens a fence and never closes it\n"
+        "```\n"
+        "placeholder\n"
+        "\n"
+        "## DEC-002 — still inside DEC-001's unclosed fence\n"
+        "- Arms DEC-002: `pkg/*`\n",
+        encoding="utf-8",
+    )
+    _, report = check_ownership(root, [_root(pre_armed_by="DEC-002")], [])
+    findings = check_empty_roots_are_declared(root, report)
+    assert len(findings) == 1
+    assert "LINT-EMPTY-BOGUS-DEC" in findings[0]
+    assert "no `## DEC-002` heading exists" in findings[0]
+
+
+def test_the_real_ledgers_dec054_still_resolves_correctly_after_round_5() -> None:
+    """PROVE IT's closing requirement: round 5's global fence pass must not
+
+    disturb resolution of the one real `gc-arms/v1` sentinel (DEC-064) in
+    decisions.md.
+    """
+    ledger_text = guard._read_ledger_text(REPO_ROOT / DECISIONS_LEDGER_RELATIVE)
+    entry = guard._resolve_dec_entry(ledger_text, "DEC-054")
+    assert entry is not None
+    assert guard._parse_arms_sentinel(entry, "DEC-054") == (
+        "unittests/Core/stderrbuf/*",
+    )
+
+
+# --------------------------------------------------------------------------
+# B-STAGE9-36 round 6 (DEC-059 amendment, reviewer round-5 defect) — a fence
+# delimiter is a HOMOGENEOUS run of one character, indented at most 3 spaces;
+# anything else is code CONTENT, not a fence line, whether opener or closer.
+# Repurposed for round 8 (DEC-060): these edge cases no longer matter for
+# Arms-bullet verdicts (block context is retired there), but they still
+# matter for HEADING resolution (DEC-060 constraint 3), so each hides a
+# heading rather than a bullet.
+# --------------------------------------------------------------------------
+def test_a_mixed_character_run_does_not_close_a_fence_hiding_a_heading(
+    tmp_path: Path,
+) -> None:
+    """DO-1: a backtick-then-tildes run is neither a backtick nor a tilde
+
+    fence delimiter, so it must not close the backtick fence opened above
+    it — the `## DEC-054` heading below must stay fenced and unresolved.
+    """
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    ledger = root / DECISIONS_LEDGER_RELATIVE
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(
+        "## DEC-001 — real entry\n"
+        "```\n"
+        "`~~\n"
+        "## DEC-054 — inside the fence, not a real entry\n"
+        "```\n",
+        encoding="utf-8",
+    )
+    _, report = check_ownership(root, [_root(pre_armed_by="DEC-054")], [])
+    findings = check_empty_roots_are_declared(root, report)
+    assert len(findings) == 1
+    assert "LINT-EMPTY-BOGUS-DEC" in findings[0]
+    assert "no `## DEC-054` heading exists" in findings[0]
+
+
+def test_a_four_space_indented_run_does_not_close_a_fence_hiding_a_heading(
+    tmp_path: Path,
+) -> None:
+    """DO-2: 4+ spaces of indentation makes a backtick run code CONTENT, not
+
+    a fence delimiter — it must not close the fence opened above it either.
+    """
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    ledger = root / DECISIONS_LEDGER_RELATIVE
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(
+        "## DEC-001 — real entry\n"
+        "```\n"
+        "    ```\n"
+        "## DEC-054 — inside the fence, not a real entry\n"
+        "```\n",
+        encoding="utf-8",
+    )
+    _, report = check_ownership(root, [_root(pre_armed_by="DEC-054")], [])
+    findings = check_empty_roots_are_declared(root, report)
+    assert len(findings) == 1
+    assert "LINT-EMPTY-BOGUS-DEC" in findings[0]
+    assert "no `## DEC-054` heading exists" in findings[0]
+
+
+def test_a_mixed_tilde_backtick_run_does_not_close_a_tilde_fence_hiding_a_heading(
+    tmp_path: Path,
+) -> None:
+    """DO-1/GROUND TRUTH 3: same defect, tilde fence, mixed run starting with
+
+    the fence's own character — `group(1)[0]` alone is not enough; the
+    WHOLE run must be homogeneous.
+    """
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    ledger = root / DECISIONS_LEDGER_RELATIVE
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(
+        "## DEC-001 — real entry\n"
+        "~~~\n"
+        "~``\n"
+        "## DEC-054 — inside the fence, not a real entry\n"
+        "~~~\n",
+        encoding="utf-8",
+    )
+    _, report = check_ownership(root, [_root(pre_armed_by="DEC-054")], [])
+    findings = check_empty_roots_are_declared(root, report)
+    assert len(findings) == 1
+    assert "LINT-EMPTY-BOGUS-DEC" in findings[0]
+    assert "no `## DEC-054` heading exists" in findings[0]
+
+
+# --------------------------------------------------------------------------
+# B-STAGE9-36 round 7 (DEC-059 amendment) established that an HTML comment
+# or a CommonMark type-1 raw HTML block must mask exactly like a code fence.
+# DEC-060 round 8 retires that question for Arms-bullet verdicts entirely —
+# these two are now "still counts when the id matches" tests, the DEC-060
+# PROVE IT requirement for the remaining two container types (backtick and
+# tilde fence are covered above). Heading resolution keeps consulting masked
+# state (DEC-060 constraint 3), so the two heading tests below are unchanged
+# in intent, only in spelling.
+# --------------------------------------------------------------------------
+def test_a_sentinel_is_read_regardless_of_its_own_masked_state(
+    tmp_path: Path,
+) -> None:
+    """DEC-064 constraint 5: `entry_lines[1]`'s `masked` flag is ignored.
+
+    A `<!-- gc-arms/v1 {...} -->` sentinel necessarily contains `<!--`, so
+    `_masked_ledger_lines` always marks it `masked=True` (round 7's HTML
+    comment state machine, unaffected by DEC-064). Rejecting masked entries
+    would reject every valid sentinel that has ever existed or ever will;
+    this calls `_parse_arms_sentinel` directly with both `masked=True` and
+    `masked=False` on the identical line and requires the same result
+    either way, so a future re-introduction of a `not is_masked` guard goes
+    red immediately rather than only on the real ledger.
+    """
+    heading = ("## DEC-054 — scratch fixture entry", False)
+    sentinel_line = '<!-- gc-arms/v1 {"dec": "DEC-054", "patterns": ["pkg/*"]} -->'
+    assert guard._parse_arms_sentinel([heading, (sentinel_line, True)], "DEC-054") == (
+        "pkg/*",
+    )
+    assert guard._parse_arms_sentinel([heading, (sentinel_line, False)], "DEC-054") == (
+        "pkg/*",
+    )
+
+
+def test_a_well_formed_sentinel_one_line_later_is_not_found(
+    tmp_path: Path,
+) -> None:
+    """PROVE IT: move the sentinel one line later -> still an error.
+
+    DEC-064 constraint 2: the sentinel is validated in its fixed slot only,
+    `entry_lines[1]`, never by scanning the rest of the entry for something
+    sentinel-shaped. Here a perfectly well-formed sentinel exists, but one
+    line too late — the fixed slot itself holds an unrelated bullet — so
+    this must still raise, not fall through to the later line.
+    """
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    ledger = root / DECISIONS_LEDGER_RELATIVE
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(
+        "## DEC-054 — scratch fixture entry\n"
+        "- Note: the sentinel below is one line too late\n"
+        '<!-- gc-arms/v1 {"dec": "DEC-054", "patterns": ["pkg/*"]} -->\n',
+        encoding="utf-8",
+    )
+    _, report = check_ownership(root, [_root(pre_armed_by="DEC-054")], [])
+    findings = check_empty_roots_are_declared(root, report)
+    assert len(findings) == 1
+    assert "LINT-EMPTY-BOGUS-DEC" in findings[0]
+    assert "is not a" in findings[0] and "sentinel" in findings[0]
+
+
+def test_a_heading_inside_an_html_comment_does_not_resolve_as_its_own_entry(
+    tmp_path: Path,
+) -> None:
+    """Cross-state, must hold: a `## DEC-ddd` heading hidden in a comment is
+
+    swallowed into the enclosing real entry, exactly like round 5's fenced
+    case — unaffected by DEC-060, since heading resolution still consults
+    masked state (constraint 3).
+    """
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    ledger = root / DECISIONS_LEDGER_RELATIVE
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(
+        "## DEC-001 — real entry showing a future entry's shape\n"
+        "<!--\n"
+        "## DEC-054 — inside the comment, not a real entry\n"
+        "- Arms DEC-054: `pkg/*`\n"
+        "-->\n",
+        encoding="utf-8",
+    )
+    _, report = check_ownership(root, [_root(pre_armed_by="DEC-054")], [])
+    findings = check_empty_roots_are_declared(root, report)
+    assert len(findings) == 1
+    assert "LINT-EMPTY-BOGUS-DEC" in findings[0]
+    assert "no `## DEC-054` heading exists" in findings[0]
+
+
+def test_the_real_ledgers_dec054_still_resolves_correctly_after_round_7() -> None:
+    """PROVE IT's closing requirement, re-run after the round-7 mask change."""
+    ledger_text = guard._read_ledger_text(REPO_ROOT / DECISIONS_LEDGER_RELATIVE)
+    entry = guard._resolve_dec_entry(ledger_text, "DEC-054")
+    assert entry is not None
+    assert guard._parse_arms_sentinel(entry, "DEC-054") == (
+        "unittests/Core/stderrbuf/*",
+    )
+
+
+def test_a_prose_only_mention_of_a_dec_id_does_not_resolve_as_an_entry(
+    tmp_path: Path,
+) -> None:
+    """A bare `DEC-054` token in running prose is not a `## DEC-054` entry.
+
+    Round 1's `\\bDEC-\\d+\\b` scan over the whole ledger text would have
+    resolved this; the heading-anchored resolver must not.
+    """
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    ledger = root / DECISIONS_LEDGER_RELATIVE
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(
+        "## DEC-001 — unrelated heading\n"
+        "See DEC-054 for background; there is no heading for it here.\n",
+        encoding="utf-8",
+    )
+    _, report = check_ownership(root, [_root(pre_armed_by="DEC-054")], [])
+    findings = check_empty_roots_are_declared(root, report)
+    assert len(findings) == 1
+    assert "LINT-EMPTY-BOGUS-DEC" in findings[0]
+    assert "DEC-054" in findings[0]
+
+
+def test_an_unreadable_ledger_fails_loudly_never_silently_passes(
+    tmp_path: Path,
+) -> None:
+    """DO 3: a missing ledger must raise, never be treated as 'nothing to check'.
+
+    No decisions.md is written at all — the resolver points at a path that
+    does not exist, in a scratch fixture, and the real ledger is never
+    touched.
+    """
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    _, report = check_ownership(root, [_root(pre_armed_by="DEC-054")], [])
+    with pytest.raises(ConfigError):
+        check_empty_roots_are_declared(root, report)
 
 
 def test_an_empty_root_is_reported_distinctly_from_a_covered_one(
@@ -721,6 +1521,17 @@ def test_an_empty_root_is_reported_distinctly_from_a_covered_one(
     line = guard.format_root_report(report[0])
     assert "EMPTY" in line
     assert "0 tracked" in line
+
+
+def test_a_declared_empty_root_names_its_arming_dec_in_the_report(
+    tmp_path: Path,
+) -> None:
+    """The PASS-path wording must say WHY an empty root is expected, not just THAT it is."""
+    root = make_git_repo(tmp_path, {"other/a.py": "x\n"})
+    _, report = check_ownership(root, [_root(pre_armed_by="DEC-057")], [])
+    line = guard.format_root_report(report[0])
+    assert "EMPTY" in line
+    assert "DEC-057" in line
 
 
 def test_a_non_empty_root_never_claims_to_be_empty(tmp_path: Path) -> None:
@@ -891,6 +1702,29 @@ def test_the_guard_passes_against_the_live_repository() -> None:
     assert sum(len(r.covered) for r in report) > 0
 
 
+def test_every_live_empty_root_is_declared_pre_armed() -> None:
+    """DEC-057, end to end: no managed root may report EMPTY unannounced."""
+    hooks = load_hooks(REPO_ROOT / ".pre-commit-config.yaml")
+    _, report = check_ownership(REPO_ROOT, MANAGED_ROOTS, hooks)
+    assert check_empty_roots_are_declared(REPO_ROOT, report) == []
+
+
+def test_the_real_dec_054_pair_resolves_against_a_forced_empty_report() -> None:
+    """DEC-060 round 9 constraint 4 (non-blocking).
+
+    `unittests/Core/stderrbuf/` now carries tracked files, so the test above
+    never reaches `is_empty` and never calls `_parse_arms_sentinel` on the
+    real ledger at all — a live PASS there proves nothing about this path.
+    This test forces `is_empty` on the REAL `garmin-cpp-stderrbuf` root so
+    the real `gc-arms/v1` sentinel (DEC-064) is actually resolved.
+    """
+    live_root = next(r for r in MANAGED_ROOTS if r.name == "garmin-cpp-stderrbuf")
+    assert live_root.pre_armed_by == "DEC-054"
+    forced_empty = RootReport(root=live_root, all_files=[])
+    assert forced_empty.is_empty is True
+    assert check_empty_roots_are_declared(REPO_ROOT, [forced_empty]) == []
+
+
 def test_the_live_declared_gaps_are_all_still_true() -> None:
     hooks = load_hooks(REPO_ROOT / ".pre-commit-config.yaml")
     _, report = check_ownership(REPO_ROOT, MANAGED_ROOTS, hooks)
@@ -930,7 +1764,13 @@ def _repo_with_live_config(tmp_path: Path, extra_top_level: str = "") -> Path:
     Real managed paths, so MANAGED_ROOTS applies and the run is not vacuous.
     The three `path`-gap subjects are present because a declared path gap goes
     STALE without its file (R1-F3) — their absence would redden the control
-    for an unrelated reason.
+    for an unrelated reason. `unittests/Core/garminconnect/` needs a tracked
+    file too, now that DEC-057 requires every managed root to be either
+    non-empty or declared pre-armed — `unittests/Core/stderrbuf/` is the one
+    root exempted by its own `pre_armed_by` declaration, so it alone is left
+    empty here. B-STAGE9-36: that declaration is now VERIFIED against
+    decisions.md — round 2 also verifies it names THIS root's own path — so
+    this scratch repo's entry must say so, matching the live DEC-054 body.
     """
     root = make_git_repo(
         tmp_path,
@@ -941,8 +1781,10 @@ def _repo_with_live_config(tmp_path: Path, extra_top_level: str = "") -> Path:
             "src/Cloud/PyEmbeddedAdapter.cpp": "// x\n",
             "src/Cloud/AddCloudWizard.cpp": "// x\n",
             "src/Cloud/AddCloudWizard.h": "// x\n",
+            "unittests/Core/garminconnect/testGarminConnectSync.cpp": "// x\n",
         },
     )
+    _ledger_naming(root, "DEC-054", arms=("unittests/Core/stderrbuf/*",))
     body = (REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
     (root / ".pre-commit-config.yaml").write_text(
         extra_top_level + body, encoding="utf-8"
@@ -1001,6 +1843,7 @@ def test_the_vacuity_verdict_is_printed_BEFORE_the_findings_it_explains(
 ) -> None:
     """Item 3: the diagnosis must not arrive behind a wall of stale-gap noise."""
     root = make_git_repo(tmp_path, {"readme.txt": "x\n"})
+    _ledger_naming(root, "DEC-054")
     (root / ".pre-commit-config.yaml").write_text(
         (REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8"),
         encoding="utf-8",
