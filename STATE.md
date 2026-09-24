@@ -49,10 +49,16 @@ LAST_CLV:  clv_findings.py 2026-09-24 (`garmin_inspector_v1_55`, post-B-STAGE9-7
            reports FAIL at OUTSTANDING=4, and that is its floor until the AppVeyor run — a FAIL
            here means "blocked on an external run", not "unfinished work". Full history of every
            prior CLV run -> archive § 13.
-NEXT_GATE: **THE PUSH — the human-in-the-loop STOP gate** (autonomy-boundary.md: pushing to a
-           shared remote and modifying CI both need the user). Everything before it is done:
-           commit 5's gate ran clean and commit 7 landed. Remaining Inspector work is commit 8
-           (ledgers) only.
+NEXT_GATE: **THE APPVEYOR RUN.** The push gate is DISCHARGED — user-authorized 2026-09-25,
+           branch `garmin/req028-row-lifetime` pushed to `git@github.com:FONSECAMVP/
+           GoldenCheetah.git` as a NEW branch at `ee06ea6e1`. Note the mechanics for next time:
+           `origin` is configured HTTPS with no credential helper, so an HTTPS push fails with
+           `could not read Username`; the working path is the SSH URL (key present, `gh` is
+           authenticated as FONSECAMVP). The branch still has NO upstream set — that was left
+           alone deliberately rather than rewriting the remote's URL.
+           The run this triggers is the ONLY evidence that can close B-STAGE9-48/-54/-57/-71 and
+           the only thing that can meet Stage 9's installer-provenance criterion. It cannot be
+           observed from this host without AppVeyor access.
            Commit-ready evidence for 5 and 7, executed not claimed: `ctest -LE gate-exclude`
            (DEC-054's canonical default-include run) **56 tests, 0 failed, 315s**, re-run after
            the clang-format hook's own reformat plus a full rebuild to confirm that reformat was
@@ -71,7 +77,8 @@ NEXT_GATE: **THE PUSH — the human-in-the-loop STOP gate** (autonomy-boundary.m
 CHANGESET: HEAD `a6fca237e`. This session (`garmin_inspector_v1_55`) closed B-STAGE9-75 (i18n
            guard markers, reviewer delta-check clean), ran the canonical gate for the first time,
            landed commits 5 and 7, filed B-STAGE9-77, and took the librarian compaction that
-           produced this file. Uncommitted at this line: the ledgers themselves (commit 8).
+           produced this file, then pushed the branch once the user authorized that gate.
+           The 8-commit Stage 9 partition is COMPLETE; nothing is staged or dirty.
 TEAM:      builder `garmin_builder_stage9_v30` (w1:pM, Claude/Sonnet, soft-landed fresh at 0k) ·
            reviewer `garmin_codex_reviewer` (w1:pD, Codex, 153k) · investigator
            `s925_tz_investigator` (w1:pR, Codex, 30k) · Inspector `garmin_inspector_v1_55`
