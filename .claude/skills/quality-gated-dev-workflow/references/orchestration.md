@@ -104,6 +104,12 @@ so the agent can falsify it in seconds. A claim you did not verify must be marke
 ahead of code: quote design for INTENT, quote disk for FACT (LSN-019/LSN-034 — one false
 premise cost a whole slice and would have shipped a cross-service regression).
 
+A claim citing a code LOCATION must name the symbol, never a bare line number — a line
+number is stale the moment anyone edits a line above it, the same failure this bites in
+code comments (qgdw-builder.md's COMMENTS rule). "The bug is in `downloadNext`'s retry
+loop" survives edits; "the bug is at line 2789" silently drifts onto the wrong line the
+next time anyone touches that file before the agent reads it (LSN-034).
+
 **Git-truth.** Read-only agents cannot see live git, and any session-start snapshot is
 frozen. For any dispatch whose verdict depends on working-tree or commit state, paste a
 FRESH `git status --porcelain` + relevant `git log --oneline -- <paths>` into the briefing;
@@ -166,6 +172,14 @@ run three checks in order:
      cascade impact names concrete downstream steps, volatile claims carry dated sources.
    - **librarian** → audit walked/mapped/skipped counts; spot-check 2–3 MAP lines against
      the tree; anomalies section present.
+
+   **Mutation-proof note.** Any time an evidence check involves applying and reverting a
+   mutation — a delegated A3 cycle's mutation list, or an ad hoc re-proof run here at the
+   Verification Gate — use A3's snapshot/restore convention (`adversarial-cycles.md:54-55`:
+   `cp f f.orig`, restore + `cmp`; never `git checkout --` on a file that may already carry
+   unrelated uncommitted content). `git checkout --` reverts the whole working-tree file to
+   HEAD, not just the mutated line — it does not matter whether the check originated as a
+   formal A3 cycle or the orchestrator's own inline verification (LSN-084).
 3. **Goal audit.** Re-read the briefing `TASK` and (for builds) the REQ acceptance
    criterion **verbatim**. The delivered work must satisfy that goal — the test must encode
    the criterion as written, not a weaker paraphrase; the diff must contain nothing outside
@@ -198,6 +212,9 @@ then does the next step's role-work itself. Counter-rules:
   user conversations, single small edits. Anything else that matches a Delegation Table
   row gets dispatched.
 - Catching yourself mid-role-work: stop, capture `op:delegate` lesson, dispatch properly.
+- A closure declared without its seal is a form of the same failure — the status looks
+  correct until someone has to re-derive it from scratch (Scale discipline's **Seal-at-close**
+  rule, below).
 
 ## Blocking effects & the behavioral matrix
 
@@ -248,7 +265,9 @@ evidence is invalid · read: everything · write: every other slice, and disjoin
 evidence: the bounded repair plus a rerun of the complete affected target on the final content
 version · terminates when that rerun is green; the checkpoint is then permitted, and **no
 A-cycle, CLV, lesson, or registry entry is allocated** unless a bounded-repair exception fires
-(see `adversarial-cycles.md`).
+(see `adversarial-cycles.md`) — or at the third same-class NOT-CLOSED round, at which point
+the only permitted exits are architectural remedy, pin, or downgrade+decouple — an unbounded
+repair loop is not S2 in progress, it is a defect in the repair policy itself.
 
 **S3 · stale internal / non-acceptance documentation**
 severity non-blocking · BLOCKS `{}` · scope: none until impact is demonstrated · read and
@@ -392,6 +411,19 @@ declared QtTest functions producing 78 executed cases is normal) and is **not it
 finding**. It becomes a finding only when the runner's accounting cannot reconcile the
 difference.
 
+**Seal-at-close (kills the redo-to-reprove-it gap).** When a checkpoint/stage/piece is
+declared discharged or closed, its independent-verification evidence MUST be sealed —
+written to `.claude/evidence-seals/` or cited from an existing seal there — in the SAME edit
+that declares it closed in `STATE.md`/`findings.md`. Never defer the seal to "write it
+later": an unsealed closure claim is indistinguishable from an unverified one to the next
+reader, including a future session with no memory of this one. Field-proven 2026-09-05:
+Stage 4's first closure recorded a full independent re-verification in prose (`STATE.md`/
+`findings.md`) but wrote no durable seal; a later fresh-context session, unable to tell the
+claim from an untested assertion, re-ran the entire independent verification from scratch
+(full rebuild, both QPA backends, full `ctest -L garmin-fast`, CLV) ~5 hours later just to
+produce the seal that should already have existed — a complete, avoidable duplicate of the
+same evidence.
+
 **Failed-gate governance.** On a FAIL, write **only**:
 1. the current verdict;
 2. the evidence pointer, with the command and the exit code;
@@ -403,15 +435,21 @@ Broad narratives, counts, registry rewrites, new lessons, compaction, and archiv
 additionally record the minimum warning required to prevent unsafe use — and must not trigger
 an automatic governance wave.
 
-**Wave-gate checklist (run all four, once per wave/feature close):**
+**Wave-gate checklist (run all five, once per wave/feature close):**
 1. full suite (the once-per-wave run);
-2. **clean-worktree configure+build of HEAD** — `git worktree add` a throwaway, configure
-   and build there; committed build files referencing untracked paths, and unit-green
-   binaries that don't link, are only visible here (LSN-018/ORCH-001 class);
+2. **clean-worktree configure+build of HEAD, including the production/main target** —
+   `git worktree add` a throwaway, configure and build there; committed build files
+   referencing untracked paths, and unit-green binaries that don't link, are only visible
+   here (LSN-018/ORCH-001 class). Build the actual shipped target explicitly, not only the
+   test target — a test binary commonly compiles its own curated source subset and can stay
+   green while the application itself has never linked;
 3. **MAP-freshness count** — in deny-only guard mode nothing nudges registration, so count
    tree entries not covered by a MAP line (directly or via parent rollup); past a handful,
    dispatch librarian sync;
-4. wave-level incremental CLV.
+4. **row-bloat check** — `python3 scripts/row_health_check.py --root .`; informational (WARN,
+   not a gate FAIL) — flags any id-indexed ledger row, or STATE.md line, that has grown into
+   the LSN-034 shape; past a finding or two, dispatch librarian Job 3 (compaction);
+5. wave-level incremental CLV.
 Prefer taking a **verified checkpoint** of each Verification-Gate-passed slice before starting
 the next (see *Snapshot vs verified checkpoint vs release*):
 **entanglement compounds with every uncommitted slice** (extracting one REQ from a tree

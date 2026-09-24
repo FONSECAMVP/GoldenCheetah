@@ -70,6 +70,14 @@ and how it changes.
 3. Patch `STATE.md` **only if** the decision adds a dependent or is a one-way door
    (so cascades and risk stay visible at Tier 0).
 
+**A decision that gets revisited or corrected later gets a new dated entry appended below
+its original full entry — never an in-place rewrite that piles the whole revision history
+into one paragraph.** The full entry documents the choice made at the time; a later
+correction is its own short, dated addendum (what changed, why, evidence), same as a
+lesson's recurrence sub-entry (`lessons-memory.md`). If a full entry is growing across
+multiple editing sessions rather than being written once and appended-to sparingly, that's
+the bloat pattern this rule exists to stop.
+
 ## Who owns the decision — and batching
 
 Not every decision needs the user. **User-owned** (always presented, never assumed):
@@ -96,3 +104,6 @@ test is reversibility and residual risk, not effort.
   is warranted; tag it.
 - **Treating a lean toward X as decided** — still present three; let the user pick X with
   informed conviction.
+- **Prose as machine input** — an option whose correctness requires a machine to
+  unambiguously interpret human prose (Markdown, comments) is not viable at any score — the
+  viable options change where the fact lives (DEC-064 doctrine), not how the prose is parsed.

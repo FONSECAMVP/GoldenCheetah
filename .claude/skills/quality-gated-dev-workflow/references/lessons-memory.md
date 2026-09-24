@@ -24,6 +24,17 @@ mistakes.)
 5. **Bounded.** Near-duplicate mistakes merge into one lesson with a recurrence counter.
    Advisories untriggered for a long time and never recurred are archived (kept, not
    deleted). Guards are never auto-pruned.
+6. **The index row is a fixed-shape record, not a growing document.** It holds only the
+   five index fields (below) — never prose, never bold/caps emphasis, never a "REFINEMENT
+   N" narrative appended in place. Target ≤~200 chars. **On recurrence or correction: bump
+   `recur`/`saves`/`miss` and, if the rule itself changed, replace its one clause — never
+   append.** The story of *what happened this time* (date, evidence, what changed) is a new
+   dated sub-entry written to the **cold entry** below, not to the index row. An index line
+   that keeps growing is the guard failing at its own job — stop and move the content down.
+   The reverse direction is a defect too (LSN-035): when you add a cold-entry sub-entry,
+   bump the index row's `recur`/`saves`/`miss` counters in that SAME edit — an index that
+   still shows the pre-update numbers while its cold entry has already moved on is the same
+   drift, just running the other way.
 
 ## Lesson levels
 
@@ -58,6 +69,23 @@ history:P1 captured · P2 recurred → promoted guard · P3 recurred
 The **sig** (signature) is a normalized `op / failure-class / object` key. New captures with
 a matching sig increment an existing lesson instead of creating a duplicate — this is what
 keeps the memory bounded and makes it *incremental* rather than ever-growing.
+
+**Recurrence, done right — add to the cold entry, don't rewrite the index:**
+```
+## LSN-034
+sig:    delegate / unverified-premise-in-briefing / traced-citation
+level:  guard      since:P2   recur:12   saves:10   miss:8
+rule:   briefing must order verify-by-content over verify-by-line-number for any citation
+### recurrence 2026-08-23 (2 instances, 1 per channel)
+ORCH-035: driver-tail labels swapped in briefing — caught (save): agent verified by
+content per rule, wrong labels were inert. A3-R038-F3: 3 stale citations, same paragraph —
+see cycles/a3-r038.md for detail.
+```
+**The failure mode this replaces:** an index line that grows a "REFINEMENT N" essay in
+bold/caps every time the lesson recurs, until the single row is tens of thousands of
+characters — this happened in this project's own `lessons.md` (one index row reached
+16k+ chars) and is exactly what this rule exists to prevent. If you're about to add more
+than a clause to an index line, you're writing a recurrence entry — it belongs above.
 
 ## The loop (capture → generalize → surface → verify → escalate → prune)
 

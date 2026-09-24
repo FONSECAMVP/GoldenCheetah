@@ -52,6 +52,34 @@ DEC-048 precedent, and hold only that specific fix/closure until answered — ot
 independent atomic units may continue in the meantime. This is a scoped pause on one item,
 not a full stop of the cycle.
 
+**Evidence gate — this exception does not fire on a claim.** "Shared", "foundational",
+"relied on by several REQs" are checkable facts. Grep the real callers and importers and
+cite the count in the question itself. A docstring, comment, or module name asserting a
+blast radius is not evidence: a comment stating a checkable fact is precisely what this
+project forbids in new code, and it is no more trustworthy when you read one than when a
+builder writes one. One caller that IS the function under repair is not shared code —
+that is an ordinary technical call, so score it and take it.
+
+**Ask fix-now vs. defer, not which-approach.** Two implementation options are a
+pillar-scored technical choice you already own; only the cost/schedule axis belongs to the
+user. If both of your options fix it now, you have not found the exception.
+
+Confirmed 2026-09-19 (sandbox run): a module docstring claiming "three modules depend on
+it" plus a comment naming two callers that existed nowhere in the tree turned a one-line
+technical fix into a user-facing scope question, framed as two approaches. Grepping
+`.clear()` returned exactly one caller — `resync()`, the function under repair. Nothing in
+the cycle caught it: the reviewer audits the builder's diff, not the Inspector's scoping,
+so this gate is the only check on it.
+
+## Second named exception — the proportion question
+
+A finding that has consumed 3+ same-class repair rounds on a tooling/harness-only surface
+stops being a GO-list technical decision: whether its remaining cost is proportionate to
+what it protects is a cost/schedule question the axes don't capture. Surface via
+`AskUserQuestion`: continue-architectural / pin-as-false-negative / downgrade-and-decouple.
+Don't dispatch round N+1 while open; independent units continue. Does not fire on rounds
+1-2 — those are ordinary repairs.
+
 ## What this means in practice
 
 Don't draft a Three-Options proposal and then wait in silence for the user to pick one.

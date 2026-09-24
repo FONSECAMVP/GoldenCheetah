@@ -53,8 +53,22 @@ wiki/glossary.md     — <what> · read when <trigger>
 line is `location — purpose [→ archive]`. The MAP is *authoritative*: if reality and the
 MAP disagree, that is drift to be reconciled (below), not a reason to create a duplicate.
 
-**REGISTRIES rules.** Every ID type gets a contiguous range plus a `next` counter and the
-canonical location of the full records. Allocation = read `next`, use it, increment it
+**MAP budget & rollup (scale rule).** The MAP has a hard budget: **~40 lines / ~700
+tokens**. Small projects map file-level; as the tree grows, **roll up to directory level**
+— one line per directory whose contents share a purpose (`src/reader/  reader window UI
+(11 files)`), with file-level lines kept only for governance files (WIKI, STATE, ledgers)
+and single-file components. A file under a rolled-up directory is "in the MAP" via its
+parent (the anti-duplication guard already resolves parent-dir coverage). When the MAP
+exceeds budget, that is a compaction trigger: dispatch the librarian (Job 3) to roll up.
+Fine-grained per-file notes, if ever needed, live in `wiki/map-detail.md` (Tier 1, read on
+demand) — never in the hub.
+
+**REGISTRIES rules.** **REGISTRIES point, they never restate.** Range + `next` + a pointer
+to the canonical file — never per-id detail or per-id status (that lives in exactly one
+canonical home; a restated copy is a second thing that drifts, and it is how a REGISTRIES
+block grows to 18k chars unnoticed). Every ID type gets a contiguous range plus a `next`
+counter and the canonical location of the full records. After editing WIKI.md, assert its
+size against the budget (`wc -c` / 4 vs the ~700-token cap) as a byproduct. Allocation = read `next`, use it, increment it
 here. IDs are never reused; a retired ID is marked `[retired]`, never recycled.
 
 ---
@@ -106,6 +120,11 @@ REQ/DEC/DES/TEST/VAL/F · 3-digit zero-padded · sequential · never reuse · re
 3 Create failed "already exists"? → MAP drift: add it to MAP, use the existing file.
 Never create a second folder/file for an existing purpose. Never restructure the tree
 without first updating WIKI MAP.
+4 NEVER place project-owned files under `.claude/skills/` — that tree is vendor territory,
+  replaced wholesale on every skill update; anything you put there is destroyed by the next
+  reinstall (the guard denies new files there mechanically). Project tooling lives at a
+  project path (`scripts/`, `tools/`) registered in the WIKI MAP. Local edits to skill
+  files are lost the same way — fold improvements upstream instead.
 ```
 
 ### `wiki/glossary.md` — canonical meanings (prevents wrong-context drift)
@@ -167,6 +186,10 @@ manual rename). Reconcile **only on a signal**, never as routine scanning:
   the canonical location, update the MAP, continue. Do not broaden into a full-tree scan.
 - **Explicit user request, or project migration (§Migrating in SKILL.md).** → The one time
   a full bounded pass over the tree is sanctioned, to (re)build the MAP from scratch.
+- **Wave gate in deny-only guard mode.** → With registration asks suppressed, nothing
+  nudges new files into the MAP, so at each wave gate run the MAP-freshness count (tree
+  entries not covered directly or via parent rollup); past a handful, dispatch a librarian
+  sync. This is a scheduled check, not exploration.
 
 Outside these signals, trust the map. Routine "let me just look around to be safe" is the
 exact behavior the wiki exists to eliminate.

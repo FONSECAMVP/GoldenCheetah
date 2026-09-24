@@ -49,6 +49,17 @@ discipline) — no release on a HEAD that only builds against a dirty tree.
    agree; no zombie or missing rows. FAIL on inconsistency. (Mechanizable: grep every cited
    `DEC-\d{3}`/`DES-\d{3}` against its index table — cheap, and catches summary tables
    silently falling behind their own prose.)
+   **No-duplicate-home sub-check:** a per-id status/lifecycle fact must live in exactly ONE
+   canonical file (its ledger's index or trace digest) — never restated, even loosely, in
+   `STATE.md`, `WIKI.md`, or a wiki spoke. FAIL when the same id's status disagrees across
+   two files it's recorded in; that is a data-model defect (a fact given a second home), not
+   ordinary staleness, and re-syncing the copies is not the fix — removing the second home
+   is.
+   **Row-bloat sub-check:** an id-indexed ledger row that has grown into a multi-KB narrative
+   instead of splitting into its cold entry (the LSN-034 anti-pattern) is a WARN here, not a
+   FAIL — informational, does not block. Mechanizable: `python3 scripts/row_health_check.py
+   --root .` (exit 1 lists every offending row/line and its cap, one per ledger); run it
+   alongside this check, not as a gate.
 7. **Cascade hygiene** — no `needs-review` (in `STATE.CASCADE` or the index) older than the
    current phase start. FAIL on a lingering flag.
 8. **Contradiction scan** — no two `accepted` DECs conflict; no DEC contradicts a

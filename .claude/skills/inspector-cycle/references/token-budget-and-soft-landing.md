@@ -1,25 +1,39 @@
 # Token budget and soft-landing
 
+## Section map — what to read when (this is the read policy)
+
+Never act on remembered procedure. The CORE sections are read in full at session start;
+each PROCEDURE section is read in full immediately BEFORE you execute it, at the event —
+not in advance. Reading at execution time is the same anti-memory gate, paid only when
+the event fires.
+
+- **Session start (core):** "Two separate thresholds" and "Measuring current context",
+  through "Reporting format" — thresholds, the mechanical read cadence, the no-scripts
+  rule.
+- **On a 250k warn for a supervised agent:** "Soft-landing procedure".
+- **On your own ~210k warn:** "Self-succession" and "Successor's first actions".
+- **On a context reading that stays `unknown` across polls:** "Known unknown case" onward.
+
 ## Two separate thresholds — don't conflate them
 
 - **Supervised agents (builder, reviewer, investigator): 250,000-token refresh threshold.**
   At or above this, start the soft-landing procedure below.
-- **The Inspector's own context: ~210k warn threshold.** A separate number from the 250k
-  worker budget, not simply scaled from it (correction 2026-09-12: an earlier draft of this
-  skill said ~300-350k — that was wrong; 210k is the real, confirmed warn point) — never
-  apply the 250k worker number to yourself, and don't assume yours is the higher one just
+- **The Inspector's own context: ~210k warn threshold.** Inspector Agent has their own 
+  separate number threshold 210k budget, confirmed warn point — never apply the 250k 
+  worker number to yourself, and don't assume yours is the higher one just
   because you supervise. Refreshed by a different mechanism than a worker too (see
-  "Self-succession" below). There is no token-monitor agent to catch this externally — read
-  your own pane's PID with `scripts/claude_context.py --pid <your-pid> --threshold 210000`
+  "Self-succession" below). You must read your own pane's PID with `scripts/claude_context.py --pid <your-pid> --threshold 210000`
   yourself, every poll tick, the same mechanical way you read the other 3 numbers.
 
 ## Measuring current context (read-only on every poll)
 
+You must use the assigned scripts to measure the context windows, Claude Code and Codex 
+have their own scripts mentioned in this markdown file, you MUST use them.
+
 The number is the latest reported **current context**, not lifetime/billing usage.
 Never send `/status` or `/context` into a supervised pane to measure it: these can queue
 behind work, concatenate with existing input, or show no context count. Do not convert a
-bare percentage, assume a model capacity, or treat `idle`/`done` as zero tokens. There is
-no standing token-monitor agent for any of this — the Inspector runs these two one-shot,
+bare percentage, assume a model capacity, or treat `idle`/`done` as zero tokens.The Inspector runs these two one-shot,
 read-only scripts itself, directly, every poll tick (including against its own pane); it is
 a mechanical file read, not work worth spending a supervised LLM's own context on.
 
@@ -67,8 +81,9 @@ stale and do not claim it is safely below threshold. These are last-reported mea
 not predictions of in-flight growth.
 
 Both readers only read files and exit; neither polls in the background, sends keystrokes,
-or performs a refresh. Continue the established `/loop` cadence, invoking the readers
-yourself each tick. On a warning, start that session's soft-landing once, continue
+or performs a refresh. Continue the established wake cadence (background `insp_wake.sh`
+re-arm, `/loop 2m` as fallback), invoking the readers yourself each wake. On a warning,
+start that session's soft-landing once, continue
 coverage of the rest, and use the procedure below.
 
 Field semantics: [Claude status-line documentation](https://code.claude.com/docs/en/statusline#context-window-fields).
@@ -87,8 +102,10 @@ This is a real gap in the file-based approach, not a parsing bug to fix in the s
 is no reliable field in the new file linking it back to the prior one's accumulated context.
 - **Detect it:** `unknown` / "no recent usage event" persisting across 2+ poll ticks for a
   pane that is otherwise visibly active (`blocked`/`working`, not a fresh idle pane) — check
-  `herdr pane read <pane> --source visible` scrollback for an unprompted `/model` switch to
-  an id that isn't the project's configured Claude model.
+  `herdr pane read <pane> --source visible` scrollback for an unprompted `/model` switch
+  to an id that isn't the pane's expected model — Sonnet for the builder
+  (`agent-roster-and-dispatch.md` → "Builder launch mode"), Opus for the Inspector's own
+  pane.
 - **Recover, for that pane, that tick only:** read the visible footer instead (`herdr pane
   read <pane> --source visible --lines 12`, the `tok Nk/Mk` figure, first number, per the
   general Claude Code footer semantics above). Keep re-attempting `claude_context.py` every
@@ -112,9 +129,11 @@ in-flight process costs more to recover later than a short, controlled pause doe
    starting anything new; finish only what's currently running to a safe stopping point.
    "Safe" is role-specific:
    - builder: finish the current RED-GREEN-REFACTOR step if it fits in remaining budget. If
-     reaching a clean GREEN would exceed it, stop earlier and write down exactly what's
+     reaching a clean GREEN would exceed it, stop earlier and report exactly what's
      mid-flight (files touched, last test status, what's unverified) instead of forcing
-     completion — the next session resumes from that note, not from scratch or a guess.
+     completion. That report comes back as a message like any other
+     (`message-transport.md`), and the Inspector transcribes it into the ledger — the next
+     session resumes from the LEDGER, never from a hand-off file left on disk.
    - reviewer: finish the current delta-check pass — don't leave a partial finding list.
    - investigator: finish the current isolated repro conclusion (nothing to leave clean in
      the real tree, since it never touched it).
@@ -124,25 +143,30 @@ in-flight process costs more to recover later than a short, controlled pause doe
 3. **EXIT and restart cleanly:**
    - Claude Code pane: `/exit` then a separate `enter` keypress — drops to a plain shell
      prompt; verify the old process is actually gone, THEN `herdr agent start <newname>
-     --kind claude --pane <same-id> -- --permission-mode auto` re-establishes tracking (the
-     old custom name is lost, re-rename if needed) **and launches the fresh session already
-     in auto mode.** A plain restart with no args comes back in "accept edits on" — one
-     step short of auto — and will stall on the first Bash permission dialog with nobody
-     piloting it to click through. Confirmed 2026-09-12 on a scratch pane: the `shift+tab`
-     mode-cycle keypress sent via `herdr agent send-keys`/`pane send-keys` does NOT reliably
-     change the mode (tried repeatedly, focused and unfocused, several key-name spellings —
-     `herdr` accepts the key with no error but Claude Code's status line never advances,
-     likely a Kitty-keyboard-protocol negotiation gap) — don't rely on it. The `--permission-
-     mode auto` launch flag is the reliable mechanism: verify by reading the fresh pane's
-     visible status line for `auto mode on` before treating the restart as complete, not just
-     by trusting the start command's own success response.
+     --kind claude --pane <same-id> -- --permission-mode auto --model sonnet` re-establishes
+     tracking (the old custom name is lost, re-rename if needed) **and launches the fresh
+     session already in auto mode and on Sonnet** — the builder's standing model
+     (`agent-roster-and-dispatch.md` → "Builder launch mode"). A plain restart with no args
+     comes back in "accept edits on" — one step short of auto — and will stall on the first
+     Bash permission dialog with nobody piloting it to click through.You MUST activate auto
+     mode in the next way : The `--permission-mode auto` launch flag is the reliable
+     mechanism: verify by reading the fresh pane's visible status line for `auto mode on`
+     before treating the restart as complete, not just by trusting the start command's own
+     success response. Same discipline for the model: the harness default is `opus`
+     (`~/.claude/settings.json`) and a prior session's `/model` switch does not survive the
+     process exit, so the `--model sonnet` flag rides on every relaunch and the same
+     status-line read must show Sonnet before the restart counts as complete. Builder only
+     — the Inspector's own pane stays Opus (see "Successor's first actions", step 0).
    - Codex pane: `/new` is lighter — resets context but keeps the SAME process/pane/agent
      name; there is no old process to verify gone and nothing to restart, and its permission
      mode (whatever it was) carries over since the process itself never exited.
-4. **Re-brief** the fresh agent using the briefing shape in `agent-roster-and-dispatch.md`
-   (mirror its own first-ever prompt), carrying forward: current stage/atomic unit, last
-   independently-validated state, any findings not yet in the ledger, and the soft-landing
-   note itself (what was in flight when it paused).
+4. **Re-brief** the fresh agent using the briefing rule in `agent-roster-and-dispatch.md`
+   (fill the role template in `.claude/inspector-briefings/<role>.md`, dispatch it with
+   `scripts/dispatch.py` per `message-transport.md`), carrying forward: current
+   stage/atomic unit, last independently-validated state, any findings not yet in the
+   ledger, and the soft-landing note itself (what was in flight when it paused). All of
+   that enters the brief as ledger ids and file paths under the role's line cap — a
+   re-brief that needs more room than the cap allows is carrying recap, not pointers.
 
 ## No restart scripts
 
@@ -163,7 +187,7 @@ agency) retire YOU — not the other way around.**
 
 At ~210k of your own tokens:
 1. Recognize the threshold and confirm you're at a safe stopping point (real, substantive
-   work, not deferral) — same discipline as any soft-landing.
+   work, not deferral) and update status documentation,`STATE.md`, the ledgers for the Successor — same discipline as any soft-landing.
 2. Spawn a successor: `herdr tab create` a clean new tab (never squeeze into a busy one),
    then `herdr agent start <new-name> --kind claude --pane <new-pane-id>`. **Name it by
    incrementing your OWN version suffix**, not an arbitrary label: the first Inspector in a
@@ -174,12 +198,31 @@ At ~210k of your own tokens:
    your own current name has no version suffix (an ad hoc name, or you're the very first
    session in this lineage and were never renamed), treat yourself as `v1_0` and name the
    successor `v1_1` — don't invent an unrelated name or a bare incrementing integer.
-3. Send the successor a SHORT rebirth prompt — NOT a context dump. It only needs to say,
-   in substance: "You are `<new-name>`, a reborn Inspector succeeding `<old-name>`/
-   `<old-pane-id>`, which hit its self-refresh threshold. Invoke the `inspector-cycle` skill
-   now — its own step 0 (environment setup) and steps 1-2 (herdr, current stage) will fully
+3. Send the successor a SHORT rebirth prompt — NOT a context dump. It only needs to say: 
+
+        "ROLE: You are the Inspector, `<new-name>`. inspector-cycle and herdr skills are your only
+        procedures — invoke it now and stick to it.
+
+        CASCADE: Goal (shippable feature) > Stage (a row in STATE.md) > atomic
+        unit (one REQ/DEC/fix). You are somewhere inside it. Find out where;
+        never assume.
+
+        FIRST ACTIONS:
+        1. Skill steps 0-2: environment, live topology, then STATE.md + the three
+          ledgers. The cursor there names the current stage and the next unit.
+        2. State, from what you just read, what is running and what is next.
+        3. Verify `<new-name>` and `<old-name>` against `herdr agent list`; retire the
+          idle predecessor `<old-name>` per the skill.
+        4. Continue the cycle at step 3."
+
+    **RULE**:This prompt carries no project state. History, tool choices, or
+        lessons beyond this structure are discarded. Skill references and ledgers
+        win over everything else."
+        
+   Invoke the `inspector-cycle` skill
+   now — its own step 0 (environment setup) and steps 1-2 (`herdr` skill, current stage) will fully
    set you up and orient you from live project state; you do not need your predecessor's
-   conversation history for that. Once set up and oriented, retire your predecessor's pane,
+   conversation history for that. Once set up and oriented, retire your predecessor's pane and tap,
    then continue the cycle. Report the succession to the user when done." No PIDs, no stage
    recap, no findings list — the cycle itself supplies all of that once invoked, by design
    (see "Successor's first actions" below).
@@ -209,15 +252,15 @@ On receiving a rebirth prompt, before anything else:
      dialog) instead of three scattered ones from before. That's the realistic floor for
      this mechanism, not literal zero-touch — but it's a single, narrow, one-time click, not
      ongoing babysitting.
-   - Confirm the running model matches the project's intended one (check the pane's own
-     status line, or `~/.claude/settings.json`'s top-level `"model"` key) — don't assume a
-     fresh pane inherited the right one; a prior session's `/model` switch or a rate-limit
-     fallback does not carry forward automatically, and a silent wrong-model session is
-     easy to miss until much later.
+   - Confirm the running model is Opus (check the pane's own status line, or
+      `~/.claude/settings.json`'s top-level `"model"` key) — don't assume a
+      fresh pane inherited it; a prior session's `/model` switch or a rate-limit
+      fallback does not carry forward automatically, and a silent wrong-model session is
+      easy to miss until much later.
    - Resume direct context-usage script reads (`claude_context.py`/`codex_context.py`) for
      all 3 supervised agents AND your own new pane immediately, not after a gap — there is
      no standing token-monitor agent to re-brief; this is just you running the readers.
-1. Invoke the `inspector-cycle` skill and run its own step 1 (herdr) and step 2 (current
+1. Invoke the `inspector-cycle` and `herdr` skill and run its own step 1 (herdr) and step 2 (current
    stage) immediately — do not wait for, or ask for, a manual briefing from the
    predecessor. The skill's whole design (re-derive every step fresh from live state, never
    trust a cached snapshot) is exactly what makes a cold Inspector self-orienting: reading
@@ -227,18 +270,20 @@ On receiving a rebirth prompt, before anything else:
    what's next — you are oriented. Re-verify the predecessor's pane id via `herdr agent
    list`/`workspace list` rather than trusting the rebirth prompt's claimed id blindly
    (topology can drift between the predecessor sending it and you checking).
-3. Retire the predecessor the same clean way a supervised Claude Code agent is refreshed:
-   `herdr pane send-text <pane> "/exit"` then `herdr agent send-keys <target> enter` —
-   never a raw `herdr pane close` or kill *while the process might still be mid-work*.
-   Verify the pane actually dropped to a plain shell prompt. **Then, because it's now
-   confirmed just an idle shell with nothing left to protect, close it:** `herdr pane close
-   <predecessor-pane-id>`. Confirmed 2026-09-12: closing the sole pane of a tab auto-closes
-   that tab too (no separate `herdr tab close` call needed) — verified via `herdr tab
-   list`/`workspace list` pane/tab counts dropping immediately after the close. Skipping
-   this step is exactly what caused the recurring "old Inspector's pane/tab sits open
-   forever" complaint: every prior succession retired the predecessor to a shell prompt but
-   never actually closed it, leaving a dead pane the user had to close by hand each time.
-   Do this AFTER confirming the shell prompt, never instead of the graceful exit above.
+3. Retire the predecessor cleanly:
+    1. Gracefully exit the supervised Claude Code agent:
+
+        `herdr pane send-text <pane> "/exit"`
+        `herdr agent send-keys <target> enter`
+         never a raw `herdr pane close` or kill *while the process might still be mid-work*.
+
+    2. Verify the pane has returned to a plain, idle shell prompt.
+    3. Once that is confirmed, close the old pane:v`herdr pane close <predecessor-pane-id>`
+    4. Check that the old pane and the tab got closed.
+    5. Confirm the pane/tab counts dropped using herdr tab list and herdr workspace list.
+    6. Do not stop after reaching the shell prompt: that leaves an obsolete pane and tab open. 
+       Always close the retired pane, but only after its graceful exit is confirmed.
+      
 4. Only then resume the normal cycle at step 3 (delegate work) and step 4 (poll agents) —
    confirm all 3 supervised agents, plus your own pane, are actually having their context
    usage read again on the established cadence (not just the one-off check from step 0),
@@ -247,8 +292,7 @@ On receiving a rebirth prompt, before anything else:
    this is a first-of-its-kind mechanism, worth narrating even though it doesn't need
    permission (see `autonomy-boundary.md`: an internal, fully-reversible operational action
    like this is not a human-in-the-loop gate).
-5. Ending a session that a user is actively, interactively attached to (rather than a
-   background herdr pane with no live viewer) is the one exception worth a direct heads-up
+5. A straight stop by the user is the one exception worth a direct heads-up
    before retiring it — confirm with the user first in that specific case, since it
    severs their current interactive connection even though the session itself is
    resumable (`claude --resume <session-id>`).

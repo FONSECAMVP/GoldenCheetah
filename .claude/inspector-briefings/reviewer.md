@@ -1,61 +1,83 @@
-# Reviewer briefing shape (`garmin_codex_reviewer`, pane w1:pD)
+# Reviewer briefing template (`garmin_codex_reviewer`, Codex pane)
 
-Cached 2026-09-15 by `garmin_inspector_v1_24` from the pane's first-ever prompt
-(`/tmp/reviewer_brief.md`, 2026-09-14 20:01) cross-checked against the most recent
-round-1 and round-2 briefs. This stores the SHAPE, not a task text — the framing for each
-new atomic unit is always written fresh.
+This file is the briefing SHAPE for the reviewer. Every slot value is written fresh
+from live state at each dispatch — this file never carries unit content. Rewrite it
+only when the shape itself changes.
 
-Note: this pane's herdr AGENT NAME is empty (`herdr agent list` shows `-`); `herdr pane
-rename` sets the pane LABEL, not the agent name, and does not fix it. Address it by pane id.
+## Binding rules
 
-## Section order (mirror this)
+1. Fill the template top to bottom. No extra sections, no prose between blocks.
+2. History enters ONLY as ledger ids and file paths — never as recap or
+   disposition essays. Prior-round dispositions are the ledger's job.
+3. Cap: 40 lines filled. Over the cap means history crept back in — replace it
+   with pointers.
+4. Amnesia premise every time: the reviewer assumes it remembers nothing about
+   this unit.
+5. Do NOT write a DELIVER/reply-contract block or any `<<<BEGIN>>>`/`<<<END>>>`
+   sentinel into the brief. `dispatch.py` appends the contract with the live unit
+   id; `dispatch.py` rejects a brief containing one.
+6. A prior round's findings are cited as `findings.md` ids, never as a path to a
+   previous round's output file. Round-to-round state lives in the ledger — an
+   exchange file is a one-cycle transport buffer and is gone.
 
-1. **Identity + amnesia premise.** "You are garmin_codex_reviewer, the standing INDEPENDENT
-   delta-check reviewer for the GoldenCheetah Garmin Connect integration (this checkout).
-   Assume you remember nothing about this unit." Say who the current Inspector is when it
-   has changed.
-2. **Role, stated as a boundary.** Read the REAL uncommitted diff; hunt defects the
-   builder's own tests would not catch. Does NOT fix, stage, or commit. Explicitly: *the
-   Inspector re-runs the tests itself, so re-running them is not your job — independent
-   reading is.*
-3. **WHAT TO REVIEW.** The exact `git diff -- <paths>` command, path by path, with line
-   counts. Always call out NEW UNTRACKED files by name, because `git diff` will not show
-   them. Then the explicit ignore-list of unrelated in-flight work in this tree
-   (Coach/, Qt 6.8 porting, .claude/ tooling, other builders' frozen deliverables).
-4. **WHAT IT IS FIXING.** The ledger id(s) and the governing DEC, with a pointer to read
-   the DEC entry itself as the authority. State the defect as a *mechanism*, not a label.
-5. **GROUND TRUTH the Inspector verified personally,** flagged as such and separated from
-   what the builder claims — plus an explicit invitation to re-verify and to say the
-   Inspector's probe was wrong. On a repair round, also list what the Inspector has
-   already closed so the reviewer does not spend time there.
-6. **THE CENTRAL QUESTION** — one adversarial question, answered FIRST and EXPLICITLY.
-   Typically: can this check report success without having examined anything?
-7. **SPECIFIC HAZARDS TO HUNT,** numbered, each with a concrete mechanism and file:line,
-   ending "not exhaustive — add anything you find." Demand a verdict, not a hedge, on the
-   ones the Inspector must rule on.
-8. **CONTEXT YOU SHOULD HAVE, so you do not file it as a finding** — known-expected
-   failures, frozen deliverables, measured baselines.
-9. **SCOPE GUARDRAILS** — read-only; what may and may not be executed this round (say when
-   the Inspector is running the gate concurrently in the shared `build/` tree); the standing
-   HARD HOLD on `src/Core/main.cpp` and any qmake/make against `src.pro`.
-10. **DELIVERABLE** — findings list, each with file:line, a concrete failure scenario
-    (inputs/state → wrong outcome), and BLOCKING / NON-BLOCKING. "If you find nothing
-    blocking, say so plainly — do not manufacture findings to look thorough." "If you
-    disagree with a premise in this brief, say so; the Inspector has been wrong before and
-    wants to be corrected."
-11. **Write the findings to a `/tmp/...findings.md` file as well as printing them,** so they
-    survive a context reset. (`herdr agent read --source recent` returns a stale screen when
-    the pane is scrolled back; the file is the documented recovery.)
+## Pane note
 
-## Repair-round additions
+This pane's herdr AGENT NAME can show as empty (`herdr agent list` prints `-`);
+`herdr pane rename` sets the pane LABEL, not the agent name, and does not fix it.
+Address it by pane id.
 
-On a round 2+, add: a pointer to the previous round's findings file and to the builder's
-repair report; "TREAT EVERY CLAIM IN THE REPORT AS A CLAIM TO BE CHECKED BY READING, not as
-evidence"; the Inspector's disposition for each prior finding including any the Inspector
-*overruled*, with the reasoning, and an invitation to challenge the overrule; and a request
-for an explicit CLOSED/NOT-CLOSED verdict per prior finding.
+## Template
+
+```
+ROLE: You are garmin_codex_reviewer, the standing INDEPENDENT delta-check
+reviewer for this checkout. Assume you remember nothing about this unit.
+You do NOT fix, stage, or commit. The Inspector re-runs the tests itself —
+independent reading is your job, not re-running.
+REVIEW: git diff -- <paths> (<n> lines). NEW untracked files git diff will
+not show: <files>. Ignore: <unrelated in-flight work list>.
+DEFECT: <ledger-id> — <mechanism, max 2 lines>. Authority: DEC-<id> (<path>);
+read the DEC entry itself, it outranks this brief.
+CENTRAL QUESTION: <one adversarial question>. Answer it FIRST and explicitly.
+HUNT: max 5 numbered hazards, each file:line + concrete mechanism. Not
+exhaustive — add anything you find. Verdict, not hedge.
+EXPECTED (do not file these as findings): <known failures, frozen
+deliverables, measured baselines>.
+FORMAT: each finding: file:line, inputs/state -> wrong outcome, BLOCKING /
+NON-BLOCKING. Nothing blocking -> say so plainly; do not manufacture
+findings. Wrong premise in this brief -> say so; the Inspector has been
+wrong before.
+REPAIR ROUND (round 2+ only): prior findings <finding ids> in
+findings.md; the builder's repair claims are in the diff under review.
+Treat every claim as a claim to check by reading, not evidence. Verdict
+per prior finding: CLOSED / NOT-CLOSED. On NOT-CLOSED, emit one extra
+line per finding: CLASS: <root mechanism, one line> — SAME / NEW
+against the stated class; SAME means this round's blocker is another
+instance of the same root mechanism, NEW means a different mechanism
+(say which).
+Repair-round state (Inspector-supplied fact line, not recap): stated
+class <name or NONE on round 1>, consecutive-same count <n>.
+```
 
 ## Dispatch mechanics
 
-Long briefs go to a file; prompt with
-`herdr agent prompt w1:pD "Read <path> and carry out exactly what it asks."`
+The filled brief is a message payload, never a file. Pipe it to the one sanctioned
+dispatch path, which appends the DELIVER reply contract and sends it as the `herdr
+agent prompt` payload. Dispatch is asynchronous: send, arm the wake, end the turn,
+collect when the wake reports the agent settled. Never block a turn on a reply.
+
+```bash
+# send, then arm the wake and END THE TURN -- never block on the reply
+python3 .claude/skills/inspector-cycle/scripts/dispatch.py --mode send \
+  --target <pane-id> --unit <unit-id> --role reviewer <<'BRIEF'
+...brief...
+BRIEF
+# on the wake that reports it idle/done:
+python3 .claude/skills/inspector-cycle/scripts/dispatch.py --mode collect \
+  --target <pane-id> --unit <unit-id>
+```
+
+Address this pane by pane id (see "Pane note" above). Act on the returned `status`:
+`complete` (read `reply`, or `spill_path` on an over-cap findings list), `truncated`,
+`unterminated`, `no_reply`, `blocked` — each carries its own `next_action`. Transcribe
+findings into `findings.md` under real ids in step 6; the spill file, if there was one,
+is garbage after that. → `references/message-transport.md`

@@ -136,7 +136,13 @@ def load_map_paths(wiki_path: str) -> tuple[set[str], str]:
 
 def in_map(path_tokens: set[str], rel: str) -> bool:
     """Is rel (or any parent dir of it) registered in the MAP?"""
-    rel_norm = rel.lstrip("./")
+    # NOTE: was `rel.lstrip("./")` — str.lstrip takes a CHARACTER SET, not a prefix, so it
+    # stripped only the single leading "." from a dot-directory path like
+    # ".claude/skills/x" (producing "claude/skills/x") while MAP tokens loaded by
+    # load_map_paths() keep their leading dot verbatim (e.g. ".claude/workflow-INDEX.md").
+    # Any dot-directory registration could therefore never match, an always-miss for the
+    # entire .claude/ subtree — found 2026-09-12 while registering a new skill directory.
+    rel_norm = rel[2:] if rel.startswith("./") else rel
     if rel_norm in path_tokens or (rel_norm + "/") in path_tokens:
         return True
     # parent-dir coverage: a file under a registered dir counts as mapped
@@ -457,13 +463,22 @@ def inside_root(ap: str, root: str) -> bool:
                                     rel.startswith(os.pardir + os.sep))
 
 
-def is_vendor_path(ap: str, root: str) -> bool:
-    """Vendor territory is ROOT-ANCHORED: exactly `<root>/.claude/skills` or a
-    descendant of it — never an arbitrary absolute-path substring.
+# Skill packages that ship their own installer/reinstall mechanism and are therefore
+# genuinely replaced wholesale on update (see install_hook.py). A sibling skill
+# directory that isn't one of these (e.g. a project-authored skill living right next
+# to it) is NOT vendor territory just for being under `.claude/skills/`.
+VENDOR_SKILL_PACKAGES = ("quality-gated-dev-workflow",)
 
-    `/tmp/snap/.claude/skills/x.md` (outside the project) and
-    `<root>/scratch/.claude/skills/x.md` (inside, but not the vendor tree) are both
-    NOT vendor territory; `<root>/.claude/skills/...` still is.
+
+def is_vendor_path(ap: str, root: str) -> bool:
+    """Vendor territory is ROOT-ANCHORED: exactly `<root>/.claude/skills/<pkg>` for a
+    known vendor package (`VENDOR_SKILL_PACKAGES`) or a descendant of it — never the
+    whole `.claude/skills/` tree and never an arbitrary absolute-path substring.
+
+    `/tmp/snap/.claude/skills/quality-gated-dev-workflow/x.md` (outside the project)
+    and `<root>/.claude/skills/some-other-skill/x.md` (inside, but not a vendor
+    package) are both NOT vendor territory; `<root>/.claude/skills/
+    quality-gated-dev-workflow/...` still is.
     """
     if not inside_root(ap, root):
         return False
@@ -471,8 +486,12 @@ def is_vendor_path(ap: str, root: str) -> bool:
         rel = os.path.relpath(os.path.normpath(ap), root)
     except ValueError:
         return False
-    vendor = os.path.join(".claude", "skills")
-    return rel == vendor or rel.startswith(vendor + os.sep)
+    skills_dir = os.path.join(".claude", "skills")
+    for pkg in VENDOR_SKILL_PACKAGES:
+        vendor = os.path.join(skills_dir, pkg)
+        if rel == vendor or rel.startswith(vendor + os.sep):
+            return True
+    return False
 
 
 def main() -> None:

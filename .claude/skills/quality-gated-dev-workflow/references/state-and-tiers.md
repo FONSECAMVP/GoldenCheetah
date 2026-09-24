@@ -21,6 +21,13 @@ indexes, and the tiered loading model.
 Escalate **only** by a named trigger. "Let me look around to be safe" is a process
 violation — the map at Tier 0 already locates everything.
 
+**The ~25 tok/line estimate assumes row discipline holds.** A read tool that returns fewer
+lines than a file's line count (check with `wc -l` first, or grep for the specific ID you
+need instead of reading the whole file) is a symptom of bloated rows silently truncating
+the read — not a smaller file than expected. Treat that as a compaction trigger (librarian
+Job 3, row-length rule) and re-read the specific ID(s) you actually need via grep rather
+than trusting a truncated whole-file read.
+
 ## Map vs. cursor — keep them distinct
 
 | | `WIKI.md` (map) | `STATE.md` (cursor) |
@@ -46,7 +53,7 @@ NEXT_GATE: <gate name> → <remaining conditions>
 CHANGESET: <ids touched since LAST_CLV>      # seeds incremental CLV
 TEAM:      on(<n> agents) | off              # qgdw subagents installed? checked at session start
 RIGOR:     light | standard | full [(REQ-nnn@full)]   # tier from Phase 0 calibration (+ per-feature overrides)
-BUDGETS:   WIKI <n>/700 · DECIDX <n>/500 · LSN <n>g/10 · FINDINGS <n>   # tokens/lines vs caps
+BUDGETS:   WIKI <n>/700 · DECIDX <n>/500 · LSN <n>g/10 · FINDINGS <n> · STATE <n>kB/12 · ROW <n>B/200   # tokens/lines/bytes vs caps
 COUNTS:    REQ<n> DEC<n> DES<n> TEST<n> · last commit <#>
 ```
 
@@ -101,6 +108,15 @@ F-018 | [TASK:REQ-028;CHECKPOINT:REQ-028;RELEASE] | use-after-free on the late-c
 F-022 | []                                        | stale internal note in wiki/architecture.md
 ```
 
+**Every index/table row above is a fixed-shape record, not a growing document** — same
+rule as the lessons index (`lessons-memory.md`): no prose, no bold/caps narrative, target
+≤~200 chars, never append. A finding that gets corrected, re-scoped, or re-investigated
+gets that story in its `cycles/` narrative (cold); a decision that gets refined gets it in
+its own full entry below the index (cold) — the row itself only ever gets a field replaced
+(status, effect set, one-clause description) or its counters bumped. A row that's growing
+is the same failure mode as an index line that grows: move the content down, don't pile it
+into the row.
+
 The wiki's PAGES section names these so the agent knows they exist and when to read them.
 
 ## Update-as-byproduct
@@ -114,6 +130,12 @@ The wiki's PAGES section names these so the agent knows they exist and when to r
 | CLV green | LAST_CLV; CHANGESET cleared | — | **VAL.next; latest:** |
 | **Gate FAIL** | **verdict + blocker line (id[effects]) ONLY** | — | **— (no bump, no registry)** |
 | Close a phase | PHASE; NEXT_GATE | — | **MAP repoint → archive** |
+
+**The index patch above is not deferred follow-up — it happens in the SAME edit as the
+cold-entry write.** Writing a decision's or requirement's full entry while leaving its
+index-row bump for "later" is the index falling behind its own prose (LSN-035) — exactly
+the drift CLV Check 6's no-duplicate-home sub-check (`cross-layer-validation.md`) exists to
+catch, and it should never have a live case to catch.
 
 If `STATE.md` (and, on structural change, `WIKI.md`) weren't touched, the operation isn't
 finished.

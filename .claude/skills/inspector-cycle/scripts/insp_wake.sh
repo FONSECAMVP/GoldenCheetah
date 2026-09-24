@@ -5,13 +5,18 @@
 # fires), prints ONE compact status block, and exits -- the exit re-invokes the
 # Inspector. Handle the wake, run one cycle pass, then re-arm this script.
 #   $1 = active heartbeat ms, while any agent is working (default 120000 = 2 min)
-#   $2 = settled heartbeat ms, while all agents are settled (default 900000 = 15 min;
+#   $2 = settled heartbeat ms, while all agents are settled (default 300000 = 5 min;
 #        pass shorter, e.g. 120000, to recheck a wait-and-see blocked agent)
+# ARM IT WITH NO ARGUMENTS. Passing both values explicitly overrides these defaults,
+# so editing them here has no effect while the call site still spells them out --
+# that is a real trap: you change the number, nothing changes, and the script looks
+# like it ignored you.
 #   SELF_PANE = Inspector's own pane id (optional; enables the self context read)
 #   WAKELOG   = append every block to this log (default /tmp/insp_wake.log); the
 #               Inspector reads the tail on demand instead of restating readings
 # Every block ends with a FINGERPRINT line: one hash over STATE.md + the 3 ledgers
-# + repo HEAD + dirty-set. Unchanged fingerprint + unchanged statuses since the last
+# + repo HEAD (the dirty-set is deliberately excluded -- builder source edits don't
+# change what step 2 reads). Unchanged fingerprint + unchanged statuses since the last
 # handled wake => skip the step-2 tiered ledger re-read (see
 # references/herdr-polling-reference.md, "Change fingerprint").
 # Checkout root. Overridable so the sandbox fixture can exercise this script
@@ -19,7 +24,7 @@
 GC="${GC:-/media/andy/TOSHIBA EXT/Backup2/Documents/GoldenCheetah}"
 S="$GC/.claude/skills/inspector-cycle/scripts"
 ACTIVE_MS="${1:-120000}"
-SETTLED_MS="${2:-900000}"
+SETTLED_MS="${2:-300000}"
 WAKELOG="${WAKELOG:-/tmp/insp_wake.log}"
 LEDGERS=("$GC/STATE.md" "$GC/.claude/workflow-garminconnect/traceability.md" \
          "$GC/.claude/workflow-garminconnect/decisions.md" \
@@ -152,12 +157,30 @@ echo "  log lines: $(wc -l < ~/.goldencheetah/goldencheetah.log 2>/dev/null)"
 echo "--- hold / scope ---"
 cd "$GC" || exit 0
 h=$(git status --short src/Core/main.cpp)
-[ -z "$h" ] && echo "  main.cpp hold: INTACT" || echo "  main.cpp hold: VIOLATED -> $h"
+[ -z "$h" ] && echo "  main.cpp: CLEAN" || echo "  main.cpp: MODIFIED -> $h"
 echo "  builder-owned dirty paths:"
 git status --short --untracked-files=all -- src/Cloud unittests | sed 's/^/    /'
 
-# Change fingerprint: ledgers + HEAD + dirty-set. Last line of the block by design.
+# Ledger budgets: caps from the tier model (state-and-tiers.md BUDGETS schema). A BREACH
+# line is the librarian Job-3 (COMPACTION) dispatch trigger -- see SKILL.md step 2.
+echo "--- ledger budgets ---"
+budget() { # path cap_bytes label
+  local s; s=$(stat -c%s "$1" 2>/dev/null || echo 0)
+  if [ "$s" -gt "$2" ]; then echo "  BREACH $3 $((s/1024))kB cap=$(($2/1024))kB"
+  else echo "  ok $3 $((s/1024))kB cap=$(($2/1024))kB"; fi
+}
+budget "$GC/STATE.md" 12288 state-cursor
+wikilines=$(wc -l < "$GC/WIKI.md" 2>/dev/null || echo 0)
+if [ "$wikilines" -gt 700 ]; then echo "  BREACH wiki ${wikilines}lines cap=700"; else echo "  ok wiki ${wikilines}lines cap=700"; fi
+maxrow=$(awk '{ if (length($0) > m) m = length($0) } END { print m+0 }' "$GC/.claude/workflow-garminconnect/findings.md" 2>/dev/null)
+if [ "${maxrow:-0}" -gt 200 ]; then echo "  BREACH findings-row ${maxrow}B cap=200B"; else echo "  ok findings-row ${maxrow}B cap=200B"; fi
+idx=$(awk '/^## DEC-/{exit} {n++} END{print n+0}' "$GC/.claude/workflow-garminconnect/decisions.md" 2>/dev/null)
+if [ "${idx:-0}" -gt 500 ]; then echo "  BREACH decidx ${idx}lines cap=500"; else echo "  ok decidx ${idx}lines cap=500"; fi
+
+# Change fingerprint: ledger stats + HEAD. Last line of the block by design.
+# Deliberately EXCLUDES the working-tree dirty-set: step 2 re-reads ledgers, and builder
+# source edits must not re-trigger it. Dirty paths stay visible in the hold/scope section
+# above, which prints every wake regardless.
 FP="$( { stat -c '%n %s %Y' "${LEDGERS[@]}" 2>/dev/null
-        git -C "$GC" rev-parse HEAD 2>/dev/null
-        git -C "$GC" status --porcelain 2>/dev/null; } | sha256sum | cut -c1-16)"
+        git -C "$GC" rev-parse HEAD 2>/dev/null; } | sha256sum | cut -c1-16)"
 echo "FINGERPRINT: ${FP:-unresolvable}"

@@ -1,0 +1,16 @@
+{
+  "_comment": "Merge the `hooks` key into the GoldenCheetah checkout's .claude/settings.json. Do not replace the file. See ../MIGRATION.md step 3.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|NotebookEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/skills/inspector-cycle/hooks/guard_exchange_paths.py\""
+          }
+        ]
+      }
+    ]
+  }
+}

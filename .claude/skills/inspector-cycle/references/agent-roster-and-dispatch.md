@@ -25,16 +25,63 @@ even the Inspector's own cross-session identity can drift or reset silently betw
 Don't dispatch to a name you remember without confirming it still resolves to the agent you
 think it is.
 
+## Builder launch mode (auto mode + Sonnet, every launch)
+
+**Invariant: every Claude Code pane in the roster (the builder) runs in auto mode on
+Sonnet — at stage start, at soft-landing restart, at any from-zero refresh.** Not "accept
+edits on": a supervised pane one step short of auto stalls on its first Bash permission
+dialog, and nobody is piloting it to click through — the whole stage blocks on that
+dialog. Not the harness default either: `~/.claude/settings.json` sets `opus` and a prior
+session's `/model` switch dies with the process, so a relaunch without an explicit model
+flag silently comes back Opus.
+
+- **Launch it that way:** `herdr agent start <name> --kind claude --pane <id> --
+  --permission-mode auto --model sonnet`. The launch flags are the reliable mechanism;
+  `shift+tab` sent via `herdr agent send-keys` does NOT reliably change the mode
+  (confirmed 2026-09-12) — don't rely on it to fix a pane that came up short.
+- **Verify before first dispatch:** read the fresh pane's visible status line for
+  `auto mode on` and Sonnet as the active model. Do not treat the start command's own
+  success response as proof, and do not dispatch work to a builder whose mode and model
+  you haven't confirmed.
+- **Any restart/refresh, same flags.** A plain restart with no args comes back in
+  "accept edits on" and on the `opus` default. Full restart procedure (exit, verify
+  process gone, re-rename): `token-budget-and-soft-landing.md` → "EXIT and restart
+  cleanly" owns the details; this section owns the standing rule.
+- Codex panes (reviewer, investigator) have no equivalent flag; their permission mode
+  carries over across `/new` because the process never exits.
+- The model half of the invariant is builder-only. The Inspector's OWN pane stays Opus
+  (`token-budget-and-soft-landing.md` → "Successor's first actions", step 0) and its
+  mirror rule is unchanged — switch to auto mode as the very first action on rebirth.
+
 ## Briefing rule
 
-Before sending a NEW task to an existing pane, find that pane's own FIRST-ever prompt
-(scroll back past all later recaps) and mirror its structure — task framing, pre-researched
-context with file:line references flagged "verify before trusting," a numbered lessons list,
-explicit governance/scope guardrails, "report back GREEN-or-blocked, don't commit." Don't
-paraphrase from memory of what the shape "roughly" was. If the pane's scrollback genuinely
-doesn't go back that far (a topology reset, lost history), say so explicitly in the new
-briefing and build it from this same shape from scratch — don't stall waiting for
-unrecoverable history.
+Brief each standing agent by filling its role template in `.claude/inspector-briefings/
+<role>.md` (builder, reviewer). The template is the shape; every slot value is written
+fresh from live state at each dispatch. Binding rules, all roles:
+
+1. **Labeled blocks only, in template order.** No prose between blocks, no added sections.
+2. **History enters only as ledger ids and file paths** — never as recap, reasoning, or
+   round-by-round narrative. A DEC is cited as `DEC-<id>` plus the path to read it, not
+   summarized into the brief.
+3. **No lessons block, any role.** A lesson that must reach a worker is a lesson row in
+   `findings.md`, reached through AUTHORITY / SETTLED / EXPECTED ids. Numbered lesson
+   lists replayed every dispatch are how a momentary workaround hardened into a standing
+   rule (the claude-sr roster incident).
+4. **Line caps: builder 50, reviewer 40, ad-hoc agents 30.** Over the cap means history
+   crept back in — replace it with pointers, don't compress the type.
+5. **Every brief works standalone.** Supervised panes are restarted cold; assume no
+   memory. No "as previously", no "as you know".
+6. **A brief is a message payload, never a file.** It goes out as the `herdr agent
+   prompt` payload through `scripts/dispatch.py` — never written to a path an agent is
+   told to go read. The line caps in rule 4 exist precisely so every brief fits in a
+   prompt; a brief that "needs" a file is a brief that broke rule 4. Replies come back
+   through the same channel, spilling to `/tmp/insp-exchange/<unit>.md` only on the
+   declared over-cap exception. → `message-transport.md`
+
+Ad-hoc agents (investigator) have no cached template: build the brief from the same block
+structure — ROLE, TASK/problem statement, verification target, SCOPE, DELIVER — under the
+same rules, dispatched with `--role adhoc`. The cache files are the canonical shapes;
+rewrite one only when the shape itself changes, and never store unit content in them.
 
 ## Reviewer-specific discipline
 
