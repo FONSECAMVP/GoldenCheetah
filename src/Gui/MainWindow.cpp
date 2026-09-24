@@ -111,6 +111,10 @@
 #endif
 #include "Secrets.h"
 
+#ifdef GC_WANT_COACH
+#include "Coach/CoachChatWidget.h"
+#endif
+
 #if defined(_MSC_VER) && defined(_WIN64)
 #include "WindowsCrashHandler.cpp"
 #endif
@@ -226,6 +230,10 @@ MainWindow::MainWindow(const QDir &home)
     sidebar->setItemEnabled(GcSideBarBtnId::REFLECT_BTN, false);
 
     sidebar->addItem(QImage(":sidebar/train.png"), tr("train"), GcSideBarBtnId::TRAIN_BTN, helpNewSideBar->getWhatsThisText(HelpWhatsThis::ScopeBar_Train));
+
+#ifdef GC_WANT_COACH
+    sidebar->addItem(QImage(":sidebar/coach.png"), tr("coach"), GcSideBarBtnId::COACH_BTN, tr("AI Coach - Get personalized training guidance"));
+#endif
 
     sidebar->addStretch();
     sidebar->addItem(QImage(":sidebar/apps.png"), tr("apps"), GcSideBarBtnId::APPS_BTN, tr("Feature not implemented yet"));
@@ -1263,6 +1271,7 @@ MainWindow::sidebarSelected(GcSideBarBtnId id)
     case GcSideBarBtnId::REFLECT_BTN: break; // reflect not written yet
     case GcSideBarBtnId::TRAIN_BTN: selectTrain(); break;
     case GcSideBarBtnId::APPS_BTN: break;// apps not written yet
+    case GcSideBarBtnId::COACH_BTN: selectCoach(); break;
 
     default: break;
     }
@@ -1327,6 +1336,22 @@ MainWindow::selectPlan()
     workoutFilterBox->hide();
     showhideLowbar->setVisible(false);
     setToolButtons();
+}
+
+void
+MainWindow::selectCoach()
+{
+#ifdef GC_WANT_COACH
+    CoachChatWidget *coach = new CoachChatWidget(currentAthleteTab->context, this);
+    coach->setAttribute(Qt::WA_DeleteOnClose);
+    coach->setWindowTitle(tr("AI Coach"));
+    coach->resize(700, 600);
+    coach->show();
+#else
+    QMessageBox::information(this, tr("AI Coach"),
+        tr("AI Coach is not enabled in this build.\n"
+           "To enable AI Coach, rebuild with GC_WANT_COACH=ON"));
+#endif
 }
 
 void

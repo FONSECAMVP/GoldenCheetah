@@ -8,6 +8,7 @@
 #include "KurtInRide.h"
 #include <QDebug>
 #include <QBluetoothUuid>
+#include <QUuid>
 
 #include "CalibrationData.h"
 
@@ -158,14 +159,16 @@ void inride_BTDeviceInfoToSystemID(const QBluetoothDeviceInfo &devinfo, uint8_t 
         
         QBluetoothUuid uuid = devinfo.deviceUuid();
 
-        quint128 be_uuid128 = uuid.toUInt128();
-
-// GC minimum Qt required for v3.8 is Qt6.5.3
-#if QT_VERSION < 0x060600
-        addr64 = *(uint64_t*)be_uuid128.data;
-#else
-        addr64 = *(uint64_t*)&be_uuid128;
-#endif
+        // Qt6.8+: toUInt128(endian) was removed; convert via QUuid bytes
+        QUuid quuid = uuid;
+        QByteArray uuidBytes = quuid.toByteArray(QUuid::WithoutBraces);
+        // toByteArray returns the canonical hex-with-dashes string; convert to raw bytes
+        QByteArray rawBytes = QByteArray::fromHex(uuidBytes.replace("-", ""));
+        addr64 = 0;
+        if (rawBytes.size() >= 8) {
+            for (int i = 0; i < 8; i++)
+                addr64 |= (static_cast<uint64_t>(static_cast<unsigned char>(rawBytes[i])) << (i * 8));
+        }
     }
 
     uint8_t* paddr64 = (uint8_t*)&addr64;

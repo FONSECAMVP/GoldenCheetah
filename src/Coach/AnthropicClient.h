@@ -90,7 +90,7 @@ private:
     QNetworkReply* currentReply_ = nullptr;
     QString apiKey_;
     QString baseUrl_ = "https://api.anthropic.com/v1";
-    QString currentModel_ = "claude-sonnet-4-20250514";
+    QString currentModel_ = "claude-opus-4-8";
     double temperature_ = 0.7;
     int maxTokens_ = 2000;
 

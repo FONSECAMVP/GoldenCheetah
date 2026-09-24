@@ -33,7 +33,8 @@ enum class GcSideBarBtnId : int {
     TRAIN_BTN = 5,
     APPS_BTN = 6,
     SYNC_BTN = 7,
-    OPTIONS_BTN = 8
+    OPTIONS_BTN = 8,
+    COACH_BTN = 9
 };
 
 class Context;

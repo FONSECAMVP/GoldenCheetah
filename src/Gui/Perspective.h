@@ -26,7 +26,7 @@
 #include <QtGui>
 #include <QScrollArea>
 #include <QFormLayout>
-#include <QXmlDefaultHandler>
+#include <QtCore5Compat/QXmlDefaultHandler>
 #include <QMessageBox>
 #include <QLabel>
 #include <QDialog>

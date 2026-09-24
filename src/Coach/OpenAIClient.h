@@ -91,7 +91,7 @@ private:
     QNetworkReply* currentReply_ = nullptr;
     QString apiKey_;
     QString baseUrl_ = "https://api.openai.com/v1";
-    QString currentModel_ = "gpt-4o";
+    QString currentModel_ = "gpt-5.5";
     double temperature_ = 0.7;
     int maxTokens_ = 2000;
 

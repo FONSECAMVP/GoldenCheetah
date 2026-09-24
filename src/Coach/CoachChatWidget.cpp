@@ -559,12 +559,11 @@ void CoachChatWidget::onShowSettings()
     auto updateModels = [&](const QString& provider) {
         modelCombo->clear();
         if (provider == "OpenAI") {
-            modelCombo->addItems({"gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"});
+            modelCombo->addItems({"gpt-5.5", "gpt-5.4", "gpt-5.4-nano"});
         } else if (provider == "Anthropic") {
-            modelCombo->addItems({"claude-sonnet-4-20250514", "claude-haiku-4-20250414",
-                                  "claude-opus-4-20250514"});
+            modelCombo->addItems({"claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"});
         } else {
-            modelCombo->addItems({"gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-pro"});
+            modelCombo->addItems({"gemini-3.1-pro-preview", "gemini-3.5-flash", "gemini-3.1-flash-lite"});
         }
         // Restore saved model for this provider
         QString savedModel = settings.value("coach/" + provider.toLower() + "_model", "").toString();

@@ -56,6 +56,10 @@ LTMSidebarView::getLTMSidebar(Context *sbContext)
 
         // need to create a sidebar for this context
         LTMSidebars_[sbContext] = new LTMSidebar(sbContext);
+        // hide until showEvent places it in the view's splitter; without this
+        // it floats as a visible child of MainWindow at position (0,0) and
+        // overlaps the menu bar when the startup view is not Trends/Plan
+        LTMSidebars_[sbContext]->hide();
     }
     return LTMSidebars_[sbContext];
 }

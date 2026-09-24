@@ -72,11 +72,9 @@ bool AnthropicClient::isAvailable() const
 QStringList AnthropicClient::availableModels() const
 {
     return {
-        "claude-sonnet-4-20250514",
-        "claude-haiku-4-20250414",
-        "claude-3-5-sonnet-20241022",
-        "claude-3-5-haiku-20241022",
-        "claude-3-opus-20240229"
+        "claude-opus-4-8",
+        "claude-sonnet-5",
+        "claude-haiku-4-5"
     };
 }
 
@@ -145,7 +143,7 @@ void AnthropicClient::buildRequest(const QString& content, QJsonObject& requestB
     requestBody["model"] = currentModel_;
     requestBody["messages"] = messages;
     requestBody["max_tokens"] = maxTokens_;
-    requestBody["temperature"] = temperature_;
+    // no "temperature": Claude 4.7+ models reject sampling parameters with a 400
 
     if (!systemPrompt_.isEmpty()) {
         requestBody["system"] = systemPrompt_;
@@ -365,7 +363,7 @@ void AnthropicClient::sendContinuation()
     requestBody["model"] = currentModel_;
     requestBody["messages"] = fullMessages_;
     requestBody["max_tokens"] = maxTokens_;
-    requestBody["temperature"] = temperature_;
+    // no "temperature": Claude 4.7+ models reject sampling parameters with a 400
     if (!systemPrompt_.isEmpty()) requestBody["system"] = systemPrompt_;
     appendToolsToRequest(requestBody);
 

@@ -91,7 +91,7 @@ private:
     QNetworkReply* currentReply_ = nullptr;
     QString apiKey_;
     QString baseUrl_ = "https://generativelanguage.googleapis.com/v1beta";
-    QString currentModel_ = "gemini-1.5-pro";
+    QString currentModel_ = "gemini-3.1-pro-preview";
     double temperature_ = 0.7;
     int maxTokens_ = 2000;
 

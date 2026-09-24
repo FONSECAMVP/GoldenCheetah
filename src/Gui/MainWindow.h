@@ -205,6 +205,7 @@ class MainWindow : public QMainWindow
         void selectPlan();
         void selectAnalysis();
         void selectTrain();
+        void selectCoach();
 
         void setSubChartMenu();
         void setChartMenu(QMenu *);

@@ -149,6 +149,7 @@ endif()
 
 # Global include directories
 include_directories(
+    ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/ANT
     ${CMAKE_CURRENT_SOURCE_DIR}/Train
     ${CMAKE_CURRENT_SOURCE_DIR}/FileIO
@@ -158,6 +159,7 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/Gui
     ${CMAKE_CURRENT_SOURCE_DIR}/Core
     ${CMAKE_CURRENT_SOURCE_DIR}/Planning
+    ${CMAKE_CURRENT_SOURCE_DIR}/Coach
     ${CMAKE_CURRENT_SOURCE_DIR}/../qwt/src
     ${CMAKE_CURRENT_SOURCE_DIR}/../contrib/qxt/src
     ${CMAKE_CURRENT_SOURCE_DIR}/../contrib/qtsolutions/json
@@ -781,6 +783,9 @@ set(GC_HEADERS_PLANNING
     Planning/PlanningWindow.h
 )
 
+# Coach AI Module (optional, enabled by default)
+option(GC_WANT_COACH "Enable AI Coach module" ON)
+
 # Garmin Connect integration (optional, OFF until DEC-011 / Phase-1 A4 gate passes)
 option(GC_WANT_GARMINCONNECT "Enable Garmin Connect activity download" OFF)
 
@@ -1392,6 +1397,14 @@ set_target_properties(GoldenCheetah PROPERTIES
     MACOSX_BUNDLE TRUE
 )
 
+# Coach AI Module (optional, enabled by default)
+# Must be added after GoldenCheetah target is created
+if(GC_WANT_COACH)
+    add_subdirectory(Coach)
+    target_link_libraries(GoldenCheetah PRIVATE Coach)
+    target_compile_definitions(GoldenCheetah PRIVATE GC_WANT_COACH)
+endif()
+
 # Garmin Connect integration (optional, OFF by default — see DEC-008/009/010)
 # Per DES-004 the implementation is a CloudService subclass compiled inline
 # into the GoldenCheetah target rather than a subdirectory library.
@@ -1544,6 +1557,7 @@ message(STATUS "Features:")
 message(STATUS "  Python Support: ${GC_WANT_PYTHON}")
 message(STATUS "  R Support: ${GC_WANT_R}")
 message(STATUS "  HTTP API: ${GC_WANT_HTTP}")
+message(STATUS "  AI Coach: ${GC_WANT_COACH}")
 message(STATUS "  Garmin Connect: ${GC_WANT_GARMINCONNECT}")
 message(STATUS "  iCal Support: ${GC_HAVE_ICAL}")
 message(STATUS "  USB Support: ${GC_HAVE_LIBUSB}")

@@ -272,6 +272,7 @@ GcSplitterHandle::init(QString title, Qt::Orientation orientation,
     Q_UNUSED(orientation);
 
     setContentsMargins(0,0,0,0);
+    setAutoFillBackground(false);
 
     gcSplitter = (GcSubSplitter*)parent;
 
@@ -369,9 +370,8 @@ GcSplitterHandle::paintBackground(QPaintEvent *)
     painter.save();
     QRect all(0,0,width(),height());
 
-    // fill with a linear gradient
+    // fill with chrome color (gradient now resolves to solid CCHROME)
     painter.setPen(Qt::NoPen);
-    painter.fillRect(all, QColor(Qt::white));
 
     QLinearGradient active = GCColor::linearGradient(height(), true, !metal);
     QLinearGradient inactive = GCColor::linearGradient(height(), false, !metal);

@@ -26,6 +26,8 @@
 #include <QMetaObject>
 #include <QStackedWidget>
 
+#include <QtCore5Compat/QXmlDefaultHandler>
+
 #include "Perspective.h"
 #include "Colors.h"
 #include "GcSideBarItem.h"

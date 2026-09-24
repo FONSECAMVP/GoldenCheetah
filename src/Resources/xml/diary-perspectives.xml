@@ -1,0 +1,26 @@
+<layouts>
+<layout name="Diary" style="0" type="8" expression="" trainswitch="0">
+	<chart id="4" name="" title="Calendar" >
+		<property name="title" type="QString" value="Calendar" />
+		<property name="subtitle" type="QString" value="" />
+		<property name="widthFactor" type="double" value="2" />
+		<property name="heightFactor" type="double" value="2" />
+		<property name="style" type="int" value="0" />
+		<property name="resizable" type="bool" value="0" />
+		<property name="view" type="int" value="0" />
+	</chart>
+	<chart id="30" name="" title="Navigator" >
+		<property name="title" type="QString" value="Navigator" />
+		<property name="subtitle" type="QString" value="" />
+		<property name="widthFactor" type="double" value="2" />
+		<property name="heightFactor" type="double" value="2" />
+		<property name="style" type="int" value="0" />
+		<property name="resizable" type="bool" value="0" />
+		<property name="sortByIndex" type="int" value="4" />
+		<property name="sortByOrder" type="int" value="1" />
+		<property name="groupBy" type="int" value="-1" />
+		<property name="columns" type="QString" value="*|Date|Sport|SubSport|Duration|Distance|RPE|Workout Code|" />
+		<property name="widths" type="QString" value="100|100|100|100|100|100|100|100|" />
+	</chart>
+</layout>
+</layouts>
