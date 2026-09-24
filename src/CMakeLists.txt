@@ -1125,6 +1125,18 @@ endif()
 
 # libusb Support
 if(GC_HAVE_LIBUSB)
+    # Locate libusb. Prefer the 1.0 API; fall back to legacy libusb-0.1 only if
+    # 1.0 is unavailable. Mirrors the LIBUSB_USE_V_1 handling in src.pro.
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(LIBUSB1 libusb-1.0)
+
+    if(LIBUSB1_FOUND)
+        set(LIBUSB_V_1 TRUE)
+    else()
+        pkg_check_modules(LIBUSB0 REQUIRED libusb)
+        set(LIBUSB_V_1 FALSE)
+    endif()
+
     set(GC_SOURCES_USB
         Train/LibUsb.cpp
         Train/Fortius.cpp
@@ -1530,6 +1542,19 @@ target_link_libraries(GoldenCheetah PRIVATE ZLIB::ZLIB)
 
 # Link platform-specific libraries
 target_link_libraries(GoldenCheetah PRIVATE ${GC_PLATFORM_LIBS})
+
+# Link libusb (ANT+ USB sticks, Fortius and Imagic trainers)
+if(GC_HAVE_LIBUSB)
+    if(LIBUSB_V_1)
+        target_include_directories(GoldenCheetah PRIVATE ${LIBUSB1_INCLUDE_DIRS})
+        target_link_libraries(GoldenCheetah PRIVATE ${LIBUSB1_LIBRARIES})
+        target_link_directories(GoldenCheetah PRIVATE ${LIBUSB1_LIBRARY_DIRS})
+    else()
+        target_include_directories(GoldenCheetah PRIVATE ${LIBUSB0_INCLUDE_DIRS})
+        target_link_libraries(GoldenCheetah PRIVATE ${LIBUSB0_LIBRARIES})
+        target_link_directories(GoldenCheetah PRIVATE ${LIBUSB0_LIBRARY_DIRS})
+    endif()
+endif()
 
 # QWT library is built from the top-level CMakeLists.txt
 # No need to add it here again

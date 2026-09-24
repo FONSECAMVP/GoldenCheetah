@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.21)
 
 project(GoldenCheetah VERSION 3.7 LANGUAGES CXX C)
 
@@ -123,6 +123,7 @@ endif()
 
 # Global include directories
 include_directories(
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ANT
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Train
     ${CMAKE_CURRENT_SOURCE_DIR}/src/FileIO
