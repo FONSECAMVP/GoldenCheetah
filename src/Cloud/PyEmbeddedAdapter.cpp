@@ -13,7 +13,10 @@
 // authenticate() sequence (spec, DES-013):
 //   1. Py_IsInitialized() false -> Unknown / "embedded Python unavailable".
 //   2. PyGILState_Ensure via RAII guard, released on every exit path.
-//   3. Prepend modulePath to sys.path if absent; import garmin_client.
+//   3. Explicit override -> hoist to sys.path index 0, check any cached
+//      sys.modules entry's identity against the C++-owned provenance ledger,
+//      import, then re-check identity against the ledger again; no override
+//      -> import only (DEC-058 constraints 5, 17; DEC-066).
 //   4. GarminClient(email, password) -> .login() (AUTH-ONLY; DEC-014 Option B).
 //   5. Success dict -> PyAuthOutcome{Success, garmin_user_id, display_name}.
 //   6. Exceptions classified by TYPE then .kind — never by message content
@@ -35,6 +38,13 @@
 // clang-format on
 
 #include "PyEmbeddedAdapter.h"
+
+#include <QDir>
+#include <QFileInfo>
+#include <QHash>
+#include <QPair>
+#include <QSet>
+#include <QVector>
 
 namespace {
 
@@ -90,23 +100,266 @@ QString toQString(PyObject* o)
     return QString();
 }
 
-// Spec step 3 (first half): sys.path gets modulePath prepended exactly once.
-void prependToSysPathIfAbsent(const QString& dir)
+// DEC-058 c17(a): find the FIRST exact (string-equality, uncanonicalized)
+// occurrence of dir in sys.path. Already at index 0 -> leave it. Present
+// later -> remove that one occurrence and insert at 0 (later duplicates, if
+// any, are left alone). Absent -> insert at 0. Returns false, with sys.path
+// left as-is, on any list-op failure or if sys.path is not a list; callers
+// on the explicit-override path must fail closed on false, never proceed to
+// import.
+bool hoistOverrideDirToFront(const QString& dir)
 {
     PyObject* sysPath = PySys_GetObject("path"); // borrowed
     if (sysPath == nullptr || !PyList_Check(sysPath)) {
         PyErr_Clear();
-        return;
+        return false;
     }
     PyRef pyDir(PyUnicode_FromString(dir.toUtf8().constData()));
     if (!pyDir) {
         PyErr_Clear();
-        return;
+        return false;
     }
-    const int present = PySequence_Contains(sysPath, pyDir.get());
-    if (present == 0)
-        PyList_Insert(sysPath, 0, pyDir.get());
-    PyErr_Clear(); // swallow Contains/Insert errors — import will report
+
+    const Py_ssize_t len = PyList_Size(sysPath);
+    if (len < 0) {
+        PyErr_Clear();
+        return false;
+    }
+
+    Py_ssize_t firstIndex = -1;
+    for (Py_ssize_t i = 0; i < len; ++i) {
+        PyObject* item = PyList_GetItem(sysPath, i); // borrowed
+        if (item == nullptr) {
+            PyErr_Clear();
+            return false;
+        }
+        const int eq = PyObject_RichCompareBool(item, pyDir.get(), Py_EQ);
+        if (eq < 0) {
+            PyErr_Clear();
+            return false;
+        }
+        if (eq == 1) {
+            firstIndex = i;
+            break;
+        }
+    }
+
+    if (firstIndex == 0)
+        return true;
+
+    if (firstIndex > 0) {
+        PyObject* existing = PyList_GetItem(sysPath, firstIndex); // borrowed
+        if (existing == nullptr) {
+            PyErr_Clear();
+            return false;
+        }
+        Py_INCREF(existing);
+        PyRef owned(existing); // kept alive across the erase below
+        if (PySequence_DelItem(sysPath, firstIndex) < 0) {
+            PyErr_Clear();
+            return false;
+        }
+        if (PyList_Insert(sysPath, 0, owned.get()) < 0) {
+            PyErr_Clear();
+            return false;
+        }
+        return true;
+    }
+
+    // firstIndex == -1: absent entirely.
+    if (PyList_Insert(sysPath, 0, pyDir.get()) < 0) {
+        PyErr_Clear();
+        return false;
+    }
+    return true;
+}
+
+// DEC-066 (amends DEC-058 c17(b)): provenance is a C++-owned identity ledger,
+// not an attribute read off a cached module — every attribute CPython exposes
+// on a module is writable by the code the guard is trying to judge. The
+// investigator's repro: a genuine ledgered parent package's __file__ still
+// names the real override dir, but its __path__ was retargeted at a decoy,
+// and the decoy child imports successfully AFTER a pre-import-only check
+// already accepted the (still-genuine-looking) parent. The ledger instead
+// records, per (interpreter, override dir, dotted name), the exact PyObject*
+// produced by the one clean import this file performs; a later call accepts
+// a cached entry only if its identity is the one this file itself ledgered.
+QHash<QString, PyObject*>& provenanceLedger()
+{
+    static QHash<QString, PyObject*> ledger;
+    return ledger;
+}
+
+QString provenanceLedgerKey(PyInterpreterState* interp, const QString& dir, const QString& name)
+{
+    // '\x1f' (US) as a field separator: not valid in a filesystem path or a
+    // Python dotted identifier, so it cannot be forged into a collision.
+    return QString::number(reinterpret_cast<quintptr>(interp)) + QLatin1Char('\x1f') + dir + QLatin1Char('\x1f') + name;
+}
+
+// Every sys.modules key equal to "gc_garmin_adapter" or prefixed
+// "gc_garmin_adapter.", paired with its current (borrowed) object pointer.
+// Never leaves a pending Python error.
+QVector<QPair<QString, PyObject*>> matchingCacheEntries()
+{
+    QVector<QPair<QString, PyObject*>> out;
+    PyObject* sysModules = PyImport_GetModuleDict(); // borrowed
+    if (sysModules == nullptr || !PyDict_Check(sysModules))
+        return out;
+
+    PyObject* key = nullptr;
+    PyObject* value = nullptr;
+    Py_ssize_t pos = 0;
+    while (PyDict_Next(sysModules, &pos, &key, &value)) {
+        if (!PyUnicode_Check(key))
+            continue;
+        const char* keyUtf8 = PyUnicode_AsUTF8(key);
+        if (keyUtf8 == nullptr) {
+            PyErr_Clear();
+            continue;
+        }
+        const QString name = QString::fromUtf8(keyUtf8);
+        if (name != QStringLiteral("gc_garmin_adapter") && !name.startsWith(QStringLiteral("gc_garmin_adapter.")))
+            continue;
+        out.append(qMakePair(name, value));
+    }
+    return out;
+}
+
+// DEC-066 constraint 1, pre-import half: every already-cached matching entry
+// must already be ledgered under (interp, dir) with the exact same pointer
+// identity; any matching entry absent from the ledger fails the whole call
+// closed (a pre-existing foreign/unverifiable entry — DEC-058 c17(b)). No
+// matching entries at all is the common first-import case and trivially
+// passes. namesOut collects the entry names that were present (and just
+// verified) before the import, so the post-import check below can tell
+// "already there and vetted" apart from "appeared during this very import".
+bool explicitOverridePreImportCacheIsSafe(PyInterpreterState* interp, const QString& dir, QSet<QString>* namesOut)
+{
+    QHash<QString, PyObject*>& ledger = provenanceLedger();
+    for (const auto& entry : matchingCacheEntries()) {
+        const auto it = ledger.constFind(provenanceLedgerKey(interp, dir, entry.first));
+        if (it == ledger.constEnd() || it.value() != entry.second)
+            return false;
+        namesOut->insert(entry.first);
+    }
+    return true;
+}
+
+// DEC-066 constraint 1, post-import half: a forged parent whose retargeted
+// __path__ produces a decoy child DURING the import is invisible to the
+// pre-import check above (the parent alone still matches the ledger) and
+// only shows up here, because the child's identity changes between the two
+// checks. presentBeforeImport is the pre-import check's verified name set:
+//   - a name that WAS present before import must still resolve to the exact
+//     pointer the pre-import check just verified (a static defense — normal
+//     import machinery never actually reaches this branch, since it does not
+//     replace an already-fully-cached entry).
+//   - a name that was NOT present before import, while presentBeforeImport
+//     is otherwise non-empty, means some of the package's identity survived
+//     from before this call and some did not — exactly the forged-__path__
+//     shape (a ledgered parent retained, its child dropped and recreated
+//     from a decoy during this call) — and fails closed.
+//   - a name that was NOT present before import, and NOTHING matching was
+//     cached before this import at all (presentBeforeImport empty), was
+//     produced by this one clean import and is recorded fresh. This is both
+//     the ordinary first-use-of-this-dir case and the legitimate case where
+//     a caller deliberately evicted every prior gc_garmin_adapter[.*] entry
+//     before reimporting under the same override — the stale ledger record
+//     any such name may still hold from a since-evicted cycle is replaced,
+//     its old strong reference released. This is the only place entries are
+//     added or replaced; nothing is ever evicted out from under a caller
+//     that never asked for it (DEC-058 c17(b): eviction leaves live objects
+//     referencing a stale type universe; a blanket reject would break a
+//     genuine second construction over the same override, constraint 3).
+bool explicitOverridePostImportCacheIsSafeAndRecord(PyInterpreterState* interp, const QString& dir,
+                                                     const QSet<QString>& presentBeforeImport)
+{
+    QHash<QString, PyObject*>& ledger = provenanceLedger();
+    for (const auto& entry : matchingCacheEntries()) {
+        const QString key = provenanceLedgerKey(interp, dir, entry.first);
+        if (presentBeforeImport.contains(entry.first)) {
+            const auto it = ledger.constFind(key);
+            if (it == ledger.constEnd() || it.value() != entry.second)
+                return false;
+            continue;
+        }
+        if (!presentBeforeImport.isEmpty())
+            return false; // mixed state: some identity survived this call, this name did not
+        const auto existing = ledger.find(key);
+        if (existing != ledger.end()) {
+            Py_DECREF(existing.value());
+            existing.value() = entry.second;
+        } else {
+            ledger.insert(key, entry.second);
+        }
+        Py_INCREF(entry.second);
+    }
+    return true;
+}
+
+// DEC-058 constraints 5 / 17: an explicit override is the FIRST thing
+// consulted, every time it is set — never a fallback tried after a failed
+// plain import (that shape let a missing installed payload silently succeed
+// anywhere the override/source-tree directory happened to exist). On the
+// explicit-override path, the override dir is hoisted to sys.path index 0
+// and any already-cached gc_garmin_adapter[.*] entry must be proven to
+// originate from that same dir; either check failing fails the whole call
+// closed (a synthesized exception, import never attempted) rather than
+// clearing the error and importing anyway. With no override, exactly one
+// plain import is attempted against sys.path as CPython already built it
+// (site-packages included); there is no fallback. Returns a new reference on
+// success, or nullptr with a pending exception set (same contract as
+// PyImport_ImportModule itself) on failure.
+PyObject* importAdapterModule(const GarminPyModulePath& modulePath)
+{
+    if (!modulePath.isExplicitOverride())
+        return PyImport_ImportModule("gc_garmin_adapter.garmin_client");
+
+    if (!hoistOverrideDirToFront(modulePath.dir())) {
+        // T208-ALLOW:I18N-TR-WRAP — DEC-066/DEC-068
+        PyErr_SetString(PyExc_RuntimeError, "GC_GARMIN_PYPATH: sys.path is not a list, or a list operation failed");
+        return nullptr;
+    }
+
+    PyInterpreterState* interp = PyInterpreterState_Get();
+    QSet<QString> presentBeforeImport;
+    if (!explicitOverridePreImportCacheIsSafe(interp, modulePath.dir(), &presentBeforeImport)) {
+        PyErr_SetString(PyExc_ImportError,
+                         // T208-ALLOW:I18N-TR-WRAP — DEC-066/DEC-068
+                         "gc_garmin_adapter is already cached from an origin other than GC_GARMIN_PYPATH");
+        return nullptr;
+    }
+
+    PyObject* module = PyImport_ImportModule("gc_garmin_adapter.garmin_client");
+    if (module == nullptr)
+        return nullptr;
+
+    // DEC-066 constraint 1: re-validate AFTER the import returns — a forged
+    // parent's retargeted __path__ only produces its decoy child during this
+    // very call, invisible to the pre-import check above.
+    if (!explicitOverridePostImportCacheIsSafeAndRecord(interp, modulePath.dir(), presentBeforeImport)) {
+        Py_DECREF(module);
+        PyErr_SetString(PyExc_ImportError,
+                         // T208-ALLOW:I18N-TR-WRAP — DEC-066/DEC-068
+                         "gc_garmin_adapter cache changed identity during import (provenance check failed)");
+        return nullptr;
+    }
+
+    // DEC-068: redundant under CPython's current PyImport_Import semantics
+    // (cpython-import-return-binding) — retained as a tripwire against a
+    // future import-path change; see DEC-068 for why, not restated here.
+    const QHash<QString, PyObject*>& ledger = provenanceLedger();
+    const QString childKey = provenanceLedgerKey(interp, modulePath.dir(), QStringLiteral("gc_garmin_adapter.garmin_client"));
+    const auto ledgered = ledger.constFind(childKey);
+    if (ledgered == ledger.constEnd() || ledgered.value() != module) {
+        Py_DECREF(module);
+        PyErr_SetString(PyExc_ImportError,
+                         // T208-ALLOW:I18N-TR-WRAP — DEC-066/DEC-068
+                         "gc_garmin_adapter.garmin_client: import returned an object absent from the provenance ledger");
+        return nullptr;
+    }
+    return module;
 }
 
 // Reviewer delta-fix #1 (security): __module__/__qualname__ are NOT
@@ -530,7 +783,7 @@ PyProfileOutcome classifyProfileException(PyObject* module)
 
 } // namespace
 
-PyEmbeddedAdapter::PyEmbeddedAdapter(const QString& modulePath)
+PyEmbeddedAdapter::PyEmbeddedAdapter(const GarminPyModulePath& modulePath)
     : modulePath(modulePath)
 {
 }
@@ -551,8 +804,7 @@ PyAuthOutcome PyEmbeddedAdapter::authenticate(const QString& email, const QStrin
     GilGuard gil;
 
     // Step 3 — path policy + import.
-    prependToSysPathIfAbsent(modulePath);
-    PyRef module(PyImport_ImportModule("gc_garmin_adapter.garmin_client"));
+    PyRef module(importAdapterModule(modulePath));
     if (!module)
         return classifyPendingException(nullptr);
 
@@ -662,8 +914,7 @@ PyAuthOutcome PyEmbeddedAdapter::submitMfa(const QString& code)
 
     // garmin_client is needed only to resolve the GarminError type for
     // classification; it is already imported/cached from authenticate().
-    prependToSysPathIfAbsent(modulePath);
-    PyRef module(PyImport_ImportModule("gc_garmin_adapter.garmin_client"));
+    PyRef module(importAdapterModule(modulePath));
 
     // Resume the pending MFA session on the SAME retained client. A bad/expired
     // code surfaces as GarminError kind 'auth' (classified by TYPE, LSN-006);
@@ -732,8 +983,7 @@ PyDownloadOutcome PyEmbeddedAdapter::downloadActivity(const QString& activityId,
 
     // garmin_client is needed only to resolve the GarminError type for
     // classification; it is already imported/cached from authenticate().
-    prependToSysPathIfAbsent(modulePath);
-    PyRef module(PyImport_ImportModule("gc_garmin_adapter.garmin_client"));
+    PyRef module(importAdapterModule(modulePath));
 
     PyRef result(PyObject_CallMethod(m_client, "download_activity", "ss",
                                      activityId.toUtf8().constData(),
@@ -792,8 +1042,7 @@ PyListOutcome PyEmbeddedAdapter::listActivitiesSince(const QString& sinceGmt)
 
     // garmin_client is needed only to resolve the GarminError type for
     // classification; it is already imported/cached from authenticate().
-    prependToSysPathIfAbsent(modulePath);
-    PyRef module(PyImport_ImportModule("gc_garmin_adapter.garmin_client"));
+    PyRef module(importAdapterModule(modulePath));
 
     // Forward the since-timestamp VERBATIM (DES-010 — Garmin's server-side
     // timestamp, never the local clock). The adapter returns an iterator of
@@ -867,8 +1116,7 @@ PyLoadTokensOutcome PyEmbeddedAdapter::loadTokens(const QString& tokenBlob)
     GilGuard gil;
 
     // Path policy + import.
-    prependToSysPathIfAbsent(modulePath);
-    PyRef module(PyImport_ImportModule("gc_garmin_adapter.garmin_client"));
+    PyRef module(importAdapterModule(modulePath));
     if (!module)
         return classifyLoadTokensException(nullptr);
 
@@ -922,8 +1170,7 @@ PyProfileOutcome PyEmbeddedAdapter::fetchProfile()
 
     // garmin_client is needed only to resolve the GarminError type for
     // classification; it is already imported/cached from authenticate().
-    prependToSysPathIfAbsent(modulePath);
-    PyRef module(PyImport_ImportModule("gc_garmin_adapter.garmin_client"));
+    PyRef module(importAdapterModule(modulePath));
 
     PyRef result(PyObject_CallMethod(m_client, "get_profile", nullptr));
     if (!result)
@@ -977,4 +1224,27 @@ PyEmbeddedAdapter::~PyEmbeddedAdapter()
         Py_DECREF(m_client);
     }
     m_client = nullptr;
+}
+
+void PyEmbeddedAdapter::releaseModuleProvenanceLedgerForCurrentInterpreter()
+{
+    // DEC-066 constraint 2: interpreter-address reuse after Py_FinalizeEx()
+    // is real (measured: INTERP_ADDR_REUSED=1), so a ledger key built from a
+    // raw interpreter pointer must never survive finalization. A held
+    // module's own address does NOT get reused while the ledger still owns
+    // its strong reference (measured: HELD_MODULE_ADDR_REUSED=0 across a
+    // million fresh allocations) — the hazard belongs only to an entry the
+    // ledger has already dropped, so it is safe to walk the table and
+    // release its references here, right before finalization.
+    QHash<QString, PyObject*>& ledger = provenanceLedger();
+    const QString prefix = QString::number(reinterpret_cast<quintptr>(PyInterpreterState_Get())) + QLatin1Char('\x1f');
+    QHash<QString, PyObject*>::iterator it = ledger.begin();
+    while (it != ledger.end()) {
+        if (it.key().startsWith(prefix)) {
+            Py_DECREF(it.value());
+            it = ledger.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }

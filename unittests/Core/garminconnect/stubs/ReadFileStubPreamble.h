@@ -295,10 +295,34 @@ class CloudServiceFactory
 #ifndef GC_PyEmbeddedAdapter_h
 #    define GC_PyEmbeddedAdapter_h
 #    include "IGarminPyAdapter.h"
+
+// DEC-058 constraint 5 / B-STAGE9-38 unit 3: mirrors the real
+// PyEmbeddedAdapter.h's GarminPyModulePath exactly (a bare QString cannot
+// carry "explicit override vs none"), so GarminConnect.cpp's constructor
+// call compiles identically against this fake and the real header.
+class GarminPyModulePath
+{
+  public:
+    static GarminPyModulePath none() { return GarminPyModulePath(); }
+    static GarminPyModulePath explicitOverride(const QString& dir) { return GarminPyModulePath(dir); }
+
+    bool isExplicitOverride() const { return m_isOverride; }
+    const QString& dir() const { return m_dir; }
+
+    // Public per B-STAGE9-43. The 1-arg override ctor stays private below.
+    GarminPyModulePath() = default;
+
+  private:
+    explicit GarminPyModulePath(const QString& dir) : m_isOverride(true), m_dir(dir) {}
+
+    bool m_isOverride = false;
+    QString m_dir;
+};
+
 class PyEmbeddedAdapter : public IGarminPyAdapter
 {
   public:
-    explicit PyEmbeddedAdapter(const QString& modulePath) : m_modulePath(modulePath) {}
+    explicit PyEmbeddedAdapter(const GarminPyModulePath& modulePath) : m_modulePath(modulePath) {}
     ~PyEmbeddedAdapter() override = default;
     PyAuthOutcome authenticate(const QString&, const QString&) override { return {}; }
     PyAuthOutcome submitMfa(const QString&) override { return {}; }
@@ -310,10 +334,10 @@ class PyEmbeddedAdapter : public IGarminPyAdapter
     // REQ-013 (DEC-050) seam extension (DEC-013 compile-enforced) — readFile
     // does not fetch a profile; a default outcome satisfies the interface.
     PyProfileOutcome fetchProfile() override { return {}; }
-    QString modulePath() const { return m_modulePath; }
+    GarminPyModulePath modulePath() const { return m_modulePath; }
 
   private:
-    QString m_modulePath;
+    GarminPyModulePath m_modulePath;
 };
 #endif // GC_PyEmbeddedAdapter_h
 

@@ -212,13 +212,13 @@ IGarminDownloadClient* GarminConnect::ensureClient()
         return m_client;
 
     // Production lazy construction (DES-013 modulePath resolution mirrors
-    // AddCloudWizard::ensureGarminAuthPage): runtime env override first, else the
-    // build-time dev default. DES-001a: GarminConnect owns adapter + chain.
-    QString modulePath = QString::fromLocal8Bit(qgetenv("GC_GARMIN_PYPATH"));
-#ifdef GARMIN_PY_MODULE_DIR
-    if (modulePath.isEmpty())
-        modulePath = QStringLiteral(GARMIN_PY_MODULE_DIR);
-#endif
+    // AddCloudWizard::ensureGarminAuthPage, DEC-058 constraint 5): GC_GARMIN_PYPATH,
+    // when set, is an EXPLICIT override; otherwise the adapter makes exactly one plain
+    // import against the installed `gc_garmin_adapter` package. DES-001a: GarminConnect
+    // owns adapter + chain.
+    const QString envOverride = QString::fromLocal8Bit(qgetenv("GC_GARMIN_PYPATH"));
+    const GarminPyModulePath modulePath =
+        envOverride.isEmpty() ? GarminPyModulePath::none() : GarminPyModulePath::explicitOverride(envOverride);
     m_adapter = new PyEmbeddedAdapter(modulePath);
     m_chain = new GarminDownloadChain(m_adapter);
     m_client = m_chain->client();

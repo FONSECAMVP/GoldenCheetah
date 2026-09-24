@@ -106,17 +106,15 @@ QString stubAttr(const char* name)
     return out;
 }
 
+// DEC-066 / B-STAGE9-70: mirrors testGarminConnectPyAdapter.cpp:104-114.
 void setScenario(const char* scenario)
 {
-    const QString code =
-        QStringLiteral("import sys\n"
-                       "_d = %1\n"
-                       "if _d not in sys.path:\n"
-                       "    sys.path.insert(0, _d)\n"
-                       "import gc_garmin_adapter.garmin_client\n"
-                       "gc_garmin_adapter.garmin_client.SCENARIO = '%2'\n")
-            .arg(QStringLiteral("r'''") + QString::fromUtf8(GARMIN_PYSTUBS_DIR) + QStringLiteral("'''"),
-                 QString::fromUtf8(scenario));
+    PyEmbeddedAdapter bootstrap(GarminPyModulePath::explicitOverride(QString::fromUtf8(GARMIN_PYSTUBS_DIR)));
+    bootstrap.authenticate(QStringLiteral("bootstrap@example.com"), QStringLiteral("bootstrap"));
+
+    const QString code = QStringLiteral("import gc_garmin_adapter.garmin_client\n"
+                                        "gc_garmin_adapter.garmin_client.SCENARIO = '%1'\n")
+                             .arg(QString::fromUtf8(scenario));
     runPy(code.toUtf8().constData());
 }
 
@@ -212,6 +210,8 @@ class TestGarminConnectPasswordPersistence : public QObject
     void cleanupTestCase()
     {
         PyEval_RestoreThread(mainState);
+        // DEC-066 constraint 2.
+        PyEmbeddedAdapter::releaseModuleProvenanceLedgerForCurrentInterpreter();
         Py_Finalize();
     }
 
@@ -220,7 +220,7 @@ class TestGarminConnectPasswordPersistence : public QObject
     // file, under any encoding a raw flush would produce.
     void authenticateWritesNoPasswordBytesToDisk()
     {
-        PyEmbeddedAdapter adapter(QString::fromUtf8(GARMIN_PYSTUBS_DIR));
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(QString::fromUtf8(GARMIN_PYSTUBS_DIR)));
 
         const PyAuthOutcome out = adapter.authenticate(QStringLiteral("t203@example.com"), kSentinelPassword);
         QCOMPARE(out.kind, PyAuthOutcome::Success);
@@ -262,7 +262,7 @@ class TestGarminConnectPasswordPersistence : public QObject
     {
         setScenario("mfa_required");
 
-        PyEmbeddedAdapter adapter(QString::fromUtf8(GARMIN_PYSTUBS_DIR));
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(QString::fromUtf8(GARMIN_PYSTUBS_DIR)));
         const PyAuthOutcome out = adapter.authenticate(QStringLiteral("t203@example.com"), kSentinelPassword);
         QCOMPARE(out.kind, PyAuthOutcome::MfaRequired);
 

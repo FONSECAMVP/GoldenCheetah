@@ -51,6 +51,7 @@
 // Garmin Connect's embedded-CPython bridge (DES-013) has a live interpreter
 // to check even when GC_WANT_PYTHON is off — see PyProcessBootstrap.h.
 #include "PyProcessBootstrap.h"
+#include "PythonDeploymentLocator.h"
 #endif
 #include <signal.h>
 
@@ -549,6 +550,20 @@ main(int argc, char *argv[])
         // uses it on this particular run.
         bootCfg.preInitHook = &registerGoldenCheetahInittab;
 #endif
+        // DEC-062 — the SAME shared locator PythonEmbed's constructor
+        // consults, called here UNCONDITIONALLY (not just under
+        // GC_WANT_PYTHON): whichever of this call and PythonEmbed's own
+        // ensureInitialized() call reaches the process-wide bootstrap FIRST
+        // is the one whose Config actually configures the interpreter. Before
+        // this, a Garmin-only build/run (GC_WANT_PYTHON off, or PythonEmbed
+        // never constructed) reached this line with a bare Config — no home,
+        // no program_name — so PyConfig_Read() fell through to CPython's own
+        // PATH/environment discovery and silently ignored any deployed
+        // payload whenever a host stdlib was visible on PATH.
+        PythonDeploymentLocator::Selection deployment = PythonDeploymentLocator::select(
+            appsettings->value(NULL, GC_PYTHON_HOME, "").toString().trimmed());
+        bootCfg.home = deployment.home;
+        bootCfg.programName = deployment.programName;
         // DEC-061 (B-STAGE9-40): nonfatal, matching this same block's own
         // R (:511) and Python-embedding (PythonEmbed.cpp:397) precedents.
         // isInitialized() and bootResult.error stay the observable record

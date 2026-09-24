@@ -305,8 +305,8 @@ set_tests_properties(testGarminConnectAuthChain PROPERTIES LABELS "garmin-fast")
 # Python-free fake in the preamble, so this target stays on `garmin-fast`.
 #
 # GC_WANT_GARMINCONNECT must be defined for the target so the wizard's Garmin
-# routing/lifecycle branches compile; GARMIN_PY_MODULE_DIR mirrors the src build
-# (used verbatim by ensureGarminAuthPage()). <QRegExp> in AddCloudWizard.cpp
+# routing/lifecycle branches compile (DEC-058 constraint 5: ensureGarminAuthPage()
+# no longer reads a compiled module-path default at all). <QRegExp> in AddCloudWizard.cpp
 # resolves via Qt6::Core5Compat, matching the src target. AUTOMOC (global) mocs
 # AddCloudWizard.h's Q_OBJECT pages and this file's test class.
 add_executable(testGarminConnectWizardRouting
@@ -345,7 +345,6 @@ target_include_directories(testGarminConnectWizardRouting PRIVATE
 
 target_compile_definitions(testGarminConnectWizardRouting PRIVATE
     GC_WANT_GARMINCONNECT
-    "GARMIN_PY_MODULE_DIR=\"${CMAKE_SOURCE_DIR}/src/Python/garminconnect\""
 )
 
 target_compile_options(testGarminConnectWizardRouting PRIVATE
@@ -1242,7 +1241,6 @@ target_include_directories(testGarminConnectImport PRIVATE
 
 target_compile_definitions(testGarminConnectImport PRIVATE
     GC_WANT_GARMINCONNECT
-    "GARMIN_PY_MODULE_DIR=\"${CMAKE_SOURCE_DIR}/src/Python/garminconnect\""
     "GC_TEST_RIDES_DIR=\"${CMAKE_SOURCE_DIR}/test/rides\""
 )
 
@@ -1364,7 +1362,6 @@ target_include_directories(testGarminConnectReadFailedConsumer PRIVATE
 
 target_compile_definitions(testGarminConnectReadFailedConsumer PRIVATE
     GC_WANT_GARMINCONNECT
-    "GARMIN_PY_MODULE_DIR=\"${CMAKE_SOURCE_DIR}/src/Python/garminconnect\""
 )
 
 find_package(ZLIB REQUIRED)
@@ -1486,7 +1483,6 @@ target_include_directories(testGarminConnectSyncDialogClose PRIVATE
 
 target_compile_definitions(testGarminConnectSyncDialogClose PRIVATE
     GC_WANT_GARMINCONNECT
-    "GARMIN_PY_MODULE_DIR=\"${CMAKE_SOURCE_DIR}/src/Python/garminconnect\""
 )
 
 # The evidence bar for this slice, expressed in the build.
@@ -2046,7 +2042,6 @@ target_include_directories(testGarminConnectUncompressLifetime PRIVATE
 
 target_compile_definitions(testGarminConnectUncompressLifetime PRIVATE
     GC_WANT_GARMINCONNECT
-    "GARMIN_PY_MODULE_DIR=\"${CMAKE_SOURCE_DIR}/src/Python/garminconnect\""
     "GC_TEST_RIDES_DIR=\"${CMAKE_SOURCE_DIR}/test/rides\""
 )
 
@@ -2194,7 +2189,6 @@ target_include_directories(testGarminConnectStravaLoopLifetime PRIVATE
 
 target_compile_definitions(testGarminConnectStravaLoopLifetime PRIVATE
     GC_WANT_GARMINCONNECT
-    "GARMIN_PY_MODULE_DIR=\"${CMAKE_SOURCE_DIR}/src/Python/garminconnect\""
 )
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -2320,7 +2314,6 @@ target_include_directories(testGarminConnectFileIOLifetime PRIVATE
 
 target_compile_definitions(testGarminConnectFileIOLifetime PRIVATE
     GC_WANT_GARMINCONNECT
-    "GARMIN_PY_MODULE_DIR=\"${CMAKE_SOURCE_DIR}/src/Python/garminconnect\""
     "GC_TEST_RIDES_DIR=\"${CMAKE_SOURCE_DIR}/test/rides\""
 )
 
@@ -2579,54 +2572,56 @@ set_tests_properties(testGarminRealLibraryContract PROPERTIES
     LABELS "garmin-py"
     TIMEOUT 60)
 
-# --- B-STAGE9-07 — PyProcessBootstrap::setProgramName storage lifetime -------
-# Regression for the pre-existing PythonEmbed defect: the old inline
-#     Py_SetProgramName((wchar_t*) pybin.toStdWString().c_str())
-# handed CPython a temporary's buffer, which Python <= 3.12 borrows for the
-# interpreter's ENTIRE lifetime. Python 3.13 (this build) copies the string,
-# so the defect is invisible against the real libpython here — the test
-# interposes its own Py_SetProgramName definition (link-order interposition,
-# the same ELF mechanism B-STAGE9-06 documented) that models the <= 3.12
-# borrowed-pointer contract, and the REAL PyProcessBootstrap.cpp calls it.
-# Links real CPython -> `garmin-py`, never `garmin-fast`.
-#
-# A LIFETIME test whose RED half is an ASan heap-use-after-free on the
-# handed-over pointer, so -fsanitize=address is applied to compilation AND
-# linking and the build fails outright without a sanitizer-capable compiler
-# (precedent: testGarminConnectSyncDialogClose).
-add_executable(testPythonProgramNameLifetime
-    testPythonProgramNameLifetime.cpp
-    ${CMAKE_SOURCE_DIR}/src/Python/PyProcessBootstrap.cpp
+# DEC-062 retires PyProcessBootstrap::setProgramName() (and its only call
+# site, PythonEmbed.cpp's old inline Py_SetProgramName usage) — the B-STAGE9-
+# 39 measurement proved the deprecated program-name API is not needed for a
+# deployed payload to be found: explicit PyConfig.home/program_name fields
+# win regardless. testPythonProgramNameLifetime existed solely to regression-
+# test that retired wrapper's storage-lifetime contract and is removed with
+# it (DEC-062-scope: "delete-or-replace"). See testPythonDeploymentLocator
+# below for DEC-062's own two required tests.
+
+# --- DEC-062 (B-STAGE9-39/B-STAGE9-40 remedy) — shared deployment locator ---
+# Two properties the extraction must guarantee: the ONE function both
+# PythonEmbed and PyProcessBootstrap's bootstrap caller now consume is
+# deterministic for the same inputs (so the two initialisers cannot compute
+# different homes), and the pre-existing inherited-PYTHONHOME fallback
+# survived the extraction rather than being silently dropped. Links real
+# CPython only for PY_MAJOR_VERSION/PY_MINOR_VERSION (LSN-007 ordering) —
+# `garmin-py`, never `garmin-fast`.
+find_package(Python3 REQUIRED COMPONENTS Development.Embed)
+
+add_executable(testPythonDeploymentLocator
+    testPythonDeploymentLocator.cpp
+    ${CMAKE_SOURCE_DIR}/src/Python/PythonDeploymentLocator.cpp
+    ${CMAKE_SOURCE_DIR}/src/Python/PythonDeploymentLocator.h
     ${CMAKE_SOURCE_DIR}/src/Python/PyProcessBootstrap.h
 )
 
-set_target_properties(testPythonProgramNameLifetime PROPERTIES AUTOMOC ON)
+set_target_properties(testPythonDeploymentLocator PROPERTIES AUTOMOC ON)
 
-target_include_directories(testPythonProgramNameLifetime PRIVATE
+target_include_directories(testPythonDeploymentLocator PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/Python
 )
 
-if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(testPythonProgramNameLifetime PRIVATE
-        -fsanitize=address -fno-omit-frame-pointer -g)
-    target_link_options(testPythonProgramNameLifetime PRIVATE -fsanitize=address)
-else()
-    message(FATAL_ERROR
-        "testPythonProgramNameLifetime (B-STAGE9-07) is a lifetime test and requires "
-        "AddressSanitizer; no -fsanitize=address for compiler ${CMAKE_CXX_COMPILER_ID}.")
+if(QT_VERSION_MAJOR EQUAL 6)
+    find_package(Qt6 REQUIRED COMPONENTS Core5Compat)
 endif()
 
-target_link_libraries(testPythonProgramNameLifetime PRIVATE
+target_link_libraries(testPythonDeploymentLocator PRIVATE
     Qt${QT_VERSION_MAJOR}::Core
     Qt${QT_VERSION_MAJOR}::Test
     Python3::Python
 )
-target_compile_features(testPythonProgramNameLifetime PRIVATE cxx_std_17)
+if(QT_VERSION_MAJOR EQUAL 6)
+    # PythonDeploymentLocator.cpp's QRegExp (extracted verbatim from
+    # PythonEmbed.cpp, unchanged) lives in Qt6's Core5Compat module, not Core.
+    target_link_libraries(testPythonDeploymentLocator PRIVATE Qt6::Core5Compat)
+endif()
+target_compile_features(testPythonDeploymentLocator PRIVATE cxx_std_17)
 
-# TIMEOUT: runs in milliseconds; 60 s is policy headroom, not a measured need.
-add_test(NAME testPythonProgramNameLifetime COMMAND testPythonProgramNameLifetime)
-set_tests_properties(testPythonProgramNameLifetime PROPERTIES
+add_test(NAME testPythonDeploymentLocator COMMAND testPythonDeploymentLocator)
+set_tests_properties(testPythonDeploymentLocator PROPERTIES
     LABELS "garmin-py"
-    TIMEOUT 60
-    ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0:abort_on_error=0:halt_on_error=1")
+    TIMEOUT 60)

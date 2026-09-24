@@ -622,7 +622,7 @@ double SplineLookup::valueY(double x) const
 // The test injects an IGarminDownloadClient, so this is never constructed — it
 // only keeps the target Python-free (`garmin-fast`), exactly as the
 // ReadFileStubPreamble fake does for the other targets.
-PyEmbeddedAdapter::PyEmbeddedAdapter(const QString& modulePath)
+PyEmbeddedAdapter::PyEmbeddedAdapter(const GarminPyModulePath& modulePath)
 {
     Q_UNUSED(modulePath);
     qFatal("PyEmbeddedAdapter must never be constructed in testGarminConnectImport");

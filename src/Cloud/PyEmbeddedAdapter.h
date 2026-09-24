@@ -31,16 +31,44 @@
 struct _object;
 using PyObject = _object;
 
+// DEC-058 constraint 5 / B-STAGE9-38 unit 3: whether the caller supplied an
+// EXPLICIT module-path override (GC_GARMIN_PYPATH) or none at all. A bare
+// QString cannot carry that distinction — an unset override and an explicit
+// override of "" collapse to the same value — so the two states are their
+// own type, constructed via the named factories below or the public default
+// ctor (equivalent to none()).
+class GarminPyModulePath
+{
+  public:
+    static GarminPyModulePath none() { return GarminPyModulePath(); }
+    static GarminPyModulePath explicitOverride(const QString& dir) { return GarminPyModulePath(dir); }
+
+    bool isExplicitOverride() const { return m_isOverride; }
+    const QString& dir() const { return m_dir; }
+
+    // Public per B-STAGE9-43. The 1-arg override ctor stays private below.
+    GarminPyModulePath() = default;
+
+  private:
+    explicit GarminPyModulePath(const QString& dir) : m_isOverride(true), m_dir(dir) {}
+
+    bool m_isOverride = false;
+    QString m_dir;
+};
+
 class PyEmbeddedAdapter : public IGarminPyAdapter
 {
   public:
-    // modulePath: directory prepended to sys.path so `garmin_client`
-    //             resolves (C++ owns path policy, per DES-012).
+    // modulePath: an explicit override is hoisted to sys.path index 0 and its
+    //             sys.modules cache origin verified before import; with no
+    //             override, the module is imported directly against sys.path
+    //             as CPython built it (C++ owns path policy, per DES-012 —
+    //             DEC-058 constraints 5, 17).
     // DEC-014 Option B (A3-R004-M3): the Python GarminClient is constructed
     // AUTH-ONLY — email+password only, NO tokenstore path. The library holds an
     // in-memory session and self-writes no token file; C++ (GarminTokenStore)
     // owns the single atomic 0600 write of the dump_tokens() blob.
-    explicit PyEmbeddedAdapter(const QString& modulePath);
+    explicit PyEmbeddedAdapter(const GarminPyModulePath& modulePath);
 
     // Releases the retained authenticated client under the GIL (REQ-007
     // session model). Safe if the interpreter is already finalized.
@@ -93,8 +121,17 @@ class PyEmbeddedAdapter : public IGarminPyAdapter
     // extraction; this seam only marshals whichever keys are present.
     PyProfileOutcome fetchProfile() override;
 
+    // DEC-066 constraint 2: releases the C++-owned module-provenance ledger's
+    // strong references for the CURRENT interpreter. Must be called with the
+    // GIL held, before any Py_FinalizeEx() of that interpreter — interpreter-
+    // address reuse across a finalize/reinitialize cycle means the ledger's
+    // pointer keys must never survive finalization. Production never
+    // finalizes the interpreter (PyProcessBootstrap.h), so today's only
+    // caller is interpreter-lifecycle test teardown.
+    static void releaseModuleProvenanceLedgerForCurrentInterpreter();
+
   private:
-    QString modulePath;
+    GarminPyModulePath modulePath;
     PyObject* m_client = nullptr; // retained authenticated GarminClient; owned
 };
 

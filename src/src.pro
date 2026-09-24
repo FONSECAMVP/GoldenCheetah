@@ -263,16 +263,10 @@ contains(DEFINES, "GC_WANT_GARMINCONNECT") {
     # relative includes instead, so this path isn't in the default INCLUDEPATH.
     INCLUDEPATH += ../contrib/qzip
 
-    # Dev default for the directory CONTAINING the gc_garmin_adapter package
-    # (DEC-058); the runtime env var GC_GARMIN_PYPATH overrides it (see
-    # AddCloudWizard::ensureGarminAuthPage).
-    # The installed/bundled location is DES-007 / REQ-NF-Pkg-001 step 2 territory.
-    # shell_quote (not a plain \\\"-escaped string) because $$PWD may contain a
-    # space (this repo's own working copy does) — a plain escape survives
-    # qmake's own value parsing but not the generated Makefile recipe line,
-    # which word-splits on the unescaped space (LSN: found verifying this
-    # block; see build report).
-    DEFINES += $$shell_quote(GARMIN_PY_MODULE_DIR=\"$$PWD/Python/garminconnect\")
+    # DEC-058 constraint 5 / B-STAGE9-38 unit 3: no compiled default module
+    # path. The runtime env var GC_GARMIN_PYPATH is the only override (see
+    # AddCloudWizard::ensureGarminAuthPage); with none set, the adapter
+    # imports the installed `gc_garmin_adapter` package (DES-007 / REQ-NF-Pkg-001).
 
     HEADERS += Cloud/GarminConnect.h Cloud/GarminAccountEpoch.h \
                 Cloud/GarminCredentialsPage.h Cloud/GarminErrors.h Cloud/GarminMfaPage.h \
@@ -333,6 +327,15 @@ contains(DEFINES, "GC_WANT_PYTHON") | contains(DEFINES, "GC_WANT_GARMINCONNECT")
     message("Enabling shared CPython process bootstrap (DEC-052)")
     HEADERS += Python/PyProcessBootstrap.h
 
+    # DEC-062 — shared deployment locator both PythonEmbed and
+    # PyProcessBootstrap's bootstrap caller consume; wired into this same
+    # OR block (rather than only GC_WANT_PYTHON's own SOURCES above) so a
+    # Garmin-only build still has it, per DEC-062-scope C3. Python-free
+    # header, so it needs no NO_PCH_SOURCES treatment of its own — but its
+    # .cpp does (see PythonDeploymentLocator.cpp's own LSN-007 comment), for
+    # the same reason PyProcessBootstrap.cpp does below.
+    HEADERS += Python/PythonDeploymentLocator.h
+
     # B-STAGE9-02 — PyProcessBootstrap.cpp needs Python.h to precede any Qt
     # header, exactly like Cloud/PyEmbeddedAdapter.cpp just above (LSN-007:
     # Qt's `slots` keyword-macro collides with the `slots` field in CPython's
@@ -347,8 +350,10 @@ contains(DEFINES, "GC_WANT_PYTHON") | contains(DEFINES, "GC_WANT_GARMINCONNECT")
     # normal source there instead.
     macx {
         SOURCES += Python/PyProcessBootstrap.cpp
+        SOURCES += Python/PythonDeploymentLocator.cpp
     } else {
         NO_PCH_SOURCES += Python/PyProcessBootstrap.cpp
+        NO_PCH_SOURCES += Python/PythonDeploymentLocator.cpp
     }
 }
 

@@ -176,12 +176,15 @@ AddCloudWizard::ensureGarminAuthPage()
 {
     if (garminChain) return;
 
-    // modulePath (DES-013): the directory containing the gc_garmin_adapter
-    // package (DEC-058). Runtime env override first, else the build-time dev
-    // default. The installed location is DES-007 / REQ-NF-Pkg-001 territory
-    // (later slice).
-    QString modulePath = QString::fromLocal8Bit(qgetenv("GC_GARMIN_PYPATH"));
-    if (modulePath.isEmpty()) modulePath = QStringLiteral(GARMIN_PY_MODULE_DIR);
+    // modulePath (DES-013): DEC-058 constraint 5 — GC_GARMIN_PYPATH is the
+    // developer escape hatch and, when set, is an EXPLICIT override,
+    // prepended to sys.path before the adapter's only import attempt. With
+    // no override, the adapter makes exactly one plain import against the
+    // installed `gc_garmin_adapter` package (DES-007 / REQ-NF-Pkg-001).
+    const QString envOverride = QString::fromLocal8Bit(qgetenv("GC_GARMIN_PYPATH"));
+    const GarminPyModulePath modulePath = envOverride.isEmpty()
+        ? GarminPyModulePath::none()
+        : GarminPyModulePath::explicitOverride(envOverride);
 
     // DEC-014 Option B (A3-R004-M3): the adapter constructs the library
     // AUTH-ONLY — no tokenstore path is forwarded (the library must self-write

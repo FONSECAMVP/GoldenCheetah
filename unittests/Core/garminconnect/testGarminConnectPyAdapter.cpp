@@ -66,6 +66,8 @@
 #include "PyEmbeddedAdapter.h" // <-- intentionally missing in RED
 
 #include <QByteArray>
+#include <QDir>
+#include <QFile>
 #include <QString>
 #include <QTemporaryDir>
 #include <QtTest/QtTest>
@@ -87,20 +89,27 @@ void runPy(const char* code)
     PyGILState_Release(st);
 }
 
-// Point the stub at a scenario. Ensures the pystubs dir is importable first
-// (the missing-module test deliberately scrubs it from sys.path), then flips
-// the module-level SCENARIO switch.
+// Point the stub at a scenario. DEC-066: the sys.modules cache may only ever
+// be seeded by this adapter's OWN ledgered import — a raw Python `import`
+// statement on a cold cache would create the first, unledgered entry for
+// kStubsDir, and the provenance ledger's pre-import check has nothing to
+// trust it against (it would then fail closed on every real construction
+// that follows). A throwaway adapter construction goes first to seed the
+// ledger through the real production path (also handles hoisting kStubsDir
+// onto sys.path, same as the missing-module test's deliberate scrub needed
+// before); its ctor args and outcome are irrelevant and immediately
+// superseded by the caller's own real construction after this returns. Only
+// then is the module-level SCENARIO switch flipped, on the now-ledgered (or
+// already-cached-from-ambient-state) module.
 void setScenario(const char* scenario)
 {
-    const QString code =
-        QStringLiteral("import sys\n"
-                       "_d = %1\n"
-                       "if _d not in sys.path:\n"
-                       "    sys.path.insert(0, _d)\n"
-                       "import gc_garmin_adapter.garmin_client\n"
-                       "gc_garmin_adapter.garmin_client.SCENARIO = '%2'\n")
-            .arg(QStringLiteral("r'''") + QString::fromUtf8(GARMIN_PYSTUBS_DIR) + QStringLiteral("'''"),
-                 QString::fromUtf8(scenario));
+    const QString stubsDir = QString::fromUtf8(GARMIN_PYSTUBS_DIR);
+    PyEmbeddedAdapter bootstrap(GarminPyModulePath::explicitOverride(stubsDir));
+    bootstrap.authenticate(QStringLiteral("bootstrap@example.com"), QStringLiteral("bootstrap"));
+
+    const QString code = QStringLiteral("import gc_garmin_adapter.garmin_client\n"
+                                        "gc_garmin_adapter.garmin_client.SCENARIO = '%1'\n")
+                             .arg(QString::fromUtf8(scenario));
     runPy(code.toUtf8().constData());
 }
 
@@ -124,6 +133,26 @@ QString stubAttr(const char* name)
     PyErr_Clear();
     PyGILState_Release(st);
     return out;
+}
+
+// True iff name is a key in sys.modules. Read-only — unlike stubAttr(), which
+// itself calls PyImport_ImportModule and so cannot be used to check whether
+// an import was ever attempted without triggering one.
+bool sysModulesContains(const char* name)
+{
+    PyGILState_STATE st = PyGILState_Ensure();
+    bool present = false;
+    PyObject* mods = PyImport_GetModuleDict(); // borrowed
+    if (mods && PyDict_Check(mods)) {
+        PyObject* key = PyUnicode_FromString(name);
+        if (key) {
+            present = PyDict_Contains(mods, key) == 1;
+            Py_DECREF(key);
+        }
+    }
+    PyErr_Clear();
+    PyGILState_Release(st);
+    return present;
 }
 
 const QString kStubsDir = QString::fromUtf8(GARMIN_PYSTUBS_DIR);
@@ -153,7 +182,7 @@ class TestGarminConnectPyAdapter : public QObject
     {
         QVERIFY2(!Py_IsInitialized(), "harness precondition: interpreter must not be up yet");
 
-        PyEmbeddedAdapter early(kStubsDir);
+        PyEmbeddedAdapter early(GarminPyModulePath::explicitOverride(kStubsDir));
         const PyAuthOutcome out = early.authenticate(QStringLiteral("a@b"), QStringLiteral("pw"));
         QCOMPARE(out.kind, PyAuthOutcome::Unknown);
         QCOMPARE(out.rawMessage, QStringLiteral("embedded Python unavailable"));
@@ -200,12 +229,474 @@ class TestGarminConnectPyAdapter : public QObject
         QTemporaryDir emptyDir;
         QVERIFY(emptyDir.isValid());
 
-        PyEmbeddedAdapter adapter(emptyDir.path());
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(emptyDir.path()));
         const PyAuthOutcome out = adapter.authenticate(QStringLiteral("a@b"), QStringLiteral("pw"));
 
         QCOMPARE(out.kind, PyAuthOutcome::Unknown);
         QVERIFY2(out.kind != PyAuthOutcome::AuthFailed, "a missing module must never masquerade as bad credentials");
         QVERIFY2(!out.rawMessage.isEmpty(), "rawMessage should carry the import error");
+    }
+
+    // B-STAGE9-38 unit 3 round 4 (DEC-058 c17(a) / B-STAGE9-44): a prepend-if-
+    // absent is not enough — the override dir must be HOISTED to sys.path
+    // index 0 even when it is already present LATER. This test deliberately
+    // ESTABLISHES that precondition itself (strips every existing occurrence
+    // of kStubsDir, then re-adds it at the END, after an unrelated installed
+    // stand-in at the FRONT) rather than relying on ambient state left by
+    // earlier slots, so it cannot pass vacuously (B-STAGE9-46).
+    // RED mutation: reverting to insert-only-if-absent leaves kStubsDir at
+    // the tail, the installed stand-in resolves first, and both assertions
+    // below fail.
+    void explicitOverrideDirIsHoistedInFrontOfAnAlreadyLaterEntry()
+    {
+        runPy("import sys\n"
+              "sys.modules.pop('gc_garmin_adapter.garmin_client', None)\n"
+              "sys.modules.pop('gc_garmin_adapter', None)\n");
+
+        QTemporaryDir installedDir;
+        QVERIFY(installedDir.isValid());
+        QVERIFY(QDir(installedDir.path()).mkpath(QStringLiteral("gc_garmin_adapter")));
+        const QString installedPkg = installedDir.path() + QStringLiteral("/gc_garmin_adapter/");
+        const QString stubPkg = kStubsDir + QStringLiteral("/gc_garmin_adapter/");
+        QVERIFY(QFile::copy(stubPkg + QStringLiteral("__init__.py"), installedPkg + QStringLiteral("__init__.py")));
+        QVERIFY(QFile::copy(stubPkg + QStringLiteral("garmin_client.py"),
+                            installedPkg + QStringLiteral("garmin_client.py")));
+
+        // Precondition, established here rather than assumed: strip every
+        // exact occurrence of kStubsDir, put the installed stand-in FIRST,
+        // then append kStubsDir at the very END — later, not merely absent.
+        const QString setupCode = QStringLiteral("import sys\n"
+                                                 "_stub = %1\n"
+                                                 "_installed = %2\n"
+                                                 "sys.path = [p for p in sys.path if p != _stub]\n"
+                                                 "sys.path.insert(0, _installed)\n"
+                                                 "sys.path.append(_stub)\n")
+                                      .arg(QStringLiteral("r'''") + kStubsDir + QStringLiteral("'''"),
+                                           QStringLiteral("r'''") + installedDir.path() + QStringLiteral("'''"));
+        runPy(setupCode.toUtf8().constData());
+
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
+        const PyAuthOutcome out =
+            adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("p@$$w/rd with spaces"));
+
+        QCOMPARE(out.kind, PyAuthOutcome::Success);
+
+        const QString resolvedFile = stubAttr("__file__");
+        QVERIFY2(resolvedFile.startsWith(kStubsDir),
+                 "an explicit override present later in sys.path must still win over an earlier stand-in");
+
+        PyGILState_STATE st = PyGILState_Ensure();
+        PyObject* sysPath = PySys_GetObject("path"); // borrowed
+        QString frontEntry;
+        if (PyList_Check(sysPath) && PyList_Size(sysPath) > 0) {
+            PyObject* first = PyList_GetItem(sysPath, 0); // borrowed
+            if (first && PyUnicode_Check(first)) {
+                const char* utf8 = PyUnicode_AsUTF8(first);
+                if (utf8)
+                    frontEntry = QString::fromUtf8(utf8);
+            }
+        }
+        PyGILState_Release(st);
+        QCOMPARE(frontEntry, kStubsDir);
+    }
+
+    // B-STAGE9-38 unit 3 round 4 (DEC-058 c17(b) / B-STAGE9-45): a
+    // `gc_garmin_adapter` cached in sys.modules from an ORIGIN OTHER THAN the
+    // explicit override must never be silently reused — that is exactly how
+    // PyImport_ImportModule() defeated the override with no path lookup at
+    // all. This test ESTABLISHES the precondition itself: a plain import
+    // (not through the adapter) from a directory that is provably NOT
+    // kStubsDir, asserted via __file__ before the adapter is ever
+    // constructed. The explicit-override construction must then fail closed
+    // (Unknown, never AuthFailed) and must NOT evict or mutate the existing
+    // cache. RED mutation: dropping the origin guard and calling
+    // PyImport_ImportModule() directly instead reuses the wrong-origin cache
+    // and reports Success.
+    void explicitOverrideFailsClosedWhenCacheIsFromAnotherOrigin()
+    {
+        runPy("import sys\n"
+              "sys.modules.pop('gc_garmin_adapter.garmin_client', None)\n"
+              "sys.modules.pop('gc_garmin_adapter', None)\n"
+              "sys.path = [p for p in sys.path if 'pystubs' not in p]\n");
+
+        QTemporaryDir installedDir;
+        QVERIFY(installedDir.isValid());
+        QVERIFY(QDir(installedDir.path()).mkpath(QStringLiteral("gc_garmin_adapter")));
+        const QString installedPkg = installedDir.path() + QStringLiteral("/gc_garmin_adapter/");
+        const QString stubPkg = kStubsDir + QStringLiteral("/gc_garmin_adapter/");
+        QVERIFY(QFile::copy(stubPkg + QStringLiteral("__init__.py"), installedPkg + QStringLiteral("__init__.py")));
+        QVERIFY(QFile::copy(stubPkg + QStringLiteral("garmin_client.py"),
+                            installedPkg + QStringLiteral("garmin_client.py")));
+
+        const QString importCode = QStringLiteral("import sys\n"
+                                                  "sys.path.insert(0, %1)\n"
+                                                  "import gc_garmin_adapter.garmin_client\n")
+                                       .arg(QStringLiteral("r'''") + installedDir.path() + QStringLiteral("'''"));
+        runPy(importCode.toUtf8().constData());
+
+        const QString cachedFile = stubAttr("__file__");
+        QVERIFY2(cachedFile.startsWith(installedDir.path()),
+                 "harness precondition: the cache must be proven to originate from installedDir, not kStubsDir");
+
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
+        const PyAuthOutcome out =
+            adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("p@$$w/rd with spaces"));
+
+        QCOMPARE(out.kind, PyAuthOutcome::Unknown);
+        QVERIFY2(out.kind != PyAuthOutcome::AuthFailed,
+                 "a cache-origin mismatch must never masquerade as bad credentials");
+
+        const QString stillCachedFile = stubAttr("__file__");
+        QCOMPARE(stillCachedFile, cachedFile); // cache left intact — no eviction happened
+    }
+
+    // B-STAGE9-38 unit 3 round 5 (DEC-058 c17(b) / B-STAGE9-45): a cached
+    // `gc_garmin_adapter` whose __file__ EQUALS the override directory itself
+    // (a directory, not a module file) must never count as proof of origin.
+    // This seeds exactly that shape and gives the fake parent a __path__
+    // pointing at a DECOY package under an unrelated directory — standing in
+    // for the foreign/unverifiable origin the defect let through. If the
+    // equals-dir check is wrongly accepted, the subsequent submodule import
+    // resolves the decoy and reports Success from the wrong location; the
+    // correct fail-closed behaviour refuses before that submodule import is
+    // ever attempted. RED mutation: restoring the old
+    // `cleanFile == cleanDir || ...` predicate at moduleFileIsUnderDir.
+    void explicitOverrideFailsClosedWhenCachedFileIsTheDirItself()
+    {
+        runPy("import sys\n"
+              "sys.modules.pop('gc_garmin_adapter.garmin_client', None)\n"
+              "sys.modules.pop('gc_garmin_adapter', None)\n"
+              "sys.path = [p for p in sys.path if 'pystubs' not in p]\n");
+
+        QTemporaryDir decoyDir;
+        QVERIFY(decoyDir.isValid());
+        QVERIFY(QDir(decoyDir.path()).mkpath(QStringLiteral("gc_garmin_adapter")));
+        const QString decoyPkg = decoyDir.path() + QStringLiteral("/gc_garmin_adapter/");
+        const QString stubPkg = kStubsDir + QStringLiteral("/gc_garmin_adapter/");
+        QVERIFY(QFile::copy(stubPkg + QStringLiteral("__init__.py"), decoyPkg + QStringLiteral("__init__.py")));
+        QVERIFY(
+            QFile::copy(stubPkg + QStringLiteral("garmin_client.py"), decoyPkg + QStringLiteral("garmin_client.py")));
+
+        const QString fabricateCode = QStringLiteral("import sys, types\n"
+                                                     "m = types.ModuleType('gc_garmin_adapter')\n"
+                                                     "m.__file__ = %1\n"
+                                                     "m.__path__ = [%2]\n"
+                                                     "sys.modules['gc_garmin_adapter'] = m\n")
+                                          .arg(QStringLiteral("r'''") + kStubsDir + QStringLiteral("'''"),
+                                               QStringLiteral("r'''") + decoyPkg + QStringLiteral("'''"));
+        runPy(fabricateCode.toUtf8().constData());
+
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
+        const PyAuthOutcome out =
+            adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("p@$$w/rd with spaces"));
+
+        QCOMPARE(out.kind, PyAuthOutcome::Unknown);
+        QVERIFY2(out.kind != PyAuthOutcome::AuthFailed,
+                 "a __file__-is-the-directory cache entry must never masquerade as bad credentials");
+        QVERIFY2(!sysModulesContains("gc_garmin_adapter.garmin_client"),
+                 "fail-closed must refuse before the decoy submodule is ever imported");
+    }
+
+    // DEC-066 constraint 1: a genuinely ledgered parent package is retained,
+    // its child dropped from sys.modules, and the parent's own __path__
+    // retargeted at a decoy — the pre-import check sees only the (still
+    // genuine) parent and would accept; the decoy child is created fresh by
+    // PyImport_ImportModule() DURING this very call, so only a post-import
+    // re-check catches it. RED mutation: removing the post-import
+    // validateExplicitOverrideCacheAgainstLedger() call (checking identity
+    // only before PyImport_ImportModule, never after) reports Success from
+    // the decoy.
+    void explicitOverrideFailsClosedWhenLedgeredParentsPathIsRetargetedAfterChildIsDropped()
+    {
+        runPy("import sys\n"
+              "sys.modules.pop('gc_garmin_adapter.garmin_client', None)\n"
+              "sys.modules.pop('gc_garmin_adapter', None)\n"
+              "sys.path = [p for p in sys.path if 'pystubs' not in p]\n");
+
+        // Establish a genuine ledger entry: one real construction over kStubsDir.
+        PyEmbeddedAdapter warm(GarminPyModulePath::explicitOverride(kStubsDir));
+        const PyAuthOutcome warmOut = warm.authenticate(QStringLiteral("a@b"), QStringLiteral("pw"));
+        QCOMPARE(warmOut.kind, PyAuthOutcome::Success);
+
+        // Decoy package the retargeted __path__ will resolve the child from.
+        QTemporaryDir decoyDir;
+        QVERIFY(decoyDir.isValid());
+        QVERIFY(QDir(decoyDir.path()).mkpath(QStringLiteral("gc_garmin_adapter")));
+        const QString decoyPkg = decoyDir.path() + QStringLiteral("/gc_garmin_adapter/");
+        const QString stubPkg = kStubsDir + QStringLiteral("/gc_garmin_adapter/");
+        QVERIFY(QFile::copy(stubPkg + QStringLiteral("__init__.py"), decoyPkg + QStringLiteral("__init__.py")));
+        QVERIFY(
+            QFile::copy(stubPkg + QStringLiteral("garmin_client.py"), decoyPkg + QStringLiteral("garmin_client.py")));
+
+        // Attacker step: drop only the child, keep the (still-ledgered)
+        // parent, and retarget the parent's __path__ at the decoy.
+        const QString attackCode = QStringLiteral("import sys\n"
+                                                  "sys.modules.pop('gc_garmin_adapter.garmin_client', None)\n"
+                                                  "sys.modules['gc_garmin_adapter'].__path__ = [%1]\n")
+                                       .arg(QStringLiteral("r'''") + decoyPkg + QStringLiteral("'''"));
+        runPy(attackCode.toUtf8().constData());
+
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
+        const PyAuthOutcome out =
+            adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("p@$$w/rd with spaces"));
+
+        QCOMPARE(out.kind, PyAuthOutcome::Unknown);
+        QVERIFY2(out.kind != PyAuthOutcome::AuthFailed,
+                 "a post-import identity mismatch must never masquerade as bad credentials");
+
+        // The decoy DID load into sys.modules — proving the attack surface is
+        // real and the rejection is a post-import check, not a pre-import
+        // refusal that never let the attack run.
+        const QString loadedFile = stubAttr("__file__");
+        QVERIFY2(loadedFile.startsWith(decoyDir.path()),
+                 "harness precondition: the decoy child must actually have been imported");
+    }
+
+    // DEC-066 Option A residual proof: a second, independent adapter
+    // constructed over the SAME override must still succeed — the ledger
+    // records identity, it does not block legitimate repeat use (DEC-058
+    // c17(b) constraint carried into DEC-066 constraint 3). RED mutation: an
+    // over-broad "reject any second construction over an already-ledgered
+    // dir" rule would fail this outright.
+    void explicitOverrideSecondConstructionOverSameOverrideStillSucceeds()
+    {
+        runPy("import sys\n"
+              "sys.modules.pop('gc_garmin_adapter.garmin_client', None)\n"
+              "sys.modules.pop('gc_garmin_adapter', None)\n"
+              "sys.path = [p for p in sys.path if 'pystubs' not in p]\n");
+
+        PyEmbeddedAdapter first(GarminPyModulePath::explicitOverride(kStubsDir));
+        const PyAuthOutcome firstOut = first.authenticate(QStringLiteral("a@b"), QStringLiteral("pw"));
+        QCOMPARE(firstOut.kind, PyAuthOutcome::Success);
+
+        PyEmbeddedAdapter second(GarminPyModulePath::explicitOverride(kStubsDir));
+        const PyAuthOutcome secondOut = second.authenticate(QStringLiteral("c@d"), QStringLiteral("pw2"));
+        QCOMPARE(secondOut.kind, PyAuthOutcome::Success);
+    }
+
+    // DEC-066 constraint 5: any gc_garmin_adapter[.*] entry in sys.modules
+    // that was never produced by this adapter's own clean import must fail
+    // the whole call closed, even when the entries this call itself imports
+    // (parent + its own child) are untouched and still genuinely ledgered.
+    // RED mutation: scanning only the two names this call itself imports
+    // (instead of every gc_garmin_adapter[.*] key already in sys.modules)
+    // would miss the rogue sibling entry and report Success.
+    void explicitOverrideFailsClosedWhenAnUnledgeredSiblingSubmoduleAppears()
+    {
+        runPy("import sys\n"
+              "sys.modules.pop('gc_garmin_adapter.garmin_client', None)\n"
+              "sys.modules.pop('gc_garmin_adapter', None)\n"
+              "sys.path = [p for p in sys.path if 'pystubs' not in p]\n");
+
+        PyEmbeddedAdapter warm(GarminPyModulePath::explicitOverride(kStubsDir));
+        const PyAuthOutcome warmOut = warm.authenticate(QStringLiteral("a@b"), QStringLiteral("pw"));
+        QCOMPARE(warmOut.kind, PyAuthOutcome::Success);
+
+        // A sibling submodule never imported through this adapter — unledgered
+        // by construction, regardless of how well-formed it looks.
+        runPy("import sys, types\n"
+              "m = types.ModuleType('gc_garmin_adapter.rogue')\n"
+              "sys.modules['gc_garmin_adapter.rogue'] = m\n");
+
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
+        const PyAuthOutcome out =
+            adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("p@$$w/rd with spaces"));
+
+        QCOMPARE(out.kind, PyAuthOutcome::Unknown);
+        QVERIFY2(out.kind != PyAuthOutcome::AuthFailed,
+                 "an unledgered sibling entry must never masquerade as bad credentials");
+
+        // Cleanup: the injected rogue entry is this test's own fixture, not
+        // ambient state any later test should have to account for.
+        runPy("import sys\n"
+              "sys.modules.pop('gc_garmin_adapter.rogue', None)\n");
+    }
+
+    // DEC-066 constraint 2 (isolated case): releaseModuleProvenanceLedgerFor-
+    // CurrentInterpreter() is wired into cleanupTestCase() right before
+    // Py_FinalizeEx(), but nothing exercises the call itself anywhere else.
+    // This proves the mechanism actually erases this interpreter's ledger
+    // entries rather than merely being reachable: sys.modules is deliberately
+    // left populated (NOT scrubbed) after the release call, so the only way a
+    // later construction over the same override can still fail closed is if
+    // the ledger itself — not the sys.modules cache — changed underneath it.
+    // RED mutation: reducing releaseModuleProvenanceLedgerForCurrentInterpreter()
+    // to a no-op leaves the ledger's entries in place, so the second
+    // construction below wrongly succeeds instead of failing closed.
+    void releaseLedgerForCurrentInterpreterMakesALaterConstructionFailClosed()
+    {
+        runPy("import sys\n"
+              "sys.modules.pop('gc_garmin_adapter.garmin_client', None)\n"
+              "sys.modules.pop('gc_garmin_adapter', None)\n"
+              "sys.path = [p for p in sys.path if 'pystubs' not in p]\n");
+
+        PyEmbeddedAdapter first(GarminPyModulePath::explicitOverride(kStubsDir));
+        QCOMPARE(first.authenticate(QStringLiteral("a@b"), QStringLiteral("pw")).kind, PyAuthOutcome::Success);
+
+        // The GIL is not held between authenticate() calls (each acquires
+        // and releases its own) — releaseModuleProvenanceLedgerForCurrentInterpreter()
+        // requires it held, same as its real call site in cleanupTestCase().
+        const PyGILState_STATE gil = PyGILState_Ensure();
+        PyEmbeddedAdapter::releaseModuleProvenanceLedgerForCurrentInterpreter();
+        PyGILState_Release(gil);
+
+        // sys.modules is untouched by the release call above — it still
+        // holds the exact entries `first`'s import produced.
+        PyEmbeddedAdapter second(GarminPyModulePath::explicitOverride(kStubsDir));
+        const PyAuthOutcome out = second.authenticate(QStringLiteral("c@d"), QStringLiteral("pw2"));
+        QCOMPARE(out.kind, PyAuthOutcome::Unknown);
+        QVERIFY2(out.kind != PyAuthOutcome::AuthFailed,
+                 "a cleared-ledger rejection must never masquerade as bad credentials");
+
+        // Restore the invariant every other test relies on (ledger and
+        // sys.modules both empty for gc_garmin_adapter[.*]) before returning
+        // — this test intentionally leaves them mismatched above.
+        runPy("import sys\n"
+              "sys.modules.pop('gc_garmin_adapter.garmin_client', None)\n"
+              "sys.modules.pop('gc_garmin_adapter', None)\n");
+    }
+
+    // DEC-068: exercises the nullptr guard at PyEmbeddedAdapter.cpp:333-334,
+    // not the :353-362 compare — see DEC-068 for why that compare is
+    // unreached by this shape.
+    void explicitOverrideFailsClosedWhenHostileImportHookLeavesSysModulesUntouched()
+    {
+        runPy("import sys\n"
+              "sys.modules.pop('gc_garmin_adapter.garmin_client', None)\n"
+              "sys.modules.pop('gc_garmin_adapter', None)\n"
+              "sys.path = [p for p in sys.path if 'pystubs' not in p]\n");
+
+        PyEmbeddedAdapter warm(GarminPyModulePath::explicitOverride(kStubsDir));
+        QCOMPARE(warm.authenticate(QStringLiteral("a@b"), QStringLiteral("pw")).kind, PyAuthOutcome::Success);
+
+        runPy("import sys\n"
+              "sys.modules.pop('gc_garmin_adapter.garmin_client', None)\n");
+
+        runPy("import types, builtins\n"
+              "_decoy = types.ModuleType('decoy_garmin_client')\n"
+              "class _DecoyClient:\n"
+              "    def __init__(self, *a, **k): pass\n"
+              "    def login(self):\n"
+              "        return {'garmin_user_id': 'forged', 'display_name': 'Forged'}\n"
+              "_decoy.GarminClient = _DecoyClient\n"
+              "_real_import = builtins.__import__\n"
+              "def _hostile(name, *a, **k):\n"
+              "    if name == 'gc_garmin_adapter.garmin_client':\n"
+              "        return _decoy\n"
+              "    return _real_import(name, *a, **k)\n"
+              "builtins.__import__ = _hostile\n");
+
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
+        const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
+
+        runPy("import sys, builtins\n"
+              "builtins.__import__ = _real_import\n"
+              "del _real_import, _hostile, _decoy, _DecoyClient\n"
+              "sys.modules.pop('gc_garmin_adapter.garmin_client', None)\n"
+              "sys.modules.pop('gc_garmin_adapter', None)\n");
+
+        QCOMPARE(out.kind, PyAuthOutcome::Unknown);
+        QVERIFY2(out.kind != PyAuthOutcome::AuthFailed,
+                 "a hostile-import rejection must never masquerade as bad credentials");
+    }
+
+    // DEC-068: pins the invariant the :353-362 tripwire rests on — a hostile
+    // builtins.__import__ that WRITES a decoy into sys.modules and RETURNS a
+    // different object still hands the adapter the sys.modules object, never
+    // the hook's own return value. Two phases: hook returns what it wrote
+    // (trivial baseline), then a distinct object (the actual invariant).
+    void moduleImportAlwaysObservesTheSysModulesObjectNotWhatImportReturns()
+    {
+        runPy("import sys\n"
+              "sys.modules.pop('gc_garmin_adapter.garmin_client', None)\n"
+              "sys.modules.pop('gc_garmin_adapter', None)\n"
+              "sys.path = [p for p in sys.path if 'pystubs' not in p]\n");
+
+        runPy("import types, builtins\n"
+              "def _make(marker):\n"
+              "    m = types.ModuleType('decoy_' + marker)\n"
+              "    class C:\n"
+              "        def __init__(self, *a, **k): pass\n"
+              "        def login(self):\n"
+              "            return {'garmin_user_id': marker, 'display_name': marker}\n"
+              "    m.GarminClient = C\n"
+              "    return m\n"
+              "_written1 = _make('phase1-written')\n"
+              "_real_import = builtins.__import__\n"
+              "def _hostile(name, *a, **k):\n"
+              "    if name == 'gc_garmin_adapter.garmin_client':\n"
+              "        import sys as _sys\n"
+              "        _sys.modules['gc_garmin_adapter.garmin_client'] = _written1\n"
+              "        return _written1\n"
+              "    return _real_import(name, *a, **k)\n"
+              "builtins.__import__ = _hostile\n");
+
+        PyEmbeddedAdapter phase1(GarminPyModulePath::explicitOverride(kStubsDir));
+        const PyAuthOutcome out1 = phase1.authenticate(QStringLiteral("a@b"), QStringLiteral("pw"));
+
+        runPy("import sys, builtins\n"
+              "builtins.__import__ = _real_import\n"
+              "sys.modules.pop('gc_garmin_adapter.garmin_client', None)\n"
+              "sys.modules.pop('gc_garmin_adapter', None)\n");
+
+        QCOMPARE(out1.kind, PyAuthOutcome::Success);
+        QCOMPARE(out1.garmin_user_id, QStringLiteral("phase1-written"));
+
+        runPy("import builtins\n"
+              "_written2 = _make('phase2-written')\n"
+              "_returned2 = _make('phase2-returned')\n"
+              "def _hostile2(name, *a, **k):\n"
+              "    if name == 'gc_garmin_adapter.garmin_client':\n"
+              "        import sys as _sys\n"
+              "        _sys.modules['gc_garmin_adapter.garmin_client'] = _written2\n"
+              "        return _returned2\n"
+              "    return _real_import(name, *a, **k)\n"
+              "builtins.__import__ = _hostile2\n");
+
+        PyEmbeddedAdapter phase2(GarminPyModulePath::explicitOverride(kStubsDir));
+        const PyAuthOutcome out2 = phase2.authenticate(QStringLiteral("c@d"), QStringLiteral("pw2"));
+
+        runPy("import sys, builtins\n"
+              "builtins.__import__ = _real_import\n"
+              "del _make, _written1, _real_import, _hostile, _written2, _returned2, _hostile2\n"
+              "sys.modules.pop('gc_garmin_adapter.garmin_client', None)\n"
+              "sys.modules.pop('gc_garmin_adapter', None)\n");
+
+        QCOMPARE(out2.kind, PyAuthOutcome::Success);
+        QCOMPARE(out2.garmin_user_id, QStringLiteral("phase2-written"));
+    }
+
+    // B-STAGE9-38 unit 3 round 2 (DO-2 proof): the reported defect —
+    // importAdapterModule() prepended modulePath and retried after ANY
+    // failed plain import, so a missing installed payload silently
+    // succeeded wherever the source tree happened to be checked out. With
+    // no override, exactly one plain import is attempted and sys.path is
+    // never touched — proven independent of whether any particular
+    // directory happens to satisfy the import, by asserting sys.path's own
+    // length is unchanged.
+    void noOverrideNeverTouchesSysPathWhenPackageIsAbsent()
+    {
+        runPy("import sys\n"
+              "sys.modules.pop('gc_garmin_adapter.garmin_client', None)\n"
+              "sys.modules.pop('gc_garmin_adapter', None)\n"
+              "sys.path = [p for p in sys.path if 'pystubs' not in p]\n");
+
+        PyGILState_STATE st0 = PyGILState_Ensure();
+        PyObject* sysPathBefore = PySys_GetObject("path"); // borrowed
+        const Py_ssize_t before = PyList_Check(sysPathBefore) ? PyList_Size(sysPathBefore) : -1;
+        PyGILState_Release(st0);
+
+        PyEmbeddedAdapter adapter(GarminPyModulePath::none());
+        const PyAuthOutcome out = adapter.authenticate(QStringLiteral("a@b"), QStringLiteral("pw"));
+        QCOMPARE(out.kind, PyAuthOutcome::Unknown);
+        QVERIFY2(out.kind != PyAuthOutcome::AuthFailed, "a missing module must never masquerade as bad credentials");
+
+        PyGILState_STATE st1 = PyGILState_Ensure();
+        PyObject* sysPathAfter = PySys_GetObject("path"); // borrowed
+        const Py_ssize_t after = PyList_Check(sysPathAfter) ? PyList_Size(sysPathAfter) : -1;
+        PyGILState_Release(st1);
+
+        QCOMPARE(after, before);
     }
 
     // (a) success dict marshals to Success + both fields, and the exact
@@ -215,7 +706,7 @@ class TestGarminConnectPyAdapter : public QObject
     {
         setScenario("success");
 
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         const PyAuthOutcome out =
             adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("p@$$w/rd with spaces"));
 
@@ -241,7 +732,7 @@ class TestGarminConnectPyAdapter : public QObject
     {
         setScenario("auth_error");
 
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("wrong"));
 
         QCOMPARE(out.kind, PyAuthOutcome::AuthFailed);
@@ -258,7 +749,7 @@ class TestGarminConnectPyAdapter : public QObject
     {
         setScenario("connection_error");
 
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
         QCOMPARE(out.kind, PyAuthOutcome::Network);
@@ -274,7 +765,7 @@ class TestGarminConnectPyAdapter : public QObject
     {
         setScenario("rate_limit_error");
 
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
         QVERIFY2(out.kind != PyAuthOutcome::AuthFailed, "kind='rate_limit' must NOT be classified as AuthFailed");
@@ -289,7 +780,7 @@ class TestGarminConnectPyAdapter : public QObject
     {
         setScenario("value_error");
 
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
         QVERIFY2(out.kind != PyAuthOutcome::AuthFailed,
@@ -320,7 +811,7 @@ class TestGarminConnectPyAdapter : public QObject
     {
         setScenario("type_confusion_error");
 
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
         QCOMPARE(out.kind, PyAuthOutcome::Unknown);
@@ -366,7 +857,7 @@ class TestGarminConnectPyAdapter : public QObject
     {
         setScenario("tp_name_fallback_error");
 
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
         QCOMPARE(out.kind, PyAuthOutcome::Unknown);
@@ -385,7 +876,7 @@ class TestGarminConnectPyAdapter : public QObject
     {
         setScenario("bad_module_shape_error");
 
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
         QCOMPARE(out.kind, PyAuthOutcome::Unknown);
@@ -408,7 +899,7 @@ class TestGarminConnectPyAdapter : public QObject
     {
         setScenario("foreign_module_error");
 
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
         QCOMPARE(out.kind, PyAuthOutcome::Unknown);
@@ -432,7 +923,7 @@ class TestGarminConnectPyAdapter : public QObject
     {
         setScenario("allowlisted_third_party_error");
 
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
         QCOMPARE(out.kind, PyAuthOutcome::Unknown);
@@ -454,7 +945,7 @@ class TestGarminConnectPyAdapter : public QObject
     {
         setScenario("genuine_allowlisted_module_error");
 
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
         QCOMPARE(out.kind, PyAuthOutcome::Unknown);
@@ -476,7 +967,7 @@ class TestGarminConnectPyAdapter : public QObject
     {
         setScenario("module_absent_tp_name_bypass_error");
 
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
         QCOMPARE(out.kind, PyAuthOutcome::Unknown);
@@ -496,7 +987,7 @@ class TestGarminConnectPyAdapter : public QObject
     {
         setScenario("module_non_str_qualname_bypass_error");
 
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
         QCOMPARE(out.kind, PyAuthOutcome::Unknown);
@@ -522,7 +1013,7 @@ class TestGarminConnectPyAdapter : public QObject
     {
         setScenario("tp_name_not_allowlisted_error");
 
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
         QCOMPARE(out.kind, PyAuthOutcome::Unknown);
@@ -546,7 +1037,7 @@ class TestGarminConnectPyAdapter : public QObject
     {
         setScenario("non_dict_result");
 
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
         QVERIFY2(out.kind != PyAuthOutcome::Success, "a non-dict login() result must NOT be reported as Success");
@@ -560,7 +1051,7 @@ class TestGarminConnectPyAdapter : public QObject
     {
         setScenario("missing_keys");
 
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
         QVERIFY2(out.kind != PyAuthOutcome::Success,
@@ -576,7 +1067,7 @@ class TestGarminConnectPyAdapter : public QObject
     {
         setScenario("success");
 
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         PyAuthOutcome out;
         std::thread worker(
             [&] { out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("hunter2")); });
@@ -593,7 +1084,7 @@ class TestGarminConnectPyAdapter : public QObject
     // non-ASCII email in and a non-ASCII display_name out (UTF-8 both ways).
     void repeatedMixedCallsStayGilBalancedWithUnicode()
     {
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
 
         // 1 — success
         setScenario("success");
@@ -642,7 +1133,7 @@ class TestGarminConnectPyAdapter : public QObject
     void mfaRequiredSentinelThenSubmitMfaSuccessMarshalsIdentity()
     {
         setScenario("mfa_required");
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
         QCOMPARE(out.kind, PyAuthOutcome::MfaRequired);
         QVERIFY2(out.garmin_user_id.isEmpty(), "MfaRequired carries no identity yet");
@@ -660,7 +1151,7 @@ class TestGarminConnectPyAdapter : public QObject
     void submitMfaAuthErrorMapsToAuthFailed()
     {
         setScenario("mfa_required");
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         QCOMPARE(adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw")).kind,
                  PyAuthOutcome::MfaRequired);
 
@@ -675,7 +1166,8 @@ class TestGarminConnectPyAdapter : public QObject
     void submitMfaWithoutPendingSessionMapsToUnknownNotSuccess()
     {
         setScenario("mfa_success");
-        PyEmbeddedAdapter adapter(kStubsDir); // never authenticated → no retained client
+        PyEmbeddedAdapter adapter(
+            GarminPyModulePath::explicitOverride(kStubsDir)); // never authenticated → no retained client
         const PyAuthOutcome out = adapter.submitMfa(QStringLiteral("123456"));
         QVERIFY2(out.kind != PyAuthOutcome::Success, "submitMfa without a pending session must NOT succeed");
         QCOMPARE(out.kind, PyAuthOutcome::Unknown);
@@ -701,7 +1193,7 @@ class TestGarminConnectPyAdapter : public QObject
     // (embedded NUL survives), and activity_id + fmt reach the stub verbatim.
     void downloadSuccessMarshalsBinaryBytesAndRecordsArgs()
     {
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         setScenario("success");
         QCOMPARE(adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw")).kind,
                  PyAuthOutcome::Success);
@@ -720,7 +1212,7 @@ class TestGarminConnectPyAdapter : public QObject
     // (kills a mutant that always requests ORIGINAL, breaking DES-004 fallback).
     void downloadForwardsTcxFmt()
     {
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         setScenario("success");
         QCOMPARE(adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw")).kind,
                  PyAuthOutcome::Success);
@@ -735,7 +1227,7 @@ class TestGarminConnectPyAdapter : public QObject
     // (c) GarminError kind='connection' → Network, raw message forwarded.
     void downloadConnectionErrorMapsToNetwork()
     {
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         setScenario("success");
         adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
@@ -750,7 +1242,7 @@ class TestGarminConnectPyAdapter : public QObject
     // collapsed to Unknown or misrouted to Network (DES-008 rate-limit copy).
     void downloadRateLimitErrorMapsToRateLimited()
     {
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         setScenario("success");
         adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
@@ -767,7 +1259,7 @@ class TestGarminConnectPyAdapter : public QObject
     // (LSN-006: classify by type; a foreign exception is not a valid download).
     void downloadForeignExceptionMapsToUnknownNotSuccess()
     {
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         setScenario("success");
         adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
@@ -784,7 +1276,7 @@ class TestGarminConnectPyAdapter : public QObject
     // NEVER a Success with empty data. Kills a mutant that skips the type check.
     void downloadNonBytesResultYieldsUnknownNotSuccess()
     {
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         setScenario("success");
         adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
@@ -801,7 +1293,7 @@ class TestGarminConnectPyAdapter : public QObject
     // reused (REQ-005), so there is no client to download through.
     void downloadWithoutAuthenticateYieldsUnknownNotSuccess()
     {
-        PyEmbeddedAdapter adapter(kStubsDir); // never authenticated
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir)); // never authenticated
         setScenario("dl_success");
         const PyDownloadOutcome out = adapter.downloadActivity(QStringLiteral("111"), QStringLiteral("ORIGINAL"));
 
@@ -815,7 +1307,7 @@ class TestGarminConnectPyAdapter : public QObject
     // acquire the GIL there and marshal the identical bytes.
     void downloadFromWorkerThreadMarshalsSameBytes()
     {
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         setScenario("success");
         adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
@@ -849,7 +1341,7 @@ class TestGarminConnectPyAdapter : public QObject
     // reaches the stub verbatim (DES-010).
     void listSuccessMarshalsSummariesAndForwardsTimestampVerbatim()
     {
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         setScenario("success");
         QCOMPARE(adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw")).kind,
                  PyAuthOutcome::Success);
@@ -875,7 +1367,7 @@ class TestGarminConnectPyAdapter : public QObject
     // null branch), never crash and never fail the listing.
     void listMissingStartTimeLocalMarshalsToEmptyStringNotCrash()
     {
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         setScenario("success");
         adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
@@ -893,7 +1385,7 @@ class TestGarminConnectPyAdapter : public QObject
     // "nothing newer" result, NOT a failure).
     void listEmptyResultIsSuccessNotFailure()
     {
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         setScenario("success");
         adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
@@ -907,7 +1399,7 @@ class TestGarminConnectPyAdapter : public QObject
     // (c) GarminError kind='connection' → Network, raw message forwarded.
     void listConnectionErrorMapsToNetwork()
     {
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         setScenario("success");
         adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
@@ -922,7 +1414,7 @@ class TestGarminConnectPyAdapter : public QObject
     // collapsed to Unknown or misrouted to Network (DES-008 rate-limit copy).
     void listRateLimitErrorMapsToRateLimited()
     {
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         setScenario("success");
         adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
@@ -939,7 +1431,7 @@ class TestGarminConnectPyAdapter : public QObject
     // (LSN-006: classify by type; a foreign exception is not a valid listing).
     void listForeignExceptionMapsToUnknownNotSuccess()
     {
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         setScenario("success");
         adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
@@ -956,7 +1448,7 @@ class TestGarminConnectPyAdapter : public QObject
     // NEVER a Success with empty summaries. Kills a mutant that skips the check.
     void listNonIterableResultYieldsUnknownNotSuccess()
     {
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         setScenario("success");
         adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
@@ -976,7 +1468,7 @@ class TestGarminConnectPyAdapter : public QObject
     // Success (kind==0) with a phantom entry, so it FAILS; restoring it passes.
     void listBadItemFoldsToUnknown()
     {
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         setScenario("success");
         adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
@@ -993,7 +1485,7 @@ class TestGarminConnectPyAdapter : public QObject
     // session), never a crash and never a Success.
     void listWithoutAuthenticateYieldsUnknownNotSuccess()
     {
-        PyEmbeddedAdapter adapter(kStubsDir); // never authenticated
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir)); // never authenticated
         setScenario("list_success");
         const PyListOutcome out = adapter.listActivitiesSince(QStringLiteral("2026-06-30 00:00:00"));
 
@@ -1008,7 +1500,7 @@ class TestGarminConnectPyAdapter : public QObject
     // the real-bridge level).
     void listFromWorkerThreadMarshalsSameSummaries()
     {
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         setScenario("success");
         adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
@@ -1044,7 +1536,7 @@ class TestGarminConnectPyAdapter : public QObject
     // and the exact values marshalled through.
     void profileSuccessMarshalsAllThreeFields()
     {
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         setScenario("success");
         QCOMPARE(adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw")).kind,
                  PyAuthOutcome::Success);
@@ -1065,7 +1557,7 @@ class TestGarminConnectPyAdapter : public QObject
     // a partial result is still a normal Success, not a failure.
     void profilePartialResultLeavesMissingFieldsUnset()
     {
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         setScenario("success");
         adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
@@ -1084,7 +1576,7 @@ class TestGarminConnectPyAdapter : public QObject
     // never a crash, never a failure signal.
     void profileEmptyResultIsSuccessWithNoFieldsSet()
     {
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         setScenario("success");
         adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
@@ -1100,7 +1592,7 @@ class TestGarminConnectPyAdapter : public QObject
     // (d) GarminError kind='connection' → Network, raw message forwarded.
     void profileConnectionErrorMapsToNetwork()
     {
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         setScenario("success");
         adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
@@ -1115,7 +1607,7 @@ class TestGarminConnectPyAdapter : public QObject
     // (LSN-006: classify by type; a foreign exception is not a valid profile).
     void profileForeignExceptionMapsToUnknownNotSuccess()
     {
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         setScenario("success");
         adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
@@ -1132,7 +1624,7 @@ class TestGarminConnectPyAdapter : public QObject
     // NEVER a Success with fabricated fields.
     void profileNonDictResultYieldsUnknownNotSuccess()
     {
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         setScenario("success");
         adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
@@ -1148,7 +1640,7 @@ class TestGarminConnectPyAdapter : public QObject
     // retained session), never a crash and never a Success.
     void profileWithoutAuthenticateYieldsUnknownNotSuccess()
     {
-        PyEmbeddedAdapter adapter(kStubsDir); // never authenticated
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir)); // never authenticated
         setScenario("profile_full");
         const PyProfileOutcome out = adapter.fetchProfile();
 
@@ -1162,7 +1654,7 @@ class TestGarminConnectPyAdapter : public QObject
     // must acquire the GIL there and marshal the identical fields.
     void profileFromWorkerThreadMarshalsSameFields()
     {
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         setScenario("success");
         adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
@@ -1183,6 +1675,9 @@ class TestGarminConnectPyAdapter : public QObject
         // skipped (process exit reclaims everything) — see briefing note.
         if (mainState) {
             PyEval_RestoreThread(mainState);
+            // DEC-066 constraint 2: the ledger's strong references must not
+            // outlive this interpreter's finalization.
+            PyEmbeddedAdapter::releaseModuleProvenanceLedgerForCurrentInterpreter();
             Py_FinalizeEx();
         }
     }

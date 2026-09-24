@@ -160,6 +160,10 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/Core
     ${CMAKE_CURRENT_SOURCE_DIR}/Planning
     ${CMAKE_CURRENT_SOURCE_DIR}/Coach
+    # DEC-052: main.cpp includes PyProcessBootstrap.h whenever GC_WANT_PYTHON
+    # OR GC_WANT_GARMINCONNECT is on; also fixes a pre-existing gap where
+    # PythonEmbed.h itself wasn't reachable from this global list either.
+    ${CMAKE_CURRENT_SOURCE_DIR}/Python
     ${CMAKE_CURRENT_SOURCE_DIR}/../qwt/src
     ${CMAKE_CURRENT_SOURCE_DIR}/../contrib/qxt/src
     ${CMAKE_CURRENT_SOURCE_DIR}/../contrib/qtsolutions/json
@@ -1413,6 +1417,33 @@ set_target_properties(GoldenCheetah PROPERTIES
     MACOSX_BUNDLE TRUE
 )
 
+# DEC-052 (B-STAGE9-01 fix) — shared, process-level CPython bootstrap.
+# Compiled whenever EITHER GC_WANT_PYTHON or GC_WANT_GARMINCONNECT is ON (an
+# OR, not either alone): PythonEmbed.cpp's own initialization and
+# Cloud/PyEmbeddedAdapter.cpp's Py_IsInitialized() fail-safe (DES-013) both
+# depend on this module actually bringing the interpreter up — previously
+# nothing did whenever GC_WANT_PYTHON was off, silently breaking Garmin
+# Connect regardless of the "either flag independent of the other" design
+# intent (src.pro / gcconfig.pri.in). Python-header-free public interface
+# (LSN-007-style invariant) — only the .cpp includes Python.h. This also
+# supplies the Python3 link dependency GC_WANT_PYTHON-only builds were
+# previously missing in CMake (GC_WANT_GARMINCONNECT's own block below
+# already had one for the Garmin-only/both-on cases).
+if(GC_WANT_PYTHON OR GC_WANT_GARMINCONNECT)
+    target_sources(GoldenCheetah PRIVATE
+        Python/PyProcessBootstrap.cpp
+        Python/PyProcessBootstrap.h
+        # DEC-062 — shared deployment locator both PythonEmbed and this
+        # block's own PyProcessBootstrap bootstrap consume; wired here
+        # (rather than only inside GC_WANT_PYTHON's own source list above)
+        # so a Garmin-only build still has it, per DEC-062-scope C3.
+        Python/PythonDeploymentLocator.cpp
+        Python/PythonDeploymentLocator.h
+    )
+    find_package(Python3 REQUIRED COMPONENTS Development.Embed)
+    target_link_libraries(GoldenCheetah PRIVATE Python3::Python)
+endif()
+
 # Coach AI Module (optional, enabled by default)
 # Must be added after GoldenCheetah target is created
 if(GC_WANT_COACH)
@@ -1492,12 +1523,10 @@ if(GC_WANT_GARMINCONNECT)
     find_package(Python3 REQUIRED COMPONENTS Development.Embed)
     target_link_libraries(GoldenCheetah PRIVATE Python3::Python)
 
-    # Dev default for the directory CONTAINING the gc_garmin_adapter package
-    # (DEC-058); the runtime env var GC_GARMIN_PYPATH overrides it (see
-    # AddCloudWizard::ensureGarminAuthPage).
-    # The installed/bundled location is DES-007 / REQ-NF-Pkg-001 territory.
-    target_compile_definitions(GoldenCheetah PRIVATE
-        "GARMIN_PY_MODULE_DIR=\"${CMAKE_SOURCE_DIR}/src/Python/garminconnect\"")
+    # DEC-058 constraint 5 / B-STAGE9-38 unit 3: no compiled default module
+    # path. The runtime env var GC_GARMIN_PYPATH is the only override (see
+    # AddCloudWizard::ensureGarminAuthPage); with none set, the adapter
+    # imports the installed `gc_garmin_adapter` package (DES-007 / REQ-NF-Pkg-001).
 endif()
 
 # Link Qt libraries

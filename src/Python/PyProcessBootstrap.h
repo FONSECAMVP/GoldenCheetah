@@ -56,9 +56,20 @@ namespace PyProcessBootstrap {
 // reaching this call) simply passes no hook.
 using PreInitHook = void (*)();
 
+// DEC-062 — home/programName are the shared PythonDeploymentLocator's answer
+// (PythonEmbed.cpp and main.cpp's OR-bootstrap call both compute it via that
+// one locator, so they can no longer disagree), set as explicit PyConfig
+// fields BEFORE PyConfig_Read — the measured call order that wins over even
+// a hostile inherited PYTHONHOME. Both are OPTIONAL and independently
+// omittable: an empty QString means "do not call PyConfig_SetString for this
+// field at all", never "call it with an empty string" — doing the latter
+// would suppress CPython's own PATH/inherited-environment discovery instead
+// of deferring to it (DEC-062-scope constraint C1).
 struct Config
 {
     PreInitHook preInitHook = nullptr;
+    QString home;
+    QString programName;
 };
 
 struct Result
@@ -106,21 +117,6 @@ Result ensureInitialized(const Config &cfg = Config());
 // Mirrors Py_IsInitialized() for callers that would otherwise need Python.h
 // just to ask. Safe to call at any time, from any thread.
 bool isInitialized();
-
-// B-STAGE9-07 — Py_SetProgramName() wrapper owning the storage contract that
-// (legacy, deprecated-since-3.11) API actually documents: on Python <= 3.12
-// CPython BORROWS the wchar_t* and may read it for the interpreter's entire
-// lifetime, so it must never alias a temporary. Python 3.13 now copies the
-// string instead (and 3.14 removes the function), but GoldenCheetah also
-// builds against 3.11/3.12 elsewhere, so the borrowed-pointer contract is
-// the one this must honor. Lives here rather than in PythonEmbed.cpp so the
-// lifetime behavior is unit-testable: PythonEmbed.cpp cannot be linked into
-// any unittest target (appsettings/Gui application layers), this module
-// already is (testPyProcessBootstrap). PythonEmbed's constructor calls this
-// immediately before ensureInitialized(), exactly where its old inline
-// Py_SetProgramName(temporary.c_str()) call — a dangling pointer CPython
-// retained on <= 3.12 — used to sit. Call it before the interpreter is up.
-void setProgramName(const QString &name);
 
 } // namespace PyProcessBootstrap
 

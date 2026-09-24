@@ -82,21 +82,19 @@ void runPy(const char* code)
     PyGILState_Release(st);
 }
 
+const QString kStubsDir = QString::fromUtf8(GARMIN_PYSTUBS_DIR);
+
+// DEC-066 / B-STAGE9-70: mirrors testGarminConnectPyAdapter.cpp:104-114.
 void setScenario(const char* scenario)
 {
-    const QString code =
-        QStringLiteral("import sys\n"
-                       "_d = %1\n"
-                       "if _d not in sys.path:\n"
-                       "    sys.path.insert(0, _d)\n"
-                       "import gc_garmin_adapter.garmin_client\n"
-                       "gc_garmin_adapter.garmin_client.SCENARIO = '%2'\n")
-            .arg(QStringLiteral("r'''") + QString::fromUtf8(GARMIN_PYSTUBS_DIR) + QStringLiteral("'''"),
-                 QString::fromUtf8(scenario));
+    PyEmbeddedAdapter bootstrap(GarminPyModulePath::explicitOverride(kStubsDir));
+    bootstrap.authenticate(QStringLiteral("bootstrap@example.com"), QStringLiteral("bootstrap"));
+
+    const QString code = QStringLiteral("import gc_garmin_adapter.garmin_client\n"
+                                        "gc_garmin_adapter.garmin_client.SCENARIO = '%1'\n")
+                             .arg(QString::fromUtf8(scenario));
     runPy(code.toUtf8().constData());
 }
-
-const QString kStubsDir = QString::fromUtf8(GARMIN_PYSTUBS_DIR);
 
 // B-STAGE9-05 — re-exec escape hatch. externallyInitializedGilIsNotStolen()
 // below needs a process where Py_IsInitialized() AND ensureInitialized()'s
@@ -177,7 +175,7 @@ class TestPyProcessBootstrap : public QObject
     {
         QVERIFY2(!Py_IsInitialized(), "harness precondition: interpreter must not be up yet");
 
-        PyEmbeddedAdapter early(kStubsDir);
+        PyEmbeddedAdapter early(GarminPyModulePath::explicitOverride(kStubsDir));
         const PyAuthOutcome out = early.authenticate(QStringLiteral("a@b"), QStringLiteral("pw"));
         QCOMPARE(out.kind, PyAuthOutcome::Unknown);
         QCOMPARE(out.rawMessage, QStringLiteral("embedded Python unavailable"));
@@ -214,7 +212,7 @@ class TestPyProcessBootstrap : public QObject
         QVERIFY(Py_IsInitialized());
 
         setScenario("success");
-        PyEmbeddedAdapter adapter(kStubsDir);
+        PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
         const PyAuthOutcome out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
 
         QCOMPARE(out.kind, PyAuthOutcome::Success);
@@ -229,8 +227,9 @@ class TestPyProcessBootstrap : public QObject
     {
         QVERIFY(Py_IsInitialized());
 
-        setScenario("success");                    // from_tokens() only special-cases load_* scenarios
-        PyEmbeddedAdapter freshAdapter(kStubsDir); // never had authenticate() called
+        setScenario("success"); // from_tokens() only special-cases load_* scenarios
+        PyEmbeddedAdapter freshAdapter(
+            GarminPyModulePath::explicitOverride(kStubsDir)); // never had authenticate() called
         const PyLoadTokensOutcome out = freshAdapter.loadTokens(QStringLiteral("{\"oauth1\":\"x\"}"));
 
         QCOMPARE(out.kind, PyLoadTokensOutcome::Success);
@@ -254,7 +253,7 @@ class TestPyProcessBootstrap : public QObject
             PyAuthOutcome out;
             std::thread worker([cycle, &out] {
                 setScenario("success");
-                PyEmbeddedAdapter adapter(kStubsDir);
+                PyEmbeddedAdapter adapter(GarminPyModulePath::explicitOverride(kStubsDir));
                 out = adapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw-%1").arg(cycle));
                 // adapter destructs here (end of thread lambda scope), on
                 // this worker thread — mirrors GarminAuthChain destroying its
@@ -271,7 +270,7 @@ class TestPyProcessBootstrap : public QObject
         // Interpreter still usable after all the churn above — not merely
         // "flagged initialized" but actually functional.
         setScenario("success");
-        PyEmbeddedAdapter finalAdapter(kStubsDir);
+        PyEmbeddedAdapter finalAdapter(GarminPyModulePath::explicitOverride(kStubsDir));
         const PyAuthOutcome out = finalAdapter.authenticate(QStringLiteral("rider@example.com"), QStringLiteral("pw"));
         QCOMPARE(out.kind, PyAuthOutcome::Success);
     }

@@ -21,7 +21,6 @@
 #include <QMutex>
 #include <QMutexLocker>
 
-#include <list>
 #include <string>
 
 namespace PyProcessBootstrap {
@@ -79,6 +78,35 @@ Result ensureInitialized(const Config &cfg)
     PyConfig config;
     PyConfig_InitPythonConfig(&config); // non-isolated: user site-packages ON by default
 
+    // DEC-062 — the shared locator's answer, set as explicit fields BEFORE
+    // PyConfig_Read (the measured call order — it wins over even a hostile
+    // inherited PYTHONHOME). Optional and independently omittable
+    // (DEC-062-scope C1): an empty cfg.home/cfg.programName must never reach
+    // PyConfig_SetString, which would suppress CPython's own PATH/inherited-
+    // environment discovery instead of deferring to it. Every SetString call
+    // is PyStatus-checked and PyConfig_Clear()'d on failure, exactly like the
+    // pre-existing PyConfig_Read/Py_InitializeFromConfig error paths below.
+    if (!cfg.home.isEmpty()) {
+        const std::wstring w = cfg.home.toStdWString();
+        PyStatus st = PyConfig_SetString(&config, &config.home, w.c_str());
+        if (PyStatus_Exception(st)) {
+            g_result.ok = false;
+            g_result.error = QString::fromUtf8(st.err_msg != nullptr ? st.err_msg : "PyConfig_SetString(home) failed");
+            PyConfig_Clear(&config);
+            return g_result;
+        }
+    }
+    if (!cfg.programName.isEmpty()) {
+        const std::wstring w = cfg.programName.toStdWString();
+        PyStatus st = PyConfig_SetString(&config, &config.program_name, w.c_str());
+        if (PyStatus_Exception(st)) {
+            g_result.ok = false;
+            g_result.error = QString::fromUtf8(st.err_msg != nullptr ? st.err_msg : "PyConfig_SetString(program_name) failed");
+            PyConfig_Clear(&config);
+            return g_result;
+        }
+    }
+
     // DEC-052: disable signal-handler installation (matches the pre-existing
     // Py_InitializeEx(0) behavior PythonEmbed relied on) and explicitly
     // preserve the user site-packages directory (~/.local/lib/python3.13/
@@ -121,23 +149,6 @@ Result ensureInitialized(const Config &cfg)
 bool isInitialized()
 {
     return Py_IsInitialized() != 0;
-}
-
-void setProgramName(const QString &name)
-{
-    // B-STAGE9-07 — CPython (<= 3.12) borrows this pointer for the
-    // interpreter's entire lifetime; it is never copied on those versions.
-    // Every name ever handed over is therefore retained for the rest of the
-    // process: std::list nodes are stable once allocated and entries are
-    // never removed, so neither this call nor a later one (main.cpp's
-    // in-process restart loop constructs a new PythonEmbed and calls this
-    // again) can free or move storage CPython may still be holding. (The
-    // old inline PythonEmbed call passed a temporary's buffer straight
-    // through — testPythonProgramNameLifetime reproduces that defect and
-    // aborts under ASan on it.)
-    static std::list<std::wstring> retainedProgramNames;
-    retainedProgramNames.push_back(name.toStdWString());
-    Py_SetProgramName((wchar_t *)retainedProgramNames.back().c_str());
 }
 
 } // namespace PyProcessBootstrap
