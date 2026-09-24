@@ -1077,8 +1077,6 @@ if(GC_WANT_PYTHON)
         FileIO/FixPyScript.h
         FileIO/FixPyDataProcessor.h
     )
-    
-    add_definitions(-DGC_HAVE_PYTHON)
 endif()
 
 # R Support
@@ -1397,6 +1395,12 @@ add_executable(GoldenCheetah
     ${GC_RC_FILE}
     Resources/application.qrc
 )
+
+# DEC-063 (B-STAGE9-41): target-local, matching :1508's GC_WANT_GARMINCONNECT
+# convention — every GC_WANT_PYTHON scripting guard in src/ reads this name.
+if(GC_WANT_PYTHON)
+    target_compile_definitions(GoldenCheetah PRIVATE GC_WANT_PYTHON)
+endif()
 
 # AUTORCC must wait for lrelease; a plain target dependency is not enough because
 # the autogen step runs ahead of the target's own compile rules.
