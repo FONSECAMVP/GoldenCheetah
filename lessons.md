@@ -86,6 +86,7 @@ LSN-044 | op:id-alloc type:unregistered-id-series-invites-guessing | guard scope
 LSN-038 | op:verify type:snapshot-suffix-unrecognized-by-guard | advisory scope:portable | recur:2 saves:0 miss:1 | RECURRED 2026-09-04, orchestrator this time (not the prior DEC-026 case's author): snapshotted CloudService. — see ## LSN-038 below
 LSN-085 | op:build op:test type:fixture-growth-unbounded-in-one-binary scope:portable | advisory | recur:1 saves:0 miss:0 | a single QTest binary growing past a fixture-growth cap (slot count + fuzzer iterations) with no split path (QTest selects functions, cannot exclude one) is a SKILL-level gap, not yet a rule — see ## LSN-085 below
 LSN-086 | op:test-design op:verify op:mutation-proof type:fake-pins-a-nonexistent-library-api | guard scope:portable | recur:1 saves:0 miss:1 | A FAKE MAY ONLY DEFINE WHAT THE REAL LIBRARY ACTUALLY HAS — ship a real-dependency contract test (attributes AND parameter order) that skips, not fails, when the dependency is absent; a mutation score computed against fakes measures fake-fidelity and can CERTIFY the very defect it should kill — see ## LSN-086 below
+LSN-087 | op:repair-round type:non-convergent-recognizer | guard scope:portable | recur:12 saves:0 miss:0 | 3 same-class NOT-CLOSED rounds ⇒ architectural-or-pin, never round 4 — see ## LSN-087 below
 
 ---
 
@@ -1484,3 +1485,27 @@ origin: B-STAGE9-09 + B-STAGE9-10 (`findings.md`, Stage 9 live-account connect r
         NOTE since the design phase and came due as a user-visible blocker.
 history:2026-09-13: captured at guard, first occurrence, recur:1 saves:0 miss:1 (miss — DEC-014
         OQ1 named the risk explicitly and no executable check was ever attached to it).
+
+## LSN-087
+sig:    repair-round / non-convergent-recognizer / non-deterministic-surface
+level:  guard   since:2026-09-20   recur:12   saves:0   miss:0
+tags:   op:repair-round, type:non-convergent-recognizer, scope:portable
+trigger:about to dispatch repair round 3+ on a finding whose prior rounds were all
+        builder-GREEN + reviewer-NOT-CLOSED
+why:    a prose recognizer was repaired one character class at a time for 12 rounds (prose →
+        fences → tilde → mixed → Unicode → Cf → Mn); each round was locally GREEN and the
+        class never closed, because the surface being parsed was non-deterministic prose.
+        DEC-054 put guard authorization in decisions.md prose; DEC-057/059/060 fed the loop;
+        DEC-064's structured sentinel finally moved where the machine reads its fact and the
+        class closed by construction.
+rule:   at the 3rd same-class NOT-CLOSED, the dispatch is an architectural remedy DEC (move
+        the fact into a structured record) or a pin-DEC (accepted false negative) — a 4th
+        recognizer round is the mistake repeating. A tooling-only finding never holds a
+        product CHECKPOINT commit past that cap.
+check:  does the fix change WHERE the machine reads its fact, or only HOW it recognizes
+        prose? If only HOW, stop.
+origin: B-STAGE9-36 (`findings.md`, 2026-09-19..20): 12 repair rounds, 4 DECs (057/059/060/
+        064), 1,612 uncommitted lines and 712 tests guarding the lint authorization of ONE
+        empty directory, with the B-STAGE9-28 product checkpoint blocked since 2026-09-19.
+history:2026-09-20: captured at guard from user-directed forensic review of the DEC-054→064
+        chain; recur:12 (rounds of the same class) saves:0 miss:0.

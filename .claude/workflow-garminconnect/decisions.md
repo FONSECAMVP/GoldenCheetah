@@ -80,6 +80,10 @@ Compact schema per `references/formats.md` § `decisions.md`. **The recap source
 | DEC-063 | B-STAGE9-41 remedy → CMake defines `GC_WANT_PYTHON` target-locally (matching `src/CMakeLists.txt:1508`'s existing `GC_WANT_GARMINCONNECT` convention) and the `GC_HAVE_PYTHON` spelling is DELETED, not aliased; it has exactly one occurrence in the live tree — its own definition at `:1085` — and no `#ifdef` consumer anywhere, while the 55 sites that do guard on `GC_WANT_PYTHON` never see it defined under CMake | accepted (Inspector, Three-Options Doctrine — ordinary build-system drift repair, not a human-in-the-loop gate; the investigator's census re-derived from source by the Inspector, which surfaced the in-file precedent the option report missed) | 2026-09-20 |
 | DEC-064 | B-STAGE9-36 remedy → the Arms authorization stops being inferred from arbitrary Markdown bullets and moves into a structured record with a fail-closed grammar, superseding DEC-060's loose-recognizer doctrine for that field only | ACCEPTED — Option C, fixed-slot sentinel replacing the `:2646` declaration; decided on the Inspector's own measurement after the second opinion dissented | 2026-09-20 |
 | DEC-065 | Stage 9's installer evidence is earned on the AppVeyor pipeline, not on a local build — the shared remote gets the branch and CI produces the Linux/macOS/Windows artifacts | accepted (USER decision 2026-09-20, the one human-in-the-loop gate of this session; both routes needed the user's own authority) | 2026-09-20 |
+| DEC-066 | B-STAGE9-45 remedy → adapter-module provenance stops being read off Python-visible attributes and becomes a C++-owned per-interpreter identity ledger, validated AFTER import and cleared before finalization | accepted (Inspector, Three-Options Doctrine — ordinary architecture decision, not a human-in-the-loop gate; option A amended by the independent second opinion, which found it insufficient as first drafted) | 2026-09-20 |
+| DEC-067 | B-STAGE9-59's smoke-assert class is terminated → one final strengthening (callable `Garmin`, real exception classes) and then the residual is a recorded, accepted false negative; there is no round 4 | accepted (Inspector, repair-round bound at 3 same-class rounds — ordinary engineering judgement, not a human-in-the-loop gate) | 2026-09-20 |
+| DEC-068 | B-STAGE9-66's premise is refuted by three independent sources → the returned-object compare guards nothing under CPython's `PyImport_Import` semantics; it stays as a tripwire with a truthful comment, and the invariant it rests on becomes a test instead of an unstated assumption | accepted (Inspector, Three-Options Doctrine — ordinary engineering judgement on dead code, not a human-in-the-loop gate) | 2026-09-24 |
+| DEC-069 | B-STAGE9-71 remedy — how many shipped platforms the Stage 9 payload assertion must cover before the installer findings may close → all three; Windows and macOS each gain an assertion against the PRODUCED artifact, not its staging tree | accepted (USER decision 2026-09-24 — a CI modification, so the user's call, not the Inspector's) | 2026-09-24 |
 
 ### Dormant index
 
@@ -3161,3 +3165,158 @@ Scoring (reliability / scalability / maintainability / best practices): **Option
 ### Cascade impact
 
 DEC-060's loose-recognizer doctrine is superseded FOR THIS FIELD ONLY if this is accepted; rounds 9-12's work is not reclassified, and the round-11 amendment's falsified "closed invisible partition" claim is corrected by this entry rather than by editing its text. `findings.md`'s B-STAGE9-36 row moves from recognizer-bug to design-defect. Nothing is dispatched to the builder until this DEC is accepted.
+
+## DEC-066 — B-STAGE9-45 remedy: module provenance is a C++-owned identity ledger, not an attribute read off the cached module
+
+- Status: **accepted 2026-09-20** (Inspector `garmin_inspector_v1_49`, Three-Options Doctrine — ordinary architecture decision, not a human-in-the-loop gate). Option A as scored, plus constraints 1 and 2 below, which the independent second opinion produced and without which option A does NOT close B-STAGE9-45.
+- Reversibility: medium — new C++ state in the adapter plus a replaced predicate; no Python-side or packaging change, and `GC_GARMIN_PYPATH` is untouched.
+- Decided / last-reviewed: 2026-09-20
+- Serves: B-STAGE9-45 (blocking), B-STAGE9-64 (folded in). Amends DEC-058 c17(b), which remains the governing decision for everything else it says.
+- Dependents: `src/Cloud/PyEmbeddedAdapter.cpp:178-257` (`moduleFileIsUnderDir`/`explicitOverrideCacheIsSafe`, both replaced), `unittests/Core/garminconnect/testGarminConnectPyAdapter.cpp:296,1393-1401`, DEC-058 c17(b).
+- Origin: `s925_tz_investigator` unit `DEC-066-cache-provenance` (three options, each with an executed CPython 3.13.5 repro); verified by `garmin_codex_reviewer` unit `DEC-066-option-a-check` before this entry was written.
+
+### The problem, restated
+
+Five repair rounds closed five forgeable attributes and each was replaced by the next one. The investigator's repro settles why: `CURRENT_FILE_CHECK_ACCEPTS=True` while `NORMAL_IMPORT_CHILD_ORIGIN=decoy` — the guard reads a real override `__file__` on the parent, and CPython then resolves the absent CHILD through a forged parent `__path__`. Every fact the predicate consults is writable by the code it is trying to judge. A sixth round would narrow the same recognizer, so the remedy changes WHERE the fact is read, not how prose is recognized.
+
+### Options scored (reliability / scalability / maintainability / best practices)
+- **Option A — C++ identity/provenance ledger (CHOSEN): 5/5/4/5.** With the GIL held, record `(interpreter, override-dir, full-name, PyObject*)` with a strong reference for every entry produced by the one clean import from the hoisted override dir; later adapter construction accepts only identical pointers. Reads no Python-visible attribute. Repro: `A_POINTER_LEDGER_SAME_OK=True`, `A_POINTER_LEDGER_HOSTILE_REJECTED=True`. Does not defend against trusted override code mutating its own genuine module object, or arbitrary code running during the initial import — both accepted residuals.
+- **Option B — opaque private override namespace: 5/3/2/3.** A high-entropy C++-owned package alias via a file-location spec; the conventional cache is never read. Repro: `B_PRIVATE_ALIAS_CHILD_ORIGIN=override`, `B_STANDARD_HOSTILE_UNTOUCHED=True`. Rejected: it buys a private-import contract that every absolute import inside the package must then honour, auditable only by inspection.
+- **Option C — C++ retained module handle: 4/4/3/4.** Import only on a verified-empty cache and hand back the retained `PyObject*` thereafter. Repro: `C_NORMAL_SECOND_ORIGIN=decoy`, `C_CPP_RETAINED_HANDLE_ORIGIN=override`. Rejected: it deliberately permits the process cache and the adapter's handle to diverge, which is a second source of truth.
+
+### Constraints the implementation must honour
+
+- **Constraint 1 (from the second opinion, BLOCKING as drafted).** Rejecting only pre-existing UNLEDGERED entries is insufficient. `PyEmbeddedAdapter.cpp:244-257`: an attacker keeps ledgered package P, deletes `sys.modules["gc_garmin_adapter.garmin_client"]`, and points `P.__path__` at a decoy; the pre-import check sees only a matching ledgered P, and `PyImport_ImportModule()` then creates the child from the decoy AFTER the check. The ledger must therefore be validated for exact cache/ledger membership and pointer identity **after** the import returns, not only before it. **VERIFIED 2026-09-20** by `DEC-066-constraint-repro` on a real CPython fixture: `C1_PRE_IMPORT_ONLY_ACCEPTS=True`, `C1_CHILD_LOADED_FROM=decoy`, `C1_POST_IMPORT_EXACT_ACCEPTS=False` — the pre-import-only check accepts and the decoy child loads; the post-import exact check is what rejects it.
+- **Constraint 2 (from the second opinion; requirement VERIFIED, rationale AMENDED).** A process-lifetime ledger holding INCREF'd references outlives `Py_FinalizeEx()` (`testGarminConnectPyAdapter.cpp:1393-1401`). The ledger is cleared under that interpreter's GIL BEFORE finalization — every strong reference released and every entry keyed by that interpreter erased — and no ledgered Python object is inspected or decref'd after finalization. **Amended 2026-09-20 on executed evidence** (`DEC-066-constraint-repro`, native CPython 3.13 embedding fixture): the drafted "a later reinitialization may reuse either address" is only half right. Interpreter-address reuse IS real (`INTERP_ADDR_REUSED=1`), which is why the interpreter key cannot survive finalization. Module-address reuse while the ledger still holds its strong reference is REFUTED (`HELD_MODULE_ADDR_REUSED=0` after a million fresh module allocations) — the outstanding reference retains the allocation. A RELEASED module's address, by contrast, was reused immediately by a distinct module object in the same interpreter (`SAME_CYCLE_MODULE_REUSED=1`), so the hazard belongs to any entry the ledger drops, not to one it still owns.
+- **Constraint 3.** No eviction of `sys.modules` and no blanket rejection of a cached entry — both remain settled from DEC-058 c17(b); a genuine second adapter construction over the same override must still succeed.
+- **Constraint 4.** The ledger is only reached with the GIL held. Confirmed already true of all six current import paths (`PyEmbeddedAdapter.cpp:699,799,868,926,1011,1054`, each behind `GilGuard`); the rule is stated so a seventh path cannot be added without it.
+- **Constraint 5.** The package currently imports its sole sibling (`gc_rate`) eagerly, so there is no live lazy-submodule case — but any future lazy `gc_garmin_adapter.*` import needs its own recording/validation rule, or it arrives unledgered and is rejected.
+
+### Cascade impact
+
+`moduleFileIsUnderDir` is replaced, not narrowed; B-STAGE9-45's findings row moves from recognizer-bug to design-defect, and B-STAGE9-64 closes with it. `testGarminConnectPyAdapter.cpp:296` gains the forged-`__path__` case, the legitimate-second-construction case, and a finalization case for constraint 2. DEC-058 c17(b) is amended to define provenance as C++-recorded identity; the rest of DEC-058 is unchanged.
+
+## DEC-067 — the Linux smoke assert gets one last strengthening, then its residual class is pinned
+
+- Status: **accepted 2026-09-20** (Inspector `garmin_inspector_v1_49`). This is the repair-round bound firing at 3 consecutive SAME-class rounds, taken as the skill's option (b) with the round's own terminal fix folded in — not a fourth repair round.
+- Reversibility: high — three lines in `appveyor.yml`, no product code.
+- Decided / last-reviewed: 2026-09-20
+- Serves: B-STAGE9-59, DEC-058 C11/C15.
+- Dependents: `appveyor.yml:257-259`; any future "the Linux leg proves the payload" claim.
+- Origin: reviewer units `B-STAGE9-59-review`, `B-STAGE9-59-r2-scope`, `B-STAGE9-59-r2-review` — three rounds, each closing the named check and naming the next weaker one.
+
+### Why this stops here
+
+Rounds 1-3 ran the same shape: the assert proves something weaker than "the payload works," the reviewer names a bundle that satisfies it anyway, the assert gets one conjunct stronger. Round 3's case is `Garmin = None` plus non-exception attributes passing `hasattr`. Each strengthening has been correct, and each has been followed by a weaker-still hypothetical, because the only check that cannot be satisfied by a wrong-but-shaped bundle is actually CALLING the Garmin API — which needs credentials and network and is forbidden in a CI smoke step by DEC-065's own scope. The class is therefore not closable by a stronger static assert, and a fourth round would narrow the same recognizer.
+
+### What is built (the terminal strengthening)
+
+`appveyor.yml:258`'s assert replaces attribute-presence with usability: `callable(_gc.Garmin)`, and each of `GarminConnectAuthenticationError` / `GarminConnectConnectionError` / `GarminConnectTooManyRequestsError` must be a `type` and a subclass of `BaseException`. Everything else from the round-2 remedy is unchanged.
+
+### What is pinned (the accepted false negative)
+
+A bundle that ships a `garminconnect` satisfying every conjunct above and still fails at runtime passes this smoke test. That is an ACCEPTED residual, on the same footing as the shellcheck declared-gap and DEC-060's Lo/So fillers. It is detected instead by the live-account acceptance criterion Stage 9 already owns — which is where "the payload actually works" has always belonged. **No further B-STAGE9-59 repair round is authorized.** A reviewer finding of this class is recorded against this DEC and closed, not dispatched.
+
+### Cascade impact
+
+B-STAGE9-59 closes on the strengthened assert plus this pin, not on a clean reviewer pass. Stage 9's live-account criterion absorbs the residual; no other row changes.
+
+### Scope-pass addendum (`DEC-067-scope`, reviewer, 2026-09-20 — binding on the builder)
+
+Pre-scoped before the edit was written. No blocking hazard; five NON-BLOCKING shape constraints, all on `appveyor.yml:258`: one physical line (a preserved YAML newline in a `>-` fold changes the parsed source); double-quoted Python literals only (a literal `'` terminates the enclosing `sh` single-quoted argument); a missing `m._gc.Garmin` or `m._gc.exceptions` raises AttributeError rather than setting `ok = False`, which is fail-closed through `|| exit 1` and is accepted; and `issubclass` needs an `isinstance(x, type)` guard or a non-class raises TypeError.
+
+The builder writes this exact source, unchanged — 522 chars, 0 single quotes, 0 newlines:
+
+`import gc_garmin_adapter.garmin_client as m, os, sys; r = os.path.realpath("squashfs-root") + os.sep; ok = os.path.realpath(m.__file__).startswith(r) and m._gc is not None and m._gc.__name__ == "garminconnect" and os.path.realpath(m._gc.__file__).startswith(r) and callable(m._gc.Garmin) and all(isinstance(x := getattr(m._gc.exceptions, e), type) and issubclass(x, BaseException) for e in ("GarminConnectAuthenticationError", "GarminConnectConnectionError", "GarminConnectTooManyRequestsError")); sys.exit(0 if ok else 1)`
+
+Inspector-verified independently, not accepted on the reviewer's word: `compile()` clean, and the exception conjunct executed against four fixtures — real exception classes `True`, a non-class value `False` (no TypeError), a real class that is not a `BaseException` subclass `False`, a missing name AttributeError (fail-closed). The walrus needs Python 3.8+; the bundled interpreter is 3.11.16 per B-STAGE9-42's pin.
+
+## DEC-068 — B-STAGE9-66's premise is refuted; the returned-object compare stays as a tripwire, and the CPython invariant it rests on becomes a test
+
+- Status: **accepted 2026-09-24** (Inspector `garmin_inspector_v1_51`, Three-Options Doctrine — ordinary engineering judgement on dead code, not a human-in-the-loop gate).
+- Reversibility: high — one comment and one test; the product branch itself is unchanged either way.
+- Decided / last-reviewed: 2026-09-24
+- Serves: B-STAGE9-66, B-STAGE9-67, DEC-066 constraint 1.
+- Dependents: `src/Cloud/PyEmbeddedAdapter.cpp:346-362`; any future change to how the adapter imports its module.
+
+### What was established, and by whom
+
+Three independent sources, two of which never saw the other's reasoning, agree that B-STAGE9-66's defect is unreachable:
+
+- `garmin_builder_stage9_v28` (unit `DEC-066-impl-r3`) ran the mutation this Inspector specified — neutralising the `:353-362` compare — and its own new forgery test STAYED GREEN. It reported that against its own interest rather than claiming the fix worked.
+- `garmin_codex_reviewer` (unit `DEC-066-impl-r3-review`, round 2, fresh context) returned CLOSED and retracted its own round-1 finding, citing CPython 3.13.5 `import.c`.
+- `s925_tz_investigator` (unit `cpython-import-return-binding`) was given ONLY the narrow CPython question — not our adapter, not our conclusion, and explicitly told that "yes it can differ" was as welcome as "no it cannot". It probed `libpython3.13.so.1.0` through a C embedding fixture AND read the source, and reported: hook returns X without writing `sys.modules` → **NULL, KeyError**; hook writes decoy D and returns something else → **D**; hook writes D and returns D → **D**. Probe and source agreed with no exceptions.
+
+Mechanism: `PyImport_Import` calls the `__import__` hook, immediately `Py_DECREF`s its result, then calls `import_get_module(tstate, module_name)`, which resolves the full dotted name in `sys.modules`. The object `PyImport_ImportModule` hands back is therefore always `sys.modules[name]` or NULL — never the hook's own return value. A NULL is caught by the existing `if (module == nullptr)` guard one line above the post-check, so `:353-362` is reached only when `module` is exactly the object the post-import scan already vetted.
+
+### Options scored
+
+1. **Delete `:353-362`.** Reliability neutral (it guards nothing today); maintainability +; best practices +. Rejected because it silently discards the tripwire: the binding guarantee is a property of *this* import call, and a future switch to `fromlist`, `importlib`, or `PyImport_ImportModuleLevelObject` would void it with nothing to notice.
+2. **Keep it unchanged.** Rejected outright. Its comment asserts the compare is "a free, load-bearing assertion" — a checkable claim about behaviour that is now known to be FALSE, in a codebase whose standing rule is that no comment may state a checkable fact about behaviour. It would also leave a permanently untestable branch in a module whose entire standard is mutation-proved tests.
+3. **Keep the branch, tell the truth about it, and make the invariant it rests on executable.** CHOSEN. Reliability + (the real risk — the invariant changing — becomes a RED test instead of an unstated assumption); maintainability + (the comment stops lying and cites this DEC); best practices + (converts an untestable claim into an assertion, which is exactly what the standing rule demands).
+
+### What is built
+
+- The `:346-353` comment is rewritten: the compare is REDUNDANT under CPython's current `PyImport_Import` semantics, retained as a tripwire, with the reason cited as DEC-068 rather than restated.
+- A new test pins the INVARIANT, not the branch: with a hostile `builtins.__import__` that writes a decoy into `sys.modules` and returns a DIFFERENT object, `PyImport_ImportModule` must hand back the `sys.modules` object. If a future CPython or a future change to our own import call breaks that, this test goes RED and this DEC is revisited.
+
+### What is pinned (the accepted residual)
+
+The `:353-362` branch itself has no RED test and cannot be given one while the invariant holds — proven, not assumed. That is an ACCEPTED untestable branch, on the same footing as DEC-067's pinned false negative. **No repair round on "the `:353-362` branch is untested" is authorized**; a finding of that class is recorded against this DEC and closed. B-STAGE9-66's cold-cache first-import residual is unaffected and remains DEC-066's own accepted residual.
+
+### Cascade impact
+
+B-STAGE9-66 closes as premise-refuted, not as fixed — no code repaired it, because nothing was broken. B-STAGE9-67 (the new test names a gate it does not reach) closes on the rename plus the invariant test. DEC-066 constraint 1 is unchanged and still met by the post-import scan.
+
+## DEC-069 — B-STAGE9-71 remedy: the Stage 9 payload assertion covers all three shipped legs
+
+- Status: **accepted 2026-09-24** (USER decision. A CI modification and a question of how much
+  evidence is enough before three blocking findings may close — cost/schedule, not a pillar-scored
+  technical call, so it was the user's to make, not the Inspector's.)
+- Reversibility: high — additions to two existing `appveyor.yml` test_script arms; no product code,
+  no new build step on either leg.
+- Decided / last-reviewed: 2026-09-24
+- Serves: B-STAGE9-71 (blocking), and gates the honest closure of B-STAGE9-48, B-STAGE9-54,
+  B-STAGE9-57. Extends DEC-067, which defined the assertion's predicates; DEC-067 is unchanged.
+  Sits under DEC-065, which already settled that installer evidence is earned on AppVeyor.
+- Dependents: `appveyor.yml` Windows `test_script` arm and macOS arm; partition commit 7.
+- Origin: Inspector `garmin_inspector_v1_53` found the gap while pre-flighting commit 7;
+  `s925_tz_investigator` unit `B-STAGE9-71-feasibility` established per-leg feasibility and patch
+  shape from the recipe sources.
+
+### The problem, restated
+
+DEC-067's assertion lives at `appveyor.yml:258`, inside the `if $CI_LINUX;` guard, while `:8-11`
+ships three images. A green run proved the Garmin payload on one of three platforms. Closing three
+installer findings on it would have repeated STAGE-9-CURSOR-AMENDMENT-3 (d)'s recorded error — one
+evidence source treated as sufficient for a whole stage — transposed onto the platform axis.
+
+### Options put to the user (cost, not correctness — all four were honest)
+
+- **Both legs (CHOSEN).** ~3 commands per leg, no new build step. All three platforms proven, so the
+  three installer findings can close on evidence that matches what they claim.
+- Windows only. Half the cost and half the untestable-locally risk; macOS stays unproven.
+- Defer both, findings stay open. Nothing overclaimed, push not delayed, Stage 9 does not close.
+- Defer both, close on Linux. Fastest; rejected — it records three installer findings as closed on
+  evidence covering one platform.
+
+### What the implementation must honour
+
+- **Assert against the PRODUCED artifact, never its staging tree.** Windows: extract or silently
+  install `GoldenCheetah_v3.8_x64.exe` and run the `python.exe` it installed. macOS: mount
+  `GoldenCheetah_v3.8_x64.dmg` and run the bundled interpreter, provenance rooted at the mount, then
+  detach. A `src\release`-only or staging-`.app`-only check proves staging input, not shipped output,
+  and does not discharge this DEC.
+- **Reuse the predicates, do not restate them.** DEC-067's `:258` payload is the definition of what
+  "a usable payload" means; the new arms assert the same thing against their own interpreter.
+- **The stated limit is carried, not quietly dropped.** On all three legs this proves the installer
+  payload contains a usable adapter and its dependencies. It does NOT prove GoldenCheetah's own
+  embedded-startup path. B-STAGE9-48/-54/-57 close against the former only.
+- **Neither new assertion is executable on the development host.** A mistake surfaces only as a failed
+  CI run costing another push cycle, so both arms are reviewed as unrunnable code — read, not tested.
+
+### Cascade impact
+
+Partition commit 7 grows from 4 hunks to 4 + 2 arms and must be re-pre-flighted before the push.
+B-STAGE9-71 closes when the arms are written; B-STAGE9-48/-54/-57 close on the resulting green run,
+against the payload claim only. DEC-067 and DEC-065 are unchanged.
