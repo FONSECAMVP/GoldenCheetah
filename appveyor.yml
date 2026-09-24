@@ -71,8 +71,8 @@ init:
       # Select gcc-11 for AppImage backward compatibility
       sudo update-alternatives --set gcc "/usr/bin/gcc-11"
       # Setup QT 6.8
-      export QTDIR=$HOME/Qt/6.8
-      export LD_LIBRARY_PATH=$QTDIR:$LD_LIBRARY_PATH
+      export QTDIR=$HOME/Qt/6.8/gcc_64
+      export LD_LIBRARY_PATH=$QTDIR/lib:$LD_LIBRARY_PATH
       export PATH=$QTDIR/bin:$PATH
       qmake --version
     else
@@ -249,11 +249,18 @@ test_script:
 - cmd: git log -1 >> GCversionWindows.txt
 - ps: if ($isWindows) { CertUtil -hashfile GoldenCheetah_v3.8_x64.exe sha256 | Select-Object -First 2 | Add-Content GCversionWindows.txt }
 - cmd: type GCversionWindows.txt
+# DEC-069
+- cmd: 7z x -y GoldenCheetah_v3.8_x64.exe -ogcwin-installroot || exit 1
+- cmd: gcwin-installroot\python.exe -I -s -c "import gc_garmin_adapter.garmin_client as m, os, sys; r = os.path.realpath('gcwin-installroot') + os.sep; ok = os.path.realpath(m.__file__).startswith(r) and m._gc is not None and m._gc.__name__ == 'garminconnect' and os.path.realpath(m._gc.__file__).startswith(r) and callable(m._gc.Garmin) and all(isinstance(x := getattr(m._gc.exceptions, e), type) and issubclass(x, BaseException) for e in ('GarminConnectAuthenticationError', 'GarminConnectConnectionError', 'GarminConnectTooManyRequestsError')); sys.exit(0 if ok else 1)" || exit 1
+- cmd: rmdir /s /q gcwin-installroot || exit 1
 
 # Linux / macOS
 - sh: >-
     if $CI_LINUX; then
       ./GoldenCheetah_v3.8_x64.AppImage --version 2>GCversionLinux.txt
+      ./GoldenCheetah_v3.8_x64.AppImage --appimage-extract || exit 1
+      env -u PYTHONPATH -u PYTHONHOME -u PYTHONUSERBASE ./squashfs-root/usr/bin/python3 -I -s -c 'import gc_garmin_adapter.garmin_client as m, os, sys; r = os.path.realpath("squashfs-root") + os.sep; ok = os.path.realpath(m.__file__).startswith(r) and m._gc is not None and m._gc.__name__ == "garminconnect" and os.path.realpath(m._gc.__file__).startswith(r) and callable(m._gc.Garmin) and all(isinstance(x := getattr(m._gc.exceptions, e), type) and issubclass(x, BaseException) for e in ("GarminConnectAuthenticationError", "GarminConnectConnectionError", "GarminConnectTooManyRequestsError")); sys.exit(0 if ok else 1)' || exit 1
+      rm -rf squashfs-root || exit 1
       git log -1 >> GCversionLinux.txt
       shasum -a 256 GoldenCheetah_v3.8_x64.AppImage | cut -f 1 -d ' '  >> GCversionLinux.txt
       cat GCversionLinux.txt
@@ -262,6 +269,12 @@ test_script:
       git log -1 >> GCversionMacOS.txt
       shasum -a 256 GoldenCheetah_v3.8_x64.dmg | cut -f 1 -d ' ' >> GCversionMacOS.txt
       cat GCversionMacOS.txt
+      mkdir -p "$PWD/gcmacos-installroot"
+      hdiutil attach GoldenCheetah_v3.8_x64.dmg -nobrowse -readonly -noautoopen -mountpoint "$PWD/gcmacos-installroot" || exit 1
+      gcmacos-installroot/GoldenCheetah.app/Contents/Frameworks/Python.framework/Versions/$PYTHON_VERSION/bin/python$PYTHON_VERSION -I -s -c 'import gc_garmin_adapter.garmin_client as m, os, sys; r = os.path.realpath("gcmacos-installroot") + os.sep; ok = os.path.realpath(m.__file__).startswith(r) and m._gc is not None and m._gc.__name__ == "garminconnect" and os.path.realpath(m._gc.__file__).startswith(r) and callable(m._gc.Garmin) and all(isinstance(x := getattr(m._gc.exceptions, e), type) and issubclass(x, BaseException) for e in ("GarminConnectAuthenticationError", "GarminConnectConnectionError", "GarminConnectTooManyRequestsError")); sys.exit(0 if ok else 1)'
+      PY_RC=$?
+      hdiutil detach "$PWD/gcmacos-installroot" -quiet || hdiutil detach "$PWD/gcmacos-installroot" -force
+      [ $PY_RC -eq 0 ] || exit 1
     fi
 
 artifacts:

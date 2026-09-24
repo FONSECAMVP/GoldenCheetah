@@ -2,7 +2,10 @@
 set -ev
 
 # Python version configuration - update this when upgrading Python
-PYTHON_APPIMAGE_VERSION="3.11.14"
+PYTHON_APPIMAGE_VERSION="3.11.16"
+# B-STAGE9-56: digest of the exact asset named at PYTHON_APPIMAGE_VERSION,
+# independently re-verified against the GitHub release API.
+PYTHON_APPIMAGE_SHA256="ea788bd339c7d8f832e246b210cb7bb27a37064aa5082f7e0963244765240c99"
 
 ### This script should be run from GoldenCheetah src directory after build
 cd src
@@ -42,6 +45,11 @@ chmod a+x linuxdeployqt-continuous-x86_64.AppImage
 # Add Python and core modules
 PYTHON_APPIMAGE_FILE="python${PYTHON_APPIMAGE_VERSION}-cp${PYTHON_VERSION//./}-cp${PYTHON_VERSION//./}-manylinux_2_28_x86_64.AppImage"
 wget --no-verbose "https://github.com/niess/python-appimage/releases/download/python${PYTHON_VERSION}/${PYTHON_APPIMAGE_FILE}"
+if [ ! -s "${PYTHON_APPIMAGE_FILE}" ] || ! echo "${PYTHON_APPIMAGE_SHA256}  ${PYTHON_APPIMAGE_FILE}" | sha256sum --check --strict -; then
+    echo "ERROR: ${PYTHON_APPIMAGE_FILE} failed SHA-256 verification (missing, empty, or checksum mismatch)" >&2
+    rm -f "${PYTHON_APPIMAGE_FILE}"
+    exit 1
+fi
 chmod +x "${PYTHON_APPIMAGE_FILE}"
 ./"${PYTHON_APPIMAGE_FILE}" --appimage-extract
 rm -f "${PYTHON_APPIMAGE_FILE}"
