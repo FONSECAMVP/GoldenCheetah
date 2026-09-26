@@ -37,10 +37,9 @@ BLOCKING:
   B-STAGE9-57[CHECKPOINT:STAGE9;RELEASE]
   B-STAGE9-71[STAGE:9]
            # -48/-54/-57/-71 are ONE class and none is code: no local installer-build environment
-           # (/dev/fuse, a linkable Python 3.11 embedding SDK, packaging tooling) and no CI artifact
-           # run yet. They close on a green AppVeyor run post-PUSH, not on builder work —
-           # `garmin-build-system-duality` in its final form. -71 residual: unpinned 7z version +
-           # unverified BadCmd NSIS profile.
+           # (/dev/fuse, a Python 3.11 embedding SDK, packaging tooling) and no CI artifact run yet.
+           # They close on a green AppVeyor run post-PUSH — `garmin-build-system-duality` in its
+           # final form. -71 residual: unpinned 7z + unverified BadCmd NSIS profile.
            # Non-blocking, unlisted (BLOCKS:{}): B-STAGE9-73/-76/-77/-117..-120/-122..-125/-128.
            # -126 and -127 are code-fixed and committed; their rows carry the traces.
            # DEC-080 narrowed DEC-077: additive default-no-op hooks OK, repairs still frozen.
@@ -99,8 +98,7 @@ NEXT_GATE: **THE CANONICAL GATE IS `ctest -LE gate-exclude` (DEC-054, dod.md:16-
            as `code: unknown`. The AppImage ships the adapter.
            KEEP `~/.goldencheetah/Andy/config/garminconnect/backfill/`'s two live staged files —
            real ZIP payloads, and the -78 regression fixture.
-           Installer class: -48/-54/-57/-71 close only on a green AppVeyor run. Neither DEC-069 CI
-           arm has ever executed, so a failure there is expected-cost, not regression.
+           Neither DEC-069 CI arm has ever executed, so a failure there is expected-cost.
            NEVER commit the untracked `python3.13-3.13.5/`, `python3.13_*.tar.xz`/`.dsc`/`.asc`,
            `FITmetadata.json`.
 CHANGESET: HEAD `4dacd8447`, 18 ahead of `origin/garmin/req028-row-lifetime` (`git rev-list --count
