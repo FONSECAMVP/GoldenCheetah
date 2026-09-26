@@ -84,6 +84,7 @@ Compact schema per `references/formats.md` § `decisions.md`. **The recap source
 | DEC-067 | B-STAGE9-59's smoke-assert class is terminated → one final strengthening (callable `Garmin`, real exception classes) and then the residual is a recorded, accepted false negative; there is no round 4 | accepted (Inspector, repair-round bound at 3 same-class rounds — ordinary engineering judgement, not a human-in-the-loop gate) | 2026-09-20 |
 | DEC-068 | B-STAGE9-66's premise is refuted by three independent sources → the returned-object compare guards nothing under CPython's `PyImport_Import` semantics; it stays as a tripwire with a truthful comment, and the invariant it rests on becomes a test instead of an unstated assumption | accepted (Inspector, Three-Options Doctrine — ordinary engineering judgement on dead code, not a human-in-the-loop gate) | 2026-09-24 |
 | DEC-069 | B-STAGE9-71 remedy — how many shipped platforms the Stage 9 payload assertion must cover before the installer findings may close → all three; Windows and macOS each gain an assertion against the PRODUCED artifact, not its staging tree | accepted (USER decision 2026-09-24 — a CI modification, so the user's call, not the Inspector's) | 2026-09-24 |
+| DEC-070 | B-STAGE9-78 remedy — how a downloaded activity reaches `RideImportWizard` when Garmin returns a ZIP → stage under the payload's TRUE extension, sniffed from the leading magic bytes, and let the wizard's existing `expandFiles()` archive route unpack it; the controller reports the real staged path instead of it being recomputed from the activity id | accepted (Inspector, Three-Options Doctrine — ordinary technical call on Garmin-side code, not a human-in-the-loop gate) | 2026-09-26 |
 
 ### Dormant index
 
@@ -3320,3 +3321,65 @@ evidence source treated as sufficient for a whole stage — transposed onto the 
 Partition commit 7 grows from 4 hunks to 4 + 2 arms and must be re-pre-flighted before the push.
 B-STAGE9-71 closes when the arms are written; B-STAGE9-48/-54/-57 close on the resulting green run,
 against the payload claim only. DEC-067 and DEC-065 are unchanged.
+
+## DEC-070 — B-STAGE9-78 remedy: stage under the payload's true extension, don't re-implement unzip
+
+- Status: **accepted 2026-09-26** (Inspector, Three-Options Doctrine. Garmin-side product code
+  with no credential, external, or irreversible element — an ordinary technical call.)
+- Reversibility: high — the staged filename and one call-site signature; no persisted schema
+  change (`imported-<uid>.json` already stores `localFilename` verbatim, whatever it is).
+- Decided / last-reviewed: 2026-09-26
+- Serves: B-STAGE9-78 (blocking). Adjacent to but NOT a fix for B-STAGE9-79, which is the
+  download-vs-import record split and stays a separate unit.
+- Dependents: `src/Cloud/GarminBackfillController.{h,cpp}` (`stagedFitPath`, the staging write
+  and the `onProgress` hand-off), `src/Cloud/GarminBackfillDialog.cpp:190` (the read side that
+  builds the wizard's file list).
+- Origin: B-STAGE9-78, from the 2026-09-26 live run. Mechanism confirmed by the Inspector
+  reading `src/Gui/RideImportWizard.cpp:443-447` directly.
+
+### The problem, restated
+
+Garmin's download-activity endpoint returns a ZIP containing `<activityId>_ACTIVITY.fit`.
+`GarminBackfillController.cpp:282-284` writes those bytes verbatim to a `.fit` filename.
+`RideImportWizard` DOES unpack archives — `expandFiles()` at `:443` matches `^(zip|gzip)$`
+against `QFileInfo(file).suffix()` and extracts via `Archive::dir`/`Archive::extract` — but it
+dispatches on the SUFFIX. A zip named `.fit` therefore skips expansion, passes the `suffixes()`
+type check as a FIT, and reaches `openRideFile` as an unparseable blob. The import layer was
+never missing; the filename lied to it.
+
+### Options scored
+
+- **A — true extension + existing wizard route (CHOSEN).** Sniff the leading bytes, write `.zip`
+  on `PK\x03\x04`, `.fit` otherwise. Reliability: highest — GC's shipped unzip path is reused,
+  so there is exactly one implementation of "unpack an archive". Scalability: covers `gzip` for
+  free, since the same wizard table already lists it. Maintainability: a magic-byte compare, no
+  archive logic in the controller. Cost: the staged path stops being derivable from the activity
+  id alone, so the read side has to be told it.
+- B — unzip inside the controller, stage the inner `*_ACTIVITY.fit`. Rejected: it creates a
+  SECOND unzip implementation beside `Archive`'s, and must grow its own empty-zip/multi-entry
+  handling. That is the two-copies-of-one-predicate failure this register's CLV Check 5 note
+  records, transposed onto archive handling. Its only advantage is keeping `stagedFitPath`'s
+  current shape.
+- C — make `RideImportWizard` dispatch on content instead of suffix. Rejected on blast radius:
+  it changes every import path in GoldenCheetah, and `GarminBackfillDialog.cpp:255-263` records
+  the standing constraint that the wizard is pre-existing shared code not to be modified for
+  this dialog.
+
+### What the implementation must honour
+
+- **Sniff, do not assume.** A bare FIT must still stage as `.fit`; the extension follows the
+  bytes, never a hardcoded expectation about what Garmin returns.
+- **One source for the staged path.** `GarminBackfillDialog.cpp:190` must not guess the
+  extension. The controller knows what it wrote and reports it; a glob or a second sniff on the
+  read side reintroduces the same split-truth defect at a new place.
+- **DES-006 and DES-009 are unchanged.** The torn-write pause and the record-then-progress order
+  at `:294-322` stay exactly as they are; only the filename and its propagation move.
+- **The two already-staged live files are the regression fixture.** `garmin-24502154112.fit` /
+  `garmin-24502696266.fit` under the athlete's `garminconnect/backfill/` are real ZIP payloads
+  from a real account and must not be deleted or rewritten.
+
+### Cascade impact
+
+B-STAGE9-78 closes on a green delta-check plus a live re-run that actually raises the ride
+library above 1146. B-STAGE9-79 is untouched and becomes the next unit. No REQ/DES row changes:
+this repairs REQ-010's implementation against its existing contract rather than altering it.

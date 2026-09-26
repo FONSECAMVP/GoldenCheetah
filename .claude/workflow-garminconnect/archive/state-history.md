@@ -8943,3 +8943,66 @@ STAGE-9-CURSOR-AMENDMENT-9 (2026-09-24, `garmin_inspector_v1_54`; deltas only �
            (i) Context at succession: builder 204k (watch), reviewer 128k, investigator 30k
            (freshly reset), Inspector 191k of 210k.
 ```
+
+## § 14 — superseded from STATE.md 2026-09-26 by `garmin_inspector_v1_56`
+
+The OPEN commit-partition detail and the NEXT_GATE push-mechanics / commit-5-and-7
+pre-flight narrative, verbatim. All of it is discharged: the 8-commit partition landed,
+the branch is pushed with an upstream now set, and the live run superseded the
+"AppVeyor run is the next gate" framing.
+
+```
+OPEN:      Commit partition, 8 planned, 5 and 6 merged into one (they share
+           `unittests/Core/garminconnect/CMakeLists.txt`, which interleaves DEC-058 and DEC-062
+           so splitting yields a commit whose tests cannot compile):
+             1 `224937824` tooling · 2 `496af3faa` Coach+UI · 3 `803d2e359` build/libusb ·
+             4 `e7b39549c` DEC-063 · 5+6 `577475bac` merged Garmin set, 22 files ·
+             7 `a6fca237e` CI (appveyor.yml + after_build.sh).
+           REMAINING: commit 8 = ledgers, then PUSH. The 5 `.claude/evidence-seals/
+           DEC040-Stage2-*.log` files B-STAGE9-74 restored need no commit — they are byte-present
+           at HEAD and the restore returned them to that state.
+           Partition trap, resolved, do not re-introduce: an earlier note called `appveyor.yml` a
+           mixed Coach/Garmin file needing a hunk split. It is not — without the `:71` QTDIR fix
+           the Linux leg dies before qmake, so every hunk is Stage 9 CI. Committed whole.
+NEXT_GATE: **B-STAGE9-78 (the zip-staged-as-.fit defect), then B-STAGE9-79.** Supersedes the
+           AppVeyor-run framing below: the 2026-09-26 live run proved Stage 9's sync journey does
+           NOT work end-to-end, and that is code, not environment. First live evidence, qmake
+           binary rebuilt from `2e6e122a7` (`make` exit 0, `releaseModuleProvenanceLedger` present
+           in the binary — the CMake-only evidence gap is now closed):
+             · CONNECT passes — `gc_obs op=auth outcome=ok`, no `garmin_auth_unknown` line,
+               tokens.json + active-account.json written 0600.
+             · MFA PASSES, first time ever exercised live, on a 2FA-enabled account
+               (`a48c11c6…`) — B-STAGE9-10's reversed-`resume_login` fix is proven.
+             · DISCONNECT passes, observed twice — credentials deleted, ledgers preserved
+               per REQ-012.
+             · SYNC FAILS end-to-end. Download/listing/dedup/resume all work; the staged file is
+               a ZIP, not a FIT, so nothing imports. Ride library unchanged at 1146.
+           Source-tree runs need `GC_GARMIN_PYPATH=<repo>/src/Python/garminconnect` or auth dies
+           as a bare `code: unknown` (ModuleNotFoundError). The AppImage does not — the adapter
+           ships in its bundled site-packages.
+           Prior framing, still true for the environment class: the push gate is DISCHARGED — user-authorized 2026-09-25,
+           branch `garmin/req028-row-lifetime` pushed to `git@github.com:FONSECAMVP/
+           GoldenCheetah.git` as a NEW branch at `ee06ea6e1`. Note the mechanics for next time:
+           `origin` is configured HTTPS with no credential helper, so an HTTPS push fails with
+           `could not read Username`; the working path is the SSH URL (key present, `gh` is
+           authenticated as FONSECAMVP). The branch still has NO upstream set — that was left
+           alone deliberately rather than rewriting the remote's URL.
+           The run this triggers is the ONLY evidence that can close B-STAGE9-48/-54/-57/-71 and
+           the only thing that can meet Stage 9's installer-provenance criterion. It cannot be
+           observed from this host without AppVeyor access.
+           Commit-ready evidence for 5 and 7, executed not claimed: `ctest -LE gate-exclude`
+           (DEC-054's canonical default-include run) **56 tests, 0 failed, 315s**, re-run after
+           the clang-format hook's own reformat plus a full rebuild to confirm that reformat was
+           cosmetic. Labels reached: garmin-fast 40, garmin-py 5, gate-guard 2, i18n-guard 2,
+           lint-guard 2, sec-guard 2, stderr-buf 2 (=55) plus 1 test carrying no `garmin-*`
+           label at all — exactly the reach DEC-054 bought and a union-of-labels run misses.
+           Count source is the OUTER ctest's stdout summary. NOT `LastTest.log`:
+           `testGarminGateCoverageGuard`'s own `--show-only=json-v1` rewrites that file as an
+           empty run in the same build dir (B-STAGE9-76).
+           NEVER commit the untracked local artifacts `python3.13-3.13.5/`,
+           `python3.13_*.tar.xz`/`.dsc`/`.asc`, `FITmetadata.json`.
+           After the push: the AppVeyor run is the evidence that closes B-STAGE9-48/-54/-57/-71.
+           Neither DEC-069 CI arm (Windows 7z/NSIS, macOS hdiutil) has ever executed — they are
+           unrunnable on a Linux host by design, so their first run is that one, and a failure
+           there is expected-cost, not regression.
+```
