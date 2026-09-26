@@ -25,8 +25,8 @@ OPEN:      Two blocking code defects from the live run, both Garmin-side, both d
                STILL OPEN, and the ONLY thing left: a live re-run raising the ride library above
                1146. A green gate does NOT discharge it. That re-run needs the user's real Garmin
                account — a human-in-the-loop gate, not builder work.
-               Frozen, NOT this branch's to fix: `ArchiveFile.cpp`'s empty GZIP arm and
-               `CloudService.cpp:565`'s `gUncompress` — real upstream GoldenCheetah defects.
+               Frozen, NOT this branch's: `ArchiveFile.cpp`'s empty GZIP arm and
+               `CloudService.cpp:565`'s `gUncompress` — upstream GoldenCheetah defects.
                Committed `02248b0d6`; T-227 `81fd6d4e8`; both gated 56/56. Pre-commit
                clang-format rewraps new C++: rebuild to prove it cosmetic, never `--amend`.
              · B-STAGE9-79 (DEC-071) — the dedup ledger records an activity at download time, so
@@ -67,8 +67,7 @@ BLOCKING:
            # environment (/dev/fuse, a linkable Python 3.11 embedding SDK, packaging tooling)
            # and no CI artifact run yet. They close on a green AppVeyor run post-PUSH, not on
            # builder work. This is `garmin-build-system-duality` in its final form.
-           # B-STAGE9-71 residual: the image's 7z version is unpinned and the Windows
-           # installer's own BadCmd NSIS profile is unverified until that run.
+           # B-STAGE9-71 residual: unpinned 7z version + unverified BadCmd NSIS profile.
            # Non-blocking, deliberately unlisted (BLOCKS:{}): B-STAGE9-73/-76/-77.
 CASCADE:   — (DEC-015 fully propagated; ledger_drift_lint.py clean at last run)
 LAST_CLV:  clv_findings.py 2026-09-27 (v1_60), after B-STAGE9-101..108.
@@ -79,11 +78,12 @@ LAST_CLV:  clv_findings.py 2026-09-27 (v1_60), after B-STAGE9-101..108.
            Editing a findings row: a naive `split("|")`/join overwrites the BODY on rows with no
            trailing pipe and an unescaped `||` in a quote splits a cell — locate the disposition
            cell relative to `BLOCKS:` and escape pipes as `\|`.
-NEXT_GATE: **B-STAGE9-108-lock (DEC-076), then B-STAGE9-79 slice 2.** The lock unit is DISPATCHED
-           to the builder and stays in slice 1's chartered store files; review it on the diff, not
-           on green, then commit. Slice 2 follows, carrying -107's message alongside DEC-071's
-           renames and the RideCache seam. B-STAGE9-78 stays ahead of both on the
-           human-in-the-loop live re-run.
+NEXT_GATE: **B-STAGE9-79 slice 2 (DISPATCHED to `garmin_builder_stage9_v33`), then slice 3.**
+           Slice 2 = both skip predicates + the record split + the dialog's RideCache seam +
+           -107's message + DEC-071's renames. Slice 3 = the legacy-entry migration, deliberately
+           cut out of slice 2 and NOT optional: until it lands, an existing athlete's legacy
+           `imported` rows still read as complete and -79's orphans survive for them. -79 does not
+           close on slice 2 alone. B-STAGE9-78 stays ahead on the human-in-the-loop live re-run.
            Below: **B-STAGE9-78, then B-STAGE9-79.** Both are code, both blocking, both from the
            first live end-to-end run on the qmake binary rebuilt from `2e6e122a7` (`make` exit 0,
            `releaseModuleProvenanceLedger` in the binary — the CMake-only evidence gap is closed).
@@ -114,7 +114,8 @@ CHANGESET: HEAD `54afaaf16` (ahead 9): `02248b0d6` B-STAGE9-78 code, `d58afde4a`
            retires the predecessor, never itself; v1_60's tab and pane are closed).
            Dirty: NOTHING tracked once this ledger commit lands. B-STAGE9-106 still binds: pre-
            commit stashes the tree, so never commit while a builder round is in flight.
-TEAM:      builder `garmin_builder_stage9_v32` (w1:pM, Claude/Sonnet, 150k) · reviewer
+TEAM:      builder `garmin_builder_stage9_v33` (w1:pM, Claude/Sonnet, fresh; v32 soft-landed at
+           206k at a clean seam before slice 2, not during it) · reviewer
            `garmin_codex_reviewer` (w1:pD, Codex, 152k; brief it COLD every round) · investigator
            `s979_record_split_investigator` (w1:pR, Codex, 54k, idle) · Inspector
            `garmin_inspector_v1_61` (Opus, auto). Codex soft-lands via `/new` (same pane/PID/name);
@@ -124,7 +125,7 @@ TEAM:      builder `garmin_builder_stage9_v32` (w1:pM, Claude/Sonnet, 150k) · r
            with scripts/claude_context.py / codex_context.py before trusting one (B-STAGE9-58:
            an unchanging value across wakes is a stale-session symptom, not a stable one).
 RIGOR:     full (Phase 0 backfill 2026-07-11; A0-A5 + STRIDE + per-slice CLV)
-BUDGETS:   STATE (this file) 11.8kB/12kB cap [at the line — trim discharged narrative before
+BUDGETS:   STATE (this file) 11.8kB/12kB cap [ok] [at the line — trim discharged narrative before
            adding] · WIKI 16,350B [BREACH, next compaction target] · FINDINGS worst single row
            9,191B (B-STAGE9-16) against DEC-074's register-specific 1,200B hard / 600B soft pair
            (live median 496B, p90 1,793B). Still [BREACH] deliberately: B-STAGE9-97 carries the
