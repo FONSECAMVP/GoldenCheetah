@@ -89,6 +89,7 @@ Compact schema per `references/formats.md` § `decisions.md`. **The recap source
 | DEC-072 | B-STAGE9-83 remedy — how a gzip payload reaches the importer when `Archive::dir`'s GZIP arm is an empty block → inflate it in the controller at stage time with zlib's gzip window, re-sniff the inflated bytes and stage under THEIR true extension; amends DEC-070's false "gzip comes for free" premise, keeps `ZipReader` as the only unzip | accepted (Inspector, Three-Options Doctrine — ordinary technical call on Garmin-side code) | 2026-09-26 |
 | DEC-073 | B-STAGE9-86 remedy after 3/3 same-class repair rounds — how the staged payload stops being a shape guess → invert the predicate: accept ONE complete single-member gzip (`Z_STREAM_END` + `avail_in == 0`) whose output is FIT-or-ZIP, refuse everything else as `PauseReason::UndecodablePayload` rather than staging it hopefully; discharges the repair cap as remedy (a), architectural | accepted (Inspector, Three-Options Doctrine; deterministic surface, so the pin option was rejected on evidence) | 2026-09-26 |
 | DEC-074 | findings.md's row-size budget — whether the 200B `ROW` cap that has stood in BREACH since 2026-09-06 is the defect or the rows are → the CAP is the defect: retire the generic 200B figure for findings.md specifically and replace it with a register-specific ~600B soft target / ~1,200B hard cap, then fix the real defect (round-by-round narrative leaking into the hot row instead of being condensed at disposition) by routing it to the existing cold archive | accepted (Inspector, Three-Options Doctrine on the librarian's measured Job-3 draft — a ledger/tooling convention, not a human-in-the-loop gate) | 2026-09-26 |
+| DEC-075 | DEC-071 slice 1's write contract — whether the callers or the store hold the invariant that `pending` survives a cursor write → the STORE holds it: `pending` becomes single-writer (`saveBackfillState` persists cursor fields and preserves the on-disk map, ignoring its argument's), and "nothing to lose" splits from "cannot model" — `NotFound`/`Torn` still self-heal by overwrite while `SidecarPermissionsRejected` and a new `PendingManifestMalformed` make all three writers refuse | accepted (Inspector, Three-Options Doctrine on the reviewer's B-STAGE9-79-s1 delta-check — ordinary technical call on Garmin-side code) | 2026-09-27 |
 
 ### Dormant index
 
@@ -3693,3 +3694,63 @@ breach honestly rather than being declared green: B-STAGE9-97 carries the follow
 
 No REQ/DES/TEST row changes. B-STAGE9-96..100 record the findings this pass turned up,
 including one the gate structurally cannot catch (B-STAGE9-98).
+
+---
+
+## DEC-075 — slice 1's write contract: `pending` is single-writer, and a file we cannot model is never overwritten
+
+- Status: **accepted 2026-09-27** (Inspector, Three-Options Doctrine, on `garmin_codex_reviewer`'s
+  B-STAGE9-79-s1 delta-check. Product code, no credential or external element — an ordinary
+  technical call, not a human-in-the-loop gate.)
+- Reversibility: medium — it adds a `LoadStatus` value and turns three writers' silent overwrite
+  into a typed refusal. Callers already map `false` to `PauseReason::StatePersistFailed`.
+- Decided / last-reviewed: 2026-09-27
+- Serves: B-STAGE9-101/-102/-103 (all blocking), raised against DEC-071's slice 1. Amends DEC-071's
+  write path only; its record split and `RideCache` completion seam are untouched.
+- Dependents: `src/Cloud/GarminSidecarStore.{h,cpp}`, `unittests/Core/garminconnect/
+  testGarminSidecarStore.cpp`. Slice 2's call routes need NO load-first change once this lands.
+- Origin: the B-STAGE9-79-s1 review round; the clobber was first seen by the Inspector reading the
+  diff and independently confirmed BLOCKING by the reviewer.
+
+### The problem, restated
+
+DEC-071 put `pending` inside `BackfillState`, and slice 1's serializer writes the whole struct. Both
+existing callers (`GarminBackfillController.cpp:270-274`, `:405-409`) build a FRESH `BackfillState`
+and save it, so every sync run writes `pending: {}` over the manifest DEC-071 exists to protect —
+the orphaned-activity defect survives its own fix. Two adjacent holes came out of the same review:
+the writers treat an owner-wider (`SidecarPermissionsRejected`) cursor as empty and overwrite it at
+0600, destroying a cursor that a `chmod` would have recovered; and a present-but-non-object
+`pending` entry is silently skipped on load, so the next write makes that omission permanent.
+
+### Chosen: the store holds the invariant, not its callers
+
+1. `pending` is **single-writer**: only `recordPendingBackfill`/`dropPendingBackfill` mutate it.
+   `saveBackfillState` persists the three cursor fields and preserves the on-disk map verbatim,
+   ignoring its argument's `pending`. No caller can forget to load first, because loading first is
+   no longer the caller's job.
+2. Split "nothing to lose" from "something we cannot model". `NotFound` and `Torn` (unparseable
+   bytes — no recoverable content by definition) keep self-healing by overwrite, the existing
+   `recordImported` precedent. `SidecarPermissionsRejected` and a new `PendingManifestMalformed`
+   (parsed fine, but `pending` or one of its entries is not an object) make all three writers
+   return `false` and write nothing.
+
+Scored 5/4/5/5 (reliability/scalability/maintainability/best practices) against:
+
+- **Fix the two call sites in slice 2 to load first** (2/4/2/2). The reviewer rejected this
+  explicitly: it leaves the unsafe default in place, so every future caller of a cursor writer must
+  remember an invariant nothing enforces. Cheapest now, and the same class of bug is B-STAGE9-79
+  itself.
+- **Move `pending` into its own sidecar file** (4/4/3/3). Removes the clobber by construction, but
+  adds a third file, a migration, and a second permission gate, and reaches past slice 1's
+  chartered files for no reliability gain over option 1.
+
+Also rejected, and worth recording because it is the obvious shortcut: making malformed `pending`
+plain `Torn` and refusing to write on `Torn`. That converts today's self-healing corrupt-cursor
+case into one needing manual file deletion — a user-visible regression on a path that already
+recovers — so the fifth status is what buys the guarantee without it.
+
+### Cascade impact
+
+No REQ/DES row changes. `LoadStatus` gains a fifth value, so every `switch` over it is a cascade
+site; slice 2 must not add a load-first workaround this makes dead. TEST ids for the three new
+assertions are allocated when the repair round reports.
