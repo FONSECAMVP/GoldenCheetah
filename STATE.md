@@ -17,39 +17,31 @@ PHASE:     2.2 · Garmin Connect integration, Stage 9 (real-account connect/MFA/
            green AppVeyor run (DEC-065) that cannot be produced on this host.
 OPEN:      Two blocking code defects from the live run, both Garmin-side, both decided:
              · B-STAGE9-78 (DEC-070/-072/-073) — the staged payload never reached the importer
-               in a shape it could read. Rounds 1-3 each fixed one shape and the reviewer found
-               the next; round 4 hit the 3-of-3 repair cap, discharged as remedy (a) = DEC-073,
-               which INVERTS the predicate. The accept-set is now closed and independently
-               confirmed: `GarminBackfillController.cpp` inflates a gzip member once, then
-               accepts ONLY ZIP- or FIT-signed bytes and otherwise pauses as
-               `PauseReason::UndecodablePayload` before staging, `recordImported` and the cursor
-               advance. The reviewer's B-STAGE9-92 delta-check named no byte sequence that can
-               reach `AtomicFile::writeOver` unsigned. Closed on that evidence: B-STAGE9-83,
-               -86, -89, -90, -92, -93, -94. Pinned by T-218..T-224.
+               in a shape it could read. CODE IS DONE AND COMMITTED: `GarminBackfillController.cpp`
+               inflates a gzip member once, then accepts ONLY ZIP- or FIT-signed bytes and
+               otherwise pauses as `PauseReason::UndecodablePayload` before staging,
+               `recordImported` and the cursor advance. Accept-set closed on the reviewer's
+               B-STAGE9-92 delta-check; pinned by T-218..T-227. Round history -> findings.md.
                STILL OPEN, and the ONLY thing left on this row: a live re-run that actually
-               raises the ride library above 1146. A green gate does not discharge it — four
+               raises the ride library above 1146. A green gate does NOT discharge it — four
                green suites in a row missed this class, and the last blocking gap (B-STAGE9-92)
-               was found by the Inspector READING THE DIFF, not by any test.
-               B-STAGE9-91's residue is discharged in findings.md: T-225/T-226 pin the false
-               positives and T-227 (a 13-byte `.FIT`-at-8 buffer) forces the length literal
-               itself, mutation-isolated. The reviewer found nothing blocking, so the
-               consecutive-same counter never reached 2. Gate 56/56 on that tree.
+               was found by the Inspector READING THE DIFF, not by any test. That re-run needs
+               the user's real Garmin account: it is a human-in-the-loop gate, not builder work.
                Frozen, and NOT this branch's to fix: `ArchiveFile.cpp`'s empty GZIP arm and
                `CloudService.cpp:565`'s `gUncompress` — real upstream GoldenCheetah defects.
-               Gate was green on this tree before the commit: `cmake --build . -j2` exit 0 and
-               `ctest -LE gate-exclude` exit 0, **56/56, 0 failed, 318.6s**, logs at
-               `/tmp/insp-exchange/gate2-{build,ctest}.log`. A green gate is NOT permission to
-               close B-STAGE9-78 (see above), only to commit.
-               The 20 code/test/`.ts` files are committed `02248b0d6`. pre-commit's clang-format
-               rewrapped 3 of them (whitespace only); confirmed cosmetic by rebuilding both
-               affected targets, 2/2 pass (`/tmp/insp-exchange/postformat-*.log`).
-               NEXT: B-STAGE9-79 under DEC-071, dispatched in TWO slices against the one DEC —
-               its remedy spans 5 files and 4 separable concerns, which is more than one atomic
-               builder turn. Slice 1 = the store layer (`GarminSidecarStore.{h,cpp}` gains the
-               versioned `pending` manifest; tests in `testGarminSidecarStore.cpp`). Slice 2 =
-               both call routes + the dialog's completion evaluation, and ONLY slice 2 may do
-               DEC-071's renames — renaming `recordImported` while its callers are frozen
-               breaks the build.
+               Code/tests/`.ts` committed `02248b0d6`; T-227 `81fd6d4e8`; both gated 56/56.
+               Expect pre-commit clang-format to rewrap new C++ — rebuild the affected target to
+               prove the rewrap cosmetic before re-staging, never `--amend`.
+               NEXT: B-STAGE9-79 under DEC-071, in TWO slices against the one DEC — its remedy
+               spans 5 files and 4 separable concerns, more than one atomic builder turn.
+               Slice 1 (store layer: `GarminSidecarStore.{h,cpp}` gains the versioned `pending`
+               manifest, tests in `testGarminSidecarStore.cpp`) is BUILT and the builder reports
+               `done` — NOT yet collected, NOT reviewed, NOT gated, NOT committed. Its 3 dirty
+               paths are the only dirty paths in the tree.
+               Slice 2 = both call routes (`GarminBackfillController.cpp` skip predicate + record
+               order, `GarminConnect.cpp:906-931`) + the dialog's completion evaluation via
+               `RideCache::getRide(startTimeGMT.toUTC())`. ONLY slice 2 may do DEC-071's renames:
+               renaming `recordImported` while its callers are frozen breaks the build.
                Builder replies overflow the pane cap every round; the
                `/tmp/insp-exchange/<unit>.md` spill is expected, not a fault.
              · B-STAGE9-79 (DEC-071) — dedup ledger records an activity at download time, so a
@@ -119,16 +111,17 @@ NEXT_GATE: **B-STAGE9-78, then B-STAGE9-79.** Both are code, both blocking, both
            macOS hdiutil) has ever executed, so a failure there is expected-cost, not regression.
            NEVER commit the untracked local artifacts `python3.13-3.13.5/`,
            `python3.13_*.tar.xz`/`.dsc`/`.asc`, `FITmetadata.json`.
-CHANGESET: HEAD `02248b0d6` (the B-STAGE9-78 fix, ahead 3 of upstream). Inspector lineage
-           v1_55..v1_58 and what each filed is recoverable from this file's own git history and
-           the B-STAGE9-78..94 rows; v1_58 retired at 217k of 210k, its pane closed by v1_59.
-           Dirty: decisions/findings/STATE only (this ledger pass).
-TEAM:      builder `garmin_builder_stage9_v32` (w1:pM, Claude/Sonnet, 0k — v31 soft-landed at
-           217k) · reviewer `garmin_codex_reviewer` (w1:pD, Codex, 64k after a `/new` at 211k;
-           brief it COLD every round) · investigator `s979_record_split_investigator` (w1:pR,
-           Codex, 156k, idle) · Inspector `garmin_inspector_v1_59` (w1:p2W, Opus). A soft-landed
-           pane reads `unknown` until its first turn writes a transcript — expected, not a
-           fault. Numbers go stale fast — re-read each pane
+CHANGESET: HEAD `def6aabcb` (ahead 5 of upstream): `02248b0d6` B-STAGE9-78 code, `d58afde4a`
+           DEC-071..073, `81fd6d4e8` T-227, `def6aabcb` DEC-074. Lineage v1_55..v1_59 is
+           recoverable from this file's git history; v1_58 retired at 217k, v1_59 at 201k.
+           Dirty: ONLY B-STAGE9-79 slice 1's 3 files.
+TEAM:      builder `garmin_builder_stage9_v32` (w1:pM, Claude/Sonnet, 89k) · reviewer
+           `garmin_codex_reviewer` (w1:pD, Codex, 64k; brief it COLD every round) · investigator
+           `s979_record_split_investigator` (w1:pR, Codex, 156k, idle) · Inspector
+           `garmin_inspector_v1_60` (Opus). Codex soft-lands via `/new` (same pane/PID/name);
+           the Claude builder needs `/exit` then `agent start ... -- --permission-mode auto
+           --model sonnet`, and a soft-landed pane reads `unknown` until its first turn writes a
+           transcript — expected, not a fault. Numbers go stale fast — re-read each pane
            with scripts/claude_context.py / codex_context.py before trusting one (B-STAGE9-58:
            an unchanging value across wakes is a stale-session symptom, not a stable one).
 RIGOR:     full (Phase 0 backfill 2026-07-11; A0-A5 + STRIDE + per-slice CLV)
