@@ -28,6 +28,8 @@ OPEN:      Commit partition, 8 planned, 5 and 6 merged into one (they share
            mixed Coach/Garmin file needing a hunk split. It is not — without the `:71` QTDIR fix
            the Linux leg dies before qmake, so every hunk is Stage 9 CI. Committed whole.
 BLOCKING:
+  B-STAGE9-78[CHECKPOINT:STAGE:9]
+  B-STAGE9-79[CHECKPOINT:STAGE:9]
   B-STAGE9-48[CHECKPOINT:STAGE9;RELEASE]
   B-STAGE9-54[CHECKPOINT:STAGE9;RELEASE]
   B-STAGE9-57[CHECKPOINT:STAGE9;RELEASE]
@@ -49,7 +51,23 @@ LAST_CLV:  clv_findings.py 2026-09-24 (`garmin_inspector_v1_55`, post-B-STAGE9-7
            reports FAIL at OUTSTANDING=4, and that is its floor until the AppVeyor run — a FAIL
            here means "blocked on an external run", not "unfinished work". Full history of every
            prior CLV run -> archive § 13.
-NEXT_GATE: **THE APPVEYOR RUN.** The push gate is DISCHARGED — user-authorized 2026-09-25,
+NEXT_GATE: **B-STAGE9-78 (the zip-staged-as-.fit defect), then B-STAGE9-79.** Supersedes the
+           AppVeyor-run framing below: the 2026-09-26 live run proved Stage 9's sync journey does
+           NOT work end-to-end, and that is code, not environment. First live evidence, qmake
+           binary rebuilt from `2e6e122a7` (`make` exit 0, `releaseModuleProvenanceLedger` present
+           in the binary — the CMake-only evidence gap is now closed):
+             · CONNECT passes — `gc_obs op=auth outcome=ok`, no `garmin_auth_unknown` line,
+               tokens.json + active-account.json written 0600.
+             · MFA PASSES, first time ever exercised live, on a 2FA-enabled account
+               (`a48c11c6…`) — B-STAGE9-10's reversed-`resume_login` fix is proven.
+             · DISCONNECT passes, observed twice — credentials deleted, ledgers preserved
+               per REQ-012.
+             · SYNC FAILS end-to-end. Download/listing/dedup/resume all work; the staged file is
+               a ZIP, not a FIT, so nothing imports. Ride library unchanged at 1146.
+           Source-tree runs need `GC_GARMIN_PYPATH=<repo>/src/Python/garminconnect` or auth dies
+           as a bare `code: unknown` (ModuleNotFoundError). The AppImage does not — the adapter
+           ships in its bundled site-packages.
+           Prior framing, still true for the environment class: the push gate is DISCHARGED — user-authorized 2026-09-25,
            branch `garmin/req028-row-lifetime` pushed to `git@github.com:FONSECAMVP/
            GoldenCheetah.git` as a NEW branch at `ee06ea6e1`. Note the mechanics for next time:
            `origin` is configured HTTPS with no credential helper, so an HTTPS push fails with
