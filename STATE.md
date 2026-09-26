@@ -22,11 +22,9 @@ OPEN:      Two blocking code defects from the live run, both Garmin-side, both d
                otherwise pauses as `PauseReason::UndecodablePayload` before staging,
                `recordImported` and the cursor advance. Accept-set closed on the reviewer's
                B-STAGE9-92 delta-check; pinned by T-218..T-227. Round history -> findings.md.
-               STILL OPEN, and the ONLY thing left on this row: a live re-run that actually
-               raises the ride library above 1146. A green gate does NOT discharge it — four
-               green suites in a row missed this class, and the last blocking gap (B-STAGE9-92)
-               was found by the Inspector READING THE DIFF, not by any test. That re-run needs
-               the user's real Garmin account: it is a human-in-the-loop gate, not builder work.
+               STILL OPEN, and the ONLY thing left: a live re-run raising the ride library above
+               1146. A green gate does NOT discharge it. That re-run needs the user's real Garmin
+               account — a human-in-the-loop gate, not builder work.
                Frozen, NOT this branch's to fix: `ArchiveFile.cpp`'s empty GZIP arm and
                `CloudService.cpp:565`'s `gUncompress` — real upstream GoldenCheetah defects.
                Committed `02248b0d6`; T-227 `81fd6d4e8`; both gated 56/56. Expect pre-commit
@@ -43,7 +41,8 @@ OPEN:      Two blocking code defects from the live run, both Garmin-side, both d
                a slice-2 file — routed there, NOT a slice-1 repair) and -108 (the writers are now
                load-modify-write and nothing serializes them; `s979_record_split_investigator` is
                establishing whether two writers for one uid can actually overlap before a lock or
-               a pin is chosen). The 3 dirty paths are still the only dirty paths in the tree.
+               a pin is chosen — DISPATCHED, unit B-STAGE9-108-concurrency, NOT yet collected).
+               Slice 1's code is COMMITTED `b82063118`; it is inert until slice 2 calls it.
                Slice 2 = both call routes (`GarminBackfillController.cpp` skip predicate + record
                order, `GarminConnect.cpp:906-931`) + the dialog's completion evaluation via
                `RideCache::getRide(startTimeGMT.toUTC())`. ONLY slice 2 may do DEC-071's renames:
@@ -85,41 +84,43 @@ LAST_CLV:  clv_findings.py 2026-09-27 (v1_60), after B-STAGE9-101..108.
            a findings row overwrites the BODY on rows with no trailing pipe, and an unescaped
            `||` inside a quote splits a cell: locate the disposition cell relative to the
            `BLOCKS:` cell and escape pipes as `\|`.
-NEXT_GATE: **B-STAGE9-78, then B-STAGE9-79.** Both are code, both blocking, both from the
+NEXT_GATE: **Collect B-STAGE9-108-concurrency, then B-STAGE9-79 slice 2.** The investigator's
+           YES/NO/UNPROVEN on overlapping cursor writers decides -108 (lock vs pinned non-issue) —
+           record that as a DEC before slice 2 touches the writers again. Slice 2 then carries
+           -107's message alongside DEC-071's renames and the RideCache seam. B-STAGE9-78 stays
+           ahead of both on the human-in-the-loop live re-run.
+           Below: **B-STAGE9-78, then B-STAGE9-79.** Both are code, both blocking, both from the
            first live end-to-end run on the qmake binary rebuilt from `2e6e122a7` (`make` exit 0,
            `releaseModuleProvenanceLedger` in the binary — the CMake-only evidence gap is closed).
            That run proved CONNECT, MFA (first live exercise ever, 2FA account) and DISCONNECT
            all pass; SYNC FAILS with the library unchanged at 1146. Detail -> archive § 13.
-           B-STAGE9-78 closes on a reviewer delta-check PLUS a live re-run that actually raises
-           the library above 1146 — a green ctest does not discharge it; every green gate in this
-           project already missed this defect once. Proof of that: round 1 passed the canonical
-           56-test gate (rebuild exit 0, 0 failed, 328s, verified by the Inspector itself) and
-           the reviewer still found a blocking gap in it.
            B-STAGE9-79's completion seam is settled by measurement, not assumption: the three
            live sidecar entries match their imported/inner-FIT timestamps to the second, so
            `RideCache::getRide(startTimeGMT.toUTC())`'s exact compare is safe and no tolerance
            window may be added without new measurement (DEC-071).
-           Slice 1 repeated the pattern: 56/56 green and three blocking findings anyway.
-           B-STAGE9-101 was visible in the diff and invisible to every test.
+           The pattern that keeps holding: a 56/56 green gate has now shipped a blocking defect
+           three times running (B-STAGE9-92, then -101, each found by READING THE DIFF, not by any
+           test). Dispatch the reviewer on every diff and read it yourself; never close on green.
            Source-tree runs need `GC_GARMIN_PYPATH=<repo>/src/Python/garminconnect` or auth dies
            as a bare `code: unknown` (ModuleNotFoundError). The AppImage ships the adapter.
            Keep the two live staged files under `~/.goldencheetah/Andy/config/garminconnect/
-           backfill/` — real ZIP payloads from a real account, the B-STAGE9-78 regression fixture,
-           and B-STAGE9-79 means the app can never re-offer them.
-           Still true for the installer class: B-STAGE9-48/-54/-57/-71 close only on a green
-           AppVeyor run, unobservable from this host. Neither DEC-069 CI arm (Windows 7z/NSIS,
-           macOS hdiutil) has ever executed, so a failure there is expected-cost, not regression.
+           backfill/` — real ZIP payloads, the B-STAGE9-78 regression fixture, and B-STAGE9-79
+           means the app can never re-offer them.
+           Installer class: B-STAGE9-48/-54/-57/-71 close only on a green AppVeyor run,
+           unobservable here. Neither DEC-069 CI arm has ever executed, so a failure there is
+           expected-cost, not regression.
            NEVER commit the untracked local artifacts `python3.13-3.13.5/`,
            `python3.13_*.tar.xz`/`.dsc`/`.asc`, `FITmetadata.json`.
-CHANGESET: HEAD `1142a2ff6` (ahead 6 of upstream): `02248b0d6` B-STAGE9-78 code, `d58afde4a`
-           DEC-071..073, `81fd6d4e8` T-227, `def6aabcb` DEC-074, `1142a2ff6` cursor. Lineage
-           v1_55..v1_60 is in this file's git history; v1_58 retired at 217k, v1_59 at 211k by
-           v1_60 (the successor retires the predecessor, never itself).
-           Dirty: ONLY B-STAGE9-79 slice 1's 3 files. Nothing staged.
-TEAM:      builder `garmin_builder_stage9_v32` (w1:pM, Claude/Sonnet, 89k) · reviewer
-           `garmin_codex_reviewer` (w1:pD, Codex, 115k; brief it COLD every round) · investigator
-           `s979_record_split_investigator` (w1:pR, Codex, 156k, idle) · Inspector
-           `garmin_inspector_v1_60` (w1:p2X, Opus, auto). Codex soft-lands via `/new` (same pane/PID/name);
+CHANGESET: HEAD `b82063118` (ahead 8): `02248b0d6` B-STAGE9-78 code, `d58afde4a` DEC-071..073,
+           `81fd6d4e8` T-227, `def6aabcb` DEC-074, `7814efdd0` DEC-075 + B-STAGE9-101..106,
+           `b82063118` slice 1 code (436+/51-, gated 56/56 by the Inspector). Lineage v1_55..v1_61
+           is in this file's git history; v1_58 retired at 217k, v1_59 at 211k, v1_60 at 197k (the
+           successor retires the predecessor, never itself).
+           Dirty: NOTHING tracked. Only the never-commit untracked artifacts remain.
+TEAM:      builder `garmin_builder_stage9_v32` (w1:pM, Claude/Sonnet, 150k) · reviewer
+           `garmin_codex_reviewer` (w1:pD, Codex, 152k; brief it COLD every round) · investigator
+           `s979_record_split_investigator` (w1:pR, Codex, 156k, working) · Inspector
+           `garmin_inspector_v1_61` (Opus, auto). Codex soft-lands via `/new` (same pane/PID/name);
            the Claude builder needs `/exit` then `agent start ... -- --permission-mode auto
            --model sonnet`, and a soft-landed pane reads `unknown` until its first turn writes a
            transcript — expected, not a fault. Numbers go stale fast — re-read each pane
