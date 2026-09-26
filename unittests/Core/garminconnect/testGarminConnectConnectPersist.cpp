@@ -1057,6 +1057,90 @@ class TestGarminConnectConnectPersist : public QObject
                  "nothing may be recorded for the disconnected account either");
     }
 
+    // T-243 (a) — DEC-079 amendment, B-STAGE9-127: an unversioned (v0) backfill
+    // state seeded directly on disk must survive a successful readFile()
+    // unchanged in its schemaVersion and cursor, while the imported map still
+    // gains the activity (recordImported is unconditional).
+    void v0BackfillStateSurvivesReadFileCursorUnchangedButImportRecorded()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QVERIFY(GarminTokenStore::persistConnectSuccess(tmp.path(), kUid, kBlob));
+
+        QVERIFY(QDir().mkpath(GarminSidecarStore::directoryFor(tmp.path())));
+        const QByteArray v0Json = QByteArray(
+            "{\"last_success_startTimeGMT\":\"2026-07-01 00:00:00\",\"range_start\":\"\",\"range_end\":\"\"}");
+        const QString v0Path = GarminSidecarStore::backfillStateFilePath(tmp.path(), kUid);
+        QVERIFY(writeFileVerbatim(v0Path, v0Json));
+        QVERIFY(QFile::setPermissions(v0Path, QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+
+        const GarminSidecarStore::BackfillLoadResult seeded = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(seeded.isOk());
+        QCOMPARE(seeded.state.schemaVersion, 0);
+
+        FakeSyncClient client;
+        GarminActivitySummary a1;
+        a1.activityId = QStringLiteral("V0A");
+        a1.startTimeGMT = QStringLiteral("2026-08-01 00:00:00");
+        client.listResult = {a1};
+        client.originalBytesById[QStringLiteral("V0A")] = makeZip(QStringLiteral("V0A.fit"), makeFitBytes());
+
+        GarminConnect gc(nullptr, &client, tmp.path());
+        QStringList errors;
+        QList<CloudServiceEntry*> entries = gc.readdir(QString(), errors, QDateTime(), QDateTime());
+        QCOMPARE(entries.size(), 1);
+
+        QByteArray data;
+        QVERIFY2(gc.readFile(&data, entries.at(0)->name, entries.at(0)->id),
+                 "readFile against a v0 state must still succeed");
+
+        const GarminSidecarStore::BackfillLoadResult after = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(after.isOk());
+        QCOMPARE(after.state.schemaVersion, 0); // T-243: DEC-079 amendment — no cursor save on v0
+        QCOMPARE(after.state.lastSuccessStartTimeGMT, QStringLiteral("2026-07-01 00:00:00"));
+
+        const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
+        QVERIFY(imported.isOk());
+        QVERIFY2(imported.entries.contains(QStringLiteral("V0A")), "recordImported must still run unconditionally");
+    }
+
+    // T-243 (b) — sibling to (a): the same run against a v1 (post-migration)
+    // state must NOT over-fire the guard — the cursor still advances.
+    void v1BackfillStateStillAdvancesCursorOnReadFile()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QVERIFY(GarminTokenStore::persistConnectSuccess(tmp.path(), kUid, kBlob));
+
+        GarminSidecarStore::BackfillState seed;
+        seed.lastSuccessStartTimeGMT = QStringLiteral("2026-07-01 00:00:00");
+        QVERIFY(GarminSidecarStore::saveBackfillState(tmp.path(), kUid, seed));
+        const GarminSidecarStore::BackfillLoadResult seeded = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(seeded.isOk());
+        QCOMPARE(seeded.state.schemaVersion, 1);
+
+        FakeSyncClient client;
+        GarminActivitySummary a1;
+        a1.activityId = QStringLiteral("V1A");
+        a1.startTimeGMT = QStringLiteral("2026-08-01 00:00:00");
+        client.listResult = {a1};
+        client.originalBytesById[QStringLiteral("V1A")] = makeZip(QStringLiteral("V1A.fit"), makeFitBytes());
+
+        GarminConnect gc(nullptr, &client, tmp.path());
+        QStringList errors;
+        QList<CloudServiceEntry*> entries = gc.readdir(QString(), errors, QDateTime(), QDateTime());
+        QCOMPARE(entries.size(), 1);
+
+        QByteArray data;
+        QVERIFY2(gc.readFile(&data, entries.at(0)->name, entries.at(0)->id),
+                 "readFile against a v1 state must succeed");
+
+        const GarminSidecarStore::BackfillLoadResult after = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(after.isOk());
+        QCOMPARE(after.state.schemaVersion, 1);
+        QCOMPARE(after.state.lastSuccessStartTimeGMT, QStringLiteral("2026-08-01 00:00:00")); // cursor advanced
+    }
+
     // =====================================================================
     // T-050 — end-to-end connect->persist->resolve->readdir round-trip
     // =====================================================================

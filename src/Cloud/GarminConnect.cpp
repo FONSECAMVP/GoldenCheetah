@@ -925,10 +925,13 @@ void GarminConnect::recordImport(const QString& activityId, const QString& stage
     GarminSidecarStore::recordImported(dir, uid, activityId, entry);
 
     // DES-010 step 6 — advance the resume cursor to this activity's server time.
+    // DEC-079 amendment, B-STAGE9-127.
     const GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(dir, uid);
-    GarminSidecarStore::BackfillState state = bf.isOk() ? bf.state : GarminSidecarStore::BackfillState{};
-    state.lastSuccessStartTimeGMT = startTimeGMT;
-    GarminSidecarStore::saveBackfillState(dir, uid, state);
+    if (!(bf.isOk() && bf.state.schemaVersion == 0)) {
+        GarminSidecarStore::BackfillState state = bf.isOk() ? bf.state : GarminSidecarStore::BackfillState{};
+        state.lastSuccessStartTimeGMT = startTimeGMT;
+        GarminSidecarStore::saveBackfillState(dir, uid, state);
+    }
 
     // DES-010 step 7 (OUT OF SCOPE this slice — REQ-NF-Obs-001): the ErrorBus
     // success event (count + duration) is a later item. TODO(REQ-NF-Obs-001).
