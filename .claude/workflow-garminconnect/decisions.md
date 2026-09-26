@@ -88,6 +88,7 @@ Compact schema per `references/formats.md` § `decisions.md`. **The recap source
 | DEC-071 | B-STAGE9-79 remedy — how a cancelled import stops orphaning an activity → split the one overloaded record into a `pending` download/resume manifest plus a completion-only imported map, and take import-completion from `RideCache::getRide(startTimeGMT.toUTC())`, the seam the wizard itself uses; exact match justified by measurement, no tolerance window | accepted (Inspector, Three-Options Doctrine on the investigator's scored report plus the B-STAGE9-79-seam measurements) | 2026-09-26 |
 | DEC-072 | B-STAGE9-83 remedy — how a gzip payload reaches the importer when `Archive::dir`'s GZIP arm is an empty block → inflate it in the controller at stage time with zlib's gzip window, re-sniff the inflated bytes and stage under THEIR true extension; amends DEC-070's false "gzip comes for free" premise, keeps `ZipReader` as the only unzip | accepted (Inspector, Three-Options Doctrine — ordinary technical call on Garmin-side code) | 2026-09-26 |
 | DEC-073 | B-STAGE9-86 remedy after 3/3 same-class repair rounds — how the staged payload stops being a shape guess → invert the predicate: accept ONE complete single-member gzip (`Z_STREAM_END` + `avail_in == 0`) whose output is FIT-or-ZIP, refuse everything else as `PauseReason::UndecodablePayload` rather than staging it hopefully; discharges the repair cap as remedy (a), architectural | accepted (Inspector, Three-Options Doctrine; deterministic surface, so the pin option was rejected on evidence) | 2026-09-26 |
+| DEC-074 | findings.md's row-size budget — whether the 200B `ROW` cap that has stood in BREACH since 2026-09-06 is the defect or the rows are → the CAP is the defect: retire the generic 200B figure for findings.md specifically and replace it with a register-specific ~600B soft target / ~1,200B hard cap, then fix the real defect (round-by-round narrative leaking into the hot row instead of being condensed at disposition) by routing it to the existing cold archive | accepted (Inspector, Three-Options Doctrine on the librarian's measured Job-3 draft — a ledger/tooling convention, not a human-in-the-loop gate) | 2026-09-26 |
 
 ### Dormant index
 
@@ -3625,3 +3626,70 @@ when this lands. B-STAGE9-87 is CLOSED and rides in the pending commit. B-STAGE9
 close on any gate: it needs the live re-run raising the ride library above 1146. If a future
 maintainer wants gzip to import rather than be refused, the fix is `ArchiveFile.cpp`'s empty arm
 plus `Archive::extract`, upstream and shared — not another shape branch in this controller.
+
+## DEC-074 — findings.md's 200B row cap is the defect, not the rows
+
+- Status: **accepted 2026-09-26** (Inspector, Three-Options Doctrine, on the librarian's
+  measured Job-3 compaction draft. A ledger convention and its gate trigger — no product
+  code, no credential, no external element.)
+- Reversibility: high — it changes one budget line in `STATE.md` and the rows it already
+  compacted are recoverable verbatim from `archive/findings-detail.md`.
+- Decided / last-reviewed: 2026-09-26
+- Serves: the `FINDINGS worst single row` BUDGETS breach, standing since 2026-09-06.
+- Dependents: `STATE.md` BUDGETS line; `archive/findings-detail.md` (append-only);
+  `scripts/clv_findings.py` is UNCHANGED and stays the gate.
+- Origin: librarian Job-3 COMPACTION draft, 2026-09-26, dispatched by
+  `garmin_inspector_v1_59`.
+
+### The problem, restated
+
+`STATE.md` has carried `FINDINGS worst single row 19,477B/200B cap [BREACH]` for 20 days.
+A budget line that is permanently red is a line nobody reads — and this register's own
+header exists because the project once produced a clean gate over a live blocker.
+
+### Why the cap, not the rows
+
+Three measurements, each independently sufficient:
+
+1. **The schema cannot meet 200B even fully compacted.** findings.md declares "this file
+   holds the closure" — a 6-cell record (id, cycle, severity, summary, disposition,
+   resolved-by). 200B is the generic `ROW` figure from `references/state-and-tiers.md`,
+   written for DECIDX/LSN one-liners and applied to this register without adjustment. It is
+   closer to the budget for the summary cell alone.
+2. **The project already set its own de facto floor, and it is not 200B.** The 2026-09-06
+   compaction produced `B-R017-06` — four of six cells archived — at 538B. The live median
+   is 496B. The median row already matches the project's own prior target.
+3. **The defect is tail leakage, not median bloat.** All five worst rows were
+   already-resolved findings whose 4-13 adversarial repair rounds accumulated inline
+   instead of being condensed at disposition. A 200B cap and a 1,200B cap are both blown
+   through by a 19kB round-13 saga sitting in a hot row; only routing it to the cold
+   archive fixes it.
+
+### Chosen, and the two alternatives rejected
+
+Scored 5/5/5/5 (reliability/scalability/maintainability/best practices): retire the flat
+200B cap for findings.md, set ~600B soft / ~1,200B hard, and route the leakage to the
+existing archive. Rejected:
+
+- **Compact all 507 rows to meet 200B** (2/1/2/2) — re-compacts rows the project already
+  compacted once, and would have to destroy closure content to hit a number no evidence
+  supports.
+- **Keep 200B, pin it as an accepted permanent breach** (2/3/2/2) — leaves a red line in
+  BUDGETS forever and trains readers to skip the section. The precedent for a pin-DEC
+  (shellcheck's declared gap, DEC-060's fillers) is a residual the machine genuinely
+  cannot recognise; a budget number the maintainer picked is not that.
+
+### Executed in this pass, and independently verified
+
+Five rows compacted 66,734B -> 5,173B; 61,561B moved VERBATIM to
+`archive/findings-detail.md` (append-only, its prior 2,808 lines untouched). Nothing
+deleted. `clv_findings.py` re-run by the Inspector after applying: 499 data rows, 0
+MALFORMED, 0 UNKNOWN-SEVERITY, 0 UNKNOWN-DISPOSITION, 0 NEEDS-DISPOSITION, 493 OK, the
+SAME 6 OUTSTANDING ids at the same lines — byte-identical to the pre-apply run. Worst row
+is now 9,191B (B-STAGE9-16), still over the new 1,200B hard cap, so BUDGETS stays in
+breach honestly rather than being declared green: B-STAGE9-97 carries the follow-up pass.
+
+### Cascade impact
+
+No REQ/DES/TEST row changes. B-STAGE9-96..100 record the findings this pass turned up,
+including one the gate structurally cannot catch (B-STAGE9-98).

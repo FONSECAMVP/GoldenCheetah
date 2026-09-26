@@ -1,4 +1,4 @@
-# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-26 by `garmin_inspector_v1_57`
+# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-26 by `garmin_inspector_v1_59`
 # Per-id lifecycle status lives ONLY in .claude/workflow-garminconnect/traceability.md (DEC-015 SSOT).
 # For a DEC's status read decisions.md. For a finding's severity/disposition read findings.md.
 # ALL superseded cursor narrative -> .claude/workflow-garminconnect/archive/state-history.md
@@ -53,8 +53,8 @@ OPEN:      Two blocking code defects from the live run, both Garmin-side, both d
                Builder replies overflow the pane cap every round; the
                `/tmp/insp-exchange/<unit>.md` spill is expected, not a fault.
              · B-STAGE9-79 (DEC-071) — dedup ledger records an activity at download time, so a
-               cancelled import orphans it forever. Remedy fully specified, BUILDER-READY,
-               not yet dispatched.
+               cancelled import orphans it forever. Slice 1 (store layer) is DISPATCHED to
+               `garmin_builder_stage9_v32`; slice 2 (call routes + completion seam) follows it.
            The 8-commit partition is complete and pushed; upstream `origin/garmin/req028-row-
            lifetime` is set and HEAD is ahead 1 (the B-STAGE9-78..81 ledger commit). Partition
            and push detail -> archive § 14.
@@ -79,9 +79,12 @@ BLOCKING:
            # assertion), B-STAGE9-76 (gate-procedure corrections), B-STAGE9-77 (clang-format
            # scope note on the i18n markers).
 CASCADE:   — (DEC-015 fully propagated; ledger_drift_lint.py clean at last run)
-LAST_CLV:  clv_findings.py 2026-09-26, re-run by v1_59 after the `02248b0d6` commit — unchanged.
+LAST_CLV:  clv_findings.py 2026-09-26 (v1_59), re-run three times this pass: before the
+           DEC-074 compaction, after applying it, and after B-STAGE9-96..100.
            0 MALFORMED / 0 UNKNOWN-SEVERITY / 0 UNKNOWN-DISPOSITION / 0 NEEDS-DISPOSITION /
-           **6 OUTSTANDING** / 492 OK over 498 rows. The 6 are exactly the BLOCKING set above.
+           **6 OUTSTANDING** / 498 OK over 504 rows. The 6 are exactly the BLOCKING set above,
+           and they did not move across the compaction — that parity IS the proof the
+           61,561B archive move changed no verdict.
            FAIL at OUTSTANDING=6 is the honest floor: B-STAGE9-78 awaits the live re-run, -79
            awaits its build, and 4 await the external AppVeyor run. A naive `split("|")`/join on
            a findings row overwrites the BODY on rows with no trailing pipe, and an unescaped
@@ -129,13 +132,16 @@ TEAM:      builder `garmin_builder_stage9_v32` (w1:pM, Claude/Sonnet, 0k — v31
            with scripts/claude_context.py / codex_context.py before trusting one (B-STAGE9-58:
            an unchanging value across wakes is a stale-session symptom, not a stable one).
 RIGOR:     full (Phase 0 backfill 2026-07-11; A0-A5 + STRIDE + per-slice CLV)
-BUDGETS:   STATE (this file) 10.2kB/12kB cap [ok, recompacted this pass] · WIKI 16,284B
-           [BREACH, next compaction target] · FINDINGS worst single row 19,477B/200B cap
-           [BREACH, flagged since 2026-09-06] · DECIDX active index 109 lines/500 [ok] ·
-           LSN/DECIDX whole-file sizes not measured this pass.
-COUNTS:    REQ29+16 REQ-NF (next:garmin-030) · DEC73 (next:garmin-074) · DES14+2 lettered
-           (next:garmin-015) · TEST max T-227 (next:T-228) · findings 499 rows, max id
-           B-STAGE9-95 (next:B-STAGE9-96 — grep `B-STAGE9-[0-9]+` for the true max before
+BUDGETS:   STATE (this file) 11.8kB/12kB cap [ok, near the line] · WIKI 16,350B [BREACH, next
+           compaction target] · FINDINGS worst single row 9,191B (B-STAGE9-16) against DEC-074's
+           new register-specific 1,200B hard / 600B soft pair — the flat 200B figure is retired
+           for this register, since the live median is 496B and p90 1,793B. Still [BREACH], and
+           deliberately so: B-STAGE9-97 carries the ~50-row follow-up pass. 61,561B moved
+           verbatim to archive/findings-detail.md this pass · DECIDX active index 75 DEC rows/500
+           [ok] · LSN whole-file size not measured this pass.
+COUNTS:    REQ29+16 REQ-NF (next:garmin-030) · DEC74 (next:garmin-075) · DES14+2 lettered
+           (next:garmin-015) · TEST max T-227 (next:T-228) · findings 504 rows, max id
+           B-STAGE9-100 (next:B-STAGE9-101 — grep `B-STAGE9-[0-9]+` for the true max before
            allocating; the REGISTRIES pointer does not cover this namespace).
            B-STAGE9-95: traceability.md's TEST cells stop at T-211 while T-212..T-227 are built
            and committed. Non-blocking, deliberately deferred to the next ledger seam.
