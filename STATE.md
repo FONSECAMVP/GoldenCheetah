@@ -1,4 +1,4 @@
-# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-26 by `garmin_inspector_v1_56`
+# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-26 by `garmin_inspector_v1_57`
 # Per-id lifecycle status lives ONLY in .claude/workflow-garminconnect/traceability.md (DEC-015 SSOT).
 # For a DEC's status read decisions.md. For a finding's severity/disposition read findings.md.
 # ALL superseded cursor narrative -> .claude/workflow-garminconnect/archive/state-history.md
@@ -15,11 +15,45 @@ PHASE:     2.2 · Garmin Connect integration, Stage 9 (real-account connect/MFA/
            Stage 9 is NOT closeable: the 2026-09-26 live run proved the sync journey fails on
            two real code defects (B-STAGE9-78/-79), and installer-provenance still needs a
            green AppVeyor run (DEC-065) that cannot be produced on this host.
-OPEN:      Two blocking code defects from the live run, both Garmin-side:
-             · B-STAGE9-78 — staged payload is a ZIP under a `.fit` name, so nothing imports.
-               Remedy decided in DEC-070; builder round in flight.
-             · B-STAGE9-79 — dedup ledger records an activity at download time, so a cancelled
-               import orphans it forever. Investigator drafting the three-option remedy report.
+OPEN:      Two blocking code defects from the live run, both Garmin-side, both decided:
+             · B-STAGE9-78 (DEC-070/-072/-073) — the staged payload never reached the importer
+               in a shape it could read. Rounds 1-3 each fixed one shape and the reviewer found
+               the next; round 4 hit the 3-of-3 repair cap, discharged as remedy (a) = DEC-073,
+               which INVERTS the predicate. The accept-set is now closed and independently
+               confirmed: `GarminBackfillController.cpp` inflates a gzip member once, then
+               accepts ONLY ZIP- or FIT-signed bytes and otherwise pauses as
+               `PauseReason::UndecodablePayload` before staging, `recordImported` and the cursor
+               advance. The reviewer's B-STAGE9-92 delta-check named no byte sequence that can
+               reach `AtomicFile::writeOver` unsigned. Closed on that evidence: B-STAGE9-83,
+               -86, -89, -90, -92, -93, -94. Pinned by T-218..T-224.
+               STILL OPEN, and the ONLY thing left on this row: a live re-run that actually
+               raises the ride library above 1146. A green gate does not discharge it — four
+               green suites in a row missed this class, and the last blocking gap (B-STAGE9-92)
+               was found by the Inspector READING THE DIFF, not by any test.
+               B-STAGE9-91 LANDED: T-225 (`.FIT` at byte 7) + T-226 (12-byte buffer), 33/33,
+               production file md5-identical (`0d0c5227...`), both clauses mutation-isolated.
+               Reviewer NOT-CLOSED, CLASS SAME, count 1 of 3, NOTHING BLOCKING: the fixtures
+               pin false positives but not the literals — offset 8->9 still refuses T-225's
+               buffer, 14->13 still refuses T-226's. Named remedy is ONE fixture, T-227: a
+               13-BYTE `.FIT`-at-8 payload separating `size() >= 14` from `>= 13`. Non-blocking;
+               it does NOT hold the commit.
+               Frozen, and NOT this branch's to fix: `ArchiveFile.cpp`'s empty GZIP arm and
+               `CloudService.cpp:565`'s `gUncompress` — real upstream GoldenCheetah defects.
+               Gate was green on this tree before the commit: `cmake --build . -j2` exit 0 and
+               `ctest -LE gate-exclude` exit 0, **56/56, 0 failed, 318.6s**, logs at
+               `/tmp/insp-exchange/gate2-{build,ctest}.log`. A green gate is NOT permission to
+               close B-STAGE9-78 (see above), only to commit.
+               The 20 code/test/`.ts` files are committed `02248b0d6`. pre-commit's clang-format
+               rewrapped 3 of them (whitespace only); confirmed cosmetic by rebuilding both
+               affected targets, 2/2 pass (`/tmp/insp-exchange/postformat-*.log`).
+               NEXT, in order: (1) dispatch T-227. (2) dispatch B-STAGE9-79 under DEC-071.
+               SOFT-LAND the reviewer BEFORE B-STAGE9-79's review, not during it — 211k of a
+               258k Codex window leaves no room for a multi-file delta-check.
+               Builder replies overflow the pane cap every round; the
+               `/tmp/insp-exchange/<unit>.md` spill is expected, not a fault.
+             · B-STAGE9-79 (DEC-071) — dedup ledger records an activity at download time, so a
+               cancelled import orphans it forever. Remedy fully specified, BUILDER-READY,
+               not yet dispatched.
            The 8-commit partition is complete and pushed; upstream `origin/garmin/req028-row-
            lifetime` is set and HEAD is ahead 1 (the B-STAGE9-78..81 ledger commit). Partition
            and push detail -> archive § 14.
@@ -30,6 +64,9 @@ BLOCKING:
   B-STAGE9-54[CHECKPOINT:STAGE9;RELEASE]
   B-STAGE9-57[CHECKPOINT:STAGE9;RELEASE]
   B-STAGE9-71[STAGE:9]
+           # B-STAGE9-83/-86/-89/-90/-92 were ONE defect class (payload shape reaching the
+           # importer); all five are closed in findings.md on the reviewer's B-STAGE9-92
+           # delta-check, so only -78 remains from that class and only on live evidence.
            # The last four are ONE class and none is code: there is no local installer-build
            # environment (/dev/fuse, a linkable Python 3.11 embedding SDK, packaging tooling)
            # and no CI artifact run yet. They close on a green AppVeyor run post-PUSH, not on
@@ -41,10 +78,14 @@ BLOCKING:
            # assertion), B-STAGE9-76 (gate-procedure corrections), B-STAGE9-77 (clang-format
            # scope note on the i18n markers).
 CASCADE:   — (DEC-015 fully propagated; ledger_drift_lint.py clean at last run)
-LAST_CLV:  clv_findings.py 2026-09-26 (`garmin_inspector_v1_56`, re-run on its own orientation).
+LAST_CLV:  clv_findings.py 2026-09-26, re-run by v1_59 after the `02248b0d6` commit — unchanged.
            0 MALFORMED / 0 UNKNOWN-SEVERITY / 0 UNKNOWN-DISPOSITION / 0 NEEDS-DISPOSITION /
-           **6 OUTSTANDING** / 479 OK over 485 rows. The 6 are the BLOCKING set above. FAIL at
-           OUTSTANDING=6 is the honest floor: 2 await builder work, 4 await the external run.
+           **6 OUTSTANDING** / 492 OK over 498 rows. The 6 are exactly the BLOCKING set above.
+           FAIL at OUTSTANDING=6 is the honest floor: B-STAGE9-78 awaits the live re-run, -79
+           awaits its build, and 4 await the external AppVeyor run. A naive `split("|")`/join on
+           a findings row overwrites the BODY on rows with no trailing pipe, and an unescaped
+           `||` inside a quote splits a cell: locate the disposition cell relative to the
+           `BLOCKS:` cell and escape pipes as `\|`.
 NEXT_GATE: **B-STAGE9-78, then B-STAGE9-79.** Both are code, both blocking, both from the
            first live end-to-end run on the qmake binary rebuilt from `2e6e122a7` (`make` exit 0,
            `releaseModuleProvenanceLedger` in the binary — the CMake-only evidence gap is closed).
@@ -56,7 +97,13 @@ NEXT_GATE: **B-STAGE9-78, then B-STAGE9-79.** Both are code, both blocking, both
                nothing imports. Ride library unchanged at 1146.
            B-STAGE9-78 closes on a reviewer delta-check PLUS a live re-run that actually raises
            the library above 1146 — a green ctest does not discharge it; every green gate in this
-           project already missed this defect once.
+           project already missed this defect once. Proof of that: round 1 passed the canonical
+           56-test gate (rebuild exit 0, 0 failed, 328s, verified by the Inspector itself) and
+           the reviewer still found a blocking gap in it.
+           B-STAGE9-79's completion seam is settled by measurement, not assumption: the three
+           live sidecar entries match their imported/inner-FIT timestamps to the second, so
+           `RideCache::getRide(startTimeGMT.toUTC())`'s exact compare is safe and no tolerance
+           window may be added without new measurement (DEC-071).
            Source-tree runs need `GC_GARMIN_PYPATH=<repo>/src/Python/garminconnect` or auth dies
            as a bare `code: unknown` (ModuleNotFoundError). The AppImage does not — the adapter
            ships in its bundled site-packages.
@@ -68,23 +115,22 @@ NEXT_GATE: **B-STAGE9-78, then B-STAGE9-79.** Both are code, both blocking, both
            macOS hdiutil) has ever executed, so a failure there is expected-cost, not regression.
            NEVER commit the untracked local artifacts `python3.13-3.13.5/`,
            `python3.13_*.tar.xz`/`.dsc`/`.asc`, `FITmetadata.json`.
-CHANGESET: HEAD `182f6a587` (ahead 1 of upstream). `garmin_inspector_v1_55` filed
-           B-STAGE9-78..81 from the live run and committed them, then was retired at 255k.
-           `garmin_inspector_v1_56` took DEC-070 (B-STAGE9-78 remedy) and dispatched the
-           B-STAGE9-78 builder round and the B-STAGE9-79 investigation. Nothing staged.
-TEAM:      builder `garmin_builder_stage9_v30` (w1:pM, Claude/Sonnet, dispatched from 0k) ·
-           reviewer `garmin_codex_reviewer` (w1:pD, Codex, 153k) · investigator
-           `s979_record_split_investigator` (w1:pR, Codex, 30k, renamed from `s925_tz_`) ·
-           Inspector `garmin_inspector_v1_56` (w1:p2S, Opus, ~50k of 210k). Numbers go stale
-           fast — re-read each pane with scripts/claude_context.py / codex_context.py before
-           trusting one (B-STAGE9-58: an unchanging value across wakes is a stale-session
-           symptom, not a stable one).
+CHANGESET: HEAD `02248b0d6` (the B-STAGE9-78 fix, ahead 3 of upstream). Inspector lineage
+           v1_55..v1_58 and what each filed is recoverable from this file's own git history and
+           the B-STAGE9-78..94 rows; v1_58 retired at 217k of 210k, its pane closed by v1_59.
+           Dirty: decisions/findings/STATE only (this ledger pass).
+TEAM:      builder `garmin_builder_stage9_v31` (w1:pM, Claude/Sonnet, 192k) · reviewer
+           `garmin_codex_reviewer` (w1:pD, Codex, 211k — soft-land due; brief it COLD every
+           round) · investigator `s979_record_split_investigator` (w1:pR, Codex, 156k, idle) ·
+           Inspector `garmin_inspector_v1_59` (w1:p2W, Opus). Numbers go stale fast — re-read each pane
+           with scripts/claude_context.py / codex_context.py before trusting one (B-STAGE9-58:
+           an unchanging value across wakes is a stale-session symptom, not a stable one).
 RIGOR:     full (Phase 0 backfill 2026-07-11; A0-A5 + STRIDE + per-slice CLV)
-BUDGETS:   STATE (this file) ~7kB/12kB cap [FIXED this pass, was 290,364B] · WIKI 16,284B
+BUDGETS:   STATE (this file) 10.2kB/12kB cap [ok, recompacted this pass] · WIKI 16,284B
            [BREACH, next compaction target] · FINDINGS worst single row 19,477B/200B cap
            [BREACH, flagged since 2026-09-06] · DECIDX active index 109 lines/500 [ok] ·
            LSN/DECIDX whole-file sizes not measured this pass.
-COUNTS:    REQ29+16 REQ-NF (next:garmin-030) · DEC70 (next:garmin-071) · DES14+2 lettered
-           (next:garmin-015) · TEST~T-211 (next:garmin-T-212) · findings 485 data rows, max id
-           B-STAGE9-81 (next:B-STAGE9-82 — grep `B-STAGE9-[0-9]+` for the true max before
+COUNTS:    REQ29+16 REQ-NF (next:garmin-030) · DEC73 (next:garmin-074) · DES14+2 lettered
+           (next:garmin-015) · TEST max T-226 (next:T-227) · findings 498 rows, max id
+           B-STAGE9-94 (next:B-STAGE9-95 — grep `B-STAGE9-[0-9]+` for the true max before
            allocating; the REGISTRIES pointer does not cover this namespace).

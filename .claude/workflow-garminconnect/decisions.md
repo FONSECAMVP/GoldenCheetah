@@ -85,6 +85,9 @@ Compact schema per `references/formats.md` § `decisions.md`. **The recap source
 | DEC-068 | B-STAGE9-66's premise is refuted by three independent sources → the returned-object compare guards nothing under CPython's `PyImport_Import` semantics; it stays as a tripwire with a truthful comment, and the invariant it rests on becomes a test instead of an unstated assumption | accepted (Inspector, Three-Options Doctrine — ordinary engineering judgement on dead code, not a human-in-the-loop gate) | 2026-09-24 |
 | DEC-069 | B-STAGE9-71 remedy — how many shipped platforms the Stage 9 payload assertion must cover before the installer findings may close → all three; Windows and macOS each gain an assertion against the PRODUCED artifact, not its staging tree | accepted (USER decision 2026-09-24 — a CI modification, so the user's call, not the Inspector's) | 2026-09-24 |
 | DEC-070 | B-STAGE9-78 remedy — how a downloaded activity reaches `RideImportWizard` when Garmin returns a ZIP → stage under the payload's TRUE extension, sniffed from the leading magic bytes, and let the wizard's existing `expandFiles()` archive route unpack it; the controller reports the real staged path instead of it being recomputed from the activity id | accepted (Inspector, Three-Options Doctrine — ordinary technical call on Garmin-side code, not a human-in-the-loop gate) | 2026-09-26 |
+| DEC-071 | B-STAGE9-79 remedy — how a cancelled import stops orphaning an activity → split the one overloaded record into a `pending` download/resume manifest plus a completion-only imported map, and take import-completion from `RideCache::getRide(startTimeGMT.toUTC())`, the seam the wizard itself uses; exact match justified by measurement, no tolerance window | accepted (Inspector, Three-Options Doctrine on the investigator's scored report plus the B-STAGE9-79-seam measurements) | 2026-09-26 |
+| DEC-072 | B-STAGE9-83 remedy — how a gzip payload reaches the importer when `Archive::dir`'s GZIP arm is an empty block → inflate it in the controller at stage time with zlib's gzip window, re-sniff the inflated bytes and stage under THEIR true extension; amends DEC-070's false "gzip comes for free" premise, keeps `ZipReader` as the only unzip | accepted (Inspector, Three-Options Doctrine — ordinary technical call on Garmin-side code) | 2026-09-26 |
+| DEC-073 | B-STAGE9-86 remedy after 3/3 same-class repair rounds — how the staged payload stops being a shape guess → invert the predicate: accept ONE complete single-member gzip (`Z_STREAM_END` + `avail_in == 0`) whose output is FIT-or-ZIP, refuse everything else as `PauseReason::UndecodablePayload` rather than staging it hopefully; discharges the repair cap as remedy (a), architectural | accepted (Inspector, Three-Options Doctrine; deterministic surface, so the pin option was rejected on evidence) | 2026-09-26 |
 
 ### Dormant index
 
@@ -3383,3 +3386,242 @@ never missing; the filename lied to it.
 B-STAGE9-78 closes on a green delta-check plus a live re-run that actually raises the ride
 library above 1146. B-STAGE9-79 is untouched and becomes the next unit. No REQ/DES row changes:
 this repairs REQ-010's implementation against its existing contract rather than altering it.
+
+## DEC-071 — B-STAGE9-79 remedy: two records, and RideCache is the import-completion seam
+
+- Status: **accepted 2026-09-26** (Inspector, Three-Options Doctrine, on the investigator's
+  scored report plus a measurement that settled its one open question. Product code, no
+  credential or external element — an ordinary technical call.)
+- Reversibility: medium — it adds a persisted `pending` record and changes which record the
+  skip predicate consults. A migration touches real athlete sidecar files, so the write path
+  must be atomic and the legacy shape must stay readable.
+- Decided / last-reviewed: 2026-09-26
+- Serves: B-STAGE9-79 (blocking). Depends on DEC-070 having landed the staged-path plumbing;
+  does not alter it.
+- Dependents: `src/Cloud/GarminSidecarStore.{h,cpp}` (schema + writers), `src/Cloud/
+  GarminBackfillController.cpp:229-235` (the skip predicate) and `:282-324` (the record
+  order), `src/Cloud/GarminBackfillDialog.cpp` (the completion evaluation), `src/Cloud/
+  GarminConnect.cpp:874-931` (the incremental-sync route that writes the same two records).
+- Origin: B-STAGE9-79 from the 2026-09-26 live run; option report and measurements by
+  `s979_record_split_investigator`, units B-STAGE9-79 and B-STAGE9-79-seam.
+
+### The problem, restated
+
+One record is serving two questions. `recordImported()` fires at `GarminBackfillController.cpp
+:301`, right after the bytes land — so it means "downloaded" — while `:233`'s
+`imported.contains(s.activityId)` reads it as "imported" and skips the id forever. A cancelled
+or failed wizard import therefore orphans the activity permanently: staged in a directory no
+UI surfaces, and invisible to every future backfill. The name encodes the confusion.
+
+### Chosen: separate the records, and take completion from RideCache
+
+`backfill-state` gains a versioned `pending[id] = {startTimeGMT, local_filename}` manifest and
+remains the download/resume record; `imported-<uid>.json` becomes import-completion ONLY; the
+skip predicates at `GarminBackfillController.cpp:229-235` and `GarminConnect.cpp:874-879`
+consult completion only. Scored 5/5/4/5 (reliability/scalability/maintainability/best
+practices) against the two alternatives:
+
+- Adding a `staged|complete` field to the existing imported map (2/4/2/2) — overloads one map
+  with two lifecycles and cannot classify the existing three-field entries.
+- Re-listing the whole requested range every run and skipping completed ids (4/2/4/3) —
+  re-lists up to the five-year cap purely to rediscover pending work, gutting the cursor.
+
+### The completion seam, settled by measurement not assumption
+
+The investigator's report correctly flagged that no import-completion signal exists:
+`RideImportWizard::process()` returns while awaiting Save (`src/Gui/RideImportWizard.cpp:
+768-805`, Inspector-verified) and the wizard is a plain `QDialog` with no completion signal;
+the real import happens later in `abortClicked()` at `:1118`. The seam is instead the
+wizard's OWN already-imported test — `rideCache->getRide(ridedatetime.toUTC())` at `:1050` —
+which needs no change to shared code and so respects DEC-070's freeze on that file.
+
+That seam is only sound if the timestamps agree exactly, because `RideCache::getRide(QDateTime)`
+(`src/Core/RideCache.cpp:807-813`) is a bare `item->dateTime == dateTime` compare with no
+tolerance. A one-second drift would re-offer an activity forever — the same orphan reversed.
+Measured on the three live sidecar entries, all three match to the second:
+
+- `24344154258` (`.tcx`, the one that DID import): sidecar `startTimeGMT 2026-09-13 10:33:17`
+  == the imported ride's `RIDE.STARTTIME` `2026/09/13 10:33:17 UTC`.
+- `24502154112` and `24502696266` (the two ZIP fixtures): the inner `*_ACTIVITY.fit`'s session
+  field 2 and first record field 253 both decode to `2026-09-26 09:10:43` / `09:54:01` UTC,
+  exactly matching their sidecar `startTimeGMT`.
+
+So: no FIT pre-parse and no tolerance window is justified by evidence, and neither may be added
+without new measurement. Implement the exact seam.
+
+### What the implementation must honour
+
+- **Evaluate completion after the wizard finishes, per activity**, via
+  `getRide(startTimeGMT.toUTC())`. A `pending` entry whose timestamp has no RideCache match
+  stays pending and is re-offered; one that matches is recorded complete and dropped from
+  pending. Do NOT use `process()`'s return as completion.
+- **Migration self-classifies; it does not blanket re-offer.** The measurement above shows the
+  seam separates the imported `.tcx` from the two never-imported ZIPs correctly, so legacy
+  entries are classified by evaluating each against RideCache once. The investigator's earlier
+  conservative "re-offer all legacy entries" is superseded by that measurement.
+- **Crash order is pending-then-cursor, atomically, before progress is reported.** A crash
+  between staging and completion must leave a `pending` entry, which is safely re-offered.
+  DES-009's resumability contract at `:294-296` and DES-006's torn-write pause are preserved,
+  not relaxed; do NOT fix this by moving `recordImported` after the wizard.
+- **Both routes, not just backfill.** `GarminConnect.cpp:906-931` writes the same two records
+  on the incremental path and must follow the same split, or the defect survives there.
+- **Rename what the split reveals.** `recordImported` means "downloaded"; the new split is the
+  moment to make each name state what its record actually holds (see B-STAGE9-85).
+
+### Cascade impact
+
+REQ-008/010/016; DES-006/009/010; TEST-045/046/048, T-176–T-189, T-194–T-196 need review for
+the changed predicate, plus new migration and crash-order tests. B-STAGE9-79 closes on a green
+delta-check AND a live re-run in which a cancelled import is successfully retried from the UI.
+B-STAGE9-84's orphaned-staging-artifact edge is in this DEC's blast radius and should be
+reconsidered here rather than separately.
+
+## DEC-072 — B-STAGE9-83 remedy: inflate gzip at stage time; there is no gzip route to reuse
+
+- Status: **accepted 2026-09-26** (Inspector, Three-Options Doctrine. Garmin-side product code,
+  no credential/external/irreversible element — an ordinary technical call.)
+- Reversibility: high — one private helper plus one branch in `stagedPayloadPath`'s caller; no
+  persisted schema change, no shared-code edit.
+- Decided / last-reviewed: 2026-09-26
+- Serves: B-STAGE9-83 (blocking), B-STAGE9-85 (non-blocking naming). Amends DEC-070; does not
+  supersede it — the ZIP half of DEC-070 is proven correct and stays.
+- Dependents: `src/Cloud/GarminBackfillController.{h,cpp}` only.
+- Origin: `garmin_codex_reviewer`'s B-STAGE9-78-r2 delta-check, mechanism re-verified by the
+  Inspector reading `src/FileIO/ArchiveFile.cpp:62-65` and `src/Gui/RideImportWizard.cpp:450-455`
+  directly.
+
+### The problem, restated
+
+DEC-070 claimed option A "covers `gzip` for free, since the same wizard table already lists it".
+That premise is false. `Archive::dir()` recognises the `gz`/`gzip` suffixes and then runs
+`case GZIP: { }` — an empty block — so it returns zero entries; `Archive::extract` has no GZIP
+arm at all. `RideImportWizard::expandFiles()` reads that empty list and takes its
+`if (contents.count() == 0) expanded << file` branch, handing the still-compressed blob to the
+importer. Round 2's `.gzip` suffix is therefore routed and never expanded: for a gzip payload the
+original B-STAGE9-78 failure survives its own fix. The wizard's suffix table advertises a
+capability the archive layer does not implement.
+
+### Options scored
+
+- **A — inflate in the controller, then re-sniff and stage the INNER payload (CHOSEN).** Reliability:
+  highest, and the only option whose fix is provable from the unit gate — the expansion happens in
+  the code under test, so an assertion can require staged bytes to be the decompressed payload
+  rather than trusting a shared route. Scalability: re-sniffing means gzip-of-zip stages `.zip` and
+  reaches the working ZIP route, so nesting costs nothing extra. Maintainability: zlib's gzip window
+  (`inflateInit2(&strm, 15 + 16)`) is already the in-tree idiom at `src/Cloud/CloudService.cpp:565`
+  and `src/FileIO/RideFile.cpp:819`, and zlib is already linked in BOTH build systems
+  (`src/gcconfig.pri:15` + `src/src.pro:87`; `ZLIB::ZLIB` in the garmin unittest targets) — no
+  build-system change, so `garmin-build-system-duality` cannot bite here.
+- B — implement the GZIP arms in `Archive::dir`/`Archive::extract`. Scores highest on scalability
+  alone: the empty arm is a real pre-existing GoldenCheetah defect for every user who drops a `.gz`
+  file, not a Garmin one. Rejected on blast radius (shared import code for all providers, under
+  DEC-070's own freeze) and on provability: `ArchiveFile.cpp` is not linked into the garmin test
+  target, so the blocking defect could not be shown closed by this project's gate. Recorded as
+  upstream-worthy, deliberately out of scope for this branch.
+- C — pin-DEC: declare gzip unreachable (both live payloads were ZIP) and delete the branch. This
+  was `garmin_inspector_v1_56`'s parting recommendation in B-STAGE9-86's disposition, on three
+  grounds. Two do not survive: its "both suffixes fail identically" ground is true only while
+  nothing inflates — option A makes `.fit`-with-inflated-bytes import successfully — and its
+  "`ArchiveFile.cpp` is frozen shared code" ground argues FOR a controller-side fix, which option A
+  is. Its first ground (no local evidence Garmin returns gzip) is accepted as true and makes this
+  low-priority, not safe to leave: with the branch deleted, gzip bytes stage as `.fit`, which is
+  B-STAGE9-78 verbatim. A pin here buys a silent trap for one helper's worth of saving.
+- **Accepted cost of A, stated up front.** This is a THIRD copy of the `gUncompress` shape
+  (`CloudService.cpp:565`, `RideFile.cpp:819`, now the controller). Real duplication, accepted
+  because the only de-duplicating alternative is a new shared header — shared-code surgery on a
+  blocking checkpoint, for a 40-line function the tree already keeps two copies of. A future
+  consolidation is upstream work, not this branch's.
+
+### What the implementation must honour
+
+- **Sniff the INFLATED bytes, then stage.** Extension follows the bytes at every level: gzip-of-FIT
+  → `.fit`, gzip-of-zip → `.zip`. No hardcoded expectation about what Garmin returns.
+- **A failed inflate is visible, never fabricated.** Empty/short inflate output → stage the original
+  bytes verbatim under `.gzip` and let the import fail loudly. Do not invent a `.fit` name for
+  bytes that were never proven to be FIT — that is the defect class itself.
+- **DES-006 / DES-009 unchanged.** The torn-write pause and record-then-report order stay exactly
+  as they are; only the bytes chosen for staging and their suffix move.
+- **No second ZIP implementation.** DEC-070's option-B rejection still binds for ZIP: `ZipReader`
+  via `Archive` is a real shipped route and stays the only unzip. This DEC is narrow to gzip
+  precisely because gzip has no such route.
+- **Naming closes with it (B-STAGE9-85).** Comments and identifiers still saying "FIT bytes" /
+  "staged FIT" on paths that now hold arbitrary payloads are corrected in the same round.
+
+### Cascade impact
+
+B-STAGE9-83 and B-STAGE9-85 close on a reviewer delta-check plus the canonical 56-test gate;
+B-STAGE9-78's own closure condition is unchanged and still requires the live re-run that raises the
+ride library above 1146. No REQ/DES row changes. The empty `Archive::dir` GZIP arm remains a filed
+upstream defect, owned by no unit on this branch.
+
+## DEC-073 — B-STAGE9-86 remedy: an undecodable payload is a download FAILURE, not a staging guess
+
+- Status: **accepted 2026-09-26** (Inspector, Three-Options Doctrine. Discharges the repair-round
+  cap at 3/3 as remedy (a), an architectural change to WHERE the fact comes from — not round 4 of
+  the same recognizer. Garmin-side product code; ordinary technical call.)
+- Reversibility: high — one helper's exit condition, one new PauseReason, no persisted schema change.
+- Decided / last-reviewed: 2026-09-26
+- Serves: B-STAGE9-86, B-STAGE9-89, B-STAGE9-90, B-STAGE9-91. Amends DEC-072, keeps its inflate.
+- Dependents: `src/Cloud/GarminBackfillController.{h,cpp}` only.
+- Origin: `garmin_codex_reviewer`'s B-STAGE9-78-r3 delta-check (3 blocking mechanisms), on a tree
+  that passed the canonical 56-test gate 56/56 — the THIRD consecutive green gate to miss a blocker.
+
+### Why this is not another round of the same fix
+
+Rounds 1-3 each asked the same question — "what shape is this payload, so what extension do I
+guess?" — and each round the answer had one more case: zip, gzip, gzip-under-a-failed-inflate,
+gzip-of-gzip, concatenated members, a truncated member, magic bytes that lie. That surface is
+open-ended by construction: it enumerates what a payload MIGHT be, and enumeration never closes.
+The cap exists to stop exactly this. So the predicate is inverted and the fact-source moves:
+
+**The controller no longer guesses a shape. It either produces bytes the import route provably
+handles, or it declares the download failed.** Fail-closed is already this project's idiom
+(REQ-017 clause a, DES-006's torn-write pause, the `sessionStillValid` pair); this puts the payload
+path under the same rule instead of letting it stage hopefully and fail at the parser.
+
+### Options scored
+
+- **A — fail closed on any payload not resolvable to a handled shape (CHOSEN).** Reliability:
+  highest and, critically, CLOSED — the accept-set is exactly two shapes (a complete single-member
+  gzip whose output is FIT-or-ZIP, or a bare FIT/ZIP), and every other input, named or unnamed
+  today, takes the same refusal branch. Truncation, concatenation, gzip-of-gzip and lying magic all
+  collapse into one already-tested path rather than four new recognizers. Scalability: a new exotic
+  shape needs NO code change — it is refused by default. Maintainability: deletes the question
+  "which extension do I guess for this?" instead of answering it again.
+- B — keep guessing, add `Z_STREAM_END` + `avail_in` + a nesting check. Rejected: this is round 4.
+  It fixes the three mechanisms the reviewer happened to find and leaves the enumeration open for
+  round 5; the cap is a judgement that this trade has already been made three times.
+- C — pin the residual as an accepted gap (remedy (b)). Rejected on evidence: unlike the
+  shellcheck/DEC-060 precedents, this surface is fully DETERMINISTIC — zlib reports stream
+  completion (`Z_STREAM_END`) and unconsumed input (`avail_in`) exactly, so a closed predicate is
+  available for the writing. A pin is for surfaces where no deterministic recognizer exists; that
+  is not the case here, and the cost of being wrong is a silently corrupt ride library.
+
+### What the implementation must honour
+
+- **One inflate, never two.** A single gzip member only. If the inflated bytes are themselves
+  gzip-signed (gzip-of-gzip), that is a refusal, not a second pass — `RideImportWizard` expands to
+  one depth, so depth 2 could not import even if staged.
+- **Completeness is zlib's answer, not a guess.** Accept inflate output only on `Z_STREAM_END`
+  with `avail_in == 0`. `Z_OK`/`Z_BUF_ERROR` at loop exit, or input left over, is a refusal.
+  A partial member must never be staged: that is B-STAGE9-89, the worst of the three, because
+  partial FIT bytes can parse far enough to import a truncated ride.
+- **Refusal is a pause, not a silent skip.** New `PauseReason::UndecodablePayload`; the activity is
+  NOT recorded imported and the cursor does NOT advance past it. ACCEPTED COST: if Garmin were ever
+  to serve that shape persistently, the backfill re-fetches it each run and makes no progress. That
+  is the same trade DES-006 already takes for a torn write, it is loud rather than silent, and the
+  per-activity skip-list that would fix it properly belongs to DEC-071's record split, not here.
+- **ZIP keeps its signature sniff.** ZIP reaches a REAL implementation (`ZipReader` via `Archive`)
+  which validates and fails visibly on its own; the controller does not need to second-guess it.
+  gzip must be fully resolved here precisely because nothing downstream implements it
+  (`ArchiveFile.cpp:62-65` is still an empty block, still frozen, still an upstream GC defect).
+- **The refusal branch is where the tests go.** Truncated member, concatenated members,
+  gzip-of-gzip, empty inflate, and a FIT-signature lie must each assert the refusal, not a suffix.
+
+### Cascade impact
+
+DES-006's PauseReason set gains a member — a design-surface change, so DES-006's row needs review
+when this lands. B-STAGE9-87 is CLOSED and rides in the pending commit. B-STAGE9-78 still does not
+close on any gate: it needs the live re-run raising the ride library above 1146. If a future
+maintainer wants gzip to import rather than be refused, the fix is `ArchiveFile.cpp`'s empty arm
+plus `Archive::extract`, upstream and shared — not another shape branch in this controller.
