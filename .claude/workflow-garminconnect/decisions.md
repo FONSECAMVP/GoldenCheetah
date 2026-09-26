@@ -91,6 +91,10 @@ Compact schema per `references/formats.md` § `decisions.md`. **The recap source
 | DEC-074 | findings.md's row-size budget — whether the 200B `ROW` cap that has stood in BREACH since 2026-09-06 is the defect or the rows are → the CAP is the defect: retire the generic 200B figure for findings.md specifically and replace it with a register-specific ~600B soft target / ~1,200B hard cap, then fix the real defect (round-by-round narrative leaking into the hot row instead of being condensed at disposition) by routing it to the existing cold archive | accepted (Inspector, Three-Options Doctrine on the librarian's measured Job-3 draft — a ledger/tooling convention, not a human-in-the-loop gate) | 2026-09-26 |
 | DEC-075 | DEC-071 slice 1's write contract — whether the callers or the store hold the invariant that `pending` survives a cursor write → the STORE holds it: `pending` becomes single-writer (`saveBackfillState` persists cursor fields and preserves the on-disk map, ignoring its argument's), and "nothing to lose" splits from "cannot model" — `NotFound`/`Torn` still self-heal by overwrite while `SidecarPermissionsRejected` and a new `PendingManifestMalformed` make all three writers refuse | accepted (Inspector, Three-Options Doctrine on the reviewer's B-STAGE9-79-s1 delta-check — ordinary technical call on Garmin-side code) | 2026-09-27 |
 | DEC-076 | B-STAGE9-108 remedy after the isolated concurrency trace — whether the store's new load-modify-write writers need a lock or a pin → a LOCK: the investigator constructed a live same-uid interleaving between the GUI backfill clone and auto-download's `QThread`, so `GarminSidecarStore` serializes on the resolved sidecar path across each transaction's load-to-`writeOver`; the pending-map loss is latent only until slice 2 gives its mutators callers, so it lands first | accepted (Inspector, Three-Options Doctrine on `s979_record_split_investigator`'s B-STAGE9-108-concurrency evidence — ordinary technical call on Garmin-side code) | 2026-09-27 |
+| DEC-077 | B-STAGE9-116's in-`process()` use-after-free — whether this branch repairs it or freezes it → FROZEN as upstream: an unbriefed investigator found `RideImportWizard`'s raw `Context*` (`RideImportWizard.h:92`, deref at `.cpp:1050,1118`) shared by four non-Garmin callers, and a Garmin-free reachable path through `MainWindow`'s manual import, so the repair is a rework of shared import code this branch never touched; same call already made for `ArchiveFile.cpp` and `CloudService.cpp:565`. B-STAGE9-114's dialog-sweep fix stands and stays this branch's | accepted (Inspector, on `s979_record_split_investigator`'s B-STAGE9-116-scope verdict — ordinary technical scope call, no external element) | 2026-09-27 |
+| DEC-078 | B-STAGE9-112's remedy at the repair-round bound — whether to pick a better cursor rewind or remove the overload → REMOVE IT: `GarminBackfillController.cpp:283,336` uses one variable as both an exclusive last-success marker and an inclusive range bound, which is why two rounds of better rewind values both failed on the reviewer's `startTimeGMT == lastSuccess == rangeStart` case; splitting the roles also closes B-STAGE9-121, the earliest activity of every range being silently skipped | accepted (Inspector, at the repair-round bound after two consecutive SAME-class verdicts — ordinary technical call on Garmin-side code) | 2026-09-27 |
+| DEC-079 | B-STAGE9-79 slice 3, the legacy migration — where it runs and how a pre-slice-2 `imported` row is classified → DIALOG PRE-START SELF-CLASSIFICATION: an absent `schema_version` loads as version 0 and is the ONLY thing that identifies a legacy sidecar pair, because an individual `imported` row is byte-for-byte indistinguishable from a current completion row; the dialog is the one seam that holds both the uid/config-dir and a populated `RideCache`, so it exact-matches each legacy row and moves the unmatched ones into `pending` before `GarminBackfillController::start()` | accepted (Inspector, on `s979_record_split_investigator`'s three scored designs — ordinary technical placement call on Garmin-side code) | 2026-09-27 |
+| DEC-080 | B-STAGE9-111 cannot be built without touching `CloudService` code DEC-077 froze — whether to abandon DEC-071's both-routes requirement or narrow the freeze → NARROW THE FREEZE: DEC-077 stays absolute for REPAIRS and REWORKS of shared import logic (the `RideImportWizard` use-after-free, `ArchiveFile.cpp`'s GZIP arm, `CloudService.cpp:565`'s `gUncompress`) and is amended to permit an ADDITIVE, default-no-op virtual extension point, because every one of the investigator's three designs must add a call after ride registration and DEC-071's both-routes requirement is the reason this branch exists | accepted (Inspector, on `s979_record_split_investigator`'s explicit amendment-required verdict, unit B-STAGE9-111-design — ordinary scope call between two of this project's own accepted decisions, no external element) | 2026-09-27 |
 
 ### Dormant index
 
@@ -3824,3 +3828,219 @@ condition across every sidecar and cache GoldenCheetah writes, not something DEC
 
 No REQ/DES row changes, no signature changes, no format change. TEST ids for the new assertions are
 allocated when the round reports.
+
+## DEC-077 — B-STAGE9-116 is upstream GoldenCheetah, not this branch's: frozen, not repaired
+
+- Status: **accepted 2026-09-27** (Inspector, on `s979_record_split_investigator`'s
+  B-STAGE9-116-scope verdict, dispatched fresh and unbriefed with only the narrow scope question.
+  Product-scope call, no credential or external element — not a human-in-the-loop gate.)
+- Reversibility: high — it defers a repair; nothing is written, and a later branch can take it.
+- Decided / last-reviewed: 2026-09-27
+- Serves: B-STAGE9-116 (blocking, reclassified pre-existing). Leaves B-STAGE9-114's fix standing:
+  that one is the dialog's own post-`process()` sweep and IS this branch's.
+- Dependents: none in `src/`. `src/Gui/RideImportWizard.{h,cpp}`, `src/Core/Athlete.cpp` and
+  `src/Core/Context.h` stay on HARD HOLD for every builder round on this branch.
+- Origin: the reviewer's confirmation pass on unit B-STAGE9-79-s2-r2rev raised the in-`process()`
+  use-after-free as a fifth lifetime round against the same dialog.
+
+### The evidence that decides it
+
+`VERDICT: PRE-EXISTING-UPSTREAM`. `RideImportWizard` holds a raw `Context*` member
+(`src/Gui/RideImportWizard.h:92`) and dereferences it at `src/Gui/RideImportWizard.cpp:1050,1118`.
+Five callers share that one body, four of them nothing to do with Garmin: `MainWindow`'s two manual
+imports (`src/Gui/MainWindow.cpp:1676-1677,1851-1852`), `WebPageWindow` download import
+(`src/Train/WebPageWindow.cpp:271-284`), `TrainSidebar` import
+(`src/Train/TrainSidebar.cpp:1631-1635`), and `Athlete` auto-import
+(`src/Core/Athlete.cpp:387-400`).
+
+The exposure is real, and reachable without Garmin: `MainWindow`'s manual import builds an
+unparented wizard (`src/Gui/MainWindow.cpp:1851-1852`; default parent null,
+`src/Gui/RideImportWizard.h:46-48`), `process()` pumps GUI events
+(`src/Gui/RideImportWizard.cpp:1019-1023`), and athlete-tab close tests only `athlete->autoImport`
+(`src/Gui/MainWindow.cpp:2088-2100`) so it does not see a manual wizard. `removeAthleteTab()` then
+deletes Athlete and Context (`src/Gui/MainWindow.cpp:2169-2185`) and `~Athlete()` deletes
+`rideCache` (`src/Core/Athlete.cpp:250-253`). Auto-import alone is protected, by the
+`importInProcess()` checks at `src/Gui/MainWindow.cpp:1089-1110,2088-2094,2117-2122`.
+
+Garmin neither creates nor widens the gap: `src/Cloud/GarminBackfillDialog.cpp:297-323` constructs
+the same wizard and calls the same method, and its close veto
+(`src/Cloud/GarminBackfillDialog.cpp:381-397`) protects the dialog, not the wizard's raw
+collaborators.
+
+### Why frozen rather than repaired
+
+The remedy is a lifetime rework of a shared import path used by four non-Garmin callers, in files
+this branch has never touched. Taking it here means owning regression risk for manual import, train
+import and web import to close a defect none of this branch's code introduced — the same call
+already recorded for `ArchiveFile.cpp`'s empty GZIP arm and `CloudService.cpp:565`'s `gUncompress`.
+B-STAGE9-116 stays a blocking finding against GoldenCheetah upstream; it stops blocking Stage 9.
+
+### Cascade impact
+
+No REQ/DES/TEST row changes. B-STAGE9-117's stub-fidelity residual is pinned with it: a faithful
+stub needs the owning teardown and nested loop that only this repair would build.
+
+## DEC-078 — B-STAGE9-112 remedy: the resume cursor and the range start stop being one variable
+
+- Status: **accepted 2026-09-27** (Inspector, at the repair-round bound. Two rounds against
+  B-STAGE9-112 both narrowed the recogniser instead of moving the fact, and the reviewer's round-3
+  boundary case is the same class again. Product code, no external element — not a gate.)
+- Reversibility: medium — it changes one filter predicate and one initialisation inside
+  `GarminBackfillController::start()`; no file format, no signature, no caller changes.
+- Decided / last-reviewed: 2026-09-27
+- Serves: B-STAGE9-112 (blocking), B-STAGE9-121 (blocking), B-STAGE9-122 (test weakness). Extends
+  DEC-071's resume behaviour and DEC-075/-076's store contract; neither is amended.
+- Dependents: `src/Cloud/GarminBackfillController.cpp`, `src/Cloud/GarminSidecarStore.{h,cpp}`,
+  `unittests/Core/garminconnect/{testGarminBackfillController,testGarminSidecarStore}.cpp`.
+- Origin: `garmin_codex_reviewer`, unit B-STAGE9-112-r3rev.
+
+### The evidence that decides it
+
+`GarminBackfillController.cpp:283` seeds `cursor` with `rangeStartGmt`, then `:336` filters
+`if (s.startTimeGMT <= cursor || s.startTimeGMT > rangeEndGmt) continue;`. The same variable is
+therefore read two incompatible ways: as an EXCLUSIVE "everything at or before this already landed"
+marker when a prior success exists, and as an INCLUSIVE "start of the requested window" when none
+does. Every attempt to fix B-STAGE9-112 by choosing a better rewind value fails on that conflation:
+clearing the cursor falls back to `rangeStart`, and `<= cursor` then excludes an activity sitting
+exactly on `rangeStart` — the reviewer's midnight case. The same conflation silently drops the
+earliest activity of every range even with no drop involved (B-STAGE9-121).
+
+### The decision
+
+Split the two roles. Keep the persisted `lastSuccessStartTimeGMT` as the exclusive resume marker and
+apply it only when a prior success is in range; when there is none, `rangeStartGmt` is INCLUSIVE.
+The filter becomes: skip if a prior success exists and `startTimeGMT <= lastSuccess`; skip if
+`startTimeGMT < rangeStartGmt`; skip if `startTimeGMT > rangeEndGmt`. With that, the store's clear
+from B-STAGE9-112's round becomes correct as written — a cleared cursor means "no prior success",
+`rangeStart` is honoured inclusively, and the dropped entry is re-listed. No greatest-surviving
+rewind is needed, so the store keeps the simpler transaction DEC-076 already locks.
+
+### Why not a fourth repair round
+
+Rounds 2 and 3 both returned `CLASS: … — SAME`. Per the repair-round bound, the next dispatch must
+change where the machine reads its fact, not how it recognises the case. This does: it removes the
+overloaded variable rather than picking a cleverer value for it.
+
+### Cascade impact
+
+No REQ/DES row changes. B-STAGE9-122's assertions must name expected cursor VALUES rather than
+inequalities, in the same round. New TEST ids from T-238, including one pinning an activity exactly
+on `rangeStart`.
+
+## DEC-079 — B-STAGE9-79 slice 3: the legacy migration classifies itself at the dialog, before start()
+
+- Status: **accepted 2026-09-27** (Inspector, on `s979_record_split_investigator`'s three scored
+  designs, unit B-STAGE9-79-s3-design. Placement and data-classification call on Garmin-side code,
+  no external element — not a gate.)
+- Reversibility: medium — it adds a one-shot migration pass and a `schema_version` stamp; no existing
+  file format field changes meaning, and an un-migrated sidecar keeps loading exactly as it does now.
+- Decided / last-reviewed: 2026-09-27
+- Serves: B-STAGE9-79 (blocking, slice 3 — the last slice). Extends DEC-071's measured exact-compare
+  seam and DEC-075's store-owned invariant; amends neither.
+- Dependents: `src/Cloud/GarminBackfillDialog.cpp`, `src/Cloud/GarminSidecarStore.{h,cpp}`,
+  `unittests/Core/garminconnect/testGarminBackfillDialogLifetime.cpp`.
+- Origin: `s979_record_split_investigator`, unit B-STAGE9-79-s3-design.
+
+### The evidence that decides it
+
+`imported-<uid>.json` is an unversioned map of `activityId -> {startTimeGMT, local_filename}`
+(`GarminSidecarStore.h:14-24,67-70`, parser `.cpp:201-232`). A legacy row and a post-slice-2
+completion row are therefore byte-for-byte identical — nothing in the row says which code wrote it.
+What DOES distinguish them is the sibling state file: `backfill-state-<uid>.json` carries
+`schema_version`, and a missing one loads as version 0 (`.cpp:299-317`). The live sidecar pair from
+the 2026-09-26 run confirms it — three imported ids, each with only those two fields, beside a state
+file holding only the three cursor/range keys and no version and no pending.
+
+The placement follows from what each candidate seam can actually reach. The store's APIs are static
+and receive only config-dir and uid (`GarminSidecarStore.h:139-194`), so it cannot consult
+`RideCache` without violating DEC-075. `GarminBackfillController`'s constructor takes only
+client/config-dir/uid (`.h:84-87`) and it writes state before listing (`.cpp:284-312`), which would
+stamp v1 before anything was classified. The dialog holds both halves: uid and config-dir
+(`GarminBackfillDialog.cpp:161-177`) and protected `Athlete`/`RideCache` access (`:319-347`) — the
+same `RideCache::getRide(QDateTime)` exact compare (`RideCache.cpp:807-813`) that DEC-071 measured
+and slice 2 already promotes through.
+
+### The decision
+
+Run a one-shot migration in the dialog, BEFORE `GarminBackfillController::start()`, gated on
+`state.isOk() && schemaVersion == 0`. Exact-match every legacy `imported` entry against `RideCache`;
+retain the matches as completion, move the misses into `pending`, then stamp the schema version so
+the pass never repeats. It must be idempotent — the store's locks are per-file, not cross-file
+(`GarminSidecarStore.cpp:150-169`), so a crash mid-pass must leave a state a re-run can finish.
+
+Arms that must NOT guess: `NotFound` no-ops and the first ordinary backfill writes v1
+(`.cpp:207-212,268-272`); a torn sidecar yields no recoverable entries and must not be classified or
+promoted (`.cpp:214-232,274-278`); permission-rejected and malformed-pending states stay untouched
+because every cursor writer already refuses them (`.cpp:327-335,344-380`).
+
+### Why not the alternatives
+
+Injecting a completion-lookup callback into the controller (reliability 5, maintainability 2) can run
+before the controller's first state write, but it widens a deliberately UI-decoupled controller API
+(`GarminBackfillController.h:99-111`) and duplicates completion policy the dialog already owns.
+Re-offering every v0 row unconditionally (reliability 2, existing-data risk 2) is mechanically
+simplest but re-presents known-complete rides and contradicts DEC-071's measured self-classification
+outright — rejected by authority, not on score.
+
+### Cascade impact
+
+No REQ/DES row changes. One new `schema_version` write path in the store and one migration pass in
+the dialog. Tests from T-240, extending the promotion test at
+`testGarminBackfillDialogLifetime.cpp:451-498`, plus torn/NotFound/idempotence arms.
+
+## DEC-080 — DEC-077's freeze is narrowed: additive no-op extension points are allowed, repairs are not
+
+- Status: **accepted 2026-09-27** (Inspector, on `s979_record_split_investigator`'s unit
+  B-STAGE9-111-design, which stopped and said plainly that all three of its designs need this
+  amendment. A scope call between two accepted decisions of this project's own, no external element
+  — not a gate. Amends DEC-077; does not touch DEC-071.)
+- Reversibility: high — the amendment authorises one default-no-op virtual and its call sites. Reverting
+  means deleting them; no non-Garmin provider is asked to implement anything.
+- Decided / last-reviewed: 2026-09-27
+- Serves: B-STAGE9-111 (blocking), and through it B-STAGE9-79's both-routes requirement.
+- Dependents: `src/Cloud/CloudService.{h,cpp}`, `src/Cloud/GarminConnect.{h,cpp}`,
+  `unittests/Core/garminconnect/testGarminConnectSync.cpp`.
+- Origin: `s979_record_split_investigator`, unit B-STAGE9-111-design.
+
+### The conflict that forces a decision
+
+DEC-071 requires the completion-only dedup fix on BOTH download routes. DEC-077 froze
+`CloudService`/`RideImportWizard`/`ArchiveFile` as upstream GoldenCheetah code this branch never
+touched. B-STAGE9-111 is the second route — and it cannot be fixed without a promotion site, because
+the only two places that register a ride (`CloudService.cpp:3547-3564` after `saveRide`, and
+`:4490-4498` after `Athlete::addRide`) hold a generic `CloudService*` while the latched uid and
+config-dir accessors belong to `GarminConnect` alone (`GarminConnect.h:141-149`). The investigator
+scored three designs and reported that literal byte-identity of shared code cannot hold for ANY of
+them: each must add a call after registration. So one of the two decisions has to yield.
+
+### The decision
+
+DEC-071 wins; DEC-077 is narrowed rather than overridden. The freeze keeps its full force for what it
+was actually written about — REPAIRING defects in shared import code, where the fix is a rework with
+four non-Garmin callers and a Garmin-free reachable path. It does not extend to ADDING a
+default-no-op extension point, where every non-Garmin provider inherits the no-op and its observable
+behaviour is unchanged.
+
+Concretely authorised: one `virtual void rideRegistrationCompleted(const QString& remoteId)` with an
+empty default body on `CloudService`, beside the existing default-no-op provider hooks
+(`CloudService.h:287-297,337-340`); its invocation after each SUCCESSFUL registration only; and
+`GarminConnect`'s override doing the promotion through the DEC-075/-076 guarded order. Design A
+(reliability 5 / maintainability 5 / blast radius 4) over a base-held `std::function` (4/3/3, adds
+callback-lifetime state) and a Qt signal (4/2/2, adds connection and thread-order machinery for no
+extra capability).
+
+### The boundary that keeps this from becoming a general licence
+
+Three things stay frozen and are NOT reopened by this amendment: the `RideImportWizard` raw `Context*`
+use-after-free (B-STAGE9-116), `ArchiveFile.cpp`'s empty GZIP arm, and `CloudService.cpp:565`'s
+`gUncompress`. Any future change in this area that is not (a) additive and (b) default-no-op for every
+existing provider needs its own decision, not this one.
+
+### Cascade impact
+
+The hook must NOT fire on any abandonment path: `CloudService.cpp:3389-3397` (abort before parse),
+`:3465-3479` (abort after parse), `:4029-4034` (existing-file refusal), `:4408-4415` (auto teardown),
+`:4439-4455` (parse failure), `:4470-4479` (duplicate-file refusal). T-048's contract changes rather
+than passing unchanged: BBB becomes pending with the cursor advanced and absent from `imported`, and
+the next listing re-offers it. A `context == nullptr` path has no registration consumer, so it
+persists pending and never promotes. Tests from T-240.
