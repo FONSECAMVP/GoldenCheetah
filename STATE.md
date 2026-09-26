@@ -87,22 +87,22 @@ NEXT_GATE: **THE CANONICAL GATE IS `ctest -LE gate-exclude` (DEC-054, dod.md:16-
            contract, not just its code. THEN slice 3, design settled by DEC-079:
            dialog pre-start self-classification, keyed on `schema_version` absent == v0, tests from
            T-240. -79 closes on neither route alone.
-           Slice 3 is NOT optional: a legacy `imported` row still reads as complete without it.
-           -78 and -79 both come from the first live run on the qmake binary from `2e6e122a7`:
-           CONNECT, MFA and DISCONNECT pass; SYNC FAILS, library stuck at 1146. -79's completion
-           seam is settled by measurement — the three live sidecar entries match their
-           imported/inner-FIT timestamps to the second, so the exact compare is safe and NO
-           tolerance window may be added without new measurement (DEC-071).
+           Slice 3 is NOT optional: a legacy `imported` row reads as complete without it.
+           -78/-79 both come from the first live run on the qmake binary `2e6e122a7`: CONNECT, MFA
+           and DISCONNECT pass; SYNC FAILS, library stuck at 1146. -79's completion seam is settled
+           by measurement — the three live sidecar entries match their imported/inner-FIT
+           timestamps to the second, so NO tolerance window may be added without new measurement
+           (DEC-071).
            A green gate has shipped a blocking defect six times (-92, -101, -111..-114, -126, -127),
            each found by READING THE CODE. Never close on green.
            Source-tree runs need `GC_GARMIN_PYPATH=<repo>/src/Python/garminconnect` or auth dies
            as `code: unknown`. The AppImage ships the adapter.
            KEEP `~/.goldencheetah/Andy/config/garminconnect/backfill/`'s two live staged files —
            real ZIP payloads, and the -78 regression fixture.
-           Installer class: -48/-54/-57/-71 close only on a green AppVeyor run, unobservable here.
-           Neither DEC-069 CI arm has ever executed, so a failure is expected-cost, not regression.
-           NEVER commit the untracked local artifacts `python3.13-3.13.5/`,
-           `python3.13_*.tar.xz`/`.dsc`/`.asc`, `FITmetadata.json`.
+           Installer class: -48/-54/-57/-71 close only on a green AppVeyor run. Neither DEC-069 CI
+           arm has ever executed, so a failure there is expected-cost, not regression.
+           NEVER commit the untracked `python3.13-3.13.5/`, `python3.13_*.tar.xz`/`.dsc`/`.asc`,
+           `FITmetadata.json`.
 CHANGESET: HEAD `4dacd8447`, 18 ahead of `origin/garmin/req028-row-lifetime` (`git rev-list --count
            origin/garmin/req028-row-lifetime..HEAD`; the master-relative 133 means nothing here).
            Code commits so far: `b82063118` slice 1, `54afaaf16` DEC-076's lock, `930329fec` slice 2
@@ -115,13 +115,19 @@ TEAM:      builder `garmin_builder_stage9_v36` (w1:pM, Claude/Sonnet; v35 soft-l
            2026-09-27, fresh prompt verified; brief it COLD every round) · investigator
            `s979_record_split_investigator` (w1:pR, Codex, 145k) · Inspector
            `garmin_inspector_v1_65` (w1:p32, Opus/auto); it closed v1_64's pane AND tab, workspace
-           down to 4 panes / 2 tabs. Each successor retires its predecessor, never itself. Codex soft-lands via `/new` (same pane/PID/name), but VERIFY the
-           fresh prompt before dispatching — a brief sent into a `/new` is silently swallowed;
-           the Claude builder needs `/exit` then `agent start ... -- --permission-mode auto
-           --model sonnet`, and a soft-landed pane reads `unknown` until its first turn writes a
-           transcript — expected, not a fault. Numbers go stale fast: re-read each pane with
+           down to 4 panes / 2 tabs. Each successor retires its predecessor, never itself.
+           Codex soft-lands via `/new` (same pane/PID/name) — VERIFY the fresh prompt before
+           dispatching, a brief into a `/new` is silently swallowed. The Claude builder needs
+           `/exit` then `agent start ... -- --permission-mode auto --model sonnet`; a soft-landed
+           pane reads `unknown` until its first turn writes a transcript, expected. Numbers go stale fast: re-read each pane with
            scripts/claude_context.py / codex_context.py before trusting one (B-STAGE9-58 — an
            unchanging value across wakes is a stale session, not a stable one).
+           TRAP, cost v1_65 ~25k of overrun: the reader returned `unknown` ("no unique session-tasks
+           fd") for the INSPECTOR'S OWN pane on every tick while it was really at 235k/210k.
+           `unknown` on your own pane is NOT "probably fine" — cross-check the footer's `tok Nk` at
+           once. Your own session id is the one in the background-task output path
+           (/tmp/claude-1000/<project>/<session-id>/tasks/...), so you can sum the transcript's last
+           assistant usage event yourself when the fd lookup fails.
 RIGOR:     full (Phase 0 backfill 2026-07-11; A0-A5 + STRIDE + per-slice CLV)
 BUDGETS:   STATE 12kB cap, AT THE LINE — every add needs a matching trim of discharged narrative,
            and this file has been trimmed three times today to stay under · WIKI 16,350B [BREACH,
@@ -131,7 +137,6 @@ BUDGETS:   STATE 12kB cap, AT THE LINE — every add needs a matching trim of di
 COUNTS:    REQ29+16 REQ-NF (next:garmin-030) · DEC81 (next:garmin-082) · DES14+2 lettered
            (next:garmin-015) · TEST max T-243 (next:T-244; T-240 reserved by DEC-079) · findings 532 rows, max id
            B-STAGE9-128 (next:B-STAGE9-129 — grep `B-STAGE9-[0-9]+` for the true max before
-           allocating; the REGISTRIES pointer does not cover this namespace). The reviewer
-           numbers its own findings and they COLLIDE every round — its r2rev -115/-116 became
-           -116/-117. Always re-number a reviewer's ids.
-           B-STAGE9-95 owns the T-212..T-234 traceability-cell backfill; not each unit's.
+           allocating; the REGISTRIES pointer does not cover this namespace). Always re-number a reviewer's
+           own finding ids; they collide every round.
+           B-STAGE9-95 owns the T-212..T-234 traceability-cell backfill.
