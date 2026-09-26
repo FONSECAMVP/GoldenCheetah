@@ -90,6 +90,7 @@ Compact schema per `references/formats.md` § `decisions.md`. **The recap source
 | DEC-073 | B-STAGE9-86 remedy after 3/3 same-class repair rounds — how the staged payload stops being a shape guess → invert the predicate: accept ONE complete single-member gzip (`Z_STREAM_END` + `avail_in == 0`) whose output is FIT-or-ZIP, refuse everything else as `PauseReason::UndecodablePayload` rather than staging it hopefully; discharges the repair cap as remedy (a), architectural | accepted (Inspector, Three-Options Doctrine; deterministic surface, so the pin option was rejected on evidence) | 2026-09-26 |
 | DEC-074 | findings.md's row-size budget — whether the 200B `ROW` cap that has stood in BREACH since 2026-09-06 is the defect or the rows are → the CAP is the defect: retire the generic 200B figure for findings.md specifically and replace it with a register-specific ~600B soft target / ~1,200B hard cap, then fix the real defect (round-by-round narrative leaking into the hot row instead of being condensed at disposition) by routing it to the existing cold archive | accepted (Inspector, Three-Options Doctrine on the librarian's measured Job-3 draft — a ledger/tooling convention, not a human-in-the-loop gate) | 2026-09-26 |
 | DEC-075 | DEC-071 slice 1's write contract — whether the callers or the store hold the invariant that `pending` survives a cursor write → the STORE holds it: `pending` becomes single-writer (`saveBackfillState` persists cursor fields and preserves the on-disk map, ignoring its argument's), and "nothing to lose" splits from "cannot model" — `NotFound`/`Torn` still self-heal by overwrite while `SidecarPermissionsRejected` and a new `PendingManifestMalformed` make all three writers refuse | accepted (Inspector, Three-Options Doctrine on the reviewer's B-STAGE9-79-s1 delta-check — ordinary technical call on Garmin-side code) | 2026-09-27 |
+| DEC-076 | B-STAGE9-108 remedy after the isolated concurrency trace — whether the store's new load-modify-write writers need a lock or a pin → a LOCK: the investigator constructed a live same-uid interleaving between the GUI backfill clone and auto-download's `QThread`, so `GarminSidecarStore` serializes on the resolved sidecar path across each transaction's load-to-`writeOver`; the pending-map loss is latent only until slice 2 gives its mutators callers, so it lands first | accepted (Inspector, Three-Options Doctrine on `s979_record_split_investigator`'s B-STAGE9-108-concurrency evidence — ordinary technical call on Garmin-side code) | 2026-09-27 |
 
 ### Dormant index
 
@@ -3754,3 +3755,72 @@ recovers — so the fifth status is what buys the guarantee without it.
 No REQ/DES row changes. `LoadStatus` gains a fifth value, so every `switch` over it is a cascade
 site; slice 2 must not add a load-first workaround this makes dead. TEST ids for the three new
 assertions are allocated when the repair round reports.
+
+---
+
+## DEC-076 — B-STAGE9-108 remedy: the sidecar store serializes its own load-modify-write transactions
+
+- Status: **accepted 2026-09-27** (Inspector, Three-Options Doctrine, on
+  `s979_record_split_investigator`'s B-STAGE9-108-concurrency trace. Product code, no credential or
+  external element — an ordinary technical call, not a human-in-the-loop gate.)
+- Reversibility: high — it adds a lock inside four existing store functions; no signature, file
+  format, or caller changes.
+- Decided / last-reviewed: 2026-09-27
+- Serves: B-STAGE9-108 (blocking). Extends DEC-075's write contract; DEC-071's record split and
+  `RideCache` completion seam are untouched.
+- Dependents: `src/Cloud/GarminSidecarStore.{h,cpp}`, `unittests/Core/garminconnect/
+  testGarminSidecarStore.cpp`. Slice 2's call routes need NO change from this.
+- Origin: B-STAGE9-108, raised by the reviewer against slice 1 and referred to an isolated
+  investigator because a lock and a pinned non-issue were both live on the evidence then available.
+
+### The evidence that decides it
+
+`CONCURRENT WRITERS POSSIBLE: YES`, and wider than the finding claimed. Two `GarminConnect` clones
+for the SAME athlete and uid write the same files on different threads with nothing between them:
+the GUI backfill controller runs on its caller thread (`GarminBackfillController.h:26-29`, created
+per invocation at `AthletePages.cpp:210-235`), while auto-download calls `readFile()` from its own
+`QThread::run()` (`CloudService.h:1388-1401`, `CloudService.cpp:4125-4129,4316-4341`) whenever
+sync-on-startup is enabled (`Athlete.cpp:167-169`, or Check Cloud at `MainWindow.cpp:2529-2536`).
+The only guard, `m_syncInProgress`, is per-object and covers `readdir()` alone
+(`GarminConnect.cpp:787-800`, `GarminConnect.h:288-292`); DEC-002's mailbox is per clone
+(`GarminConnect.cpp:209-225`, `GarminDownloadChain.cpp:20-28`) and sidecar writes return to the
+caller thread, not the worker (`GarminConnect.cpp:937-952`). The filename is uid-derived
+(`GarminSidecarStore.cpp:163-175`), so same-uid clones hit the identical path.
+
+Two corrections to the finding's framing, both material:
+
+1. **The live race is not slice 1's.** `recordImported` has had this exact load-modify-write shape
+   all along (`GarminSidecarStore.cpp:212-235`) with two production callers
+   (`GarminBackfillController.cpp:395-409`, `GarminConnect.cpp:921-931`), and `saveBackfillState`
+   can lose a cursor advance the same way (`:300` load, `:304-308` write).
+2. **The pending-map loss specifically is latent, not live.** `recordPendingBackfill` and
+   `dropPendingBackfill` exist only as declarations and definitions
+   (`GarminSidecarStore.h:181-187`, `.cpp:311-335`) — slice 2 is what gives them callers. So the
+   fix must land BEFORE slice 2, not after it.
+
+### Chosen: a per-file lock held across the whole transaction, inside the store
+
+Serialize on the resolved sidecar path inside `GarminSidecarStore`, covering `saveBackfillState`,
+`recordImported`, `recordPendingBackfill` and `dropPendingBackfill` from their load through their
+`AtomicFile::writeOver`. `AtomicFile` keeps giving per-write atomicity; the lock supplies what it
+never did, atomicity across the read-modify-write.
+
+Scored 5/4/5/5 (reliability/scalability/maintainability/best practices) against:
+
+- **Pin B-STAGE9-108 as an accepted non-issue** (1/5/3/2). This was genuinely live before the
+  trace and is now refuted by it: the interleaving is constructible today, on the shipped
+  `recordImported` path, with no new code at all.
+- **Serialize at the call sites** (2/3/2/2). Reaches into slice 2's frozen files, contradicts
+  DEC-075's finding that the store holds the invariant rather than its callers, and puts the
+  obligation on every future caller — the same shape as the defect it would be fixing.
+
+### Residual, recorded rather than left implicit
+
+An in-process lock does not serialize two GoldenCheetah processes sharing one athlete config
+directory. That is out of scope here and NOT covered by this DEC: it is a pre-existing whole-app
+condition across every sidecar and cache GoldenCheetah writes, not something DEC-071 introduced.
+
+### Cascade impact
+
+No REQ/DES row changes, no signature changes, no format change. TEST ids for the new assertions are
+allocated when the round reports.
