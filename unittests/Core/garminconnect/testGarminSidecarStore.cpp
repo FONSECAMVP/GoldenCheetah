@@ -607,6 +607,78 @@ class TestGarminSidecarStore : public QObject
     }
 
     // ================================================================
+    // B-STAGE9-112 — dropping the pending entry AT the cursor rewinds it
+    // ================================================================
+
+    // T-235 — mutation-must-go-RED: drop a pending entry whose startTimeGMT
+    // equals the persisted cursor. Per DEC-075 the store owns this
+    // invariant, not the caller; per DEC-078 clearing it to empty is what
+    // GarminBackfillController::start() reads as "no prior success", the
+    // exact value asserted below.
+    void backfill_dropAtCursorEntry_rewindsCursorStrictlyBeforeIt_otherPendingSurvive_rangeUnchanged()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("235235");
+
+        GarminSidecarStore::BackfillState st;
+        st.lastSuccessStartTimeGMT = QStringLiteral("2026-06-02T00:00:00.0");
+        st.rangeStart = QStringLiteral("2026-06-01T00:00:00.0");
+        st.rangeEnd = QStringLiteral("2026-06-10T00:00:00.0");
+        QVERIFY(GarminSidecarStore::saveBackfillState(athlete.path(), uid, st));
+
+        GarminSidecarStore::ImportedEntry survivor;
+        survivor.startTimeGMT = QStringLiteral("2026-06-01T12:00:00.0"); // strictly before cursor
+        survivor.localFilename = QStringLiteral("garmin-111.fit");
+        QVERIFY(GarminSidecarStore::recordPendingBackfill(athlete.path(), uid, QStringLiteral("111"), survivor));
+
+        GarminSidecarStore::ImportedEntry atCursor;
+        atCursor.startTimeGMT = st.lastSuccessStartTimeGMT; // exactly AT the cursor
+        atCursor.localFilename = QStringLiteral("garmin-222.fit");
+        QVERIFY(GarminSidecarStore::recordPendingBackfill(athlete.path(), uid, QStringLiteral("222"), atCursor));
+
+        QVERIFY(GarminSidecarStore::dropPendingBackfill(athlete.path(), uid, QStringLiteral("222")));
+
+        const GarminSidecarStore::BackfillLoadResult r = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QVERIFY(r.isOk());
+        QVERIFY2(!r.state.pending.contains(QStringLiteral("222")), "the dropped id must be gone");
+        QCOMPARE(r.state.lastSuccessStartTimeGMT, QString());
+        QVERIFY2(r.state.pending.contains(QStringLiteral("111")), "every OTHER pending entry must survive (DEC-075)");
+        QCOMPARE(r.state.rangeStart, st.rangeStart);
+        QCOMPARE(r.state.rangeEnd, st.rangeEnd);
+    }
+
+    // T-236 — side-effect invariant: dropping a pending entry STRICTLY BEFORE
+    // the cursor must leave the cursor untouched. Only the entry the cursor
+    // currently points AT is the resume anchor; an earlier still-pending
+    // entry going missing does not invalidate later, already-confirmed
+    // progress.
+    void backfill_dropStrictlyBeforeCursorEntry_leavesCursorUntouched()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("235236");
+
+        GarminSidecarStore::BackfillState st;
+        st.lastSuccessStartTimeGMT = QStringLiteral("2026-07-03T00:00:00.0");
+        st.rangeStart = QStringLiteral("2026-07-01T00:00:00.0");
+        st.rangeEnd = QStringLiteral("2026-07-10T00:00:00.0");
+        QVERIFY(GarminSidecarStore::saveBackfillState(athlete.path(), uid, st));
+
+        GarminSidecarStore::ImportedEntry earlier;
+        earlier.startTimeGMT = QStringLiteral("2026-07-02T00:00:00.0"); // strictly before cursor
+        earlier.localFilename = QStringLiteral("garmin-333.fit");
+        QVERIFY(GarminSidecarStore::recordPendingBackfill(athlete.path(), uid, QStringLiteral("333"), earlier));
+
+        QVERIFY(GarminSidecarStore::dropPendingBackfill(athlete.path(), uid, QStringLiteral("333")));
+
+        const GarminSidecarStore::BackfillLoadResult r = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QVERIFY(r.isOk());
+        QVERIFY2(!r.state.pending.contains(QStringLiteral("333")), "the dropped id must be gone");
+        QCOMPARE(r.state.lastSuccessStartTimeGMT, st.lastSuccessStartTimeGMT);
+    }
+
+    // ================================================================
     // DEC-076 — the store serializes its own load-modify-write transactions
     // ================================================================
 

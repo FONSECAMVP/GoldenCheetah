@@ -14219,6 +14219,21 @@ Torque Adjust - this defines an absolute value in poinds per square inch or newt
         <source>Garmin Connect: could not record activity %1 as imported.</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <location filename="../../Cloud/GarminBackfillController.cpp" line="127"/>
+        <source>Garmin Connect: %1 has group- or other-readable permissions, so backfill state cannot be updated. Run &quot;chmod 600&quot; on that file, then restart the backfill.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminBackfillController.cpp" line="132"/>
+        <source>Garmin Connect: %1&apos;s pending-activity list is malformed, so backfill state cannot be updated. Move that file aside (or delete it to start a fresh backfill), then try again.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../Cloud/GarminBackfillController.cpp" line="137"/>
+        <source>Garmin Connect: could not persist backfill state to %1.</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>GarminBackfillDialog</name>

@@ -42,9 +42,13 @@
 #    error "testGarminBackfillDialogLifetime (T-194/195) is a lifetime test and requires AddressSanitizer"
 #endif
 
+#include "AtomicFile.h"
 #include "GarminBackfillDialog.h"
+#include "GarminSidecarStore.h"
 
 #include <QDateTime>
+#include <QDir>
+#include <QFile>
 #include <QPointer>
 #include <QString>
 #include <QStringList>
@@ -158,6 +162,21 @@ class SingleZipActivityBackfillClient : public IGarminDownloadClient
     }
 };
 
+// B-STAGE9-113 (T-218) — fails ONLY the recordImported() write
+// (imported-<uid>.json.tmp), so a test can force that specific write to fail
+// while backfill-state-<uid>.json (dropPendingBackfill's target) still writes
+// normally through the real AtomicFile::TmpWriter default.
+class ImportedWriteFailureInjector : public AtomicFile::TmpWriter
+{
+  public:
+    qint64 write(QFileDevice& f, const QByteArray& bytes) override
+    {
+        if (QFile* qf = dynamic_cast<QFile*>(&f); qf && qf->fileName().contains(QStringLiteral("imported-")))
+            return -1;
+        return AtomicFile::TmpWriter::write(f, bytes);
+    }
+};
+
 void resetCounters()
 {
     g_backfillOpenCalls = 0;
@@ -169,6 +188,17 @@ void resetCounters()
     g_backfillOpenSucceeds = true;
     g_rideImportWizardConstructions = 0;
     g_rideImportWizardPaths.clear();
+    g_rideCacheMatchedDates.clear();
+    g_onRideImportWizardProcess = nullptr;
+}
+
+// DEC-071 (T-79-s2) — the same "yyyy-MM-dd HH:mm:ss" verbatim wire-format
+// SingleZipActivityBackfillClient's fixture startTimeGMT uses.
+QDateTime garminTimeToUtc(const QString& s)
+{
+    QDateTime dt = QDateTime::fromString(s, QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+    dt.setTimeSpec(Qt::UTC);
+    return dt;
 }
 } // namespace
 
@@ -349,6 +379,279 @@ class TestGarminBackfillDialogLifetime : public QObject
         const QString handedOffPath = g_rideImportWizardPaths.first();
         QVERIFY2(handedOffPath.endsWith(QStringLiteral(".zip")), "the zip payload must have been staged as .zip");
         QVERIFY2(QFile(handedOffPath).exists(), "the path handed to the wizard must be the one actually written");
+
+        delete dialog; // running == false here; ~GarminBackfillDialog closes+deletes store
+        delete ctx;
+    }
+
+    // =====================================================================
+    // B-STAGE9-79 slice 2 (DEC-071) — the whole defect, end to end: a
+    // pending entry that RideCache does NOT yet confirm must stay pending
+    // and be handed to the wizard AGAIN on the next run, even when that run's
+    // OWN listing returns nothing new (the cursor already moved past it) -
+    // proving the re-offer comes from the persisted pending manifest, not
+    // from re-listing/re-downloading.
+    // =====================================================================
+    void cancelledPendingEntryIsReofferedOnNextRunWithoutRedownload()
+    {
+        resetCounters();
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        Context* ctx = new Context;
+        Athlete athlete;
+        ctx->athlete = &athlete;
+
+        SingleZipActivityBackfillClient client1;
+        GarminConnect* store = new GarminConnect;
+        store->configDir = tmp.path();
+        store->uid = kUid;
+        store->client = &client1;
+
+        GarminBackfillDialog* dialog = new GarminBackfillDialog(ctx, store, nullptr);
+        QVERIFY(dialog->start());
+
+        dialog->startClicked(); // run 1: stages act-zip-1; no RideCache match -> stays pending
+
+        QCOMPARE(g_rideImportWizardConstructions, 1);
+        QVERIFY2(!g_rideImportWizardPaths.isEmpty(), "premise: run 1 must have staged something");
+        const QString stagedPath = g_rideImportWizardPaths.first();
+
+        const GarminSidecarStore::BackfillLoadResult bfAfterRun1 =
+            GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(bfAfterRun1.isOk());
+        QVERIFY2(bfAfterRun1.state.pending.contains(QStringLiteral("act-zip-1")),
+                 "the un-promoted activity must stay pending, not vanish");
+        const GarminSidecarStore::ImportedMap importedAfterRun1 = GarminSidecarStore::loadImported(tmp.path(), kUid);
+        QVERIFY2(!importedAfterRun1.contains(QStringLiteral("act-zip-1")),
+                 "an unconfirmed import must never be recorded complete (the B-STAGE9-79 defect)");
+
+        // Run 2 - a fresh client that lists nothing new: the cursor already
+        // advanced past this activity in run 1, so the OLD (pre-DEC-071)
+        // shape would never see it again. It must still reach the wizard.
+        FakeBackfillClient client2; // always lists empty (see the class above)
+        store->client = &client2;
+
+        dialog->startClicked();
+
+        QCOMPARE(g_rideImportWizardConstructions, 2);
+        QCOMPARE(client2.listCalls, 1);
+        QVERIFY2(!g_rideImportWizardPaths.isEmpty(), "run 2 must re-offer the still-pending activity to the wizard");
+        QCOMPARE(g_rideImportWizardPaths.first(), stagedPath);
+
+        delete dialog; // running == false here; ~GarminBackfillDialog closes+deletes store
+        delete ctx;
+    }
+
+    // =====================================================================
+    // B-STAGE9-79 slice 2 (DEC-071) — once RideCache confirms the ride
+    // actually landed, the entry is promoted: imported-<uid>.json gains it
+    // and it is dropped from the pending manifest, so it is never re-offered
+    // again.
+    // =====================================================================
+    void pendingEntryPromotedToImportedWhenRideCacheConfirmsIt()
+    {
+        resetCounters();
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        Context* ctx = new Context;
+        Athlete athlete;
+        RideCache rideCache;
+        athlete.rideCache = &rideCache;
+        ctx->athlete = &athlete;
+
+        SingleZipActivityBackfillClient client;
+        GarminConnect* store = new GarminConnect;
+        store->configDir = tmp.path();
+        store->uid = kUid;
+        store->client = &client;
+
+        GarminBackfillDialog* dialog = new GarminBackfillDialog(ctx, store, nullptr);
+        QVERIFY(dialog->start());
+
+        // Run 1: no RideCache match yet, so the entry stays pending. Learn
+        // the REAL recorded startTimeGMT rather than racing
+        // QDateTime::currentDateTimeUtc() against the fixture's own clock read.
+        dialog->startClicked();
+        const GarminSidecarStore::BackfillLoadResult bf1 = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(bf1.isOk());
+        QVERIFY(bf1.state.pending.contains(QStringLiteral("act-zip-1")));
+        const QString startTimeGMT = bf1.state.pending.value(QStringLiteral("act-zip-1")).startTimeGMT;
+
+        // Simulate the wizard having actually saved the ride this time.
+        g_rideCacheMatchedDates << garminTimeToUtc(startTimeGMT);
+        FakeBackfillClient client2; // always lists empty (see the class above)
+        store->client = &client2;
+
+        dialog->startClicked();
+
+        const GarminSidecarStore::BackfillLoadResult bf2 = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(bf2.isOk());
+        QVERIFY2(!bf2.state.pending.contains(QStringLiteral("act-zip-1")),
+                 "a RideCache-confirmed import must be dropped from pending");
+        const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
+        QVERIFY2(imported.contains(QStringLiteral("act-zip-1")),
+                 "a RideCache-confirmed import must be recorded complete");
+
+        delete dialog; // running == false here; ~GarminBackfillDialog closes+deletes store
+        delete ctx;
+    }
+
+    // =====================================================================
+    // B-STAGE9-112 — a pending entry whose staged payload file is missing
+    // must reach a definite state (dropped), never sit silently excluded
+    // from stagedFiles while remaining in `pending` forever.
+    // =====================================================================
+    void pendingEntryWithMissingStagedFileIsDroppedNotStranded()
+    {
+        resetCounters();
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        Context* ctx = new Context;
+        Athlete athlete;
+        ctx->athlete = &athlete;
+
+        SingleZipActivityBackfillClient client1;
+        GarminConnect* store = new GarminConnect;
+        store->configDir = tmp.path();
+        store->uid = kUid;
+        store->client = &client1;
+
+        GarminBackfillDialog* dialog = new GarminBackfillDialog(ctx, store, nullptr);
+        QVERIFY(dialog->start());
+
+        dialog->startClicked(); // run 1: stages act-zip-1 -> pending, unconfirmed
+
+        QVERIFY2(!g_rideImportWizardPaths.isEmpty(), "premise: run 1 must have staged something");
+        const QString stagedPath = g_rideImportWizardPaths.first();
+        QVERIFY2(QFile(stagedPath).exists(), "premise: the staged payload must exist on disk after run 1");
+        QVERIFY(QFile::remove(stagedPath)); // simulate the file going missing out from under it
+
+        FakeBackfillClient client2; // always lists empty
+        store->client = &client2;
+
+        dialog->startClicked(); // run 2 — RED (pre-fix): entry sits untouched in pending forever
+
+        const GarminSidecarStore::BackfillLoadResult bf2 = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(bf2.isOk());
+        QVERIFY2(!bf2.state.pending.contains(QStringLiteral("act-zip-1")),
+                 "a pending entry whose staged file is gone must be dropped, not stranded");
+        const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
+        QVERIFY2(!imported.contains(QStringLiteral("act-zip-1")),
+                 "a dropped entry with no staged bytes must never be recorded imported");
+
+        delete dialog; // running == false here; ~GarminBackfillDialog closes+deletes store
+        delete ctx;
+    }
+
+    // =====================================================================
+    // B-STAGE9-113 — recordImported()'s return value must gate
+    // dropPendingBackfill(): a failed completion write leaves the entry in
+    // NEITHER manifest otherwise (cursor already advanced past it).
+    // =====================================================================
+    void failedRecordImportedLeavesEntryStillPending()
+    {
+        resetCounters();
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        Context* ctx = new Context;
+        Athlete athlete;
+        RideCache rideCache;
+        athlete.rideCache = &rideCache;
+        ctx->athlete = &athlete;
+
+        SingleZipActivityBackfillClient client;
+        GarminConnect* store = new GarminConnect;
+        store->configDir = tmp.path();
+        store->uid = kUid;
+        store->client = &client;
+
+        GarminBackfillDialog* dialog = new GarminBackfillDialog(ctx, store, nullptr);
+        QVERIFY(dialog->start());
+
+        dialog->startClicked(); // run 1: stages act-zip-1 -> pending, unconfirmed
+        const GarminSidecarStore::BackfillLoadResult bf1 = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(bf1.isOk());
+        QVERIFY(bf1.state.pending.contains(QStringLiteral("act-zip-1")));
+        const QString startTimeGMT = bf1.state.pending.value(QStringLiteral("act-zip-1")).startTimeGMT;
+
+        // Simulate the wizard having actually saved the ride, so run 2's
+        // completion sweep finds a RideCache match and attempts recordImported().
+        g_rideCacheMatchedDates << garminTimeToUtc(startTimeGMT);
+
+        // Force AtomicFile::writeOver to fail for recordImported()'s write
+        // ONLY — the injected TmpWriter fails a write targeting
+        // "imported-*.json.tmp" and defers to the real writer for everything
+        // else (backfill-state-*.json, staged payloads), so
+        // dropPendingBackfill()'s own write is unaffected and the test can
+        // actually distinguish "gated on the result" from "unconditional".
+        ImportedWriteFailureInjector importedWriteFailureInjector;
+        AtomicFile::setTmpWriterForTest(&importedWriteFailureInjector);
+
+        FakeBackfillClient client2; // always lists empty
+        store->client = &client2;
+
+        dialog->startClicked(); // run 2 — RED (pre-fix): dropped despite the failed write
+
+        AtomicFile::setTmpWriterForTest(nullptr); // restore the production default
+
+        const GarminSidecarStore::BackfillLoadResult bf2 = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(bf2.isOk());
+        QVERIFY2(bf2.state.pending.contains(QStringLiteral("act-zip-1")),
+                 "a failed completion write must leave the entry in pending");
+        const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
+        QVERIFY2(!imported.contains(QStringLiteral("act-zip-1")),
+                 "a failed completion write must never be recorded imported");
+
+        delete dialog; // running == false here; ~GarminBackfillDialog closes+deletes store
+        delete ctx;
+    }
+
+    // =====================================================================
+    // B-STAGE9-114 — the completion sweep must not dereference a dangling
+    // Athlete/RideCache after wizard->process()'s nested loop: a QPointer
+    // guard captured before the call, re-checked after, must catch an
+    // Athlete destroyed DURING process() even though `context` itself (a
+    // separate QObject) survives. RED (pre-fix, raw `context->athlete`
+    // re-read): heap-use-after-free under ASan.
+    // =====================================================================
+    void athleteDestroyedDuringWizardProcessDoesNotUseAfterFree()
+    {
+        resetCounters();
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        Context* ctx = new Context;
+        Athlete* athlete = new Athlete;
+        RideCache rideCache;
+        athlete->rideCache = &rideCache;
+        ctx->athlete = athlete;
+
+        g_onRideImportWizardProcess = [&]() {
+            delete athlete; // Context (and its raw `athlete` member) survives this
+        };
+
+        SingleZipActivityBackfillClient client;
+        GarminConnect* store = new GarminConnect;
+        store->configDir = tmp.path();
+        store->uid = kUid;
+        store->client = &client;
+
+        GarminBackfillDialog* dialog = new GarminBackfillDialog(ctx, store, nullptr);
+        QVERIFY(dialog->start());
+
+        dialog->startClicked(); // RED: ASan heap-use-after-free in the completion sweep
+
+        // GREEN observable: the completion sweep could not safely run at all
+        // (the athlete guard nulled), so the activity stays pending rather
+        // than being (unsafely) evaluated against a freed RideCache.
+        const GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(bf.isOk());
+        QVERIFY2(bf.state.pending.contains(QStringLiteral("act-zip-1")),
+                 "an entry that could not be safely evaluated must stay pending");
 
         delete dialog; // running == false here; ~GarminBackfillDialog closes+deletes store
         delete ctx;

@@ -12,13 +12,17 @@
 #include "Athlete.h"
 #include "Context.h"
 #include "GarminConnect.h"
+#include "GarminSidecarStore.h"
 #include "MainWindow.h"
+#include "RideCache.h"
 #include "RideImportWizard.h"
 
 #include <QCloseEvent>
 #include <QDate>
 #include <QDateEdit>
 #include <QDateTime>
+#include <QDir>
+#include <QFile>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMessageBox>
@@ -33,6 +37,28 @@ namespace {
 QString toGarminTime(const QDate& d, const QTime& t)
 {
     return QDateTime(d, t).toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+}
+
+// DEC-071 — the pending manifest's startTimeGMT is Garmin's verbatim
+// server-side string (DES-010's format); parsed here purely to reach the
+// RideCache::getRide(QDateTime) seam the DEC blessed. No tolerance window,
+// no fallback format: an unparseable string cannot be matched, so it is left
+// pending rather than guessed at.
+QDateTime parsePendingStartTimeUtc(const QString& startTimeGMT)
+{
+    QDateTime dt = QDateTime::fromString(startTimeGMT, QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+    if (dt.isValid())
+        dt.setTimeSpec(Qt::UTC);
+    return dt;
+}
+
+// The on-disk path a pending entry's localFilename resolves to (mirrors
+// GarminBackfillController::stagedPayloadPath's "backfill/" subdirectory,
+// the ONLY place this controller stages bytes).
+QString pendingEntryPath(const QString& athleteConfigDir, const QString& localFilename)
+{
+    return QDir(GarminSidecarStore::directoryFor(athleteConfigDir))
+        .filePath(QStringLiteral("backfill/") + localFilename);
 }
 } // namespace
 
@@ -173,7 +199,6 @@ void GarminBackfillDialog::startClicked()
     // recheck at all.
     GarminConnect* const backfillStore = store;
 
-    QStringList stagedFiles;
     GarminBackfillController controller(backfillStore->backfillClient(), configDir, uid);
     runningController = &controller;
 
@@ -186,8 +211,7 @@ void GarminBackfillDialog::startClicked()
     // built, which does not apply to a member watching since construction.
     const GarminBackfillController::Result r = controller.start(
         rangeStart, rangeEnd,
-        [&](const QString&, const QString& stagedPath, int importedSoFar) {
-            stagedFiles << stagedPath;
+        [&](const QString&, const QString&, int importedSoFar) {
             if (!self.isNull())
                 progressLabel->setText(tr("Imported %1 so far...").arg(importedSoFar));
         },
@@ -231,11 +255,38 @@ void GarminBackfillDialog::startClicked()
     to->setEnabled(true);
     cancelButton->setText(tr("Close"));
 
-    // Hand off whatever landed on disk this run to GC's existing FIT/TCX
-    // import pipeline (parse -> DataProcessorFactory::autoProcess -> JSON save
-    // -> RideCache registration) - GarminBackfillController's own job stops at
-    // "downloaded and staged atomically" (DES-009), same separation of concerns
-    // DES-010 draws between GarminConnect::readFile (stage bytes) and
+    // DEC-071 — hand off every currently PENDING entry, not just what this
+    // run's onProgress reported: the manifest is exactly what makes a
+    // previously-cancelled activity re-offered on a LATER run, since a
+    // pending entry's bytes are already staged on disk (its own
+    // localFilename) and do not need re-listing or re-downloading to reach
+    // the wizard again. `pendingLoad` is read ONCE here and reused below to
+    // evaluate completion, so the id/entry set the wizard actually saw and
+    // the set this dialog checks against RideCache are the same set.
+    const GarminSidecarStore::BackfillLoadResult pendingLoad = GarminSidecarStore::loadBackfillState(configDir, uid);
+    QStringList stagedFiles;
+    if (pendingLoad.isOk()) {
+        for (auto it = pendingLoad.state.pending.constBegin(); it != pendingLoad.state.pending.constEnd(); ++it) {
+            const QString path = pendingEntryPath(configDir, it.value().localFilename);
+            if (QFile::exists(path)) {
+                stagedFiles << path;
+            } else {
+                // B-STAGE9-112/-120 — explicit drop, not silent exclusion:
+                // GarminSidecarStore::dropPendingBackfill clears the
+                // persisted cursor when it drops the entry the cursor points
+                // at; DEC-078's split filter then reads that as "no prior
+                // success" and applies rangeStart inclusively, which is what
+                // re-lists this activity on a later run.
+                GarminSidecarStore::dropPendingBackfill(configDir, uid, it.key());
+            }
+        }
+    }
+
+    // Hand off whatever is pending to GC's existing FIT/TCX import pipeline
+    // (parse -> DataProcessorFactory::autoProcess -> JSON save -> RideCache
+    // registration) - GarminBackfillController's own job stops at "downloaded
+    // and staged atomically" (DES-009), same separation of concerns DES-010
+    // draws between GarminConnect::readFile (stage bytes) and
     // CloudServiceSyncDialog::saveRide (parse+register). See the B-R010-04
     // build report for why there is no reusable "drop it and GC picks it up"
     // staging directory to redirect into instead.
@@ -261,8 +312,41 @@ void GarminBackfillDialog::startClicked()
         // `context` was alive at the moment the wizard was constructed.
         // Fixing that is out of scope here (RideImportWizard is pre-existing,
         // shared code - not to be modified for this dialog).
+        // B-STAGE9-114 — QPointer guards, not raw-pointer re-reads: `context`
+        // surviving wizard->process()'s nested loop does not mean
+        // `context->athlete` does, and Athlete/RideCache are themselves
+        // QObjects, so a locally-owned QPointer tracks their destruction
+        // independently of Context's own (non-tracking) raw member.
+        QPointer<Athlete> athleteGuard = context.isNull() ? nullptr : context->athlete;
+        QPointer<RideCache> rideCacheGuard = athleteGuard.isNull() ? nullptr : athleteGuard->rideCache;
+
         RideImportWizard* wizard = new RideImportWizard(stagedFiles, context, this);
         wizard->process();
+
+        // DEC-071 — evaluate EACH pending entry via RideCache, the seam the
+        // wizard itself uses (RideImportWizard.cpp's own already-imported
+        // test), settled by measurement to need no tolerance window and no
+        // FIT pre-parse. A match means the wizard actually saved this ride:
+        // promote it to imported-<uid>.json (completion) and drop it from
+        // pending. No match (cancelled, skipped, or still mid-wizard) leaves
+        // the entry pending - re-offered on the next run by this same block.
+        // This evaluation is a best-effort completion sweep, not a
+        // correctness-critical write.
+        if (!context.isNull() && !athleteGuard.isNull() && !rideCacheGuard.isNull()) {
+            RideCache* const rideCache = rideCacheGuard.data();
+            for (auto it = pendingLoad.state.pending.constBegin(); it != pendingLoad.state.pending.constEnd(); ++it) {
+                const QDateTime startUtc = parsePendingStartTimeUtc(it.value().startTimeGMT);
+                if (!startUtc.isValid())
+                    continue; // cannot be matched - stays pending rather than guessed at
+                if (rideCache->getRide(startUtc) == nullptr)
+                    continue; // no RideCache match yet - stays pending, re-offered
+                // B-STAGE9-113 — recordImported()'s result gates the drop: a
+                // failed completion write must leave the entry in `pending`,
+                // never in neither manifest.
+                if (GarminSidecarStore::recordImported(configDir, uid, it.key(), it.value()))
+                    GarminSidecarStore::dropPendingBackfill(configDir, uid, it.key());
+            }
+        }
     }
 
     // B-R010-07 — cleared LAST, after the wizard hand-off above completes

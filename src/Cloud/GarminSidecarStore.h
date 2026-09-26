@@ -184,6 +184,12 @@ class GarminSidecarStore
     // Drop one pending entry (its activity resolved — imported or otherwise).
     // Same read-modify-write/refusal discipline as recordPendingBackfill.
     // Dropping an id that is not pending is a no-op that still returns true.
+    // B-STAGE9-112: if the dropped entry's startTimeGMT equals the persisted
+    // cursor (lastSuccessStartTimeGMT), the cursor is cleared with it — the
+    // cursor means "everything at or before this landed", so losing the
+    // entry it currently points AT without rewinding would make it
+    // unreachable by any later run. An entry strictly before the cursor
+    // leaves the cursor untouched.
     static bool dropPendingBackfill(const QString& athleteConfigDir, const QString& garminUserId,
                                     const QString& activityId);
 };

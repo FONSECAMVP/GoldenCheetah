@@ -52,14 +52,48 @@
 #endif
 
 // ===========================================================================
-// Athlete.h (guard: _GC_Athlete_h)
+// RideCache.h (guard: _GC_RideCache_h) — DEC-071's completion seam. A
+// from-scratch stand-in: `g_rideCacheMatchedDates` is the set of UTC
+// QDateTimes a test wants getRide() to report as already-imported (a
+// non-null return), mirroring RideCache::getRide(QDateTime)'s bare
+// `item->dateTime == dateTime` compare (src/Core/RideCache.cpp:807-813) with
+// no tolerance window - the same contract DEC-071 requires of the real class.
+// A QObject (like the real RideCache — src/Core/RideCache.h) so B-STAGE9-114's
+// QPointer<RideCache> guard tracks a REAL destruction here too.
+// ===========================================================================
+#ifndef _GC_RideCache_h
+#    define _GC_RideCache_h
+#    include <QDateTime>
+#    include <QList>
+#    include <QObject>
+class RideItem
+{
+};
+inline QList<QDateTime> g_rideCacheMatchedDates;
+class RideCache : public QObject
+{
+  public:
+    RideItem* getRide(QDateTime dateTime)
+    {
+        static RideItem sentinel;
+        return g_rideCacheMatchedDates.contains(dateTime) ? &sentinel : nullptr;
+    }
+};
+#endif
+
+// ===========================================================================
+// Athlete.h (guard: _GC_Athlete_h) — a QObject (like the real Athlete —
+// src/Core/Athlete.h) so B-STAGE9-114's QPointer<Athlete> guard tracks a REAL
+// destruction here too.
 // ===========================================================================
 #ifndef _GC_Athlete_h
 #    define _GC_Athlete_h
-class Athlete
+#    include <QObject>
+class Athlete : public QObject
 {
   public:
     QString cyclist;
+    RideCache* rideCache = nullptr;
 };
 #endif
 
@@ -147,8 +181,13 @@ class GarminConnect
 // ===========================================================================
 #ifndef _RideImportWizard_h
 #    define _RideImportWizard_h
+#    include <functional>
 inline int g_rideImportWizardConstructions = 0;
 inline QList<QString> g_rideImportWizardPaths;
+// B-STAGE9-114 (T-217) — fires synchronously from inside process(), standing
+// in for a teardown landing in RideImportWizard's OWN nested event pumping
+// (see the disclosed residual gap in GarminBackfillDialog.cpp).
+inline std::function<void()> g_onRideImportWizardProcess;
 class RideImportWizard : public QDialog
 {
   public:
@@ -157,7 +196,12 @@ class RideImportWizard : public QDialog
         ++g_rideImportWizardConstructions;
         g_rideImportWizardPaths = paths;
     }
-    int process() { return 0; }
+    int process()
+    {
+        if (g_onRideImportWizardProcess)
+            g_onRideImportWizardProcess();
+        return 0;
+    }
 };
 #endif // _RideImportWizard_h
 

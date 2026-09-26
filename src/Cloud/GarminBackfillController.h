@@ -21,7 +21,7 @@
 // cursor; the real garminconnect library pages 20-at-a-time INTERNALLY inside
 // that single call, invisible to this controller - see the REQ-010 build
 // report) -> per-activity (download -> write FIT atomically -> advance
-// backfill-state -> record imported -> check cancellation) -> Done (range
+// backfill-state -> record pending -> check cancellation) -> Done (range
 // exhausted / empty result) or Paused (user cancel / retry-exhausted transient
 // error). Cancellation is cooperative: checked at the per-activity loop head,
 // same-thread (this controller never leaves the caller's thread — the nested
@@ -67,7 +67,7 @@ class GarminBackfillController
         UserCancelled,      // cancel() observed at a loop-head check
         TransientError,     // DES-005 retry exhausted; listFailed/downloadFailed reached us
         TornWrite,          // AtomicFile::writeOver failed on the staged file; cursor not advanced past it
-        StatePersistFailed, // GarminSidecarStore::saveBackfillState/recordImported returned false
+        StatePersistFailed, // GarminSidecarStore::saveBackfillState/recordPendingBackfill returned false
         InvalidRange,       // Outcome::Rejected only: end < start, or span > the hard cap
         SessionInvalidated, // B-R010-05: `sessionStillValid` returned false (see SessionCheck)
         UndecodablePayload  // DEC-073: downloaded bytes did not resolve to a handled shape

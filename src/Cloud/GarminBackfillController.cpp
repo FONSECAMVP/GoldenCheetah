@@ -111,6 +111,40 @@ QDateTime parseGarminTime(const QString& s)
         dt.setTimeSpec(Qt::UTC);
     return dt;
 }
+
+// B-STAGE9-107 — DEC-075's refusal is deliberately RECOVERABLE
+// (SidecarPermissionsRejected: a chmod fixes it; PendingManifestMalformed: an
+// edit fixes it), so the message must say which one and how, not collapse
+// both into "could not persist backfill state". Re-loads the current status
+// rather than threading it through every call site (DEC-075 forbids a
+// load-first fix AT the writers themselves; this reads AFTER the writer has
+// already refused, purely to describe the refusal already decided).
+QString describeBackfillPersistFailure(const QString& configDir, const QString& uid)
+{
+    const GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(configDir, uid);
+    switch (bf.status) {
+    case GarminSidecarStore::LoadStatus::SidecarPermissionsRejected:
+        return GarminBackfillController::tr(
+                   "Garmin Connect: %1 has group- or other-readable permissions, so backfill state "
+                   "cannot be updated. Run \"chmod 600\" on that file, then restart the backfill.")
+            .arg(bf.path);
+    case GarminSidecarStore::LoadStatus::PendingManifestMalformed:
+        return GarminBackfillController::tr(
+                   "Garmin Connect: %1's pending-activity list is malformed, so backfill state cannot "
+                   "be updated. Move that file aside (or delete it to start a fresh backfill), then try again.")
+            .arg(bf.path);
+    // B-STAGE9-118 — Ok/NotFound/Torn share the one generic message below;
+    // enumerated explicitly (no `default:`), so a LoadStatus value added
+    // later reaches the trailing generic `return` below rather than a silent
+    // `default:` branch — this repo's build does not enable `-Wswitch`, so
+    // that omission is not itself a compile-time diagnostic here.
+    case GarminSidecarStore::LoadStatus::Ok:
+    case GarminSidecarStore::LoadStatus::NotFound:
+    case GarminSidecarStore::LoadStatus::Torn:
+        return GarminBackfillController::tr("Garmin Connect: could not persist backfill state to %1.").arg(bf.path);
+    }
+    return GarminBackfillController::tr("Garmin Connect: could not persist backfill state to %1.").arg(bf.path);
+}
 } // namespace
 
 GarminBackfillController::GarminBackfillController(IGarminDownloadClient* client, QString athleteConfigDir,
@@ -274,7 +308,7 @@ GarminBackfillController::Result GarminBackfillController::start(const QString& 
         if (!GarminSidecarStore::saveBackfillState(m_configDir, m_uid, initial)) {
             result.outcome = Outcome::Paused;
             result.pauseReason = PauseReason::StatePersistFailed;
-            result.message = tr("Garmin Connect: could not persist backfill state.");
+            result.message = describeBackfillPersistFailure(m_configDir, m_uid);
             return result;
         }
     }
@@ -307,7 +341,14 @@ GarminBackfillController::Result GarminBackfillController::start(const QString& 
     QVector<GarminActivitySummary> filtered;
     const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(m_configDir, m_uid);
     for (const GarminActivitySummary& s : listed.summaries) {
-        if (s.startTimeGMT <= cursor || s.startTimeGMT > rangeEndGmt)
+        // DEC-078 — `cursor` above is ONLY the blockingList() paging argument;
+        // the filter reads `priorSuccess` (exclusive, only when a prior
+        // success is actually in range) and `rangeStartGmt` (inclusive)
+        // separately, so an activity sitting exactly on `rangeStartGmt` with
+        // no prior success is never mistaken for one already landed.
+        if (!priorSuccess.isEmpty() && s.startTimeGMT <= priorSuccess)
+            continue;
+        if (s.startTimeGMT < rangeStartGmt || s.startTimeGMT > rangeEndGmt)
             continue;
         if (imported.isOk() && imported.contains(s.activityId))
             continue; // Tier-1 dedup (DES-010), defense in depth
@@ -366,7 +407,7 @@ GarminBackfillController::Result GarminBackfillController::start(const QString& 
         // check on `stageBytes` afterwards covers the bare payload AND the
         // post-inflate result identically - nothing here re-derives a shape.
         // Anything that doesn't resolve to ZIP-or-FIT pauses BEFORE staging,
-        // BEFORE recordImported and BEFORE the cursor advances.
+        // BEFORE recordPendingBackfill and BEFORE the cursor advances.
         QByteArray stageBytes = startsWithGzipSignature(dl.bytes) ? inflateGzipMember(dl.bytes) : dl.bytes;
         if (!startsWithZipSignature(stageBytes) && !startsWithFitSignature(stageBytes)) {
             result.outcome = Outcome::Paused;
@@ -388,20 +429,32 @@ GarminBackfillController::Result GarminBackfillController::start(const QString& 
             return result;
         }
 
-        // A false return here means the dedup record / resume cursor never
+        // DEC-071 — the stage-time write records PENDING (bytes landed, not
+        // yet import-complete), never recordImported: recordImported means
+        // "downloaded", and the skip predicate above reads it as "imported",
+        // so writing it here is exactly the B-STAGE9-79 defect (a cancelled
+        // hand-off to RideImportWizard would orphan this id forever).
+        // GarminBackfillDialog promotes this entry to imported-<uid>.json
+        // only after RideCache confirms the ride actually landed. A false
+        // return here means neither the dedup record nor the resume cursor
         // made it to disk despite the payload bytes landing intact; advancing
         // in-memory progress anyway would break DES-009's resumability
         // contract (a crash right after would resume from unsaved state).
         GarminSidecarStore::ImportedEntry entry;
         entry.startTimeGMT = s.startTimeGMT;
         entry.localFilename = QFileInfo(payloadPath).fileName();
-        if (!GarminSidecarStore::recordImported(m_configDir, m_uid, s.activityId, entry)) {
+        if (!GarminSidecarStore::recordPendingBackfill(m_configDir, m_uid, s.activityId, entry)) {
             result.outcome = Outcome::Paused;
             result.pauseReason = PauseReason::StatePersistFailed;
-            result.message = tr("Garmin Connect: could not record activity %1 as imported.").arg(s.activityId);
+            result.message = describeBackfillPersistFailure(m_configDir, m_uid);
             return result;
         }
 
+        // Pending-then-cursor, atomically, before progress is reported below
+        // (DEC-071's crash order): a crash between this write and the next
+        // leaves a `pending` entry with the cursor not yet past it, which is
+        // exactly DES-009's existing "never record success past an unwritten
+        // file" contract, now covering import-completion too.
         GarminSidecarStore::BackfillState advanced;
         advanced.lastSuccessStartTimeGMT = s.startTimeGMT;
         advanced.rangeStart = rangeStartGmt;
@@ -409,7 +462,7 @@ GarminBackfillController::Result GarminBackfillController::start(const QString& 
         if (!GarminSidecarStore::saveBackfillState(m_configDir, m_uid, advanced)) {
             result.outcome = Outcome::Paused;
             result.pauseReason = PauseReason::StatePersistFailed;
-            result.message = tr("Garmin Connect: could not persist backfill state.");
+            result.message = describeBackfillPersistFailure(m_configDir, m_uid);
             return result;
         }
 

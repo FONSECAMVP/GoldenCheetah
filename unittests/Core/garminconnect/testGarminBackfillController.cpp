@@ -222,25 +222,11 @@ class FailingBackfillStateWriter : public AtomicFile::TmpWriter
 };
 
 // ---------------------------------------------------------------------------
-// A TmpWriter that fails EVERY write to imported-<uid>.json (T-186), used to
-// force GarminSidecarStore::recordImported() itself to fail while leaving the
-// FIT write and backfill-state write untouched.
-// ---------------------------------------------------------------------------
-class FailingImportedWriter : public AtomicFile::TmpWriter
-{
-  public:
-    qint64 write(QFileDevice& f, const QByteArray& bytes) override
-    {
-        if (f.fileName().contains(QStringLiteral("imported-")))
-            return -1;
-        return f.write(bytes);
-    }
-};
-
-// ---------------------------------------------------------------------------
 // A TmpWriter that lets the FIRST write to backfill-state-<uid>.json (the
-// pre-listing persist) succeed but fails every subsequent one (T-187), so the
-// PER-ACTIVITY saveBackfillState() call can be isolated from the initial one.
+// pre-listing persist) succeed but fails every subsequent one (T-186), so the
+// PER-ACTIVITY recordPendingBackfill() call (DEC-071: now the SECOND write to
+// this file - the first per-activity write moved off imported-<uid>.json) can
+// be isolated from the initial one.
 // ---------------------------------------------------------------------------
 class FailingBackfillStateWriterAfterFirst : public AtomicFile::TmpWriter
 {
@@ -251,6 +237,27 @@ class FailingBackfillStateWriterAfterFirst : public AtomicFile::TmpWriter
         if (f.fileName().contains(QStringLiteral("backfill-state-"))) {
             ++seen;
             if (seen > 1)
+                return -1;
+        }
+        return f.write(bytes);
+    }
+};
+
+// ---------------------------------------------------------------------------
+// A TmpWriter that lets the first TWO writes to backfill-state-<uid>.json
+// (the pre-listing persist, then recordPendingBackfill()) succeed but fails
+// every subsequent one (T-187), isolating the per-activity cursor-advance
+// saveBackfillState() call - the THIRD write to this file under DEC-071.
+// ---------------------------------------------------------------------------
+class FailingBackfillStateWriterAfterSecond : public AtomicFile::TmpWriter
+{
+  public:
+    int seen = 0;
+    qint64 write(QFileDevice& f, const QByteArray& bytes) override
+    {
+        if (f.fileName().contains(QStringLiteral("backfill-state-"))) {
+            ++seen;
+            if (seen > 2)
                 return -1;
         }
         return f.write(bytes);
@@ -309,10 +316,17 @@ class TestGarminBackfillController : public QObject
         QVERIFY(bf.isOk());
         QCOMPARE(bf.state.lastSuccessStartTimeGMT, newer.startTimeGMT);
 
-        // Both activities recorded into the Tier-1 dedup map.
+        // DEC-071 — the controller's stage-time write is PENDING, never
+        // recordImported: both activities land in the pending manifest, and
+        // neither is in the Tier-1 dedup map (GarminBackfillDialog promotes
+        // pending -> imported only after RideCache confirms the wizard
+        // actually saved the ride, which this controller-only test never
+        // drives).
+        QVERIFY(bf.state.pending.contains(older.activityId));
+        QVERIFY(bf.state.pending.contains(newer.activityId));
         const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
-        QVERIFY(imported.contains(older.activityId));
-        QVERIFY(imported.contains(newer.activityId));
+        QVERIFY2(!imported.contains(older.activityId), "the controller must never write imported-<uid>.json itself");
+        QVERIFY2(!imported.contains(newer.activityId), "the controller must never write imported-<uid>.json itself");
     }
 
     // =====================================================================
@@ -425,6 +439,143 @@ class TestGarminBackfillController : public QObject
         const GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
         QVERIFY(bf.isOk());
         QCOMPARE(bf.state.lastSuccessStartTimeGMT, a2.startTimeGMT);
+    }
+
+    // =====================================================================
+    // T-237 — B-STAGE9-112: dropping the pending entry AT the cursor (e.g.
+    // the dialog's missing-staged-payload drop) rewinds the persisted cursor,
+    // so a LATER run over the same range re-lists and re-downloads it rather
+    // than losing it forever.
+    // =====================================================================
+    void droppingPendingEntryAtCursorRewindsCursorSoALaterRunRelistsIt()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        GarminActivitySummary a1, a2;
+        a1.activityId = QStringLiteral("4101");
+        a1.startTimeGMT = QStringLiteral("2026-04-01 00:00:00");
+        a2.activityId = QStringLiteral("4102");
+        a2.startTimeGMT = QStringLiteral("2026-04-02 00:00:00");
+
+        {
+            FakeBackfillClient client;
+            client.listResult = {a1, a2};
+            client.okBytesById.insert(a1.activityId, fitBytesFor(a1.activityId));
+            client.okBytesById.insert(a2.activityId, fitBytesFor(a2.activityId));
+            GarminBackfillController ctrl(&client, tmp.path(), kUid);
+            const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-05-01 00:00:00"));
+            QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Done));
+        }
+
+        const GarminSidecarStore::BackfillLoadResult before = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(before.isOk());
+        QCOMPARE(before.state.lastSuccessStartTimeGMT, a2.startTimeGMT); // a2 IS the cursor
+
+        // Simulate GarminBackfillDialog's missing-staged-payload drop (its own
+        // pendingLoad-driven loop, not exercised here) for a2.
+        QVERIFY(GarminSidecarStore::dropPendingBackfill(tmp.path(), kUid, a2.activityId));
+
+        const GarminSidecarStore::BackfillLoadResult after = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(after.isOk());
+        QCOMPARE(after.state.lastSuccessStartTimeGMT, QString());
+
+        // A later run over the SAME range must re-list AND re-download a2 -
+        // the rewound cursor is what puts it back into `filtered`.
+        {
+            FakeBackfillClient client;
+            client.listResult = {a1, a2};
+            client.okBytesById.insert(a1.activityId, fitBytesFor(a1.activityId));
+            client.okBytesById.insert(a2.activityId, fitBytesFor(a2.activityId));
+            GarminBackfillController ctrl(&client, tmp.path(), kUid);
+            const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-05-01 00:00:00"));
+
+            QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Done));
+            QVERIFY2(client.downloadCallsSeen.contains(a2.activityId),
+                     "the rewound cursor must put a2 back into filtered on the next run");
+        }
+
+        const GarminSidecarStore::BackfillLoadResult finalBf = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(finalBf.isOk());
+        QCOMPARE(finalBf.state.lastSuccessStartTimeGMT, a2.startTimeGMT);
+    }
+
+    // =====================================================================
+    // T-238 — DEC-078/B-STAGE9-121: an activity sitting exactly ON
+    // rangeStart, with no prior success at all, must be downloaded - the
+    // pre-DEC-078 `<= cursor` filter (cursor seeded from rangeStartGmt) read
+    // rangeStart as an EXCLUSIVE marker and silently dropped it.
+    // =====================================================================
+    void activityExactlyOnRangeStartWithNoPriorSuccessIsDownloaded()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        GarminActivitySummary a;
+        a.activityId = QStringLiteral("4201");
+        a.startTimeGMT = QStringLiteral("2026-04-01 00:00:00"); // == rangeStart below
+
+        FakeBackfillClient client;
+        client.listResult = {a};
+        client.okBytesById.insert(a.activityId, fitBytesFor(a.activityId));
+
+        GarminBackfillController ctrl(&client, tmp.path(), kUid);
+        const auto r = ctrl.start(a.startTimeGMT, QStringLiteral("2026-04-10 00:00:00"));
+
+        QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Done));
+        QCOMPARE(r.importedCount, 1);
+        QVERIFY2(client.downloadCallsSeen.contains(a.activityId),
+                 "an activity exactly on rangeStart, with no prior success, must be downloaded");
+    }
+
+    // =====================================================================
+    // T-239 — DEC-078/B-STAGE9-112: an entry whose startTimeGMT equals BOTH
+    // the persisted cursor AND the range start, dropped via
+    // dropPendingBackfill, must be re-listed by a later run over the SAME
+    // range - the boundary case that defeated two prior repair rounds
+    // (DEC-078's "reviewer's midnight case").
+    // =====================================================================
+    void entryAtBothCursorAndRangeStartIsRelistedAfterDrop()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        GarminActivitySummary a;
+        a.activityId = QStringLiteral("4301");
+        a.startTimeGMT = QStringLiteral("2026-04-01 00:00:00");
+        const QString rangeStart = a.startTimeGMT; // same value as a's own timestamp
+        const QString rangeEnd = QStringLiteral("2026-04-10 00:00:00");
+
+        {
+            FakeBackfillClient client;
+            client.listResult = {a};
+            client.okBytesById.insert(a.activityId, fitBytesFor(a.activityId));
+            GarminBackfillController ctrl(&client, tmp.path(), kUid);
+            const auto r = ctrl.start(rangeStart, rangeEnd);
+            QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Done));
+        }
+
+        const GarminSidecarStore::BackfillLoadResult before = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(before.isOk());
+        QCOMPARE(before.state.lastSuccessStartTimeGMT, a.startTimeGMT); // a IS the cursor AND rangeStart
+
+        QVERIFY(GarminSidecarStore::dropPendingBackfill(tmp.path(), kUid, a.activityId));
+
+        const GarminSidecarStore::BackfillLoadResult after = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(after.isOk());
+        QCOMPARE(after.state.lastSuccessStartTimeGMT, QString());
+
+        {
+            FakeBackfillClient client;
+            client.listResult = {a};
+            client.okBytesById.insert(a.activityId, fitBytesFor(a.activityId));
+            GarminBackfillController ctrl(&client, tmp.path(), kUid);
+            const auto r = ctrl.start(rangeStart, rangeEnd);
+
+            QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Done));
+            QVERIFY2(client.downloadCallsSeen.contains(a.activityId),
+                     "an entry at both the cursor and rangeStart must be re-listed after being dropped");
+        }
     }
 
     // =====================================================================
@@ -589,11 +740,41 @@ class TestGarminBackfillController : public QObject
     }
 
     // =====================================================================
-    // T-186 — recordImported() failing mid-loop must pause rather than
-    // silently advance: no importedCount credit, cursor stays unadvanced, and
-    // the (unwritten) dedup entry is genuinely absent on disk.
+    // B-STAGE9-107 — DEC-075's SidecarPermissionsRejected refusal is
+    // deliberately RECOVERABLE (a chmod clears it), so the message must name
+    // the offending path AND a recovery action, not collapse into the
+    // generic "could not persist backfill state" the user cannot act on.
     // =====================================================================
-    void recordImportedFailurePausesWithoutAdvancing()
+    void permissionsRejectedStateFileNamesPathAndRecoveryAction()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        GarminSidecarStore::BackfillState seed;
+        QVERIFY(GarminSidecarStore::saveBackfillState(tmp.path(), kUid, seed));
+        const QString path = GarminSidecarStore::backfillStateFilePath(tmp.path(), kUid);
+        QVERIFY(QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ReadGroup));
+
+        FakeBackfillClient client;
+        GarminBackfillController ctrl(&client, tmp.path(), kUid);
+        const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-02-01 00:00:00"));
+
+        QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Paused));
+        QCOMPARE(int(r.pauseReason), int(GarminBackfillController::PauseReason::StatePersistFailed));
+        QVERIFY2(r.message.contains(path), "the message must name the offending path");
+        QVERIFY2(r.message.contains(QStringLiteral("chmod"), Qt::CaseInsensitive),
+                 "the message must name a recovery action");
+        QCOMPARE(client.listCallsSeen.size(), 0);
+    }
+
+    // =====================================================================
+    // T-186 (DEC-071) — recordPendingBackfill() failing mid-loop must pause
+    // rather than silently advance: no importedCount credit, cursor stays
+    // unadvanced, and the (unwritten) pending entry is genuinely absent on
+    // disk. Also carries B-STAGE9-107: the message must name the file and a
+    // recovery action, not just "could not persist backfill state".
+    // =====================================================================
+    void recordPendingBackfillFailurePausesWithoutAdvancing()
     {
         QTemporaryDir tmp;
         QVERIFY(tmp.isValid());
@@ -602,40 +783,6 @@ class TestGarminBackfillController : public QObject
         GarminActivitySummary a1;
         a1.activityId = QStringLiteral("7001");
         a1.startTimeGMT = QStringLiteral("2026-07-01 00:00:00");
-        client.listResult = {a1};
-        client.okBytesById.insert(a1.activityId, fitBytesFor(a1.activityId));
-
-        FailingImportedWriter failing;
-        AtomicFile::setTmpWriterForTest(&failing);
-        GarminBackfillController ctrl(&client, tmp.path(), kUid);
-        const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-08-01 00:00:00"));
-        AtomicFile::setTmpWriterForTest(nullptr);
-
-        QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Paused));
-        QVERIFY2(!r.message.isEmpty(), "a persist failure must carry a user-facing message");
-        QCOMPARE(r.importedCount, 0);
-
-        const GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
-        QVERIFY(bf.isOk());
-        QVERIFY2(bf.state.lastSuccessStartTimeGMT.isEmpty(), "cursor must not advance past an unrecorded activity");
-        const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
-        QVERIFY2(!imported.contains(a1.activityId), "the failed recordImported() write must leave no entry");
-    }
-
-    // =====================================================================
-    // T-187 — the PER-ACTIVITY saveBackfillState() (after a successful
-    // download+write+recordImported) failing must also pause without
-    // crediting importedCount or advancing the persisted cursor.
-    // =====================================================================
-    void perActivityStatePersistFailurePausesWithoutAdvancing()
-    {
-        QTemporaryDir tmp;
-        QVERIFY(tmp.isValid());
-
-        FakeBackfillClient client;
-        GarminActivitySummary a1;
-        a1.activityId = QStringLiteral("7002");
-        a1.startTimeGMT = QStringLiteral("2026-07-02 00:00:00");
         client.listResult = {a1};
         client.okBytesById.insert(a1.activityId, fitBytesFor(a1.activityId));
 
@@ -651,12 +798,53 @@ class TestGarminBackfillController : public QObject
 
         const GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
         QVERIFY(bf.isOk());
-        QVERIFY2(bf.state.lastSuccessStartTimeGMT.isEmpty(), "cursor must not advance when its own persist failed");
-        // recordImported() DID succeed here (only backfill-state writes fail) -
-        // resume will treat a1 as already imported via the Tier-1 dedup map,
-        // so it is not silently lost even though the cursor didn't move.
+        QVERIFY2(bf.state.lastSuccessStartTimeGMT.isEmpty(), "cursor must not advance past an unrecorded activity");
+        QVERIFY2(!bf.state.pending.contains(a1.activityId),
+                 "the failed recordPendingBackfill() write must leave no entry");
         const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
-        QVERIFY(imported.contains(a1.activityId));
+        QVERIFY(!imported.contains(a1.activityId));
+    }
+
+    // =====================================================================
+    // T-187 (DEC-071) — the PER-ACTIVITY cursor-advance saveBackfillState()
+    // (after a successful download+write+recordPendingBackfill) failing must
+    // also pause without crediting importedCount or advancing the persisted
+    // cursor - but, unlike T-186, the pending entry itself DID survive, so
+    // the activity is not silently lost even though the cursor didn't move
+    // (DEC-071's whole point: the id is re-offerable, not orphaned).
+    // =====================================================================
+    void perActivityStatePersistFailurePausesWithoutAdvancing()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        FakeBackfillClient client;
+        GarminActivitySummary a1;
+        a1.activityId = QStringLiteral("7002");
+        a1.startTimeGMT = QStringLiteral("2026-07-02 00:00:00");
+        client.listResult = {a1};
+        client.okBytesById.insert(a1.activityId, fitBytesFor(a1.activityId));
+
+        FailingBackfillStateWriterAfterSecond failing;
+        AtomicFile::setTmpWriterForTest(&failing);
+        GarminBackfillController ctrl(&client, tmp.path(), kUid);
+        const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-08-01 00:00:00"));
+        AtomicFile::setTmpWriterForTest(nullptr);
+
+        QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Paused));
+        QVERIFY2(!r.message.isEmpty(), "a persist failure must carry a user-facing message");
+        QCOMPARE(r.importedCount, 0);
+
+        const GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(bf.isOk());
+        QVERIFY2(bf.state.lastSuccessStartTimeGMT.isEmpty(), "cursor must not advance when its own persist failed");
+        // recordPendingBackfill() DID succeed here (only the cursor-advance
+        // write fails) - the activity is re-offerable via the pending
+        // manifest even though the cursor didn't move.
+        QVERIFY2(bf.state.pending.contains(a1.activityId),
+                 "the surviving pending entry is what keeps this activity from being lost");
+        const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
+        QVERIFY(!imported.contains(a1.activityId));
     }
 
     // =====================================================================
@@ -973,7 +1161,6 @@ class TestGarminBackfillController : public QObject
         client.okBytesById.insert(a1.activityId, realGzipMemberFor(fitBytesFor(a1.activityId)));
 
         QString reportedPath;
-        GarminSidecarStore::ImportedEntry recordedEntry;
         GarminBackfillController ctrl(&client, tmp.path(), kUid);
         const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-11-01 00:00:00"),
                                   [&](const QString&, const QString& stagedPath, int) { reportedPath = stagedPath; });
@@ -984,9 +1171,11 @@ class TestGarminBackfillController : public QObject
         QVERIFY(f.open(QIODevice::ReadOnly));
         QCOMPARE(f.readAll(), fitBytesFor(a1.activityId));
 
-        const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
-        QVERIFY(imported.contains(a1.activityId));
-        QCOMPARE(imported.value(a1.activityId).localFilename, QFileInfo(reportedPath).fileName());
+        // DEC-071 — recorded PENDING, not imported (see T-176's comment).
+        const GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(bf.isOk());
+        QVERIFY(bf.state.pending.contains(a1.activityId));
+        QCOMPARE(bf.state.pending.value(a1.activityId).localFilename, QFileInfo(reportedPath).fileName());
     }
 
     // =====================================================================
@@ -1017,9 +1206,11 @@ class TestGarminBackfillController : public QObject
         QVERIFY(f.open(QIODevice::ReadOnly));
         QCOMPARE(f.readAll(), zipBytesFor(a1.activityId));
 
-        const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
-        QVERIFY(imported.contains(a1.activityId));
-        QCOMPARE(imported.value(a1.activityId).localFilename, QFileInfo(reportedPath).fileName());
+        // DEC-071 — recorded PENDING, not imported (see T-176's comment).
+        const GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(bf.isOk());
+        QVERIFY(bf.state.pending.contains(a1.activityId));
+        QCOMPARE(bf.state.pending.value(a1.activityId).localFilename, QFileInfo(reportedPath).fileName());
     }
 
     // =====================================================================
