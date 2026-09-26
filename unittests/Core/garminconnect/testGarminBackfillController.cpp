@@ -1251,6 +1251,38 @@ class TestGarminBackfillController : public QObject
         const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
         QVERIFY(!imported.contains(a1.activityId));
     }
+
+    // =====================================================================
+    // T-227 — DEC-073/B-STAGE9-91: a buffer whose bytes 8-11 are exactly
+    // ".FIT" but whose total length is only 13 (one byte short of the
+    // 14-byte header) must PAUSE with UndecodablePayload -
+    // `startsWithFitSignature`'s length gate is `>= 14`, not `>= 13`.
+    // =====================================================================
+    void fitSignatureHeaderOneByteShortPausesAsUndecodable()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        FakeBackfillClient client;
+        GarminActivitySummary a1;
+        a1.activityId = QStringLiteral("10014");
+        a1.startTimeGMT = QStringLiteral("2026-10-14 00:00:00");
+        client.listResult = {a1};
+        QByteArray oneByteShortHeader(13, '\0');
+        oneByteShortHeader.replace(8, 4, QByteArrayLiteral(".FIT"));
+        QCOMPARE(oneByteShortHeader.size(), 13);
+        client.okBytesById.insert(a1.activityId, oneByteShortHeader);
+
+        GarminBackfillController ctrl(&client, tmp.path(), kUid);
+        const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-11-01 00:00:00"));
+
+        QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Paused));
+        QCOMPARE(int(r.pauseReason), int(GarminBackfillController::PauseReason::UndecodablePayload));
+        QCOMPARE(r.importedCount, 0);
+        QVERIFY(noStagedFileExistsFor(tmp.path(), a1.activityId));
+        const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
+        QVERIFY(!imported.contains(a1.activityId));
+    }
 };
 
 QTEST_MAIN(TestGarminBackfillController)

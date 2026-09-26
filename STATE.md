@@ -30,13 +30,10 @@ OPEN:      Two blocking code defects from the live run, both Garmin-side, both d
                raises the ride library above 1146. A green gate does not discharge it — four
                green suites in a row missed this class, and the last blocking gap (B-STAGE9-92)
                was found by the Inspector READING THE DIFF, not by any test.
-               B-STAGE9-91 LANDED: T-225 (`.FIT` at byte 7) + T-226 (12-byte buffer), 33/33,
-               production file md5-identical (`0d0c5227...`), both clauses mutation-isolated.
-               Reviewer NOT-CLOSED, CLASS SAME, count 1 of 3, NOTHING BLOCKING: the fixtures
-               pin false positives but not the literals — offset 8->9 still refuses T-225's
-               buffer, 14->13 still refuses T-226's. Named remedy is ONE fixture, T-227: a
-               13-BYTE `.FIT`-at-8 payload separating `size() >= 14` from `>= 13`. Non-blocking;
-               it does NOT hold the commit.
+               B-STAGE9-91's residue is discharged in findings.md: T-225/T-226 pin the false
+               positives and T-227 (a 13-byte `.FIT`-at-8 buffer) forces the length literal
+               itself, mutation-isolated. The reviewer found nothing blocking, so the
+               consecutive-same counter never reached 2. Gate 56/56 on that tree.
                Frozen, and NOT this branch's to fix: `ArchiveFile.cpp`'s empty GZIP arm and
                `CloudService.cpp:565`'s `gUncompress` — real upstream GoldenCheetah defects.
                Gate was green on this tree before the commit: `cmake --build . -j2` exit 0 and
@@ -46,9 +43,13 @@ OPEN:      Two blocking code defects from the live run, both Garmin-side, both d
                The 20 code/test/`.ts` files are committed `02248b0d6`. pre-commit's clang-format
                rewrapped 3 of them (whitespace only); confirmed cosmetic by rebuilding both
                affected targets, 2/2 pass (`/tmp/insp-exchange/postformat-*.log`).
-               NEXT, in order: (1) dispatch T-227. (2) dispatch B-STAGE9-79 under DEC-071.
-               SOFT-LAND the reviewer BEFORE B-STAGE9-79's review, not during it — 211k of a
-               258k Codex window leaves no room for a multi-file delta-check.
+               NEXT: B-STAGE9-79 under DEC-071, dispatched in TWO slices against the one DEC —
+               its remedy spans 5 files and 4 separable concerns, which is more than one atomic
+               builder turn. Slice 1 = the store layer (`GarminSidecarStore.{h,cpp}` gains the
+               versioned `pending` manifest; tests in `testGarminSidecarStore.cpp`). Slice 2 =
+               both call routes + the dialog's completion evaluation, and ONLY slice 2 may do
+               DEC-071's renames — renaming `recordImported` while its callers are frozen
+               breaks the build.
                Builder replies overflow the pane cap every round; the
                `/tmp/insp-exchange/<unit>.md` spill is expected, not a fault.
              · B-STAGE9-79 (DEC-071) — dedup ledger records an activity at download time, so a
@@ -119,10 +120,12 @@ CHANGESET: HEAD `02248b0d6` (the B-STAGE9-78 fix, ahead 3 of upstream). Inspecto
            v1_55..v1_58 and what each filed is recoverable from this file's own git history and
            the B-STAGE9-78..94 rows; v1_58 retired at 217k of 210k, its pane closed by v1_59.
            Dirty: decisions/findings/STATE only (this ledger pass).
-TEAM:      builder `garmin_builder_stage9_v31` (w1:pM, Claude/Sonnet, 192k) · reviewer
-           `garmin_codex_reviewer` (w1:pD, Codex, 211k — soft-land due; brief it COLD every
-           round) · investigator `s979_record_split_investigator` (w1:pR, Codex, 156k, idle) ·
-           Inspector `garmin_inspector_v1_59` (w1:p2W, Opus). Numbers go stale fast — re-read each pane
+TEAM:      builder `garmin_builder_stage9_v32` (w1:pM, Claude/Sonnet, 0k — v31 soft-landed at
+           217k) · reviewer `garmin_codex_reviewer` (w1:pD, Codex, 64k after a `/new` at 211k;
+           brief it COLD every round) · investigator `s979_record_split_investigator` (w1:pR,
+           Codex, 156k, idle) · Inspector `garmin_inspector_v1_59` (w1:p2W, Opus). A soft-landed
+           pane reads `unknown` until its first turn writes a transcript — expected, not a
+           fault. Numbers go stale fast — re-read each pane
            with scripts/claude_context.py / codex_context.py before trusting one (B-STAGE9-58:
            an unchanging value across wakes is a stale-session symptom, not a stable one).
 RIGOR:     full (Phase 0 backfill 2026-07-11; A0-A5 + STRIDE + per-slice CLV)
@@ -131,6 +134,8 @@ BUDGETS:   STATE (this file) 10.2kB/12kB cap [ok, recompacted this pass] · WIKI
            [BREACH, flagged since 2026-09-06] · DECIDX active index 109 lines/500 [ok] ·
            LSN/DECIDX whole-file sizes not measured this pass.
 COUNTS:    REQ29+16 REQ-NF (next:garmin-030) · DEC73 (next:garmin-074) · DES14+2 lettered
-           (next:garmin-015) · TEST max T-226 (next:T-227) · findings 498 rows, max id
-           B-STAGE9-94 (next:B-STAGE9-95 — grep `B-STAGE9-[0-9]+` for the true max before
+           (next:garmin-015) · TEST max T-227 (next:T-228) · findings 499 rows, max id
+           B-STAGE9-95 (next:B-STAGE9-96 — grep `B-STAGE9-[0-9]+` for the true max before
            allocating; the REGISTRIES pointer does not cover this namespace).
+           B-STAGE9-95: traceability.md's TEST cells stop at T-211 while T-212..T-227 are built
+           and committed. Non-blocking, deliberately deferred to the next ledger seam.
