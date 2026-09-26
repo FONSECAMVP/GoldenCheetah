@@ -33,6 +33,10 @@
 #include <QFileInfo>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QThread>
+
+#include <memory>
+#include <vector>
 
 class TestGarminSidecarStore : public QObject
 {
@@ -600,6 +604,102 @@ class TestGarminSidecarStore : public QObject
         QFile check(dest);
         QVERIFY(check.open(QIODevice::ReadOnly));
         QCOMPARE(check.readAll(), malformedBytes);
+    }
+
+    // ================================================================
+    // DEC-076 — the store serializes its own load-modify-write transactions
+    // ================================================================
+
+    // >=4 threads x many iterations, each thread's ids distinct from every
+    // other thread's, all calling recordPendingBackfill for ONE uid. Without
+    // the DEC-076 lock, two threads' load-modify-write cycles interleave and
+    // one thread's insert is overwritten by the other's stale read — this
+    // asserts every single id survives.
+    void backfill_concurrentRecordPendingBackfill_distinctIds_allSurvive()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString athletePath = athlete.path();
+        const QString uid = QStringLiteral("999001");
+
+        constexpr int kThreads = 4;
+        constexpr int kPerThread = 25;
+
+        std::vector<std::unique_ptr<QThread>> threads;
+        for (int t = 0; t < kThreads; ++t) {
+            threads.push_back(std::unique_ptr<QThread>(QThread::create([athletePath, uid, t]() {
+                for (int i = 0; i < kPerThread; ++i) {
+                    GarminSidecarStore::ImportedEntry e;
+                    e.startTimeGMT = QStringLiteral("2026-01-01T00:00:00.0");
+                    e.localFilename = QStringLiteral("garmin-x.fit");
+                    GarminSidecarStore::recordPendingBackfill(athletePath, uid, QStringLiteral("%1-%2").arg(t).arg(i),
+                                                              e);
+                }
+            })));
+        }
+        for (auto& th : threads)
+            th->start();
+        for (auto& th : threads)
+            th->wait();
+
+        const GarminSidecarStore::BackfillLoadResult r = GarminSidecarStore::loadBackfillState(athletePath, uid);
+        QVERIFY(r.isOk());
+        QCOMPARE(r.state.pending.size(), kThreads * kPerThread);
+        for (int t = 0; t < kThreads; ++t) {
+            for (int i = 0; i < kPerThread; ++i) {
+                QVERIFY2(r.state.pending.contains(QStringLiteral("%1-%2").arg(t).arg(i)),
+                         "every concurrently-recorded pending id must survive (DEC-076)");
+            }
+        }
+    }
+
+    // One thread hammers saveBackfillState (cursor advance) while another
+    // hammers recordPendingBackfill (pending insert) on the SAME uid. Without
+    // the DEC-076 lock, saveBackfillState's own load-modify-write can capture
+    // a pre-insert pending snapshot and overwrite the recorder's entry (the
+    // classic lost-update race) — this asserts both survive.
+    void backfill_concurrentSaveAndRecordPending_bothSurvive()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString athletePath = athlete.path();
+        const QString uid = QStringLiteral("999002");
+
+        GarminSidecarStore::BackfillState seed;
+        seed.lastSuccessStartTimeGMT = QStringLiteral("2026-01-01T00:00:00.0");
+        seed.rangeStart = QStringLiteral("2026-01-01T00:00:00.0");
+        seed.rangeEnd = QStringLiteral("2026-01-02T00:00:00.0");
+        QVERIFY(GarminSidecarStore::saveBackfillState(athletePath, uid, seed));
+
+        constexpr int kIterations = 200;
+        std::unique_ptr<QThread> saver(QThread::create([athletePath, uid]() {
+            for (int i = 0; i < kIterations; ++i) {
+                GarminSidecarStore::BackfillState st;
+                st.lastSuccessStartTimeGMT = QStringLiteral("2026-03-15T00:00:00.0");
+                st.rangeStart = QStringLiteral("2026-01-01T00:00:00.0");
+                st.rangeEnd = QStringLiteral("2026-03-15T00:00:00.0");
+                GarminSidecarStore::saveBackfillState(athletePath, uid, st);
+            }
+        }));
+        std::unique_ptr<QThread> recorder(QThread::create([athletePath, uid]() {
+            for (int i = 0; i < kIterations; ++i) {
+                GarminSidecarStore::ImportedEntry e;
+                e.startTimeGMT = QStringLiteral("2026-02-01T00:00:00.0");
+                e.localFilename = QStringLiteral("garmin-555.fit");
+                GarminSidecarStore::recordPendingBackfill(athletePath, uid, QStringLiteral("555"), e);
+            }
+        }));
+
+        saver->start();
+        recorder->start();
+        saver->wait();
+        recorder->wait();
+
+        const GarminSidecarStore::BackfillLoadResult r = GarminSidecarStore::loadBackfillState(athletePath, uid);
+        QVERIFY(r.isOk());
+        QCOMPARE(r.state.lastSuccessStartTimeGMT, QStringLiteral("2026-03-15T00:00:00.0"));
+        QVERIFY2(r.state.pending.contains(QStringLiteral("555")),
+                 "a concurrent recordPendingBackfill entry must survive concurrent saveBackfillState calls (DEC-076)");
     }
 };
 

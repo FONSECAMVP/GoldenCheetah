@@ -17,6 +17,8 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QMutex>
+#include <QMutexLocker>
 
 namespace {
 
@@ -145,6 +147,27 @@ bool refuseCursorOverwrite(GarminSidecarStore::LoadStatus status)
            status == GarminSidecarStore::LoadStatus::PendingManifestMalformed;
 }
 
+// DEC-076: the mutex guarding one path's load-modify-write transaction. Keyed
+// by the resolved sidecar file path, so imported-<uid>.json and
+// backfill-state-<uid>.json (even for the same uid) are independent locks.
+// Function-local statics (Meyer's singleton, thread-safe init) avoid
+// static-init-order; entries are never erased, so `m` stays valid for the
+// process lifetime once created — bounded by the distinct paths this process
+// ever resolves. Callers hold this from their load through their
+// AtomicFile::writeOver; the public loaders (loadImported/loadBackfillState)
+// take no lock themselves, so a writer already holding it can call them.
+QMutex& transactionLockFor(const QString& path)
+{
+    static QMutex tableGuard;
+    static QHash<QString, QMutex*> locks;
+
+    QMutexLocker guard(&tableGuard);
+    QMutex*& m = locks[path];
+    if (!m)
+        m = new QMutex();
+    return *m;
+}
+
 // Ensures the dir and writes the WHOLE state atomically at 0600 (DES-006).
 // Shared write path for saveBackfillState/recordPendingBackfill/
 // dropPendingBackfill so all three match exactly.
@@ -212,10 +235,11 @@ GarminSidecarStore::ImportedMap GarminSidecarStore::loadImported(const QString& 
 bool GarminSidecarStore::recordImported(const QString& athleteConfigDir, const QString& garminUserId,
                                         const QString& activityId, const ImportedEntry& entry)
 {
+    const QString path = importedFilePath(athleteConfigDir, garminUserId);
+    QMutexLocker locker(&transactionLockFor(path)); // DEC-076: load-through-writeOver
+
     if (!ensureDir(directoryFor(athleteConfigDir)))
         return false;
-
-    const QString path = importedFilePath(athleteConfigDir, garminUserId);
 
     // Read-modify-write: start from the current object. A present-but-torn file
     // is treated as empty (DES-002 fallback) so recording never propagates a
@@ -297,6 +321,9 @@ GarminSidecarStore::BackfillLoadResult GarminSidecarStore::loadBackfillState(con
 bool GarminSidecarStore::saveBackfillState(const QString& athleteConfigDir, const QString& garminUserId,
                                            const BackfillState& state)
 {
+    QMutexLocker locker( // DEC-076: load-through-writeOver
+        &transactionLockFor(backfillStateFilePath(athleteConfigDir, garminUserId)));
+
     const BackfillLoadResult current = loadBackfillState(athleteConfigDir, garminUserId);
     if (refuseCursorOverwrite(current.status))
         return false;
@@ -311,6 +338,9 @@ bool GarminSidecarStore::saveBackfillState(const QString& athleteConfigDir, cons
 bool GarminSidecarStore::recordPendingBackfill(const QString& athleteConfigDir, const QString& garminUserId,
                                                const QString& activityId, const ImportedEntry& entry)
 {
+    QMutexLocker locker( // DEC-076: load-through-writeOver
+        &transactionLockFor(backfillStateFilePath(athleteConfigDir, garminUserId)));
+
     const BackfillLoadResult current = loadBackfillState(athleteConfigDir, garminUserId);
     if (refuseCursorOverwrite(current.status))
         return false;
@@ -325,6 +355,9 @@ bool GarminSidecarStore::recordPendingBackfill(const QString& athleteConfigDir, 
 bool GarminSidecarStore::dropPendingBackfill(const QString& athleteConfigDir, const QString& garminUserId,
                                              const QString& activityId)
 {
+    QMutexLocker locker( // DEC-076: load-through-writeOver
+        &transactionLockFor(backfillStateFilePath(athleteConfigDir, garminUserId)));
+
     const BackfillLoadResult current = loadBackfillState(athleteConfigDir, garminUserId);
     if (refuseCursorOverwrite(current.status))
         return false;
