@@ -1,14 +1,9 @@
 # STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-27 by `garmin_inspector_v1_64`
 # Per-id lifecycle status lives ONLY in .claude/workflow-garminconnect/traceability.md (DEC-015 SSOT).
 # For a DEC's status read decisions.md. For a finding's severity/disposition read findings.md.
-# ALL superseded cursor narrative -> .claude/workflow-garminconnect/archive/state-history.md
-#   (§ 1-11 = history through the 2026-09-06 compaction; § 12 = that pass's BUDGETS/git-truth
-#   detail; § 13 = the FULL 3415-line/290,364-char STATE.md this file replaces, extracted
-#   VERBATIM, md5 a81d6e6bcddda3c0f2e198bdc166f93c, re-verified after append — nothing deleted;
-#   § 14 = the discharged commit-partition / push-mechanics narrative, removed 2026-09-26).
-# This file carries ONLY the Tier-0 cursor schema (references/state-and-tiers.md line 43-58).
-# Stage 1-8 history, the live-account run log, and the entire STAGE-9-CURSOR/-AMENDMENT chain
-# (v1_21..v1_54) are in archive § 13.
+# This file carries ONLY the Tier-0 cursor schema (references/state-and-tiers.md line 43-58). ALL
+# superseded narrative is in archive/state-history.md, whose own header maps its sections: Stage 1-8,
+# the live-account run log, and the v1_21..v1_54 cursor chain are § 13, commit-partition § 14.
 
 PHASE:     2.2 · Garmin Connect integration, Stage 9 (real-account connect/MFA/sync/disconnect +
            installed-package smoke checklist). Stages 1-8 all discharged on executed evidence.
@@ -63,9 +58,18 @@ LAST_CLV:  clv_findings.py 2026-09-27 (v1_64), after DEC-078's round landed in t
 NEXT_GATE: **THE CANONICAL GATE IS `ctest -LE gate-exclude` (DEC-054, dod.md:16-47). NOT
            `ctest -L garmin-fast`** — that label omits the i18n guards and is 40/40 GREEN on a
            tree whose real gate FAILS. Reading the right label is what found B-STAGE9-115.
-           Slice 2 + DEC-078 + the -118/-120 comment repairs are COMMITTED: `ctest -LE gate-exclude`
-           56/56 GREEN, Inspector-run, on the exact tree committed. All three agents idle at the
-           commit, per B-STAGE9-106.
+           Slice 2 + DEC-078 + the -118/-120 comment repairs are COMMITTED: `930329fec` (code, 22
+           files) and `1bb811c0c` (ledgers). `ctest -LE gate-exclude` 56/56 GREEN, Inspector-run,
+           before the commit; all three agents were idle for it, per B-STAGE9-106. Pre-commit
+           clang-format rewrapped 4 lines across 3 files — read and confirmed pure line-wrapping,
+           then re-staged. A rebuild + re-gate was left running to prove that cosmetic; if it is NOT
+           green, fix FORWARD with a new commit, never `--amend`.
+           IN FLIGHT: reviewer `garmin_codex_reviewer` on unit B-STAGE9-126-precheck — a PRE-check of
+           -126's mechanism and its `==`->`<=` remedy before any builder touches it. Collect with
+           `dispatch.py --mode collect --target garmin_codex_reviewer --unit B-STAGE9-126-precheck`.
+           Builder and investigator idle. The builder was deliberately NOT dispatched yet: ./build was
+           held by the Inspector's own re-gate and two concurrent ninja runs in one build dir collide.
+           Dispatch it as soon as that finishes.
            NEXT BUILDER ROUND, ready to brief: **B-STAGE9-126 (blocking) + -124 + -125**, one round,
            all in the controller and its test. -126 is the real defect: the store rewinds only on
            `==` the cursor, so dropping a pending entry STRICTLY BEFORE it loses that activity for
@@ -74,12 +78,10 @@ NEXT_GATE: **THE CANONICAL GATE IS `ctest -LE gate-exclude` (DEC-054, dod.md:16-
            THEN B-STAGE9-111, now fully builder-ready: DEC-080 narrowed DEC-077's freeze to permit
            ONE additive default-no-op `CloudService` virtual, and DEC-080 names the 6 abandonment
            paths it must not fire on plus T-048's new contract.
-           LESSON of this session, five instances (-118/-120/-123/-124/-126): a comment asserting a
-           checkable fact the code contradicts is not cosmetic. -124's made an independent reviewer
-           file a FALSE BLOCKING verdict (it read `IGarminDownloadClient.h:52-57`'s "newer than"
-           prose; production lists INCLUSIVELY, `garmin_client.py:430` `>= cursor`, deliberate since
-           B-STAGE9-25 r3). -126's was load-bearing for a fix's correctness. Read the code, not the
-           comment, before accepting ANY verdict — including a reviewer's.
+           LESSON, five instances (-118/-120/-123/-124/-126): a comment asserting a checkable fact
+           the code contradicts is not cosmetic. -124's made the reviewer file a FALSE BLOCKING
+           verdict; -126's was load-bearing for a fix's correctness. Read the CODE, not the comment,
+           before accepting any verdict — a reviewer's included. Rows carry both traces.
            THEN B-STAGE9-111, seam settled `NEEDS-NEW-SEAM` (its row carries the trace): no promotion
            site exists in generic CloudService code, and the route keeps NO durable staged file, so
            slice 2's re-offer-the-bytes shape does not transfer — an unpromoted entry must be
@@ -87,48 +89,46 @@ NEXT_GATE: **THE CANONICAL GATE IS `ctest -LE gate-exclude` (DEC-054, dod.md:16-
            changes that test's contract, not just its code. THEN slice 3, design settled by DEC-079:
            dialog pre-start self-classification, keyed on `schema_version` absent == v0, tests from
            T-240. -79 closes on neither route alone. -107 and -115 are closed both ways, gate and independent read.
-           A `setTimeSpec(Qt::UTC)` deprecation in `parsePendingStartTimeUtc` is unfiled — judge
-           it yourself.
-           Slice 3 is NOT optional: until it lands, a legacy `imported` row still reads as complete
-           and -79's orphans survive for every existing athlete.
+           Slice 3 is NOT optional: a legacy `imported` row still reads as complete without it.
            -78 and -79 both come from the first live run on the qmake binary from `2e6e122a7`:
-           CONNECT, MFA (2FA account) and DISCONNECT pass; SYNC FAILS, library stuck at 1146.
-           -79's completion seam is settled by measurement: the three live sidecar entries match
-           their imported/inner-FIT timestamps to the second, so the exact compare is safe and no
-           tolerance window may be added without new measurement (DEC-071).
-           The pattern that keeps holding: a green gate has shipped a blocking defect four times
-           (-92, -101, -111..-114), each found by READING THE DIFF. Never close on green.
+           CONNECT, MFA (2FA) and DISCONNECT pass; SYNC FAILS, library stuck at 1146. -79's
+           completion seam is settled by measurement — the three live sidecar entries match their
+           imported/inner-FIT timestamps to the second, so the exact compare is safe and NO tolerance
+           window may be added without new measurement (DEC-071).
+           A green gate has shipped a blocking defect five times (-92, -101, -111..-114, -126), each
+           found by READING THE CODE. Never close on green.
            Source-tree runs need `GC_GARMIN_PYPATH=<repo>/src/Python/garminconnect` or auth dies
            as `code: unknown` (ModuleNotFoundError). The AppImage ships the adapter.
-           Keep the two live staged files under `~/.goldencheetah/Andy/config/garminconnect/
-           backfill/` — real ZIP payloads and the -78 regression fixture.
+           KEEP `~/.goldencheetah/Andy/config/garminconnect/backfill/`'s two live staged files —
+           real ZIP payloads, and the -78 regression fixture.
            Installer class: -48/-54/-57/-71 close only on a green AppVeyor run, unobservable here.
            Neither DEC-069 CI arm has ever executed, so a failure is expected-cost, not regression.
            NEVER commit the untracked local artifacts `python3.13-3.13.5/`,
            `python3.13_*.tar.xz`/`.dsc`/`.asc`, `FITmetadata.json`.
-CHANGESET: HEAD `ab78fe1f8`, 13 commits ahead of `origin/garmin/req028-row-lifetime` (count it with
-           `git rev-list --count origin/garmin/req028-row-lifetime..HEAD`; the master-relative number
-           is 133 and means nothing here).
-           Last two code commits: `b82063118` slice 1 (gated 56/56), `54afaaf16` DEC-076's lock
-           (gated 58/58, reviewer-closed). Inspector lineage is in this file's git history; the
-           successor retires the predecessor, never itself, and closes its pane AND tab.
-           Dirty: NOTHING tracked once this ledger commit lands. B-STAGE9-106 still binds: pre-
-           commit stashes the tree, so never commit while a builder round is in flight.
-TEAM:      builder `garmin_builder_stage9_v35` (w1:pM, Claude/Sonnet, 118k) · reviewer `garmin_codex_reviewer`
-           (w1:pD, Codex, 96k; brief it COLD every round) · investigator
-           `s979_record_split_investigator` (w1:pR, Codex, 96k) · Inspector
-           `garmin_inspector_v1_64` (w1:p31, tab w1:t2S, Opus, auto); v1_63 retired, pane and tab closed. Codex soft-lands via `/new` (same pane/PID/name);
+CHANGESET: HEAD `1bb811c0c`, 15 ahead of `origin/garmin/req028-row-lifetime` (`git rev-list --count
+           origin/garmin/req028-row-lifetime..HEAD`; the master-relative 133 means nothing here).
+           Code commits so far: `b82063118` slice 1, `54afaaf16` DEC-076's lock, `930329fec` slice 2 +
+           DEC-078 — each gated 56/56+ and reviewer-closed. NOTHING tracked is dirty. Inspector
+           lineage is in this file's git history; the successor retires the predecessor, never
+           itself, and closes its pane AND tab. B-STAGE9-106 binds: pre-commit stashes the tree, so
+           never commit while a builder round is in flight.
+TEAM:      builder `garmin_builder_stage9_v35` (w1:pM, Claude/Sonnet, 179k) · reviewer
+           `garmin_codex_reviewer` (w1:pD, Codex, ~96k post-`/new`; brief it COLD every round) ·
+           investigator `s979_record_split_investigator` (w1:pR, Codex, reset 07:28) · Inspector
+           `garmin_inspector_v1_65` succeeding v1_64 at 203k/210k; v1_63 and v1_64 retired in turn,
+           each by its successor. Codex soft-lands via `/new` (same pane/PID/name), but VERIFY the
+           fresh prompt before dispatching — a brief sent into a `/new` is silently swallowed;
            the Claude builder needs `/exit` then `agent start ... -- --permission-mode auto
            --model sonnet`, and a soft-landed pane reads `unknown` until its first turn writes a
-           transcript — expected, not a fault. Numbers go stale fast — re-read each pane
-           with scripts/claude_context.py / codex_context.py before trusting one (B-STAGE9-58:
-           an unchanging value across wakes is a stale-session symptom, not a stable one).
+           transcript — expected, not a fault. Numbers go stale fast: re-read each pane with
+           scripts/claude_context.py / codex_context.py before trusting one (B-STAGE9-58 — an
+           unchanging value across wakes is a stale session, not a stable one).
 RIGOR:     full (Phase 0 backfill 2026-07-11; A0-A5 + STRIDE + per-slice CLV)
-BUDGETS:   STATE (this file) 12.0kB/12kB cap [ok] [AT THE LINE — every add needs a matching trim
-           of discharged narrative] · WIKI 16,350B [BREACH, next compaction target] · FINDINGS
-           worst row 9,191B (B-STAGE9-16) vs DEC-074's 1,200B hard / 600B soft; [BREACH]
-           deliberately, B-STAGE9-97 carries the ~50-row follow-up pass. `insp_wake.sh` still
-           prints the retired 200B cap — B-STAGE9-105 · DECIDX 76 rows/500 [ok] · LSN unmeasured.
+BUDGETS:   STATE 12kB cap, AT THE LINE — every add needs a matching trim of discharged narrative,
+           and this file has been trimmed three times today to stay under · WIKI 16,350B [BREACH,
+           next compaction target] · FINDINGS worst row 9,191B (B-STAGE9-16) vs DEC-074's 1,200B
+           hard; [BREACH] deliberately, B-STAGE9-97 carries the ~50-row pass. `insp_wake.sh` prints
+           the retired 200B row cap — B-STAGE9-105 · DECIDX 80 rows/500 [ok] · LSN unmeasured.
 COUNTS:    REQ29+16 REQ-NF (next:garmin-030) · DEC80 (next:garmin-081) · DES14+2 lettered
            (next:garmin-015) · TEST max T-239 (next:T-240) · findings 530 rows, max id
            B-STAGE9-126 (next:B-STAGE9-127 — grep `B-STAGE9-[0-9]+` for the true max before
