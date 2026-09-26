@@ -41,12 +41,87 @@
 #include <QVector>
 #include <QtTest/QtTest>
 
+#ifdef Q_CC_MSVC
+#    include <QtZlib/zlib.h>
+#else
+#    include <zlib.h>
+#endif
+
 namespace {
 const QString kUid = QStringLiteral("555000111");
 
+// B-STAGE9-92 — a real 14-byte FIT header (byte 0 = header size, bytes 8-11 =
+// ".FIT") ahead of the distinguishing payload, so `startsWithFitSignature`
+// accepts this fixture the same way it accepts a genuine Garmin FIT download.
 QByteArray fitBytesFor(const QString& activityId)
 {
-    return QStringLiteral("FIT-bytes-for-%1").arg(activityId).toUtf8();
+    QByteArray header(14, '\0');
+    header[0] = char(14);
+    header.replace(8, 4, QByteArrayLiteral(".FIT"));
+    return header + QStringLiteral("FIT-bytes-for-%1").arg(activityId).toUtf8();
+}
+
+// DEC-070 fixture: a minimal payload carrying a real ZIP local-file-header
+// signature, standing in for Garmin's `<activityId>_ACTIVITY.fit`-in-a-zip
+// download shape.
+QByteArray zipBytesFor(const QString& activityId)
+{
+    return QByteArray("PK\x03\x04") + QStringLiteral("-zip-bytes-for-%1").arg(activityId).toUtf8();
+}
+
+// B-STAGE9-83 fixture: a minimal payload carrying a real GZIP member header
+// signature, standing in for a gzip-shaped Garmin download.
+QByteArray gzipBytesFor(const QString& activityId)
+{
+    return QByteArray("\x1f\x8b") + QStringLiteral("-gzip-bytes-for-%1").arg(activityId).toUtf8();
+}
+
+// B-STAGE9-83 fixture (T-216/T-217): wraps `payload` in a REAL gzip member,
+// so the controller's `inflateGzipMember` has genuine deflate output to
+// invert, not just a spoofed two-byte signature (see gzipBytesFor above,
+// which stays a signature-only fixture for T-222).
+QByteArray realGzipMemberFor(const QByteArray& payload)
+{
+    z_stream strm;
+    strm.zalloc = Z_NULL;
+    strm.zfree = Z_NULL;
+    strm.opaque = Z_NULL;
+
+    const int ret = deflateInit2(&strm, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY);
+    Q_ASSERT(ret == Z_OK);
+
+    QByteArray out;
+    out.resize(payload.size() + 128);
+    strm.avail_in = payload.size();
+    strm.next_in = (Bytef*)(payload.constData());
+    strm.avail_out = out.size();
+    strm.next_out = (Bytef*)(out.data());
+
+    deflate(&strm, Z_FINISH);
+    out.resize(out.size() - strm.avail_out);
+    deflateEnd(&strm);
+    return out;
+}
+
+// B-STAGE9-89/-90 fixture: a payload long enough that chopping off a
+// meaningful tail from its real gzip member still leaves a mid-stream
+// truncation (not just a missing trailer) - `data.size() <= 4` cannot
+// short-circuit inflateGzipMember, and the truncated deflate body can never
+// reach Z_STREAM_END.
+QByteArray longFitBytesFor(const QString& activityId)
+{
+    return QStringLiteral("FIT-bytes-for-%1-").arg(activityId).repeated(64).toUtf8();
+}
+
+// DEC-073 refusal-assertion helper (T-218..T-221): none of the four new
+// mutation cases may leave ANY staged file for the activity, under any
+// extension - the refusal happens before stagedPayloadPath is ever called.
+bool noStagedFileExistsFor(const QString& athleteConfigDir, const QString& activityId)
+{
+    const QDir backfillDir(
+        QDir(GarminSidecarStore::directoryFor(athleteConfigDir)).filePath(QStringLiteral("backfill")));
+    const QStringList matches = backfillDir.entryList({QStringLiteral("garmin-%1.*").arg(activityId)}, QDir::Files);
+    return matches.isEmpty();
 }
 } // namespace
 
@@ -220,9 +295,12 @@ class TestGarminBackfillController : public QObject
         QCOMPARE(client.downloadCallsSeen, QStringList({older.activityId, newer.activityId}));
 
         // Both FIT files staged atomically with the right bytes.
-        QCOMPARE(QFile(GarminBackfillController::stagedFitPath(tmp.path(), older.activityId)).size(),
+        QCOMPARE(QFile(GarminBackfillController::stagedPayloadPath(tmp.path(), older.activityId,
+                                                                   fitBytesFor(older.activityId)))
+                     .size(),
                  qint64(fitBytesFor(older.activityId).size()));
-        QFile f(GarminBackfillController::stagedFitPath(tmp.path(), newer.activityId));
+        QFile f(
+            GarminBackfillController::stagedPayloadPath(tmp.path(), newer.activityId, fitBytesFor(newer.activityId)));
         QVERIFY(f.open(QIODevice::ReadOnly));
         QCOMPARE(f.readAll(), fitBytesFor(newer.activityId));
 
@@ -603,17 +681,24 @@ class TestGarminBackfillController : public QObject
         client.okBytesById.insert(a2.activityId, fitBytesFor(a2.activityId));
 
         QStringList seenIds;
+        QStringList seenPaths;
         QVector<int> seenCounts;
         GarminBackfillController ctrl(&client, tmp.path(), kUid);
         const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-10-01 00:00:00"),
-                                  [&](const QString& id, int importedSoFar) {
+                                  [&](const QString& id, const QString& stagedPath, int importedSoFar) {
                                       seenIds << id;
+                                      seenPaths << stagedPath;
                                       seenCounts << importedSoFar;
                                   });
 
         QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Done));
         QCOMPARE(seenIds, QStringList({a1.activityId, a2.activityId}));
         QCOMPARE(seenCounts, (QVector<int>{1, 2}));
+        QCOMPARE(
+            seenPaths,
+            QStringList(
+                {GarminBackfillController::stagedPayloadPath(tmp.path(), a1.activityId, fitBytesFor(a1.activityId)),
+                 GarminBackfillController::stagedPayloadPath(tmp.path(), a2.activityId, fitBytesFor(a2.activityId))}));
     }
 
     // =====================================================================
@@ -638,7 +723,7 @@ class TestGarminBackfillController : public QObject
         int calls = 0;
         GarminBackfillController ctrl(&client, tmp.path(), kUid);
         const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-10-01 00:00:00"),
-                                  [&](const QString&, int) { ++calls; });
+                                  [&](const QString&, const QString&, int) { ++calls; });
         AtomicFile::setTmpWriterForTest(nullptr);
 
         QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Paused));
@@ -698,7 +783,7 @@ class TestGarminBackfillController : public QObject
         // ever requested) observes the flip.
         const auto r = ctrl.start(
             QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-10-01 00:00:00"),
-            [&](const QString&, int) { sessionValid = false; }, [&] { return sessionValid; });
+            [&](const QString&, const QString&, int) { sessionValid = false; }, [&] { return sessionValid; });
 
         QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Paused));
         QCOMPARE(int(r.pauseReason), int(GarminBackfillController::PauseReason::SessionInvalidated));
@@ -742,8 +827,10 @@ class TestGarminBackfillController : public QObject
         QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Paused));
         QCOMPARE(int(r.pauseReason), int(GarminBackfillController::PauseReason::SessionInvalidated));
         QCOMPARE(r.importedCount, 0);
-        QVERIFY2(!QFile(GarminBackfillController::stagedFitPath(tmp.path(), a1.activityId)).exists(),
-                 "a discarded download must never be staged to disk");
+        QVERIFY2(
+            !QFile(GarminBackfillController::stagedPayloadPath(tmp.path(), a1.activityId, fitBytesFor(a1.activityId)))
+                 .exists(),
+            "a discarded download must never be staged to disk");
 
         const GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
         QVERIFY(bf.isOk());
@@ -775,6 +862,394 @@ class TestGarminBackfillController : public QObject
 
         QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Done));
         QCOMPARE(r.importedCount, 1);
+    }
+
+    // =====================================================================
+    // T-212 — DEC-070: a downloaded payload starting with the ZIP local-file-
+    // header signature must be staged under a ".zip" filename, so
+    // RideImportWizard's suffix-dispatching expandFiles() actually unpacks
+    // it instead of receiving a mislabelled ".fit" blob.
+    // =====================================================================
+    void zipSignaturePayloadIsStagedWithZipExtension()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        FakeBackfillClient client;
+        GarminActivitySummary a1;
+        a1.activityId = QStringLiteral("10001");
+        a1.startTimeGMT = QStringLiteral("2026-10-01 00:00:00");
+        client.listResult = {a1};
+        client.okBytesById.insert(a1.activityId, zipBytesFor(a1.activityId));
+
+        QString reportedPath;
+        GarminBackfillController ctrl(&client, tmp.path(), kUid);
+        const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-11-01 00:00:00"),
+                                  [&](const QString&, const QString& stagedPath, int) { reportedPath = stagedPath; });
+
+        QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Done));
+        QVERIFY2(reportedPath.endsWith(QStringLiteral(".zip")), "a zip-signature payload must stage as .zip");
+        QFile f(reportedPath);
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        QCOMPARE(f.readAll(), zipBytesFor(a1.activityId));
+    }
+
+    // =====================================================================
+    // T-213 — DEC-070: a bare FIT payload (no ZIP signature) must still be
+    // staged under a ".fit" filename - sniffing must not misclassify the
+    // common case.
+    // =====================================================================
+    void bareFitPayloadIsStagedWithFitExtension()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        FakeBackfillClient client;
+        GarminActivitySummary a1;
+        a1.activityId = QStringLiteral("10002");
+        a1.startTimeGMT = QStringLiteral("2026-10-02 00:00:00");
+        client.listResult = {a1};
+        client.okBytesById.insert(a1.activityId, fitBytesFor(a1.activityId));
+
+        QString reportedPath;
+        GarminBackfillController ctrl(&client, tmp.path(), kUid);
+        const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-11-01 00:00:00"),
+                                  [&](const QString&, const QString& stagedPath, int) { reportedPath = stagedPath; });
+
+        QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Done));
+        QVERIFY2(reportedPath.endsWith(QStringLiteral(".fit")), "a bare FIT payload must stage as .fit");
+        QFile f(reportedPath);
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        QCOMPARE(f.readAll(), fitBytesFor(a1.activityId));
+    }
+
+    // =====================================================================
+    // T-222 (was T-215, inverted by DEC-073/B-STAGE9-92) — a downloaded
+    // payload starting with the GZIP member-header signature but not
+    // decodable to a complete member (this fixture's bytes fail to parse at
+    // all) is a refusal, not a ".gzip"-suffixed guess: DEC-073's accept-set
+    // is exactly ZIP-or-FIT, reached either bare or via a complete gzip
+    // inflate, so undecodable gzip-signed bytes pause with
+    // UndecodablePayload and stage nothing.
+    // =====================================================================
+    void gzipSignatureThatFailsToDecodePausesAsUndecodable()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        FakeBackfillClient client;
+        GarminActivitySummary a1;
+        a1.activityId = QStringLiteral("10003");
+        a1.startTimeGMT = QStringLiteral("2026-10-03 00:00:00");
+        client.listResult = {a1};
+        client.okBytesById.insert(a1.activityId, gzipBytesFor(a1.activityId));
+
+        GarminBackfillController ctrl(&client, tmp.path(), kUid);
+        const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-11-01 00:00:00"));
+
+        QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Paused));
+        QCOMPARE(int(r.pauseReason), int(GarminBackfillController::PauseReason::UndecodablePayload));
+        QVERIFY(noStagedFileExistsFor(tmp.path(), a1.activityId));
+        const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
+        QVERIFY(!imported.contains(a1.activityId));
+    }
+
+    // =====================================================================
+    // T-216 — DEC-072: a REAL gzip member wrapping a bare-FIT payload must be
+    // inflated before staging, so the staged bytes are the FIT payload
+    // (never the still-compressed bytes) and the extension follows the
+    // INFLATED content (".fit").
+    // =====================================================================
+    void realGzipOfFitPayloadIsInflatedAndStagedAsFit()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        FakeBackfillClient client;
+        GarminActivitySummary a1;
+        a1.activityId = QStringLiteral("10004");
+        a1.startTimeGMT = QStringLiteral("2026-10-04 00:00:00");
+        client.listResult = {a1};
+        client.okBytesById.insert(a1.activityId, realGzipMemberFor(fitBytesFor(a1.activityId)));
+
+        QString reportedPath;
+        GarminSidecarStore::ImportedEntry recordedEntry;
+        GarminBackfillController ctrl(&client, tmp.path(), kUid);
+        const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-11-01 00:00:00"),
+                                  [&](const QString&, const QString& stagedPath, int) { reportedPath = stagedPath; });
+
+        QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Done));
+        QVERIFY2(reportedPath.endsWith(QStringLiteral(".fit")), "an inflated bare-FIT payload must stage as .fit");
+        QFile f(reportedPath);
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        QCOMPARE(f.readAll(), fitBytesFor(a1.activityId));
+
+        const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
+        QVERIFY(imported.contains(a1.activityId));
+        QCOMPARE(imported.value(a1.activityId).localFilename, QFileInfo(reportedPath).fileName());
+    }
+
+    // =====================================================================
+    // T-217 — DEC-072: a REAL gzip member wrapping a ZIP payload must also be
+    // inflated first, then re-sniffed - the extension follows the inflated
+    // bytes, so gzip-of-zip stages as ".zip", not ".gzip" or ".fit".
+    // =====================================================================
+    void realGzipOfZipPayloadIsInflatedAndStagedAsZip()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        FakeBackfillClient client;
+        GarminActivitySummary a1;
+        a1.activityId = QStringLiteral("10005");
+        a1.startTimeGMT = QStringLiteral("2026-10-05 00:00:00");
+        client.listResult = {a1};
+        client.okBytesById.insert(a1.activityId, realGzipMemberFor(zipBytesFor(a1.activityId)));
+
+        QString reportedPath;
+        GarminBackfillController ctrl(&client, tmp.path(), kUid);
+        const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-11-01 00:00:00"),
+                                  [&](const QString&, const QString& stagedPath, int) { reportedPath = stagedPath; });
+
+        QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Done));
+        QVERIFY2(reportedPath.endsWith(QStringLiteral(".zip")), "an inflated ZIP payload must stage as .zip");
+        QFile f(reportedPath);
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        QCOMPARE(f.readAll(), zipBytesFor(a1.activityId));
+
+        const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
+        QVERIFY(imported.contains(a1.activityId));
+        QCOMPARE(imported.value(a1.activityId).localFilename, QFileInfo(reportedPath).fileName());
+    }
+
+    // =====================================================================
+    // T-218 — DEC-073/B-STAGE9-89: a gzip member truncated mid-stream (never
+    // reaches Z_STREAM_END) must PAUSE with UndecodablePayload, not stage the
+    // partial bytes zlib already produced. RED mutation (a) - dropping the
+    // Z_STREAM_END requirement in inflateGzipMember - must fail this test.
+    // =====================================================================
+    void truncatedGzipMemberPausesAsUndecodable()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        FakeBackfillClient client;
+        GarminActivitySummary a1;
+        a1.activityId = QStringLiteral("10006");
+        a1.startTimeGMT = QStringLiteral("2026-10-06 00:00:00");
+        client.listResult = {a1};
+        const QByteArray full = realGzipMemberFor(longFitBytesFor(a1.activityId));
+        QVERIFY(full.size() > 20);
+        client.okBytesById.insert(a1.activityId, full.left(full.size() / 2));
+
+        GarminBackfillController ctrl(&client, tmp.path(), kUid);
+        const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-11-01 00:00:00"));
+
+        QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Paused));
+        QCOMPARE(int(r.pauseReason), int(GarminBackfillController::PauseReason::UndecodablePayload));
+        QVERIFY(noStagedFileExistsFor(tmp.path(), a1.activityId));
+        const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
+        QVERIFY(!imported.contains(a1.activityId));
+    }
+
+    // =====================================================================
+    // T-219 — DEC-073/B-STAGE9-89: two concatenated gzip members. The first
+    // member reaches Z_STREAM_END but leaves the second member's bytes in
+    // `avail_in`, so the stream is not "complete" by DEC-073's definition -
+    // must PAUSE with UndecodablePayload, never stage the first member alone.
+    // =====================================================================
+    void concatenatedGzipMembersPauseAsUndecodable()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        FakeBackfillClient client;
+        GarminActivitySummary a1;
+        a1.activityId = QStringLiteral("10007");
+        a1.startTimeGMT = QStringLiteral("2026-10-07 00:00:00");
+        client.listResult = {a1};
+        client.okBytesById.insert(a1.activityId, realGzipMemberFor(fitBytesFor(a1.activityId)) +
+                                                     realGzipMemberFor(fitBytesFor(a1.activityId)));
+
+        GarminBackfillController ctrl(&client, tmp.path(), kUid);
+        const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-11-01 00:00:00"));
+
+        QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Paused));
+        QCOMPARE(int(r.pauseReason), int(GarminBackfillController::PauseReason::UndecodablePayload));
+        QVERIFY(noStagedFileExistsFor(tmp.path(), a1.activityId));
+        const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
+        QVERIFY(!imported.contains(a1.activityId));
+    }
+
+    // =====================================================================
+    // T-220 — DEC-073/B-STAGE9-90: gzip-of-gzip, BOTH members individually
+    // complete and valid. One inflate only: the inner gzip-signed result is a
+    // refusal, never a second inflate pass. RED mutation (b) - allowing a
+    // second inflate pass - must fail this test.
+    // =====================================================================
+    void gzipOfGzipBothValidPausesAsUndecodable()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        FakeBackfillClient client;
+        GarminActivitySummary a1;
+        a1.activityId = QStringLiteral("10008");
+        a1.startTimeGMT = QStringLiteral("2026-10-08 00:00:00");
+        client.listResult = {a1};
+        client.okBytesById.insert(a1.activityId, realGzipMemberFor(realGzipMemberFor(fitBytesFor(a1.activityId))));
+
+        GarminBackfillController ctrl(&client, tmp.path(), kUid);
+        const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-11-01 00:00:00"));
+
+        QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Paused));
+        QCOMPARE(int(r.pauseReason), int(GarminBackfillController::PauseReason::UndecodablePayload));
+        QVERIFY(noStagedFileExistsFor(tmp.path(), a1.activityId));
+        const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
+        QVERIFY(!imported.contains(a1.activityId));
+    }
+
+    // =====================================================================
+    // T-221 — DEC-073: a complete, valid gzip member whose inflated output is
+    // empty (zero-byte payload) must PAUSE with UndecodablePayload rather than
+    // stage a zero-byte file under any name.
+    // =====================================================================
+    void gzipMemberOfEmptyPayloadPausesAsUndecodable()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        FakeBackfillClient client;
+        GarminActivitySummary a1;
+        a1.activityId = QStringLiteral("10009");
+        a1.startTimeGMT = QStringLiteral("2026-10-09 00:00:00");
+        client.listResult = {a1};
+        client.okBytesById.insert(a1.activityId, realGzipMemberFor(QByteArray()));
+
+        GarminBackfillController ctrl(&client, tmp.path(), kUid);
+        const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-11-01 00:00:00"));
+
+        QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Paused));
+        QCOMPARE(int(r.pauseReason), int(GarminBackfillController::PauseReason::UndecodablePayload));
+        QVERIFY(noStagedFileExistsFor(tmp.path(), a1.activityId));
+        const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
+        QVERIFY(!imported.contains(a1.activityId));
+    }
+
+    // =====================================================================
+    // T-223 — DEC-073/B-STAGE9-92: a bare downloaded payload that is neither
+    // ZIP- nor gzip- nor FIT-signed must PAUSE with UndecodablePayload - the
+    // accept-set is exactly ZIP-or-FIT, not "else assume FIT".
+    // =====================================================================
+    void bareUnsignedPayloadPausesAsUndecodable()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        FakeBackfillClient client;
+        GarminActivitySummary a1;
+        a1.activityId = QStringLiteral("10010");
+        a1.startTimeGMT = QStringLiteral("2026-10-10 00:00:00");
+        client.listResult = {a1};
+        client.okBytesById.insert(a1.activityId, QByteArrayLiteral("not-a-recognised-payload-shape"));
+
+        GarminBackfillController ctrl(&client, tmp.path(), kUid);
+        const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-11-01 00:00:00"));
+
+        QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Paused));
+        QCOMPARE(int(r.pauseReason), int(GarminBackfillController::PauseReason::UndecodablePayload));
+        QVERIFY(noStagedFileExistsFor(tmp.path(), a1.activityId));
+        const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
+        QVERIFY(!imported.contains(a1.activityId));
+    }
+
+    // =====================================================================
+    // T-224 — DEC-073/B-STAGE9-92: a REAL complete gzip member whose inflated
+    // bytes are neither ZIP- nor FIT-signed must PAUSE with
+    // UndecodablePayload - a successful inflate is not itself acceptance,
+    // the DECODED bytes still have to resolve to a handled shape.
+    // =====================================================================
+    void realGzipOfNonFitNonZipPayloadPausesAsUndecodable()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        FakeBackfillClient client;
+        GarminActivitySummary a1;
+        a1.activityId = QStringLiteral("10011");
+        a1.startTimeGMT = QStringLiteral("2026-10-11 00:00:00");
+        client.listResult = {a1};
+        client.okBytesById.insert(a1.activityId, realGzipMemberFor(QByteArrayLiteral("plain-text-not-fit-not-zip")));
+
+        GarminBackfillController ctrl(&client, tmp.path(), kUid);
+        const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-11-01 00:00:00"));
+
+        QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Paused));
+        QCOMPARE(int(r.pauseReason), int(GarminBackfillController::PauseReason::UndecodablePayload));
+        QVERIFY(noStagedFileExistsFor(tmp.path(), a1.activityId));
+        const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
+        QVERIFY(!imported.contains(a1.activityId));
+    }
+
+    // =====================================================================
+    // T-225 — DEC-073/B-STAGE9-91: ".FIT" present but at byte offset 7, not
+    // the required 8, must PAUSE with UndecodablePayload - `startsWithFitSignature`
+    // checks the exact offset, not merely the substring's presence anywhere
+    // in the header.
+    // =====================================================================
+    void fitSignatureAtWrongOffsetPausesAsUndecodable()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        FakeBackfillClient client;
+        GarminActivitySummary a1;
+        a1.activityId = QStringLiteral("10012");
+        a1.startTimeGMT = QStringLiteral("2026-10-12 00:00:00");
+        client.listResult = {a1};
+        QByteArray offsetLie(14, '\0');
+        offsetLie.replace(7, 4, QByteArrayLiteral(".FIT"));
+        client.okBytesById.insert(a1.activityId, offsetLie);
+
+        GarminBackfillController ctrl(&client, tmp.path(), kUid);
+        const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-11-01 00:00:00"));
+
+        QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Paused));
+        QCOMPARE(int(r.pauseReason), int(GarminBackfillController::PauseReason::UndecodablePayload));
+        QVERIFY(noStagedFileExistsFor(tmp.path(), a1.activityId));
+        const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
+        QVERIFY(!imported.contains(a1.activityId));
+    }
+
+    // =====================================================================
+    // T-226 — DEC-073/B-STAGE9-91: a buffer whose bytes 8-11 are exactly
+    // ".FIT" but whose total length is only 12 (short of the 14-byte header)
+    // must PAUSE with UndecodablePayload - `startsWithFitSignature`'s length
+    // gate applies even when the marker bytes themselves are intact.
+    // =====================================================================
+    void fitSignatureHeaderTooShortPausesAsUndecodable()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        FakeBackfillClient client;
+        GarminActivitySummary a1;
+        a1.activityId = QStringLiteral("10013");
+        a1.startTimeGMT = QStringLiteral("2026-10-13 00:00:00");
+        client.listResult = {a1};
+        QByteArray shortHeader(12, '\0');
+        shortHeader.replace(8, 4, QByteArrayLiteral(".FIT"));
+        QCOMPARE(shortHeader.size(), 12);
+        client.okBytesById.insert(a1.activityId, shortHeader);
+
+        GarminBackfillController ctrl(&client, tmp.path(), kUid);
+        const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-11-01 00:00:00"));
+
+        QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Paused));
+        QCOMPARE(int(r.pauseReason), int(GarminBackfillController::PauseReason::UndecodablePayload));
+        QVERIFY(noStagedFileExistsFor(tmp.path(), a1.activityId));
+        const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
+        QVERIFY(!imported.contains(a1.activityId));
     }
 };
 

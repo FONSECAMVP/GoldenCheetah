@@ -2412,9 +2412,11 @@ target_include_directories(testGarminBackfillController PRIVATE
     ${CMAKE_SOURCE_DIR}/src/Cloud
 )
 
+find_package(ZLIB REQUIRED)
 target_link_libraries(testGarminBackfillController PRIVATE
     Qt${QT_VERSION_MAJOR}::Core
     Qt${QT_VERSION_MAJOR}::Test
+    ZLIB::ZLIB
 )
 target_compile_features(testGarminBackfillController PRIVATE cxx_std_17)
 
@@ -2472,11 +2474,13 @@ else()
         "AddressSanitizer; no -fsanitize=address for compiler ${CMAKE_CXX_COMPILER_ID}.")
 endif()
 
+find_package(ZLIB REQUIRED)
 target_link_libraries(testGarminBackfillDialogLifetime PRIVATE
     Qt${QT_VERSION_MAJOR}::Core
     Qt${QT_VERSION_MAJOR}::Gui
     Qt${QT_VERSION_MAJOR}::Widgets
     Qt${QT_VERSION_MAJOR}::Test
+    ZLIB::ZLIB
 )
 target_compile_features(testGarminBackfillDialogLifetime PRIVATE cxx_std_17)
 

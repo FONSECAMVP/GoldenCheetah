@@ -148,12 +148,14 @@ class GarminConnect
 #ifndef _RideImportWizard_h
 #    define _RideImportWizard_h
 inline int g_rideImportWizardConstructions = 0;
+inline QList<QString> g_rideImportWizardPaths;
 class RideImportWizard : public QDialog
 {
   public:
-    RideImportWizard(QList<QString>, Context*, QWidget* parent = nullptr) : QDialog(parent)
+    RideImportWizard(QList<QString> paths, Context*, QWidget* parent = nullptr) : QDialog(parent)
     {
         ++g_rideImportWizardConstructions;
+        g_rideImportWizardPaths = paths;
     }
     int process() { return 0; }
 };

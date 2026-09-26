@@ -66,10 +66,11 @@ class GarminBackfillController
         None,
         UserCancelled,      // cancel() observed at a loop-head check
         TransientError,     // DES-005 retry exhausted; listFailed/downloadFailed reached us
-        TornWrite,          // AtomicFile::writeOver failed on the FIT file; cursor not advanced past it
+        TornWrite,          // AtomicFile::writeOver failed on the staged file; cursor not advanced past it
         StatePersistFailed, // GarminSidecarStore::saveBackfillState/recordImported returned false
         InvalidRange,       // Outcome::Rejected only: end < start, or span > the hard cap
-        SessionInvalidated  // B-R010-05: `sessionStillValid` returned false (see SessionCheck)
+        SessionInvalidated, // B-R010-05: `sessionStillValid` returned false (see SessionCheck)
+        UndecodablePayload  // DEC-073: downloaded bytes did not resolve to a handled shape
     };
 
     struct Result
@@ -86,10 +87,14 @@ class GarminBackfillController
     GarminBackfillController(IGarminDownloadClient* client, QString athleteConfigDir, QString garminUserId);
 
     // B-R010-04 (UI wiring) — reported once per successfully-imported
-    // activity, in PROCESSING (oldest-first) order, carrying its id and the
-    // running Result::importedCount. A backfill dialog's progress label and
-    // its post-run RideImportWizard file-list hand-off are both built on this.
-    using ProgressCallback = std::function<void(const QString& activityId, int importedSoFar)>;
+    // activity, in PROCESSING (oldest-first) order, carrying its id, the
+    // path start() actually staged its bytes under (DEC-070: extension
+    // follows the sniffed payload, not a fixed assumption), and the running
+    // Result::importedCount. A backfill dialog's progress label and its
+    // post-run RideImportWizard file-list hand-off are both built on this;
+    // the path must be taken verbatim, never re-derived on the read side.
+    using ProgressCallback =
+        std::function<void(const QString& activityId, const QString& stagedPath, int importedSoFar)>;
 
     // B-R010-05 — checked at the SAME two points GarminConnect::readFile()/
     // readdir() enforce their fail-closed pair (REQ-017 clause a + DEC-
@@ -122,8 +127,12 @@ class GarminBackfillController
     // thread only; this class is not thread-safe across threads).
     void cancel();
 
-    // Where a given activity's FIT bytes are staged (test/diagnostic seam).
-    static QString stagedFitPath(const QString& athleteConfigDir, const QString& activityId);
+    // Where a given activity's downloaded bytes are staged (test/diagnostic
+    // seam). DEC-070/B-STAGE9-83: the extension follows `bytes`' own leading
+    // signature. DEC-072/DEC-073: `start()` resolves any gzip member to a
+    // complete inflate-or-refusal before this function ever sees the bytes.
+    static QString stagedPayloadPath(const QString& athleteConfigDir, const QString& activityId,
+                                     const QByteArray& bytes);
 
     // DES-009 "Paging" — the checkpoint granularity referenced by design.md;
     // does not change per-activity cancellation/resume correctness (checked

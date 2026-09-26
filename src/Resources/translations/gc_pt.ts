@@ -13536,6 +13536,11 @@ Torque Adjust - isto define um valor absoluto em pontos por polegada quadrada ou
         <translation type="unfinished"></translation>
     </message>
     <message>
+        <location filename="../../Cloud/GarminBackfillController.cpp" line="374"/>
+        <source>Garmin Connect: activity %1&apos;s payload could not be decoded; it was discarded.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
         <location filename="../../Cloud/GarminBackfillController.cpp" line="290"/>
         <source>Garmin Connect: could not stage activity %1.</source>
         <translation type="unfinished"></translation>

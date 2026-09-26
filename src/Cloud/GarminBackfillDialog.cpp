@@ -186,8 +186,8 @@ void GarminBackfillDialog::startClicked()
     // built, which does not apply to a member watching since construction.
     const GarminBackfillController::Result r = controller.start(
         rangeStart, rangeEnd,
-        [&](const QString& activityId, int importedSoFar) {
-            stagedFiles << GarminBackfillController::stagedFitPath(configDir, activityId);
+        [&](const QString&, const QString& stagedPath, int importedSoFar) {
+            stagedFiles << stagedPath;
             if (!self.isNull())
                 progressLabel->setText(tr("Imported %1 so far...").arg(importedSoFar));
         },

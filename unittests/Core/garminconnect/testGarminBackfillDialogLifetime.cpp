@@ -126,6 +126,38 @@ class ContextDyingBackfillClient : public IGarminDownloadClient
     std::function<void()> onDownloadActivity;
 };
 
+// ---------------------------------------------------------------------------
+// SingleZipActivityBackfillClient — DEC-070 (T-214): lists exactly one
+// in-range activity and returns ZIP-local-file-header-signed bytes on
+// download, so the resulting RideImportWizard hand-off carries a real
+// ".zip"-staged path the dialog must consume verbatim rather than re-derive.
+// ---------------------------------------------------------------------------
+class SingleZipActivityBackfillClient : public IGarminDownloadClient
+{
+    Q_OBJECT
+  public:
+    void restoreSession(const QString&, QUuid id) override
+    {
+        QMetaObject::invokeMethod(this, [this, id]() { emit sessionRestored(id); }, Qt::QueuedConnection);
+    }
+
+    void listActivities(const QString&, QUuid id) override
+    {
+        GarminActivitySummary s;
+        s.activityId = QStringLiteral("act-zip-1");
+        s.startTimeGMT = QDateTime::currentDateTimeUtc().addDays(-10).toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+        QMetaObject::invokeMethod(
+            this, [this, id, s]() { emit activitiesListed(id, QVector<GarminActivitySummary>{s}); },
+            Qt::QueuedConnection);
+    }
+
+    void downloadActivity(const QString&, const QString&, QUuid id) override
+    {
+        const QByteArray bytes = QByteArray("PK\x03\x04") + QByteArrayLiteral("-zip-payload");
+        QMetaObject::invokeMethod(this, [this, id, bytes]() { emit downloaded(id, bytes); }, Qt::QueuedConnection);
+    }
+};
+
 void resetCounters()
 {
     g_backfillOpenCalls = 0;
@@ -136,6 +168,7 @@ void resetCounters()
     g_backfillSessionStillValidCalls = 0;
     g_backfillOpenSucceeds = true;
     g_rideImportWizardConstructions = 0;
+    g_rideImportWizardPaths.clear();
 }
 } // namespace
 
@@ -280,6 +313,45 @@ class TestGarminBackfillDialogLifetime : public QObject
         QCOMPARE(g_backfillSessionStillValidCalls, 2);
 
         delete dialog; // running == false; ~GarminBackfillDialog closes+deletes store
+    }
+
+    // =====================================================================
+    // T-214 — DEC-070: the RideImportWizard file-list hand-off must carry the
+    // controller's OWN reported staged path (here, a real ".zip"-suffixed
+    // file the real GarminBackfillController actually wrote), not a path the
+    // dialog re-derives itself. A dialog that goes back to guessing the
+    // extension on the read side would hand the wizard a ".fit" path that
+    // does not exist on disk.
+    // =====================================================================
+    void wizardHandoffCarriesControllerReportedPathNotAGuessedOne()
+    {
+        resetCounters();
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        Context* ctx = new Context;
+        Athlete athlete;
+        ctx->athlete = &athlete;
+
+        SingleZipActivityBackfillClient client;
+        GarminConnect* store = new GarminConnect;
+        store->configDir = tmp.path();
+        store->uid = kUid;
+        store->client = &client;
+
+        GarminBackfillDialog* dialog = new GarminBackfillDialog(ctx, store, nullptr);
+        QVERIFY(dialog->start());
+
+        dialog->startClicked();
+
+        QCOMPARE(g_rideImportWizardConstructions, 1);
+        QCOMPARE(g_rideImportWizardPaths.size(), 1);
+        const QString handedOffPath = g_rideImportWizardPaths.first();
+        QVERIFY2(handedOffPath.endsWith(QStringLiteral(".zip")), "the zip payload must have been staged as .zip");
+        QVERIFY2(QFile(handedOffPath).exists(), "the path handed to the wizard must be the one actually written");
+
+        delete dialog; // running == false here; ~GarminBackfillDialog closes+deletes store
+        delete ctx;
     }
 };
 

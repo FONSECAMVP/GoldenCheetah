@@ -19,6 +19,12 @@
 #include <QTimer>
 #include <QUuid>
 
+#ifdef Q_CC_MSVC
+#    include <QtZlib/zlib.h>
+#else
+#    include <zlib.h>
+#endif
+
 #include <algorithm>
 
 namespace {
@@ -30,6 +36,71 @@ constexpr int kBlockingTimeoutMs = 60000;
 // only for the hard-cap/range-validity check below - range FILTERING and
 // cursor comparisons stay on the lexicographically-sortable string form.
 const char* const kGarminTimeFormat = "yyyy-MM-dd HH:mm:ss";
+
+// DEC-070/B-STAGE9-83 — the staged extension follows these signatures, not
+// an assumption about which shape a given download takes.
+bool startsWithZipSignature(const QByteArray& bytes)
+{
+    return bytes.startsWith(QByteArrayLiteral("PK\x03\x04"));
+}
+
+bool startsWithGzipSignature(const QByteArray& bytes)
+{
+    return bytes.startsWith(QByteArrayLiteral("\x1f\x8b"));
+}
+
+// DEC-073/B-STAGE9-92 — signature level only, same idiom as the ZIP check
+// above: the FIT parser (not this controller) validates the rest of the
+// file. FIT's 14-byte header carries ".FIT" at bytes 8-11.
+bool startsWithFitSignature(const QByteArray& bytes)
+{
+    return bytes.size() >= 14 && bytes.mid(8, 4) == QByteArrayLiteral(".FIT");
+}
+
+// DEC-072/DEC-073 — mirrors CloudService.cpp's gUncompress idiom
+// (inflateInit2(&strm, 15 + 16) selects gzip-member decoding). Returns
+// non-empty ONLY when zlib reports the member fully consumed: `Z_STREAM_END`
+// reached with `strm.avail_in == 0`. A truncated member (loop exits on
+// Z_OK/Z_BUF_ERROR) or a complete member followed by trailing bytes
+// (leftover avail_in) both return empty — the caller treats empty as a
+// refusal, never as "fall back to the original bytes".
+QByteArray inflateGzipMember(const QByteArray& data)
+{
+    if (data.size() <= 4)
+        return QByteArray();
+
+    QByteArray result;
+    z_stream strm;
+    static const int kChunkSize = 1024;
+    char out[kChunkSize];
+
+    strm.zalloc = Z_NULL;
+    strm.zfree = Z_NULL;
+    strm.opaque = Z_NULL;
+    strm.avail_in = data.size();
+    strm.next_in = (Bytef*)(data.data());
+
+    if (inflateInit2(&strm, 15 + 16) != Z_OK)
+        return QByteArray();
+
+    int ret;
+    do {
+        strm.avail_out = kChunkSize;
+        strm.next_out = (Bytef*)(out);
+
+        ret = inflate(&strm, Z_NO_FLUSH);
+        if (ret == Z_NEED_DICT || ret == Z_DATA_ERROR || ret == Z_MEM_ERROR) {
+            inflateEnd(&strm);
+            return QByteArray();
+        }
+
+        result.append(out, kChunkSize - strm.avail_out);
+    } while (ret != Z_STREAM_END && strm.avail_out == 0);
+
+    const bool complete = (ret == Z_STREAM_END && strm.avail_in == 0);
+    inflateEnd(&strm);
+    return complete ? result : QByteArray();
+}
 
 QDateTime parseGarminTime(const QString& s)
 {
@@ -48,10 +119,18 @@ GarminBackfillController::GarminBackfillController(IGarminDownloadClient* client
 {
 }
 
-QString GarminBackfillController::stagedFitPath(const QString& athleteConfigDir, const QString& activityId)
+QString GarminBackfillController::stagedPayloadPath(const QString& athleteConfigDir, const QString& activityId,
+                                                    const QByteArray& bytes)
 {
+    QString ext;
+    if (startsWithZipSignature(bytes))
+        ext = QStringLiteral("zip");
+    else if (startsWithGzipSignature(bytes))
+        ext = QStringLiteral("gzip");
+    else
+        ext = QStringLiteral("fit");
     return QDir(GarminSidecarStore::directoryFor(athleteConfigDir))
-        .filePath(QStringLiteral("backfill/garmin-%1.fit").arg(activityId));
+        .filePath(QStringLiteral("backfill/garmin-%1.%2").arg(activityId, ext));
 }
 
 void GarminBackfillController::cancel()
@@ -279,9 +358,27 @@ GarminBackfillController::Result GarminBackfillController::start(const QString& 
             return result;
         }
 
-        const QString fitPath = stagedFitPath(m_configDir, s.activityId);
-        QDir().mkpath(QFileInfo(fitPath).absolutePath());
-        if (!AtomicFile::writeOver(fitPath, dl.bytes)) {
+        // DEC-073/B-STAGE9-92 — the accept-set is exactly two shapes: a bare
+        // FIT/ZIP, or a single complete gzip member whose inflated bytes are
+        // themselves FIT-or-ZIP. One inflate, never two: inflateGzipMember
+        // already refuses an incomplete/nested/empty member by returning
+        // empty (never falls back to the original bytes), so ONE signature
+        // check on `stageBytes` afterwards covers the bare payload AND the
+        // post-inflate result identically - nothing here re-derives a shape.
+        // Anything that doesn't resolve to ZIP-or-FIT pauses BEFORE staging,
+        // BEFORE recordImported and BEFORE the cursor advances.
+        QByteArray stageBytes = startsWithGzipSignature(dl.bytes) ? inflateGzipMember(dl.bytes) : dl.bytes;
+        if (!startsWithZipSignature(stageBytes) && !startsWithFitSignature(stageBytes)) {
+            result.outcome = Outcome::Paused;
+            result.pauseReason = PauseReason::UndecodablePayload;
+            result.message =
+                tr("Garmin Connect: activity %1's payload could not be decoded; it was discarded.").arg(s.activityId);
+            return result;
+        }
+
+        const QString payloadPath = stagedPayloadPath(m_configDir, s.activityId, stageBytes);
+        QDir().mkpath(QFileInfo(payloadPath).absolutePath());
+        if (!AtomicFile::writeOver(payloadPath, stageBytes)) {
             // DES-006 torn-write recovery: do NOT advance the cursor past an
             // activity that never made it to disk intact - the next start()
             // re-fetches it rather than silently skipping it forever.
@@ -292,12 +389,12 @@ GarminBackfillController::Result GarminBackfillController::start(const QString& 
         }
 
         // A false return here means the dedup record / resume cursor never
-        // made it to disk despite the FIT bytes landing intact; advancing
+        // made it to disk despite the payload bytes landing intact; advancing
         // in-memory progress anyway would break DES-009's resumability
         // contract (a crash right after would resume from unsaved state).
         GarminSidecarStore::ImportedEntry entry;
         entry.startTimeGMT = s.startTimeGMT;
-        entry.localFilename = QFileInfo(fitPath).fileName();
+        entry.localFilename = QFileInfo(payloadPath).fileName();
         if (!GarminSidecarStore::recordImported(m_configDir, m_uid, s.activityId, entry)) {
             result.outcome = Outcome::Paused;
             result.pauseReason = PauseReason::StatePersistFailed;
@@ -318,10 +415,10 @@ GarminBackfillController::Result GarminBackfillController::start(const QString& 
 
         ++result.importedCount;
         // B-R010-04: report AFTER the cursor/dedup writes above, so a caller
-        // that reacts to this (e.g. queues the staged FIT for RideImportWizard)
+        // that reacts to this (e.g. queues the staged payload for RideImportWizard)
         // never sees an activity this run has not yet durably recorded.
         if (onProgress)
-            onProgress(s.activityId, result.importedCount);
+            onProgress(s.activityId, payloadPath, result.importedCount);
     }
 
     result.outcome = Outcome::Done;
