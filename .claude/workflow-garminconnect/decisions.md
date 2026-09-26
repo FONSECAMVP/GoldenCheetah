@@ -95,6 +95,7 @@ Compact schema per `references/formats.md` § `decisions.md`. **The recap source
 | DEC-078 | B-STAGE9-112's remedy at the repair-round bound — whether to pick a better cursor rewind or remove the overload → REMOVE IT: `GarminBackfillController.cpp:283,336` uses one variable as both an exclusive last-success marker and an inclusive range bound, which is why two rounds of better rewind values both failed on the reviewer's `startTimeGMT == lastSuccess == rangeStart` case; splitting the roles also closes B-STAGE9-121, the earliest activity of every range being silently skipped | accepted (Inspector, at the repair-round bound after two consecutive SAME-class verdicts — ordinary technical call on Garmin-side code) | 2026-09-27 |
 | DEC-079 | B-STAGE9-79 slice 3, the legacy migration — where it runs and how a pre-slice-2 `imported` row is classified → DIALOG PRE-START SELF-CLASSIFICATION: an absent `schema_version` loads as version 0 and is the ONLY thing that identifies a legacy sidecar pair, because an individual `imported` row is byte-for-byte indistinguishable from a current completion row; the dialog is the one seam that holds both the uid/config-dir and a populated `RideCache`, so it exact-matches each legacy row and moves the unmatched ones into `pending` before `GarminBackfillController::start()` | accepted (Inspector, on `s979_record_split_investigator`'s three scored designs — ordinary technical placement call on Garmin-side code) | 2026-09-27 |
 | DEC-080 | B-STAGE9-111 cannot be built without touching `CloudService` code DEC-077 froze — whether to abandon DEC-071's both-routes requirement or narrow the freeze → NARROW THE FREEZE: DEC-077 stays absolute for REPAIRS and REWORKS of shared import logic (the `RideImportWizard` use-after-free, `ArchiveFile.cpp`'s GZIP arm, `CloudService.cpp:565`'s `gUncompress`) and is amended to permit an ADDITIVE, default-no-op virtual extension point, because every one of the investigator's three designs must add a call after ride registration and DEC-071's both-routes requirement is the reason this branch exists | accepted (Inspector, on `s979_record_split_investigator`'s explicit amendment-required verdict, unit B-STAGE9-111-design — ordinary scope call between two of this project's own accepted decisions, no external element) | 2026-09-27 |
+| DEC-081 | Garmin backfill timestamps are compared as TEXT at five sites while the adapter forwards whatever ISO-8601 spelling Garmin sent (B-STAGE9-128) — canonicalise, or make C++ instant-aware → CANONICALISE AT THE ADAPTER BOUNDARY: the adapter already owns the authoritative parse, so normalising each accepted summary to one `yyyy-MM-dd HH:mm:ss` UTC spelling stops raw variants ever reaching C++ persistence or comparison, instead of duplicating instant policy across store, controller, dialog and the test fake | accepted (Inspector, on `s979_record_split_investigator`'s three scored options, unit B-STAGE9-128-design — ordinary technical call on Garmin-side code) | 2026-09-27 |
 
 ### Dormant index
 
@@ -3973,6 +3974,30 @@ Arms that must NOT guess: `NotFound` no-ops and the first ordinary backfill writ
 promoted (`.cpp:214-232,274-278`); permission-rejected and malformed-pending states stay untouched
 because every cursor writer already refuses them (`.cpp:327-335,344-380`).
 
+### Amendment 2026-09-27 — the gate needs a guard on the non-dialog writer (B-STAGE9-127)
+
+The decision above is unreachable as written. `serializeBackfillState()`
+(`GarminSidecarStore.cpp:121-137`) stamps the current version on EVERY state write, and the
+non-dialog route performs one: `readFile()` -> `GarminConnect::recordImport()` (`.cpp:691`) loads
+the legacy state and calls `saveBackfillState()` (`:927-931`). One ordinary sync therefore stamps a
+legacy athlete v1 and `schemaVersion == 0` never holds again.
+
+Remedy, inside this decision's placement and needing no new DEC: for precisely
+`bf.isOk() && bf.state.schemaVersion == 0`, `recordImport()` keeps `recordImported()` and SKIPS only
+the cursor save, so the dialog stays the sole upgrader of a legacy v0 file. B-STAGE9-111's
+replacement pending writer takes the same guard.
+
+Scope limit, load-bearing: the guard applies ONLY to an existing Ok/v0 state. `NotFound` and torn
+states have no legacy data to classify and keep DEC-075's self-healing write
+(`GarminSidecarStore.cpp:321-335`) — a blanket non-dialog write ban would contradict this decision.
+
+Cost accepted: a v0 athlete who never opens Backfill re-lists from the old cursor every sync.
+That is repeated listing work, not loss or duplicate download — Tier-1 `imported` dedup
+(`GarminConnect.cpp:855-879`) skips every recorded id, and no consumer reads the cursor as proof an
+import completed. Independently checked before this amendment was recorded: `garmin_codex_reviewer`,
+unit B-STAGE9-127-remedy, which also confirmed `schema_version` is the sound hinge (a separate
+one-shot marker would duplicate migration state and widen the cross-file crash surface).
+
 ### Why not the alternatives
 
 Injecting a completion-lookup callback into the controller (reliability 5, maintainability 2) can run
@@ -4044,3 +4069,58 @@ The hook must NOT fire on any abandonment path: `CloudService.cpp:3389-3397` (ab
 than passing unchanged: BBB becomes pending with the cursor advanced and absent from `imported`, and
 the next listing re-offers it. A `context == nullptr` path has no registration consumer, so it
 persists pending and never promotes. Tests from T-240.
+
+## DEC-081 — Garmin backfill timestamps are canonicalised at the adapter boundary, not compared as text
+
+- Status: **accepted 2026-09-27** (Inspector, on `s979_record_split_investigator`'s three scored
+  options, unit B-STAGE9-128-design. Ordinary technical call on Garmin-side code, no external
+  element — not a gate.)
+- Reversibility: medium — the adapter change is one function; the on-disk rewrite is a one-shot
+  migration that a reader accepting both spellings makes safe to roll back.
+- Decided / last-reviewed: 2026-09-27
+- Serves: B-STAGE9-128 (non-blocking, latent). Does NOT hold Stage 9 and must not displace
+  B-STAGE9-79 slice 3 or B-STAGE9-111 in the builder queue.
+- Dependents: `src/Python/garminconnect/gc_garmin_adapter/garmin_client.py`,
+  `src/Cloud/GarminSidecarStore.cpp`, `src/Cloud/GarminBackfillController.cpp`,
+  `src/Cloud/GarminBackfillDialog.cpp`, and the two Garmin test files.
+- Origin: `garmin_codex_reviewer` unit B-STAGE9-126-rev raised it; the Inspector re-set its
+  severity against the real sidecar; `s979_record_split_investigator` scored the options.
+
+### The evidence that decides it
+
+The comparison is textual at FIVE sites, not the two the finding first named:
+`GarminSidecarStore.cpp:375-378` (the drop-rewind), and in the controller the cursor filter
+(`:349`), cursor-in-range selection (`:292-295`), the range filter (`:351`) and the sort
+(`:357-359`). `GarminBackfillDialog.cpp:47-52`'s completion parser accepts only the current
+space-second spelling before DEC-071's exact `RideCache::getRide()` lookup (`:337-346`).
+
+The adapter parses an accepted timestamp to a real instant (`garmin_client.py:79-92`) purely to
+compare it, then emits the ORIGINAL text (`:431-435`). So an offset or `Z` spelling would flow
+through unnormalised and sort lexically against a differently-spelled cursor.
+
+It is latent rather than live: every non-empty value in the 2026-09-26 run's real sidecars is
+space-separated UTC seconds with no `T`, no offset and no fractional part.
+
+### The decision
+
+Canonicalise in the adapter (option A, scored 5/5/5/5). Each accepted summary carries one
+`yyyy-MM-dd HH:mm:ss` UTC spelling; the adapter keeps parsing every variant it accepts today. The
+rejected alternatives: instant-aware C++ compares (4/3/2/3) duplicate instant policy across five
+sites plus the dialog and the fake, and leave raw text on disk for ever; schema-v2 sidecars
+(5/4/2/3) buy no capability over A at the highest migration cost.
+
+Binding constraints on the implementation:
+- Canonicalisation must REJECT a non-zero fractional second rather than round or truncate it.
+  DEC-071's completion seam is a measured second-level exact compare; silently reshaping a value
+  it matches on would invalidate that measurement.
+- Sidecars already on disk are rewritten once, atomically, cursor and ranges and pending and
+  imported together; readers accept the old spelling for as long as legacy files are supported.
+- `FakeBackfillClient::listActivities()` (`testGarminBackfillController.cpp:150-162`) repeats the
+  production text compare, so it must move to the same canonical basis or no controller test can
+  detect a regression here.
+
+### Cascade impact
+
+No REQ/DES row changes. Regression coverage the investigator named: an equivalent-instant
+cursor/summary pair (`...+00:00` vs `...Z`) must neither re-download nor strand — one test in
+`testGarminBackfillController.cpp`, its twin in `testGarminSidecarStore.cpp`.
