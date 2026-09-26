@@ -26,6 +26,12 @@ const QString kLocalFilename = QStringLiteral("local_filename");
 const QString kLastSuccess = QStringLiteral("last_success_startTimeGMT");
 const QString kRangeStart = QStringLiteral("range_start");
 const QString kRangeEnd = QStringLiteral("range_end");
+const QString kPending = QStringLiteral("pending");              // DEC-071 pending manifest
+const QString kSchemaVersion = QStringLiteral("schema_version"); // DEC-071
+
+// The schema version this store writes. A file with no `schema_version` key
+// (pre-DEC-071) loads as version 0 — never produced by a write in this file.
+constexpr int kCurrentBackfillSchemaVersion = 1;
 
 // The result of the shared permission-enforcing read step: a load status and
 // the raw bytes (valid only when status==Ok). Parse/decode is layered on top by
@@ -105,6 +111,51 @@ bool ensureDir(const QString& dirPath)
         QFile::setPermissions(dirPath, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
     }
     return true;
+}
+
+// Serialize the full backfill cursor, including the DEC-071 pending manifest
+// and the current schema version. Shared by saveBackfillState and the two
+// pending writers so all three stamp the identical on-disk shape.
+QJsonObject serializeBackfillState(const GarminSidecarStore::BackfillState& state)
+{
+    QJsonObject obj;
+    obj.insert(kLastSuccess, state.lastSuccessStartTimeGMT);
+    obj.insert(kRangeStart, state.rangeStart);
+    obj.insert(kRangeEnd, state.rangeEnd);
+    obj.insert(kSchemaVersion, kCurrentBackfillSchemaVersion);
+
+    QJsonObject pending;
+    for (auto it = state.pending.constBegin(); it != state.pending.constEnd(); ++it) {
+        QJsonObject e;
+        e.insert(kStartTimeGMT, it.value().startTimeGMT);
+        e.insert(kLocalFilename, it.value().localFilename);
+        pending.insert(it.key(), e);
+    }
+    obj.insert(kPending, pending);
+    return obj;
+}
+
+// DEC-075: a file whose current status is one of these two cannot be safely
+// modelled (Rejected: bytes never read; PendingManifestMalformed: parsed but
+// `pending` uninterpretable), so a cursor writer must refuse rather than
+// overwrite it. NotFound/Torn have nothing recoverable and keep self-healing.
+bool refuseCursorOverwrite(GarminSidecarStore::LoadStatus status)
+{
+    return status == GarminSidecarStore::LoadStatus::SidecarPermissionsRejected ||
+           status == GarminSidecarStore::LoadStatus::PendingManifestMalformed;
+}
+
+// Ensures the dir and writes the WHOLE state atomically at 0600 (DES-006).
+// Shared write path for saveBackfillState/recordPendingBackfill/
+// dropPendingBackfill so all three match exactly.
+bool writeBackfillState(const QString& athleteConfigDir, const QString& garminUserId,
+                        const GarminSidecarStore::BackfillState& state)
+{
+    if (!ensureDir(GarminSidecarStore::directoryFor(athleteConfigDir)))
+        return false;
+
+    const QByteArray bytes = QJsonDocument(serializeBackfillState(state)).toJson(QJsonDocument::Compact);
+    return AtomicFile::writeOver(GarminSidecarStore::backfillStateFilePath(athleteConfigDir, garminUserId), bytes);
 }
 
 } // namespace
@@ -202,9 +253,43 @@ GarminSidecarStore::BackfillLoadResult GarminSidecarStore::loadBackfillState(con
         return result;
     }
 
+    // DEC-075: a present `pending` key that is not an object, or an entry
+    // within it that is not an object, is parsed JSON we still cannot model —
+    // refuse the whole load rather than silently drop the offending entry (a
+    // silent drop would become permanent on the next write).
+    if (obj.contains(kPending)) {
+        const QJsonValue pendingVal = obj.value(kPending);
+        if (!pendingVal.isObject()) {
+            result.status = LoadStatus::PendingManifestMalformed;
+            return result;
+        }
+        const QJsonObject pendingObj = pendingVal.toObject();
+        for (auto it = pendingObj.constBegin(); it != pendingObj.constEnd(); ++it) {
+            if (!it.value().isObject()) {
+                result.status = LoadStatus::PendingManifestMalformed;
+                return result;
+            }
+        }
+    }
+
     result.state.lastSuccessStartTimeGMT = obj.value(kLastSuccess).toString();
     result.state.rangeStart = obj.value(kRangeStart).toString();
     result.state.rangeEnd = obj.value(kRangeEnd).toString();
+    // Missing key (pre-DEC-071 legacy file) -> version 0, NOT Torn.
+    result.state.schemaVersion = obj.value(kSchemaVersion).toInt(0);
+
+    // Missing key (legacy file) -> not present, pending stays empty. Present
+    // means every entry validated as an object above.
+    if (obj.contains(kPending)) {
+        const QJsonObject pendingObj = obj.value(kPending).toObject();
+        for (auto it = pendingObj.constBegin(); it != pendingObj.constEnd(); ++it) {
+            const QJsonObject e = it.value().toObject();
+            ImportedEntry entry;
+            entry.startTimeGMT = e.value(kStartTimeGMT).toString();
+            entry.localFilename = e.value(kLocalFilename).toString();
+            result.state.pending.insert(it.key(), entry);
+        }
+    }
     result.status = LoadStatus::Ok;
     return result;
 }
@@ -212,14 +297,39 @@ GarminSidecarStore::BackfillLoadResult GarminSidecarStore::loadBackfillState(con
 bool GarminSidecarStore::saveBackfillState(const QString& athleteConfigDir, const QString& garminUserId,
                                            const BackfillState& state)
 {
-    if (!ensureDir(directoryFor(athleteConfigDir)))
+    const BackfillLoadResult current = loadBackfillState(athleteConfigDir, garminUserId);
+    if (refuseCursorOverwrite(current.status))
         return false;
 
-    QJsonObject obj;
-    obj.insert(kLastSuccess, state.lastSuccessStartTimeGMT);
-    obj.insert(kRangeStart, state.rangeStart);
-    obj.insert(kRangeEnd, state.rangeEnd);
+    // DEC-075: pending is single-writer — this call never persists its own
+    // `state.pending` argument, only the on-disk map (empty if there wasn't one).
+    BackfillState toWrite = state;
+    toWrite.pending = current.isOk() ? current.state.pending : QHash<QString, GarminSidecarStore::ImportedEntry>();
+    return writeBackfillState(athleteConfigDir, garminUserId, toWrite);
+}
 
-    const QByteArray bytes = QJsonDocument(obj).toJson(QJsonDocument::Compact);
-    return AtomicFile::writeOver(backfillStateFilePath(athleteConfigDir, garminUserId), bytes);
+bool GarminSidecarStore::recordPendingBackfill(const QString& athleteConfigDir, const QString& garminUserId,
+                                               const QString& activityId, const ImportedEntry& entry)
+{
+    const BackfillLoadResult current = loadBackfillState(athleteConfigDir, garminUserId);
+    if (refuseCursorOverwrite(current.status))
+        return false;
+
+    // NotFound/Torn treated as empty (DES-002 fallback), same precedent as
+    // recordImported: recording never propagates a prior parse failure.
+    BackfillState state = current.isOk() ? current.state : BackfillState();
+    state.pending.insert(activityId, entry);
+    return writeBackfillState(athleteConfigDir, garminUserId, state);
+}
+
+bool GarminSidecarStore::dropPendingBackfill(const QString& athleteConfigDir, const QString& garminUserId,
+                                             const QString& activityId)
+{
+    const BackfillLoadResult current = loadBackfillState(athleteConfigDir, garminUserId);
+    if (refuseCursorOverwrite(current.status))
+        return false;
+
+    BackfillState state = current.isOk() ? current.state : BackfillState();
+    state.pending.remove(activityId);
+    return writeBackfillState(athleteConfigDir, garminUserId, state);
 }

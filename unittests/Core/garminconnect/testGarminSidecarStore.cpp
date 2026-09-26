@@ -370,6 +370,237 @@ class TestGarminSidecarStore : public QObject
         QCOMPARE(r.status, GarminSidecarStore::LoadStatus::Torn);
         QVERIFY2(!r.isOk(), "torn backfill file must NOT be Ok");
     }
+
+    // ================================================================
+    // DEC-071 / B-STAGE9-79 slice 1 — the `pending` manifest
+    // ================================================================
+
+    // Acceptance: recordPendingBackfill then dropPendingBackfill both
+    // read-modify-write the WHOLE cursor atomically at 0600 — the three
+    // existing cursor fields set by an earlier saveBackfillState survive both
+    // calls unchanged, and the pending entry itself round-trips then vanishes.
+    void backfill_pendingRecordDropRoundTrip_cursorFieldsUnchanged_0600_noTmp()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("161803");
+
+        GarminSidecarStore::BackfillState st;
+        st.lastSuccessStartTimeGMT = QStringLiteral("2026-05-01T00:00:00.0");
+        st.rangeStart = QStringLiteral("2026-01-01T00:00:00.0");
+        st.rangeEnd = QStringLiteral("2026-05-01T00:00:00.0");
+        QVERIFY(GarminSidecarStore::saveBackfillState(athlete.path(), uid, st));
+
+        GarminSidecarStore::ImportedEntry pending;
+        pending.startTimeGMT = QStringLiteral("2026-04-15T10:00:00.0");
+        pending.localFilename = QStringLiteral("garmin-321.fit");
+        QVERIFY(GarminSidecarStore::recordPendingBackfill(athlete.path(), uid, QStringLiteral("321"), pending));
+
+        const QString dest = GarminSidecarStore::backfillStateFilePath(athlete.path(), uid);
+#ifndef Q_OS_WIN
+        QVERIFY2(!isWiderThanOwnerOnly(QFileInfo(dest).permissions()),
+                 "backfill-state-<uid>.json must stay owner-only 0600 after recording a pending entry");
+#endif
+        QVERIFY2(!QFileInfo::exists(dest + ".tmp"), "atomic write must leave no .tmp residue after recording pending");
+
+        const GarminSidecarStore::BackfillLoadResult afterRecord =
+            GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QVERIFY(afterRecord.isOk());
+        QVERIFY2(afterRecord.state.pending.contains(QStringLiteral("321")), "recorded pending id must be present");
+        QCOMPARE(afterRecord.state.pending.value(QStringLiteral("321")).startTimeGMT, pending.startTimeGMT);
+        QCOMPARE(afterRecord.state.pending.value(QStringLiteral("321")).localFilename, pending.localFilename);
+        QCOMPARE(afterRecord.state.lastSuccessStartTimeGMT, st.lastSuccessStartTimeGMT);
+        QCOMPARE(afterRecord.state.rangeStart, st.rangeStart);
+        QCOMPARE(afterRecord.state.rangeEnd, st.rangeEnd);
+
+        QVERIFY(GarminSidecarStore::dropPendingBackfill(athlete.path(), uid, QStringLiteral("321")));
+#ifndef Q_OS_WIN
+        QVERIFY2(!isWiderThanOwnerOnly(QFileInfo(dest).permissions()),
+                 "backfill-state-<uid>.json must stay owner-only 0600 after dropping a pending entry");
+#endif
+        QVERIFY2(!QFileInfo::exists(dest + ".tmp"), "atomic write must leave no .tmp residue after dropping pending");
+
+        const GarminSidecarStore::BackfillLoadResult afterDrop =
+            GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QVERIFY(afterDrop.isOk());
+        QVERIFY2(!afterDrop.state.pending.contains(QStringLiteral("321")), "dropped pending id must be gone");
+        QCOMPARE(afterDrop.state.lastSuccessStartTimeGMT, st.lastSuccessStartTimeGMT);
+        QCOMPARE(afterDrop.state.rangeStart, st.rangeStart);
+        QCOMPARE(afterDrop.state.rangeEnd, st.rangeEnd);
+    }
+
+    // A pre-DEC-071 3-field file (no `pending`, no `schema_version`) MUST load
+    // Ok with pending empty and schema_version 0 — never Torn, and the load
+    // must not rewrite the file (no key injected on a read-only path).
+    void backfill_legacyFileLoadsOk_pendingEmpty_versionZero_notRewritten()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("31415");
+
+        const QString dest = GarminSidecarStore::backfillStateFilePath(athlete.path(), uid);
+        QVERIFY(QDir().mkpath(GarminSidecarStore::directoryFor(athlete.path())));
+        QFile f(dest);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        const QByteArray legacyBytes = QByteArrayLiteral("{\"last_success_startTimeGMT\":\"2026-02-02T02:02:02.0\","
+                                                         "\"range_start\":\"2026-01-01T00:00:00.0\","
+                                                         "\"range_end\":\"2026-02-02T00:00:00.0\"}");
+        f.write(legacyBytes);
+        f.close();
+#ifndef Q_OS_WIN
+        QVERIFY(f.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+#endif
+
+        const GarminSidecarStore::BackfillLoadResult r = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QCOMPARE(r.status, GarminSidecarStore::LoadStatus::Ok);
+        QVERIFY2(r.isOk(), "a pre-DEC-071 3-field file (no pending, no schema_version) must load Ok");
+        QVERIFY2(r.state.pending.isEmpty(), "a legacy file has no pending key: pending must be empty");
+        QCOMPARE(r.state.schemaVersion, 0);
+        QCOMPARE(r.state.lastSuccessStartTimeGMT, QStringLiteral("2026-02-02T02:02:02.0"));
+        QCOMPARE(r.state.rangeStart, QStringLiteral("2026-01-01T00:00:00.0"));
+        QCOMPARE(r.state.rangeEnd, QStringLiteral("2026-02-02T00:00:00.0"));
+
+        QFile check(dest);
+        QVERIFY(check.open(QIODevice::ReadOnly));
+        QCOMPARE(check.readAll(), legacyBytes); // load must never rewrite the file
+    }
+
+    // ================================================================
+    // DEC-075 — pending is single-writer; a file we cannot model is refused
+    // ================================================================
+
+    // saveBackfillState must never persist its own `state.pending` argument —
+    // only recordPendingBackfill/dropPendingBackfill mutate the on-disk map.
+    void backfill_saveIgnoresArgumentPending_preservesOnDiskManifest()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("271831");
+
+        GarminSidecarStore::BackfillState seed;
+        seed.lastSuccessStartTimeGMT = QStringLiteral("2026-05-01T00:00:00.0");
+        seed.rangeStart = QStringLiteral("2026-01-01T00:00:00.0");
+        seed.rangeEnd = QStringLiteral("2026-05-01T00:00:00.0");
+        QVERIFY(GarminSidecarStore::saveBackfillState(athlete.path(), uid, seed));
+
+        GarminSidecarStore::ImportedEntry pendingEntry;
+        pendingEntry.startTimeGMT = QStringLiteral("2026-04-20T00:00:00.0");
+        pendingEntry.localFilename = QStringLiteral("garmin-321.fit");
+        QVERIFY(GarminSidecarStore::recordPendingBackfill(athlete.path(), uid, QStringLiteral("321"), pendingEntry));
+
+        // A FRESH state, as every caller today constructs, carrying a bogus
+        // pending entry that must never reach disk.
+        GarminSidecarStore::BackfillState fresh;
+        fresh.lastSuccessStartTimeGMT = QStringLiteral("2026-06-01T00:00:00.0");
+        fresh.rangeStart = QStringLiteral("2026-02-01T00:00:00.0");
+        fresh.rangeEnd = QStringLiteral("2026-06-01T00:00:00.0");
+        GarminSidecarStore::ImportedEntry bogus;
+        bogus.startTimeGMT = QStringLiteral("bogus");
+        bogus.localFilename = QStringLiteral("bogus.fit");
+        fresh.pending.insert(QStringLiteral("999"), bogus);
+        QVERIFY(GarminSidecarStore::saveBackfillState(athlete.path(), uid, fresh));
+
+        const GarminSidecarStore::BackfillLoadResult r = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QVERIFY(r.isOk());
+        QCOMPARE(r.state.pending.size(), 1);
+        QVERIFY2(r.state.pending.contains(QStringLiteral("321")),
+                 "the pending manifest recorded before the fresh save must survive it");
+        QVERIFY2(!r.state.pending.contains(QStringLiteral("999")),
+                 "saveBackfillState must never persist its own argument's pending");
+        QCOMPARE(r.state.lastSuccessStartTimeGMT, fresh.lastSuccessStartTimeGMT);
+        QCOMPARE(r.state.rangeStart, fresh.rangeStart);
+        QCOMPARE(r.state.rangeEnd, fresh.rangeEnd);
+    }
+
+#ifndef Q_OS_WIN
+    // A SidecarPermissionsRejected cursor must never be overwritten: all three
+    // writers refuse (return false), and the file's bytes AND mode are left
+    // byte-identical.
+    void backfill_rejectedFileNeverOverwritten_allThreeWritersRefuse()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("112358");
+
+        GarminSidecarStore::BackfillState st;
+        st.lastSuccessStartTimeGMT = QStringLiteral("2026-03-03T00:00:00.0");
+        st.rangeStart = QStringLiteral("2026-01-01T00:00:00.0");
+        st.rangeEnd = QStringLiteral("2026-03-03T00:00:00.0");
+        QVERIFY(GarminSidecarStore::saveBackfillState(athlete.path(), uid, st));
+
+        GarminSidecarStore::ImportedEntry entry;
+        entry.startTimeGMT = QStringLiteral("2026-02-15T00:00:00.0");
+        entry.localFilename = QStringLiteral("garmin-42.fit");
+        QVERIFY(GarminSidecarStore::recordPendingBackfill(athlete.path(), uid, QStringLiteral("42"), entry));
+
+        const QString dest = GarminSidecarStore::backfillStateFilePath(athlete.path(), uid);
+        QFile before(dest);
+        QVERIFY(before.open(QIODevice::ReadOnly));
+        const QByteArray bytesBefore = before.readAll();
+        before.close();
+
+        QVERIFY(QFile::setPermissions(dest, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ReadGroup));
+        const QFileDevice::Permissions modeBefore = QFileInfo(dest).permissions();
+
+        QVERIFY2(!GarminSidecarStore::recordPendingBackfill(athlete.path(), uid, QStringLiteral("77"), entry),
+                 "recordPendingBackfill must refuse a Rejected cursor");
+        QVERIFY2(!GarminSidecarStore::dropPendingBackfill(athlete.path(), uid, QStringLiteral("42")),
+                 "dropPendingBackfill must refuse a Rejected cursor");
+        QVERIFY2(!GarminSidecarStore::saveBackfillState(athlete.path(), uid, st),
+                 "saveBackfillState must refuse a Rejected cursor");
+
+        QFile after(dest);
+        QVERIFY(after.open(QIODevice::ReadOnly));
+        QCOMPARE(after.readAll(), bytesBefore);
+        after.close();
+        QCOMPARE(QFileInfo(dest).permissions(), modeBefore);
+    }
+#endif
+
+    // A `pending` entry that parses but is not itself an object is
+    // PendingManifestMalformed, not Ok — and all three writers refuse, leaving
+    // the file's bytes unchanged.
+    void backfill_pendingManifestMalformed_refusesAllWriters_bytesUnchanged()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("503");
+
+        const QString dest = GarminSidecarStore::backfillStateFilePath(athlete.path(), uid);
+        QVERIFY(QDir().mkpath(GarminSidecarStore::directoryFor(athlete.path())));
+        QFile f(dest);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        const QByteArray malformedBytes = QByteArrayLiteral("{\"last_success_startTimeGMT\":\"2026-01-01T00:00:00.0\","
+                                                            "\"range_start\":\"2026-01-01T00:00:00.0\","
+                                                            "\"range_end\":\"2026-01-02T00:00:00.0\","
+                                                            "\"pending\":{\"55\":\"not-an-object\"}}");
+        f.write(malformedBytes);
+        f.close();
+#ifndef Q_OS_WIN
+        QVERIFY(f.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+#endif
+
+        const GarminSidecarStore::BackfillLoadResult r = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QCOMPARE(r.status, GarminSidecarStore::LoadStatus::PendingManifestMalformed);
+        QVERIFY2(!r.isOk(), "a malformed pending entry must not be Ok");
+
+        GarminSidecarStore::ImportedEntry entry;
+        entry.startTimeGMT = QStringLiteral("x");
+        entry.localFilename = QStringLiteral("y.fit");
+        QVERIFY2(!GarminSidecarStore::recordPendingBackfill(athlete.path(), uid, QStringLiteral("66"), entry),
+                 "recordPendingBackfill must refuse a PendingManifestMalformed cursor");
+        QVERIFY2(!GarminSidecarStore::dropPendingBackfill(athlete.path(), uid, QStringLiteral("55")),
+                 "dropPendingBackfill must refuse a PendingManifestMalformed cursor");
+
+        GarminSidecarStore::BackfillState st;
+        st.lastSuccessStartTimeGMT = QStringLiteral("2026-09-09T00:00:00.0");
+        QVERIFY2(!GarminSidecarStore::saveBackfillState(athlete.path(), uid, st),
+                 "saveBackfillState must refuse a PendingManifestMalformed cursor");
+
+        QFile check(dest);
+        QVERIFY(check.open(QIODevice::ReadOnly));
+        QCOMPARE(check.readAll(), malformedBytes);
+    }
 };
 
 QTEST_APPLESS_MAIN(TestGarminSidecarStore)

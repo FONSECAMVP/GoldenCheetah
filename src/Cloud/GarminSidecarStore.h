@@ -16,7 +16,13 @@
 //   imported-<garmin_user_id>.json        — the Tier-1 dedup map (DES-010):
 //       garmin_activity_id -> { startTimeGMT, local_filename }
 //   backfill-state-<garmin_user_id>.json  — the sync/backfill resume cursor:
-//       { last_success_startTimeGMT, range_start, range_end }
+//       { last_success_startTimeGMT, range_start, range_end, schema_version,
+//         pending: { garmin_activity_id -> { startTimeGMT, local_filename } } }
+//       `pending` (DEC-071) is the downloaded-not-yet-import-complete set —
+//       separate from the imported-<uid>.json completion map above, so a
+//       cancelled import is retried rather than skipped forever. A legacy
+//       (pre-DEC-071) file has neither key and loads with pending empty and
+//       schema_version 0.
 //
 // <garmin_user_id> is the stable numeric Garmin account id embedded in the
 // filename (DES-002), so the per-account partition is STRUCTURAL: account A's
@@ -42,15 +48,19 @@ class GarminSidecarStore
   public:
     // The mutually-exclusive outcomes of a permission-enforcing sidecar load.
     // Mirrors GarminTokenStore::LoadStatus, plus a Torn state for a present-but-
-    // unparseable file (a bare bool cannot encode four states).
+    // unparseable file (a bare bool cannot encode these states).
     enum class LoadStatus {
-        Ok,                        // present, owner-only 0600, parsed cleanly
-        NotFound,                  // file absent — "nothing recorded yet"
-        Torn,                      // present but unparseable JSON — caller treats
-                                   // as absent-and-refetch (DES-002 soft fallback)
-        SidecarPermissionsRejected // present but mode WIDER than owner-only:
-                                   // REFUSED (DES-008 %1 key), path exposed, no
-                                   // data; caller forces a re-fetch.
+        Ok,                         // present, owner-only 0600, parsed cleanly
+        NotFound,                   // file absent — "nothing recorded yet"
+        Torn,                       // present but unparseable JSON — caller treats
+                                    // as absent-and-refetch (DES-002 soft fallback)
+        SidecarPermissionsRejected, // present but mode WIDER than owner-only:
+                                    // REFUSED (DES-008 %1 key), path exposed, no
+                                    // data; caller forces a re-fetch.
+        PendingManifestMalformed    // backfill-state only (DEC-075): parsed as an
+                                    // object, but its `pending` key is present
+                                    // and not itself an object, or one of
+                                    // pending's entries is not an object.
     };
 
     // One imported-activity record: Garmin's verbatim server timestamp + the
@@ -85,6 +95,17 @@ class GarminSidecarStore
         QString lastSuccessStartTimeGMT; // last activity successfully imported
         QString rangeStart;              // window lower bound (verbatim string)
         QString rangeEnd;                // window upper bound (verbatim string)
+
+        // DEC-071: activities staged (bytes landed) but not yet import-complete.
+        // activityId -> {startTimeGMT, localFilename}. Empty for a legacy
+        // (pre-DEC-071) file, which carries no `pending` key at all.
+        QHash<QString, ImportedEntry> pending;
+
+        // Explicit on-disk schema version (DEC-071). 0 means the file predates
+        // versioning (no `schema_version` key present) — never written by this
+        // store; saveBackfillState/recordPendingBackfill/dropPendingBackfill
+        // always stamp the current version.
+        int schemaVersion = 0;
     };
 
     // The result of loading backfill-state-<uid>.json: a status + the decoded
@@ -134,16 +155,37 @@ class GarminSidecarStore
 
     // --- backfill-state-<uid>.json (sync resume cursor) ----------------------
 
-    // Permission-enforcing load of backfill-state-<uid>.json, same discipline as
-    // loadImported (Ok / NotFound / Torn / SidecarPermissionsRejected).
+    // Permission-enforcing load of backfill-state-<uid>.json (Ok / NotFound /
+    // Torn / SidecarPermissionsRejected / PendingManifestMalformed — DEC-075's
+    // fifth status, see the enum).
     static BackfillLoadResult loadBackfillState(const QString& athleteConfigDir, const QString& garminUserId);
 
-    // Persist the backfill cursor. Ensures garminconnect/ exists (0700 if absent,
-    // existing dir not tightened) and writes the record via AtomicFile::writeOver
-    // at owner-only 0600. Returns false on write failure without corrupting a
-    // pre-existing good file.
+    // Persist the three cursor fields (DEC-075: `pending` is single-writer —
+    // this call IGNORES `state.pending` and preserves the on-disk `pending`
+    // map verbatim; only recordPendingBackfill/dropPendingBackfill mutate it).
+    // Refuses (returns false, writes nothing) when the current file is
+    // SidecarPermissionsRejected or PendingManifestMalformed — DEC-075: a file
+    // this store cannot model is never overwritten. NotFound/Torn still
+    // self-heal by overwrite (nothing recoverable there, the recordImported
+    // precedent). On success, writes via AtomicFile::writeOver at 0600.
     static bool saveBackfillState(const QString& athleteConfigDir, const QString& garminUserId,
                                   const BackfillState& state);
+
+    // Record one pending (bytes-landed, not-yet-import-complete) backfill entry
+    // (DEC-071 split from recordImported's overloaded "downloaded" vs.
+    // "imported" meaning). Read-modify-write against the on-disk cursor: the
+    // three cursor fields and every other pending entry survive untouched.
+    // Same DEC-075 refusal as saveBackfillState on SidecarPermissionsRejected/
+    // PendingManifestMalformed; NotFound/Torn treated as empty (DES-002
+    // fallback, the recordImported precedent).
+    static bool recordPendingBackfill(const QString& athleteConfigDir, const QString& garminUserId,
+                                      const QString& activityId, const ImportedEntry& entry);
+
+    // Drop one pending entry (its activity resolved — imported or otherwise).
+    // Same read-modify-write/refusal discipline as recordPendingBackfill.
+    // Dropping an id that is not pending is a no-op that still returns true.
+    static bool dropPendingBackfill(const QString& athleteConfigDir, const QString& garminUserId,
+                                    const QString& activityId);
 };
 
 #endif // GC_GarminSidecarStore_h
