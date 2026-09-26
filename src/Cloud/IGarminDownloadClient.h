@@ -49,7 +49,8 @@ class IGarminDownloadClient : public QObject
     virtual void downloadActivity(const QString& activityId, const QString& fmt, QUuid requestId) = 0;
 
     // REQ-008 Slice C (DES-010 step 4) — list the activities whose Garmin
-    // server-side startTimeGMT is newer than `sinceGmt`, via the same worker
+    // server-side startTimeGMT is at or after `sinceGmt` (inclusive: the
+    // production implementation compares with `>=`), via the same worker
     // session (Slice A). `sinceGmt` is Garmin's server-side timestamp forwarded
     // verbatim (never the local clock). Same correlation contract as the ops
     // above. Pure-virtual (DEC-013 Option A — a production impl that forgets to

@@ -396,7 +396,8 @@ class TestGarminSidecarStore : public QObject
         QVERIFY(GarminSidecarStore::saveBackfillState(athlete.path(), uid, st));
 
         GarminSidecarStore::ImportedEntry pending;
-        pending.startTimeGMT = QStringLiteral("2026-04-15T10:00:00.0");
+        // Strictly AFTER the cursor (B-STAGE9-126: dropping at-or-before it clears the cursor - not this case).
+        pending.startTimeGMT = QStringLiteral("2026-05-15T10:00:00.0");
         pending.localFilename = QStringLiteral("garmin-321.fit");
         QVERIFY(GarminSidecarStore::recordPendingBackfill(athlete.path(), uid, QStringLiteral("321"), pending));
 
@@ -648,12 +649,16 @@ class TestGarminSidecarStore : public QObject
         QCOMPARE(r.state.rangeEnd, st.rangeEnd);
     }
 
-    // T-236 — side-effect invariant: dropping a pending entry STRICTLY BEFORE
-    // the cursor must leave the cursor untouched. Only the entry the cursor
-    // currently points AT is the resume anchor; an earlier still-pending
-    // entry going missing does not invalidate later, already-confirmed
-    // progress.
-    void backfill_dropStrictlyBeforeCursorEntry_leavesCursorUntouched()
+    // T-241 — B-STAGE9-126: dropping a pending entry STRICTLY BEFORE the
+    // cursor must ALSO clear it. GarminBackfillController.cpp's filter skips
+    // on `startTimeGMT <= priorSuccess` (DEC-078), so a dropped entry at or
+    // before the cursor is unreachable by any later run unless the cursor
+    // clears with it — the same permanent-loss mechanism B-STAGE9-112 fixed
+    // for the exactly-at-cursor case, now widened to cover every entry at or
+    // before it, per DEC-078's rejection of a greatest-surviving rewind.
+    // Mutation-must-go-RED: narrowing the store's `<=` back to `==` must
+    // fail this test.
+    void backfill_dropStrictlyBeforeCursorEntry_alsoClearsCursor()
     {
         QTemporaryDir athlete;
         QVERIFY(athlete.isValid());
@@ -675,7 +680,7 @@ class TestGarminSidecarStore : public QObject
         const GarminSidecarStore::BackfillLoadResult r = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
         QVERIFY(r.isOk());
         QVERIFY2(!r.state.pending.contains(QStringLiteral("333")), "the dropped id must be gone");
-        QCOMPARE(r.state.lastSuccessStartTimeGMT, st.lastSuccessStartTimeGMT);
+        QCOMPARE(r.state.lastSuccessStartTimeGMT, QString());
     }
 
     // ================================================================

@@ -364,15 +364,17 @@ bool GarminSidecarStore::dropPendingBackfill(const QString& athleteConfigDir, co
 
     BackfillState state = current.isOk() ? current.state : BackfillState();
 
-    // B-STAGE9-112/DEC-078: clearing lastSuccessStartTimeGMT here means "no
-    // prior success" to GarminBackfillController::start() — DEC-078 split
+    // B-STAGE9-112/-126/DEC-078: clearing lastSuccessStartTimeGMT here means
+    // "no prior success" to GarminBackfillController::start() — DEC-078 split
     // that controller's filter so an empty prior-success no longer falls
     // back to an exclusive marker, letting rangeStartGmt apply inclusively
-    // instead. An entry strictly before the cursor is a different,
-    // already-confirmed-past position and is left alone.
+    // instead. Dropping any entry AT OR BEFORE the cursor clears it (no
+    // greatest-surviving rewind — DEC-078 rejected that as unneeded
+    // complexity); a dropped entry strictly after the cursor leaves it
+    // untouched.
     const auto it = state.pending.constFind(activityId);
     if (it != state.pending.constEnd() && !state.lastSuccessStartTimeGMT.isEmpty() &&
-        it.value().startTimeGMT == state.lastSuccessStartTimeGMT) {
+        it.value().startTimeGMT <= state.lastSuccessStartTimeGMT) {
         state.lastSuccessStartTimeGMT.clear();
     }
 

@@ -377,7 +377,8 @@ class GarminClient:
 
     def _list_activities_since_impl(self, ts_gmt: str) -> Iterator[dict[str, Any]]:
         # REQ-008 Slice A (DES-010 step 4 / DES-012). List the activities whose
-        # Garmin server-side startTimeGMT is newer than ts_gmt. `ts_gmt` is
+        # Garmin server-side startTimeGMT is at or after ts_gmt (inclusive:
+        # `_as_utc_instant(...) >= cursor` below). `ts_gmt` is
         # Garmin's SERVER-SIDE timestamp, NOT the local clock (DES-010 —
         # protects against clock-skew duplicates). Dedup and download are
         # later slices (B/C) — this is a thin list+translate.

@@ -151,7 +151,15 @@ class FakeBackfillClient : public IGarminDownloadClient
     {
         listCallsSeen << sinceGmt;
         const bool ok = listOk;
-        const QVector<GarminActivitySummary> res = listResult;
+        // B-STAGE9-125 — mirror garmin_client.py's production bound
+        // (`_as_utc_instant(...) >= cursor`, inclusive): a scripted activity
+        // strictly before `sinceGmt` is never returned by the real API, so
+        // this fake must not hand it to the controller either.
+        QVector<GarminActivitySummary> res;
+        for (const GarminActivitySummary& s : listResult) {
+            if (s.startTimeGMT >= sinceGmt)
+                res << s;
+        }
         QMetaObject::invokeMethod(
             this,
             [this, id, ok, res]() {
@@ -576,6 +584,38 @@ class TestGarminBackfillController : public QObject
             QVERIFY2(client.downloadCallsSeen.contains(a.activityId),
                      "an entry at both the cursor and rangeStart must be re-listed after being dropped");
         }
+    }
+
+    // =====================================================================
+    // T-242 — B-STAGE9-125: FakeBackfillClient now honours the production
+    // `>= sinceGmt` bound (garmin_client.py's `_as_utc_instant(...) >=
+    // cursor`) instead of ignoring it and returning `listResult` verbatim.
+    // =====================================================================
+    void fakeClientListActivitiesAppliesInclusiveSinceGmtBound()
+    {
+        FakeBackfillClient client;
+        GarminActivitySummary before, atBound, after;
+        before.activityId = QStringLiteral("4401");
+        before.startTimeGMT = QStringLiteral("2026-04-01 00:00:00");
+        atBound.activityId = QStringLiteral("4402");
+        atBound.startTimeGMT = QStringLiteral("2026-04-02 00:00:00");
+        after.activityId = QStringLiteral("4403");
+        after.startTimeGMT = QStringLiteral("2026-04-03 00:00:00");
+        client.listResult = {before, atBound, after};
+
+        QSignalSpy spy(&client, &IGarminDownloadClient::activitiesListed);
+        client.listActivities(atBound.startTimeGMT, QUuid::createUuid());
+        QVERIFY(spy.wait());
+
+        QCOMPARE(spy.count(), 1);
+        const QVector<GarminActivitySummary> got = spy.at(0).at(1).value<QVector<GarminActivitySummary>>();
+        QStringList gotIds;
+        for (const auto& s : got)
+            gotIds << s.activityId;
+        QVERIFY2(!gotIds.contains(before.activityId), "an activity strictly before sinceGmt must not be listed");
+        QVERIFY2(gotIds.contains(atBound.activityId),
+                 "an activity exactly AT sinceGmt is inclusive and must be listed");
+        QVERIFY2(gotIds.contains(after.activityId), "an activity after sinceGmt must be listed");
     }
 
     // =====================================================================
