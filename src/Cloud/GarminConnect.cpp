@@ -21,6 +21,7 @@
 #include "GarminAccountEpoch.h"
 #include "GarminDownloadChain.h"
 #include "GarminSidecarStore.h"
+#include "GarminTime.h"
 #include "GarminTokenStore.h"
 #include "IGarminDownloadClient.h"
 #include "PyEmbeddedAdapter.h"
@@ -114,16 +115,6 @@ const char* garminRestoreKindCode(int kind)
         break;
     }
     return "unknown";
-}
-
-QDateTime parseGarminTime(const QString& s)
-{
-    QDateTime dt = QDateTime::fromString(s, QString::fromLatin1(kGarminTimeFormat));
-    if (!dt.isValid())
-        dt = QDateTime::fromString(s, Qt::ISODate);
-    if (dt.isValid())
-        dt.setTimeSpec(Qt::UTC);
-    return dt;
 }
 
 // DEC-056 — startTimeLocal (unlike startTimeGMT) is already the activity's own
@@ -885,13 +876,13 @@ QList<CloudServiceEntry*> GarminConnect::readdir(QString path, QStringList& erro
         // (remoteid) and dedup keys do not move.
         QDateTime localStart = parseGarminLocalTime(s.startTimeLocal);
         if (!localStart.isValid())
-            localStart = parseGarminTime(s.startTimeGMT).toLocalTime();
+            localStart = garminInstantFromString(s.startTimeGMT).toLocalTime();
 
         CloudServiceEntry* e = newCloudServiceEntry();
         e->isDir = false;
         e->id = s.activityId; // remoteid → readFile
         e->name = localStart.toString(QStringLiteral("yyyy_MM_dd_HH_mm_ss")) + QStringLiteral(".fit");
-        e->modified = parseGarminTime(s.startTimeGMT); // server-side timestamp
+        e->modified = garminInstantFromString(s.startTimeGMT); // server-side timestamp
         returning << e;
 
         // Remember the server-side startTimeGMT so the subsequent readFile can
@@ -918,23 +909,59 @@ void GarminConnect::recordImport(const QString& activityId, const QString& stage
 
     const QString startTimeGMT = m_pendingStartTimes.value(activityId);
 
-    // DES-010 step 5e — record the import (read-modify-write, atomic 0600).
     GarminSidecarStore::ImportedEntry entry;
     entry.startTimeGMT = startTimeGMT;
     entry.localFilename = stagedFilename;
-    GarminSidecarStore::recordImported(dir, uid, activityId, entry);
 
-    // DES-010 step 6 — advance the resume cursor to this activity's server time.
-    // DEC-079 amendment, B-STAGE9-127.
+    // DES-010 step 5e — DEC-079 amendment, B-STAGE9-127/-132, DEC-080/B-STAGE9-111.
+    // DEC-083 clause 1: download time writes the PENDING row and nothing
+    // else — the cursor is a completeness watermark, advanced only by
+    // promotion (rideRegistrationCompleted -> GarminSidecarStore::promotePendingBackfill).
     const GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(dir, uid);
-    if (!(bf.isOk() && bf.state.schemaVersion == 0)) {
-        GarminSidecarStore::BackfillState state = bf.isOk() ? bf.state : GarminSidecarStore::BackfillState{};
-        state.lastSuccessStartTimeGMT = startTimeGMT;
-        GarminSidecarStore::saveBackfillState(dir, uid, state);
+    if (bf.isOk() && bf.state.schemaVersion == 0) {
+        GarminSidecarStore::recordImported(dir, uid, activityId, entry);
+    } else {
+        GarminSidecarStore::recordPendingBackfill(dir, uid, activityId, entry);
     }
 
     // DES-010 step 7 (OUT OF SCOPE this slice — REQ-NF-Obs-001): the ErrorBus
     // success event (count + duration) is a later item. TODO(REQ-NF-Obs-001).
+}
+
+// DEC-080, B-STAGE9-111.
+QString GarminConnect::activityIdFromStagedFilename(const QString& stagedFilename)
+{
+    static const QString kPrefix = QStringLiteral("garmin-");
+    static const QString kFitSuffix = QStringLiteral(".fit");
+    static const QString kTcxSuffix = QStringLiteral(".tcx");
+
+    if (!stagedFilename.startsWith(kPrefix))
+        return QString();
+    const QString rest = stagedFilename.mid(kPrefix.size());
+    if (rest.endsWith(kFitSuffix))
+        return rest.chopped(kFitSuffix.size());
+    if (rest.endsWith(kTcxSuffix))
+        return rest.chopped(kTcxSuffix.size());
+    return QString();
+}
+
+// DEC-080, DEC-075, DEC-076, B-STAGE9-111, DEC-083 (clause 2/3 promotion caller).
+void GarminConnect::rideRegistrationCompleted(const QString& remoteId)
+{
+    const QString activityId = activityIdFromStagedFilename(remoteId);
+    if (activityId.isEmpty())
+        return;
+
+    ensureSessionLatched();
+    const QString dir = resolveConfigDir();
+    const QString uid = m_openedUserId;
+    if (dir.isEmpty() || uid.isEmpty())
+        return;
+
+    // DEC-083 clause 2 — a no-op (false) when activityId is not pending
+    // (T-245: a differently-named registration must not disturb an unrelated
+    // pending entry) covers the guard the two loads above used to perform.
+    GarminSidecarStore::promotePendingBackfill(dir, uid, activityId);
 }
 
 // B-R007-01 / REQ-NF-Perf-003: deliver readComplete as a QUEUED self-post rather

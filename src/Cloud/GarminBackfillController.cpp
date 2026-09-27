@@ -11,6 +11,7 @@
 
 #include "AtomicFile.h"
 #include "GarminSidecarStore.h"
+#include "GarminTime.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -31,11 +32,6 @@ namespace {
 // Generous bound so production never wedges the caller's event loop; unit
 // tests reply on the first loop turn and never approach this.
 constexpr int kBlockingTimeoutMs = 60000;
-
-// Same verbatim-string convention DES-010 uses (GarminConnect.cpp); parsed
-// only for the hard-cap/range-validity check below - range FILTERING and
-// cursor comparisons stay on the lexicographically-sortable string form.
-const char* const kGarminTimeFormat = "yyyy-MM-dd HH:mm:ss";
 
 // DEC-070/B-STAGE9-83 — the staged extension follows these signatures, not
 // an assumption about which shape a given download takes.
@@ -100,16 +96,6 @@ QByteArray inflateGzipMember(const QByteArray& data)
     const bool complete = (ret == Z_STREAM_END && strm.avail_in == 0);
     inflateEnd(&strm);
     return complete ? result : QByteArray();
-}
-
-QDateTime parseGarminTime(const QString& s)
-{
-    QDateTime dt = QDateTime::fromString(s, QString::fromLatin1(kGarminTimeFormat));
-    if (!dt.isValid())
-        dt = QDateTime::fromString(s, Qt::ISODate);
-    if (dt.isValid())
-        dt.setTimeSpec(Qt::UTC);
-    return dt;
 }
 
 // B-STAGE9-107 — DEC-075's refusal is deliberately RECOVERABLE
@@ -268,8 +254,8 @@ GarminBackfillController::Result GarminBackfillController::start(const QString& 
     // helper so the pre-request/post-download call sites below stay one-liners.
     auto sessionInvalidated = [&sessionStillValid]() { return sessionStillValid && !sessionStillValid(); };
 
-    const QDateTime startDt = parseGarminTime(rangeStartGmt);
-    const QDateTime endDt = parseGarminTime(rangeEndGmt);
+    const QDateTime startDt = garminInstantFromString(rangeStartGmt);
+    const QDateTime endDt = garminInstantFromString(rangeEndGmt);
     if (!startDt.isValid() || !endDt.isValid() || endDt < startDt) {
         result.outcome = Outcome::Rejected;
         result.pauseReason = PauseReason::InvalidRange;
@@ -289,8 +275,12 @@ GarminBackfillController::Result GarminBackfillController::start(const QString& 
     const GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(m_configDir, m_uid);
     QString cursor = rangeStartGmt;
     QString priorSuccess;
-    if (bf.isOk() && !bf.state.lastSuccessStartTimeGMT.isEmpty() && bf.state.lastSuccessStartTimeGMT >= rangeStartGmt &&
-        bf.state.lastSuccessStartTimeGMT <= rangeEndGmt) {
+    // DEC-084 clause 5 CONTROLLER branch: an unparseable stored cursor must
+    // never narrow the range, so it falls through to rangeStartGmt below —
+    // the isValid() guards on both sides make that the case.
+    const QDateTime storedCursorInstant = garminInstantFromString(bf.state.lastSuccessStartTimeGMT);
+    if (bf.isOk() && !bf.state.lastSuccessStartTimeGMT.isEmpty() && storedCursorInstant.isValid() &&
+        storedCursorInstant >= startDt && storedCursorInstant <= endDt) {
         cursor = bf.state.lastSuccessStartTimeGMT;
         priorSuccess = cursor;
     }
@@ -300,12 +290,12 @@ GarminBackfillController::Result GarminBackfillController::start(const QString& 
     // launch sees the state file and offers resume). A write failure here
     // means that guarantee never held, so bail rather than proceed as if it
     // had (mirrors the TransientError/TornWrite Paused-with-message shape).
+    // B-STAGE9-136/DEC-083: range-only — the cursor is never written from
+    // this controller's own in-memory `priorSuccess`; saveBackfillRange
+    // preserves whatever cursor is on disk, so a promotion racing this save
+    // (e.g. another session's rideRegistrationCompleted) is never clobbered.
     {
-        GarminSidecarStore::BackfillState initial;
-        initial.lastSuccessStartTimeGMT = priorSuccess;
-        initial.rangeStart = rangeStartGmt;
-        initial.rangeEnd = rangeEndGmt;
-        if (!GarminSidecarStore::saveBackfillState(m_configDir, m_uid, initial)) {
+        if (!GarminSidecarStore::saveBackfillRange(m_configDir, m_uid, rangeStartGmt, rangeEndGmt)) {
             result.outcome = Outcome::Paused;
             result.pauseReason = PauseReason::StatePersistFailed;
             result.message = describeBackfillPersistFailure(m_configDir, m_uid);
@@ -340,22 +330,41 @@ GarminBackfillController::Result GarminBackfillController::start(const QString& 
     // the library's (or a test double's) ordering.
     QVector<GarminActivitySummary> filtered;
     const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(m_configDir, m_uid);
+    const QDateTime priorSuccessInstant = priorSuccess.isEmpty() ? QDateTime() : garminInstantFromString(priorSuccess);
     for (const GarminActivitySummary& s : listed.summaries) {
-        // DEC-078 — `cursor` above is ONLY the blockingList() paging argument;
-        // the filter reads `priorSuccess` (exclusive, only when a prior
-        // success is actually in range) and `rangeStartGmt` (inclusive)
-        // separately, so an activity sitting exactly on `rangeStartGmt` with
-        // no prior success is never mistaken for one already landed.
-        if (!priorSuccess.isEmpty() && s.startTimeGMT <= priorSuccess)
-            continue;
-        if (s.startTimeGMT < rangeStartGmt || s.startTimeGMT > rangeEndGmt)
-            continue;
+        // DEC-078/DEC-083 clause 4 — `cursor` above is ONLY the
+        // blockingList() paging argument; the filter reads `priorSuccess`
+        // (STRICTLY BEFORE, only when a prior success is actually in range)
+        // and the range bound (inclusive) separately, so an activity sitting
+        // exactly on the range start OR an equal-second sibling of
+        // `priorSuccess` is never mistaken for one already landed — the
+        // adapter's own listing bound is already inclusive (B-STAGE9-25) and
+        // Tier-1 imported-id dedup below handles the exact-cursor duplicate.
+        // DEC-084 clause 5: an entry whose startTimeGMT fails to parse is
+        // never excluded by either bound — this filter protects reachability,
+        // the opposite of the store's completeness guard.
+        const QDateTime entryInstant = garminInstantFromString(s.startTimeGMT);
+        if (entryInstant.isValid()) {
+            if (priorSuccessInstant.isValid() && entryInstant < priorSuccessInstant)
+                continue;
+            if (entryInstant < startDt || entryInstant > endDt)
+                continue;
+        }
         if (imported.isOk() && imported.contains(s.activityId))
             continue; // Tier-1 dedup (DES-010), defense in depth
+        if (bf.isOk() && bf.state.pending.contains(s.activityId))
+            continue; // DEC-083 clause 5 — already staged, awaiting promotion; not re-downloaded
         filtered << s;
     }
     std::sort(filtered.begin(), filtered.end(), [](const GarminActivitySummary& a, const GarminActivitySummary& b) {
-        return a.startTimeGMT < b.startTimeGMT;
+        // DEC-084 clause 5: order on the (isValid, instant) pair — comparing
+        // raw instants when either side is invalid is not a strict weak
+        // ordering and makes std::sort undefined behaviour (B-STAGE9-147).
+        const QDateTime da = garminInstantFromString(a.startTimeGMT);
+        const QDateTime db = garminInstantFromString(b.startTimeGMT);
+        if (da.isValid() != db.isValid())
+            return da.isValid();
+        return da.isValid() && da < db;
     });
 
     for (const GarminActivitySummary& s : filtered) {
@@ -406,8 +415,8 @@ GarminBackfillController::Result GarminBackfillController::start(const QString& 
         // empty (never falls back to the original bytes), so ONE signature
         // check on `stageBytes` afterwards covers the bare payload AND the
         // post-inflate result identically - nothing here re-derives a shape.
-        // Anything that doesn't resolve to ZIP-or-FIT pauses BEFORE staging,
-        // BEFORE recordPendingBackfill and BEFORE the cursor advances.
+        // Anything that doesn't resolve to ZIP-or-FIT pauses BEFORE staging
+        // and BEFORE recordPendingBackfill.
         QByteArray stageBytes = startsWithGzipSignature(dl.bytes) ? inflateGzipMember(dl.bytes) : dl.bytes;
         if (!startsWithZipSignature(stageBytes) && !startsWithFitSignature(stageBytes)) {
             result.outcome = Outcome::Paused;
@@ -420,7 +429,7 @@ GarminBackfillController::Result GarminBackfillController::start(const QString& 
         const QString payloadPath = stagedPayloadPath(m_configDir, s.activityId, stageBytes);
         QDir().mkpath(QFileInfo(payloadPath).absolutePath());
         if (!AtomicFile::writeOver(payloadPath, stageBytes)) {
-            // DES-006 torn-write recovery: do NOT advance the cursor past an
+            // DES-006 torn-write recovery: no pending row is written for an
             // activity that never made it to disk intact - the next start()
             // re-fetches it rather than silently skipping it forever.
             result.outcome = Outcome::Paused;
@@ -434,12 +443,13 @@ GarminBackfillController::Result GarminBackfillController::start(const QString& 
         // "downloaded", and the skip predicate above reads it as "imported",
         // so writing it here is exactly the B-STAGE9-79 defect (a cancelled
         // hand-off to RideImportWizard would orphan this id forever).
-        // GarminBackfillDialog promotes this entry to imported-<uid>.json
-        // only after RideCache confirms the ride actually landed. A false
-        // return here means neither the dedup record nor the resume cursor
-        // made it to disk despite the payload bytes landing intact; advancing
-        // in-memory progress anyway would break DES-009's resumability
-        // contract (a crash right after would resume from unsaved state).
+        // GarminBackfillDialog promotes this entry (GarminSidecarStore::
+        // promotePendingBackfill, DEC-083) only after RideCache confirms the
+        // ride actually landed. A false return here means the dedup record
+        // never made it to disk despite the payload bytes landing intact;
+        // advancing in-memory progress anyway would break DES-009's
+        // resumability contract (a crash right after would resume from
+        // unsaved state).
         GarminSidecarStore::ImportedEntry entry;
         entry.startTimeGMT = s.startTimeGMT;
         entry.localFilename = QFileInfo(payloadPath).fileName();
@@ -450,16 +460,18 @@ GarminBackfillController::Result GarminBackfillController::start(const QString& 
             return result;
         }
 
-        // Pending-then-cursor, atomically, before progress is reported below
-        // (DEC-071's crash order): a crash between this write and the next
-        // leaves a `pending` entry with the cursor not yet past it, which is
-        // exactly DES-009's existing "never record success past an unwritten
-        // file" contract, now covering import-completion too.
-        GarminSidecarStore::BackfillState advanced;
-        advanced.lastSuccessStartTimeGMT = s.startTimeGMT;
-        advanced.rangeStart = rangeStartGmt;
-        advanced.rangeEnd = rangeEndGmt;
-        if (!GarminSidecarStore::saveBackfillState(m_configDir, m_uid, advanced)) {
+        // DEC-083 clauses 1/2/5 — the cursor is a completeness watermark,
+        // advanced ONLY by promotion; staging never moves it. This write
+        // persists rangeStart/rangeEnd (so a fresh controller instance still
+        // resumes the correct window). B-STAGE9-136: it no longer touches
+        // lastSuccessStartTimeGMT at all — saveBackfillRange leaves whatever
+        // cursor is on disk untouched, so a promotion from another session
+        // landing during this run's blockingList()/download is never
+        // overwritten by this controller's stale in-memory `priorSuccess`.
+        // Resumability across a crash between this write and the next rests
+        // on the pending-skip: a re-run sees `s` still in `pending` and does
+        // not re-download it.
+        if (!GarminSidecarStore::saveBackfillRange(m_configDir, m_uid, rangeStartGmt, rangeEndGmt)) {
             result.outcome = Outcome::Paused;
             result.pauseReason = PauseReason::StatePersistFailed;
             result.message = describeBackfillPersistFailure(m_configDir, m_uid);

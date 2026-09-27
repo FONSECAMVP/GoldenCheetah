@@ -3555,6 +3555,11 @@ CloudServiceSyncDialog::completedRead(QByteArray *data, QString name, QString /*
         delete ride;
 
         if (self.isNull()) return;
+
+        // B-STAGE9-131 (DEC-080): a sidecar fact, gated on self.isNull() alone --
+        // must fire ahead of the row/list-generation guard below, not behind it.
+        if (saved == true) store->rideRegistrationCompleted(name);
+
         if (batchGeneration != completionGeneration || listGeneration != completionListGeneration) return;
 
         if (saved == true) {
@@ -4497,6 +4502,7 @@ CloudServiceAutoDownload::readComplete(QByteArray*data,QString name,QString)
     // add to the ride list -- but don't select it
     context->athlete->addRide(fileinfo.fileName(), true, false);
 
+    entry.provider->rideRegistrationCompleted(name); // DEC-080, B-STAGE9-111
 }
 
 

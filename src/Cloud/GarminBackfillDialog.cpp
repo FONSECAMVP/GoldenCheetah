@@ -33,7 +33,7 @@
 
 namespace {
 // GarminBackfillController's verbatim wire-format (DES-010); see
-// GarminBackfillController.cpp's kGarminTimeFormat.
+// GarminConnect.cpp's kGarminTimeFormat.
 QString toGarminTime(const QDate& d, const QTime& t)
 {
     return QDateTime(d, t).toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
@@ -340,11 +340,11 @@ void GarminBackfillDialog::startClicked()
                     continue; // cannot be matched - stays pending rather than guessed at
                 if (rideCache->getRide(startUtc) == nullptr)
                     continue; // no RideCache match yet - stays pending, re-offered
-                // B-STAGE9-113 — recordImported()'s result gates the drop: a
-                // failed completion write must leave the entry in `pending`,
-                // never in neither manifest.
-                if (GarminSidecarStore::recordImported(configDir, uid, it.key(), it.value()))
-                    GarminSidecarStore::dropPendingBackfill(configDir, uid, it.key());
+                // B-STAGE9-113/DEC-083 clause 2 — promotePendingBackfill's own
+                // imported-write-before-pending-removal gates the drop: a
+                // failed completion write leaves the entry in `pending`,
+                // never in neither manifest, and never advances the cursor.
+                GarminSidecarStore::promotePendingBackfill(configDir, uid, it.key());
             }
         }
     }

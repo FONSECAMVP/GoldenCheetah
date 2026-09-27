@@ -10,7 +10,9 @@
 #include "GarminSidecarStore.h"
 
 #include "AtomicFile.h"
+#include "GarminTime.h"
 
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -335,6 +337,27 @@ bool GarminSidecarStore::saveBackfillState(const QString& athleteConfigDir, cons
     return writeBackfillState(athleteConfigDir, garminUserId, toWrite);
 }
 
+bool GarminSidecarStore::saveBackfillRange(const QString& athleteConfigDir, const QString& garminUserId,
+                                           const QString& rangeStart, const QString& rangeEnd)
+{
+    QMutexLocker locker( // DEC-076: load-through-writeOver
+        &transactionLockFor(backfillStateFilePath(athleteConfigDir, garminUserId)));
+
+    const BackfillLoadResult current = loadBackfillState(athleteConfigDir, garminUserId);
+    if (refuseCursorOverwrite(current.status))
+        return false;
+
+    // DEC-083/B-STAGE9-136: range-only write. lastSuccessStartTimeGMT AND
+    // pending both come from the freshly-loaded on-disk state, never from a
+    // caller-supplied value — this is the read-modify-write that keeps a
+    // cursor advanced by a concurrent promotePendingBackfill() from being
+    // overwritten by a controller holding a stale in-memory cursor.
+    BackfillState state = current.isOk() ? current.state : BackfillState();
+    state.rangeStart = rangeStart;
+    state.rangeEnd = rangeEnd;
+    return writeBackfillState(athleteConfigDir, garminUserId, state);
+}
+
 bool GarminSidecarStore::recordPendingBackfill(const QString& athleteConfigDir, const QString& garminUserId,
                                                const QString& activityId, const ImportedEntry& entry)
 {
@@ -373,11 +396,80 @@ bool GarminSidecarStore::dropPendingBackfill(const QString& athleteConfigDir, co
     // complexity); a dropped entry strictly after the cursor leaves it
     // untouched.
     const auto it = state.pending.constFind(activityId);
-    if (it != state.pending.constEnd() && !state.lastSuccessStartTimeGMT.isEmpty() &&
-        it.value().startTimeGMT <= state.lastSuccessStartTimeGMT) {
-        state.lastSuccessStartTimeGMT.clear();
+    if (it != state.pending.constEnd() && !state.lastSuccessStartTimeGMT.isEmpty()) {
+        const QDateTime droppedInstant = garminInstantFromString(it.value().startTimeGMT);
+        const QDateTime cursorInstant = garminInstantFromString(state.lastSuccessStartTimeGMT);
+        // DEC-084 clause 5 STORE branch: an unparseable instant on either
+        // side counts as at-or-before, so the cursor clears rather than
+        // leaving the dropped row unreachable for ever.
+        if (!droppedInstant.isValid() || !cursorInstant.isValid() || droppedInstant <= cursorInstant) {
+            state.lastSuccessStartTimeGMT.clear();
+        }
     }
 
     state.pending.remove(activityId);
+    return writeBackfillState(athleteConfigDir, garminUserId, state);
+}
+
+bool GarminSidecarStore::promotePendingBackfill(const QString& athleteConfigDir, const QString& garminUserId,
+                                                const QString& activityId)
+{
+    QMutexLocker locker( // DEC-076/DEC-083 clause 2: state-path lock spans load, recordImported, and the write
+        &transactionLockFor(backfillStateFilePath(athleteConfigDir, garminUserId)));
+
+    const BackfillLoadResult current = loadBackfillState(athleteConfigDir, garminUserId);
+    if (refuseCursorOverwrite(current.status))
+        return false;
+
+    // B-STAGE9-137/DEC-082: an Ok, v0 sidecar with pending rows is exactly
+    // migration phase 1 plus a crash. Promotion must not touch backfill
+    // state here — stamping v1 would disarm the `schemaVersion == 0` retry
+    // gate before phases 2-3 ever ran. Same refusal shape as
+    // refuseCursorOverwrite: no write, activityId stays pending.
+    if (current.isOk() && current.state.schemaVersion == 0)
+        return false;
+
+    BackfillState state = current.isOk() ? current.state : BackfillState();
+    const auto it = state.pending.constFind(activityId);
+    if (it == state.pending.constEnd())
+        return false; // nothing pending under this id — no-op (DEC-083 clause 2)
+    const ImportedEntry entry = it.value();
+
+    // DEC-083 clause 2: imported-write-before-pending-removal. recordImported
+    // takes the imported-<uid>.json path's OWN lock (DEC-076 per-path
+    // locking, a distinct QMutex from the one held here), so this nested
+    // call cannot deadlock against this function's own lock.
+    if (!recordImported(athleteConfigDir, garminUserId, activityId, entry))
+        return false;
+
+    state.pending.remove(activityId);
+
+    // Advance the cursor to this entry's own startTimeGMT ONLY when no
+    // surviving pending row is at or before it — an earlier row, or an
+    // equal-second sibling, still unpromoted must stay reachable.
+    // DEC-084 clause 5: a pending row (or this entry) that fails to parse
+    // counts as SURVIVING — this guard protects completeness, so an instant
+    // it cannot order must never let the cursor advance past it.
+    const QDateTime entryInstant = garminInstantFromString(entry.startTimeGMT);
+    bool earlierOrEqualPendingSurvives = false;
+    for (auto pit = state.pending.constBegin(); pit != state.pending.constEnd(); ++pit) {
+        const QDateTime pendingInstant = garminInstantFromString(pit.value().startTimeGMT);
+        if (!pendingInstant.isValid() || !entryInstant.isValid() || pendingInstant <= entryInstant) {
+            earlierOrEqualPendingSurvives = true;
+            break;
+        }
+    }
+    bool advance = false;
+    if (!earlierOrEqualPendingSurvives && entryInstant.isValid()) {
+        if (state.lastSuccessStartTimeGMT.isEmpty()) {
+            advance = true;
+        } else {
+            const QDateTime storedInstant = garminInstantFromString(state.lastSuccessStartTimeGMT);
+            advance = storedInstant.isValid() && entryInstant > storedInstant;
+        }
+    }
+    if (advance)
+        state.lastSuccessStartTimeGMT = entry.startTimeGMT;
+
     return writeBackfillState(athleteConfigDir, garminUserId, state);
 }

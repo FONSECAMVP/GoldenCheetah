@@ -388,16 +388,31 @@ class TestGarminConnectAccountEpoch : public QObject
         QCOMPARE(client.downloadCalls, 1);
         QCOMPARE(data, makeFitBytes());
 
+        // DEC-083 (B-STAGE9-133/-134): the cursor is a completeness watermark
+        // now advanced ONLY by promotion, so recordImport's download-time
+        // write leaves it untouched.
+        const GarminSidecarStore::BackfillLoadResult bfPending =
+            GarminSidecarStore::loadBackfillState(tmp.path(), kUidA);
+        QVERIFY(bfPending.isOk());
+        QVERIFY2(bfPending.state.lastSuccessStartTimeGMT.isEmpty(), "T-134: download time must not advance the cursor");
+
+        // B-STAGE9-132/-134 — DEC-080/B-STAGE9-111: readFile alone leaves AAA
+        // pending; promotion is what moves it into the imported map this test
+        // asserts against.
+        gc.rideRegistrationCompleted(QStringLiteral("garmin-AAA.fit"));
+
+        // DEC-083 clause 2 — promotion is what advances the cursor, to the
+        // promoted entry's own startTimeGMT.
+        const GarminSidecarStore::BackfillLoadResult bfA = GarminSidecarStore::loadBackfillState(tmp.path(), kUidA);
+        QVERIFY(bfA.isOk());
+        QCOMPARE(bfA.state.lastSuccessStartTimeGMT, QStringLiteral("2026-07-05 09:15:00"));
+
         // ...and the import is recorded under the OPEN-TIME account.
         const GarminSidecarStore::ImportedMap mapA = GarminSidecarStore::loadImported(tmp.path(), kUidA);
         QVERIFY(mapA.isOk());
         QVERIFY2(mapA.contains(QStringLiteral("AAA")),
                  "the import must be recorded under the uid latched at session open");
         QCOMPARE(mapA.value(QStringLiteral("AAA")).localFilename, QStringLiteral("garmin-AAA.fit"));
-
-        const GarminSidecarStore::BackfillLoadResult bfA = GarminSidecarStore::loadBackfillState(tmp.path(), kUidA);
-        QVERIFY(bfA.isOk());
-        QCOMPARE(bfA.state.lastSuccessStartTimeGMT, QStringLiteral("2026-07-05 09:15:00"));
 
         // NOTHING may be keyed on the account that appeared mid-sync.
         QVERIFY2(!QFileInfo::exists(GarminSidecarStore::importedFilePath(tmp.path(), kUidB)),
@@ -618,6 +633,11 @@ class TestGarminConnectAccountEpoch : public QObject
         QVERIFY2(gcB.readFile(&dataB, entriesB.at(0)->name, entriesB.at(0)->id),
                  "athlete B's live session must keep working when athlete A disconnects");
         QCOMPARE(dataB, makeFitBytes());
+
+        // B-STAGE9-132/-134 — DEC-080/B-STAGE9-111: readFile alone leaves B-1
+        // pending; promotion is what moves it into the imported map below.
+        gcB.rideRegistrationCompleted(QStringLiteral("garmin-B-1.fit"));
+
         const GarminSidecarStore::ImportedMap mapB = GarminSidecarStore::loadImported(dirB.path(), kUidB);
         QVERIFY(mapB.isOk());
         QVERIFY(mapB.contains(QStringLiteral("B-1")));

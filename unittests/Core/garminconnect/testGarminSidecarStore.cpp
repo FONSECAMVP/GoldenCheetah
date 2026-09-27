@@ -651,11 +651,12 @@ class TestGarminSidecarStore : public QObject
 
     // T-241 — B-STAGE9-126: dropping a pending entry STRICTLY BEFORE the
     // cursor must ALSO clear it. GarminBackfillController.cpp's filter skips
-    // on `startTimeGMT <= priorSuccess` (DEC-078), so a dropped entry at or
-    // before the cursor is unreachable by any later run unless the cursor
-    // clears with it — the same permanent-loss mechanism B-STAGE9-112 fixed
-    // for the exactly-at-cursor case, now widened to cover every entry at or
-    // before it, per DEC-078's rejection of a greatest-surviving rewind.
+    // on `startTimeGMT < priorSuccess` (DEC-083 clause 4, narrowed from
+    // DEC-078's `<=` so an equal-second sibling stays reachable), so a
+    // dropped entry strictly before the cursor is still unreachable by any
+    // later run unless the cursor clears with it — the same permanent-loss
+    // mechanism B-STAGE9-112 fixed for the exactly-at-cursor case, now
+    // widened to cover every entry strictly before it.
     // Mutation-must-go-RED: narrowing the store's `<=` back to `==` must
     // fail this test.
     void backfill_dropStrictlyBeforeCursorEntry_alsoClearsCursor()
@@ -681,6 +682,263 @@ class TestGarminSidecarStore : public QObject
         QVERIFY(r.isOk());
         QVERIFY2(!r.state.pending.contains(QStringLiteral("333")), "the dropped id must be gone");
         QCOMPARE(r.state.lastSuccessStartTimeGMT, QString());
+    }
+
+    // T-261 — B-STAGE9-148/DEC-084 clause 5 STORE branch: at-or-before is
+    // decided by INSTANT, not text. Cursor "2026-09-01 01:00:00" (naive ->
+    // 2026-09-01T01:00:00Z); dropped row spelled "2026-09-01T00:30:00Z" — an
+    // earlier instant (00:30 < 01:00) but a textually GREATER string ('T'
+    // 0x54 > ' ' 0x20 at the separator), so a text `<=` reads it as AFTER the
+    // cursor and never clears it. Mutation-must-go-RED: restoring the text
+    // `<=` here fails this test.
+    void backfill_dropAbandonedRow_offsetSpellingEarlierInstant_clearsCursorDespiteTextOrder()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("261261");
+
+        GarminSidecarStore::BackfillState st;
+        st.lastSuccessStartTimeGMT = QStringLiteral("2026-09-01 01:00:00");
+        QVERIFY(GarminSidecarStore::saveBackfillState(athlete.path(), uid, st));
+
+        GarminSidecarStore::ImportedEntry abandoned;
+        abandoned.startTimeGMT = QStringLiteral("2026-09-01T00:30:00Z");
+        abandoned.localFilename = QStringLiteral("garmin-261.fit");
+        QVERIFY(GarminSidecarStore::recordPendingBackfill(athlete.path(), uid, QStringLiteral("261"), abandoned));
+
+        QVERIFY(GarminSidecarStore::dropPendingBackfill(athlete.path(), uid, QStringLiteral("261")));
+
+        const GarminSidecarStore::BackfillLoadResult r = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QVERIFY(r.isOk());
+        QVERIFY2(!r.state.pending.contains(QStringLiteral("261")), "the dropped id must be gone");
+        QCOMPARE(r.state.lastSuccessStartTimeGMT, QString());
+    }
+
+    // T-261b — DEC-084 clause 5 STORE branch's conservative direction: an
+    // unparseable dropped row's instant can never be ordered against the
+    // cursor, so it counts as at-or-before and the cursor clears rather than
+    // leaving the row silently unreachable.
+    void backfill_dropAbandonedRow_unparseableStartTime_clearsCursor()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("261262");
+
+        GarminSidecarStore::BackfillState st;
+        st.lastSuccessStartTimeGMT = QStringLiteral("2026-09-05T00:00:00Z");
+        QVERIFY(GarminSidecarStore::saveBackfillState(athlete.path(), uid, st));
+
+        GarminSidecarStore::ImportedEntry abandoned;
+        abandoned.startTimeGMT = QStringLiteral("garbage-not-a-date");
+        abandoned.localFilename = QStringLiteral("garmin-262.fit");
+        QVERIFY(GarminSidecarStore::recordPendingBackfill(athlete.path(), uid, QStringLiteral("262"), abandoned));
+
+        QVERIFY(GarminSidecarStore::dropPendingBackfill(athlete.path(), uid, QStringLiteral("262")));
+
+        const GarminSidecarStore::BackfillLoadResult r = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QVERIFY(r.isOk());
+        QVERIFY2(!r.state.pending.contains(QStringLiteral("262")), "the dropped id must be gone");
+        QCOMPARE(r.state.lastSuccessStartTimeGMT, QString());
+    }
+
+    // ================================================================
+    // DEC-083 (B-STAGE9-133) — promotePendingBackfill: the cursor is a
+    // completeness watermark, advanced ONLY by promotion.
+    // ================================================================
+
+    // T-248 — mutation-must-go-RED: promoting the sole pending entry records
+    // it imported, drops the pending row, and advances the cursor to that
+    // entry's own startTimeGMT (no other pending row survives it). Restoring
+    // the pre-DEC-083 recordImported()+dropPendingBackfill() pair in place of
+    // promotePendingBackfill must fail this test (the old pair never touches
+    // the cursor at all, so it would stay empty here).
+    void promote_soleEntry_recordsImported_dropsPending_advancesCursor()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("248248");
+
+        GarminSidecarStore::ImportedEntry entry;
+        entry.startTimeGMT = QStringLiteral("2026-09-01T00:00:00.0");
+        entry.localFilename = QStringLiteral("garmin-901.fit");
+        QVERIFY(GarminSidecarStore::recordPendingBackfill(athlete.path(), uid, QStringLiteral("901"), entry));
+
+        QVERIFY(GarminSidecarStore::promotePendingBackfill(athlete.path(), uid, QStringLiteral("901")));
+
+        const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(athlete.path(), uid);
+        QVERIFY(imported.isOk());
+        QVERIFY2(imported.contains(QStringLiteral("901")), "promotion must record the completion");
+        QCOMPARE(imported.value(QStringLiteral("901")).startTimeGMT, entry.startTimeGMT);
+
+        const GarminSidecarStore::BackfillLoadResult r = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QVERIFY(r.isOk());
+        QVERIFY2(!r.state.pending.contains(QStringLiteral("901")), "promotion must drop the pending entry");
+        QCOMPARE(r.state.lastSuccessStartTimeGMT, entry.startTimeGMT); // an at-cursor promotion leaves the cursor SET
+    }
+
+    // T-249 — the DO 1 guard: an EARLIER pending row still present must block
+    // the cursor from advancing past the entry being promoted. Mutation-
+    // must-go-RED: dropping this guard (advancing unconditionally) fails.
+    void promote_earlierPendingRowSurvives_blocksCursorAdvance_thenCatchesUpOncePromotedToo()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("249249");
+
+        GarminSidecarStore::ImportedEntry earlier;
+        earlier.startTimeGMT = QStringLiteral("2026-09-01T00:00:00.0");
+        earlier.localFilename = QStringLiteral("garmin-902.fit");
+        QVERIFY(GarminSidecarStore::recordPendingBackfill(athlete.path(), uid, QStringLiteral("902"), earlier));
+
+        GarminSidecarStore::ImportedEntry later;
+        later.startTimeGMT = QStringLiteral("2026-09-02T00:00:00.0");
+        later.localFilename = QStringLiteral("garmin-903.fit");
+        QVERIFY(GarminSidecarStore::recordPendingBackfill(athlete.path(), uid, QStringLiteral("903"), later));
+
+        // Promoting the LATER entry first must not advance the cursor: the
+        // earlier, still-unpromoted "902" would become unreachable.
+        QVERIFY(GarminSidecarStore::promotePendingBackfill(athlete.path(), uid, QStringLiteral("903")));
+        GarminSidecarStore::BackfillLoadResult r = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QVERIFY(r.isOk());
+        QVERIFY2(!r.state.pending.contains(QStringLiteral("903")), "903 must still be promoted out of pending");
+        QCOMPARE(r.state.lastSuccessStartTimeGMT, QString()); // blocked by the still-pending earlier row
+
+        // Now promote the earlier entry: no pending row remains at or before
+        // it, so the cursor catches up to it.
+        QVERIFY(GarminSidecarStore::promotePendingBackfill(athlete.path(), uid, QStringLiteral("902")));
+        r = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QVERIFY(r.isOk());
+        QCOMPARE(r.state.lastSuccessStartTimeGMT, earlier.startTimeGMT);
+    }
+
+    // T-250 — DEC-083 clause 4's equal-second sibling, at the store's own
+    // guard: two entries sharing the identical startTimeGMT. Promoting one
+    // while its sibling is still pending must not advance the cursor past
+    // it; only once BOTH are promoted does the cursor reach the shared time.
+    void promote_equalSecondSiblingStillPending_blocksCursorUntilBothPromoted()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("250250");
+        const QString sharedTime = QStringLiteral("2026-09-05T00:00:00.0");
+
+        GarminSidecarStore::ImportedEntry sib1;
+        sib1.startTimeGMT = sharedTime;
+        sib1.localFilename = QStringLiteral("garmin-904.fit");
+        QVERIFY(GarminSidecarStore::recordPendingBackfill(athlete.path(), uid, QStringLiteral("904"), sib1));
+
+        GarminSidecarStore::ImportedEntry sib2;
+        sib2.startTimeGMT = sharedTime;
+        sib2.localFilename = QStringLiteral("garmin-905.fit");
+        QVERIFY(GarminSidecarStore::recordPendingBackfill(athlete.path(), uid, QStringLiteral("905"), sib2));
+
+        QVERIFY(GarminSidecarStore::promotePendingBackfill(athlete.path(), uid, QStringLiteral("904")));
+        GarminSidecarStore::BackfillLoadResult r = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QVERIFY(r.isOk());
+        QCOMPARE(r.state.lastSuccessStartTimeGMT, QString()); // 905, same second, still pending
+
+        QVERIFY(GarminSidecarStore::promotePendingBackfill(athlete.path(), uid, QStringLiteral("905")));
+        r = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QVERIFY(r.isOk());
+        QCOMPARE(r.state.lastSuccessStartTimeGMT, sharedTime);
+    }
+
+    // T-256 — B-STAGE9-138 r3, mutation-must-go-RED: a TEXT `>` orders two
+    // spellings of the SAME calendar day wrongly at the separator byte alone
+    // (space 0x20 < 'T' 0x54): "...01 23:59:59" < "...01T00:00:00Z" lexically
+    // even though 23:59:59 is chronologically LATER than 00:00:00 that day.
+    // The cursor is already at the later (space-spelled) instant; the
+    // promoted entry is the earlier (T-spelled) instant, same calendar day.
+    // Restoring a TEXT `>` comparison must fail this test.
+    void promote_laterCursorSpaceSpelling_earlierEntryTSpelling_doesNotRewind()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("256256");
+
+        GarminSidecarStore::BackfillState st;
+        st.lastSuccessStartTimeGMT = QStringLiteral("2026-09-01 23:59:59"); // later instant, space spelling
+        QVERIFY(GarminSidecarStore::saveBackfillState(athlete.path(), uid, st));
+
+        GarminSidecarStore::ImportedEntry earlier;
+        earlier.startTimeGMT = QStringLiteral("2026-09-01T00:00:00Z"); // earlier instant, T spelling, same day
+        earlier.localFilename = QStringLiteral("garmin-906.fit");
+        QVERIFY(GarminSidecarStore::recordPendingBackfill(athlete.path(), uid, QStringLiteral("906"), earlier));
+
+        QVERIFY(GarminSidecarStore::promotePendingBackfill(athlete.path(), uid, QStringLiteral("906")));
+
+        const GarminSidecarStore::BackfillLoadResult r = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QVERIFY(r.isOk());
+        QCOMPARE(r.state.lastSuccessStartTimeGMT, st.lastSuccessStartTimeGMT);
+    }
+
+    // T-257 — the same instant in two spellings must not advance the cursor:
+    // equal instants, like equal text, are not STRICTLY later.
+    void promote_equalInstantDifferentSpelling_doesNotAdvance()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("257257");
+
+        GarminSidecarStore::BackfillState st;
+        st.lastSuccessStartTimeGMT = QStringLiteral("2026-09-03T00:00:00Z");
+        QVERIFY(GarminSidecarStore::saveBackfillState(athlete.path(), uid, st));
+
+        GarminSidecarStore::ImportedEntry sameInstant;
+        sameInstant.startTimeGMT = QStringLiteral("2026-09-03 00:00:00"); // same instant, space spelling
+        sameInstant.localFilename = QStringLiteral("garmin-907.fit");
+        QVERIFY(GarminSidecarStore::recordPendingBackfill(athlete.path(), uid, QStringLiteral("907"), sameInstant));
+
+        QVERIFY(GarminSidecarStore::promotePendingBackfill(athlete.path(), uid, QStringLiteral("907")));
+
+        const GarminSidecarStore::BackfillLoadResult r = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QVERIFY(r.isOk());
+        QCOMPARE(r.state.lastSuccessStartTimeGMT, st.lastSuccessStartTimeGMT);
+    }
+
+    // T-263 — B-STAGE9-150: pins instant-correct cursor ADVANCEMENT (not just
+    // the does-not-advance guards T-256/T-257 already cover) across mixed
+    // spellings where text order and instant order DISAGREE. Cursor
+    // "2026-09-02 00:00:00" (naive -> 2026-09-02T00:00:00Z); the sole pending
+    // entry is spelled "2026-09-01T20:00:00-08:00", whose TEXT is lexically
+    // SMALLER (day "01" < "02") but whose instant, converted, is
+    // 2026-09-02T04:00:00Z — genuinely LATER than the cursor. A text `>`
+    // comparator refuses to advance here; the instant-correct one must, and
+    // land on the entry's own VERBATIM string (nothing renormalised).
+    // Mutation-must-go-RED: a text compare in the advance block fails this.
+    void promote_offsetSpellingLaterInstant_textOrderDisagrees_advancesToVerbatimString()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("263263");
+
+        GarminSidecarStore::BackfillState st;
+        st.lastSuccessStartTimeGMT = QStringLiteral("2026-09-02 00:00:00");
+        QVERIFY(GarminSidecarStore::saveBackfillState(athlete.path(), uid, st));
+
+        GarminSidecarStore::ImportedEntry later;
+        later.startTimeGMT = QStringLiteral("2026-09-01T20:00:00-08:00"); // -> 2026-09-02T04:00:00Z
+        later.localFilename = QStringLiteral("garmin-908.fit");
+        QVERIFY(GarminSidecarStore::recordPendingBackfill(athlete.path(), uid, QStringLiteral("908"), later));
+
+        QVERIFY(GarminSidecarStore::promotePendingBackfill(athlete.path(), uid, QStringLiteral("908")));
+
+        const GarminSidecarStore::BackfillLoadResult r = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QVERIFY(r.isOk());
+        QCOMPARE(r.state.lastSuccessStartTimeGMT, later.startTimeGMT); // byte-identical, not renormalised
+    }
+
+    // A non-pending id is a no-op: nothing recorded, nothing written.
+    void promote_idNotPending_isNoOpReturningFalse()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("251251");
+
+        QVERIFY2(!GarminSidecarStore::promotePendingBackfill(athlete.path(), uid, QStringLiteral("nope")),
+                 "promoting an id that was never staged pending must return false");
+        const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(athlete.path(), uid);
+        QVERIFY2(!imported.isOk() || !imported.contains(QStringLiteral("nope")), "nothing may be recorded");
     }
 
     // ================================================================

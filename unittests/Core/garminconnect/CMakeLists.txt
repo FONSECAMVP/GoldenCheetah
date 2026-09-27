@@ -779,6 +779,29 @@ target_compile_features(testGarminSidecarStore PRIVATE cxx_std_17)
 add_test(NAME testGarminSidecarStore COMMAND testGarminSidecarStore)
 set_tests_properties(testGarminSidecarStore PROPERTIES LABELS "garmin-fast")
 
+# --- T-258/T-259 — DEC-084: GarminTime.h's garminInstantFromString() --------
+# Header-only primitive (no .cpp to link) — the positive-case table DEC-084's
+# clause 1 rests on, plus the naive-spelling regression run under a non-UTC
+# host TZ. Pure-Qt, `garmin-fast` label.
+add_executable(testGarminTime
+    testGarminTime.cpp
+    ${CMAKE_SOURCE_DIR}/src/Cloud/GarminTime.h
+)
+
+target_include_directories(testGarminTime PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Cloud
+)
+
+target_link_libraries(testGarminTime PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Test
+)
+target_compile_features(testGarminTime PRIVATE cxx_std_17)
+
+add_test(NAME testGarminTime COMMAND testGarminTime)
+set_tests_properties(testGarminTime PROPERTIES LABELS "garmin-fast")
+
 # --- T-047 / T-048 — REQ-008 Slice C: GarminConnect incremental-sync ----------
 # The DES-010 flow bound onto CloudService's readdir/readFile sync machinery:
 # readdir drives the Slice-A worker list op (off the caller thread via the REAL

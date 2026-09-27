@@ -171,6 +171,16 @@ class GarminSidecarStore
     static bool saveBackfillState(const QString& athleteConfigDir, const QString& garminUserId,
                                   const BackfillState& state);
 
+    // DEC-083/B-STAGE9-136 — the range-only sibling of saveBackfillState, for
+    // callers (GarminBackfillController) that must persist rangeStart/rangeEnd
+    // without ever writing lastSuccessStartTimeGMT: after clause 1/2, only
+    // promotePendingBackfill may move the cursor. Read-modify-write against
+    // the on-disk state under the same lock: `pending` AND the cursor both
+    // survive untouched, so a cursor advanced by a concurrent promotion is
+    // never overwritten. Same DEC-075 refusal as saveBackfillState.
+    static bool saveBackfillRange(const QString& athleteConfigDir, const QString& garminUserId,
+                                  const QString& rangeStart, const QString& rangeEnd);
+
     // Record one pending (bytes-landed, not-yet-import-complete) backfill entry
     // (DEC-071 split from recordImported's overloaded "downloaded" vs.
     // "imported" meaning). Read-modify-write against the on-disk cursor: the
@@ -181,17 +191,37 @@ class GarminSidecarStore
     static bool recordPendingBackfill(const QString& athleteConfigDir, const QString& garminUserId,
                                       const QString& activityId, const ImportedEntry& entry);
 
-    // Drop one pending entry (its activity resolved — imported or otherwise).
-    // Same read-modify-write/refusal discipline as recordPendingBackfill.
-    // Dropping an id that is not pending is a no-op that still returns true.
-    // B-STAGE9-112: if the dropped entry's startTimeGMT equals the persisted
-    // cursor (lastSuccessStartTimeGMT), the cursor is cleared with it — the
-    // cursor means "everything at or before this landed", so losing the
-    // entry it currently points AT without rewinding would make it
-    // unreachable by any later run. An entry strictly before the cursor
-    // leaves the cursor untouched.
+    // Drop one pending entry that will never be promoted — an ABANDONED
+    // download (cancelled/failed registration, or a missing staged payload).
+    // DEC-083: promotion is its own operation (promotePendingBackfill below)
+    // and removes its own pending row directly; this call is for the
+    // abandonment path only. Same read-modify-write/refusal discipline as
+    // recordPendingBackfill. Dropping an id that is not pending is a no-op
+    // that still returns true.
+    // B-STAGE9-112/-126: if the dropped entry's startTimeGMT is AT OR BEFORE
+    // the persisted cursor (lastSuccessStartTimeGMT), the cursor is cleared
+    // with it — kept as defence in depth under DEC-083 clause 3, since the
+    // cursor can no longer legitimately sit past an unpromoted row, but the
+    // clear costs only re-listing, never loss.
     static bool dropPendingBackfill(const QString& athleteConfigDir, const QString& garminUserId,
                                     const QString& activityId);
+
+    // DEC-083 clause 2 — the cursor is a completeness watermark, advanced
+    // ONLY here. Looks up `activityId` in the on-disk `pending` map (its
+    // entry there already carries the startTimeGMT/localFilename an imported
+    // record needs — no separate ImportedEntry argument), records it
+    // imported (imported-write-first), removes the pending row, and advances
+    // `lastSuccessStartTimeGMT` to that entry's own startTimeGMT ONLY when no
+    // surviving pending row sits at or before it — an earlier (or
+    // equal-second sibling) still-unpromoted row must stay reachable to a
+    // later run. Takes the state-path lock (DEC-076) across the whole
+    // operation; every other pending row is preserved untouched. Same
+    // DEC-075 refusal as the other writers. Returns false, with nothing
+    // written, when `activityId` is not currently pending, or when
+    // recordImported() fails (leaves the row pending, never in neither
+    // manifest).
+    static bool promotePendingBackfill(const QString& athleteConfigDir, const QString& garminUserId,
+                                       const QString& activityId);
 };
 
 #endif // GC_GarminSidecarStore_h

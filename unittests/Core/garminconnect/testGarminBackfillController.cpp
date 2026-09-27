@@ -319,10 +319,12 @@ class TestGarminBackfillController : public QObject
         QVERIFY(f.open(QIODevice::ReadOnly));
         QCOMPARE(f.readAll(), fitBytesFor(newer.activityId));
 
-        // Cursor advanced to the LAST (newest) successfully-imported activity.
+        // DEC-083 (B-STAGE9-133) — the cursor is a completeness watermark
+        // advanced ONLY by promotion; a controller-only run (no dialog/wizard
+        // promotion ever drives this test) must leave it untouched.
         const GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
         QVERIFY(bf.isOk());
-        QCOMPARE(bf.state.lastSuccessStartTimeGMT, newer.startTimeGMT);
+        QVERIFY2(bf.state.lastSuccessStartTimeGMT.isEmpty(), "staging alone must not advance the cursor");
 
         // DEC-071 — the controller's stage-time write is PENDING, never
         // recordImported: both activities land in the pending manifest, and
@@ -395,7 +397,14 @@ class TestGarminBackfillController : public QObject
 
         const GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
         QVERIFY(bf.isOk());
-        QCOMPARE(bf.state.lastSuccessStartTimeGMT, a1.startTimeGMT);
+        // DEC-083 (B-STAGE9-133) — staging alone never advances the cursor.
+        QVERIFY2(bf.state.lastSuccessStartTimeGMT.isEmpty(), "staging alone must not advance the cursor");
+        // B-STAGE9-139 — the durable-progress subject this test exists for:
+        // a1 stays pending, never promoted, and its staged bytes survive.
+        QVERIFY2(bf.state.pending.contains(a1.activityId), "the downloaded activity must remain pending after cancel");
+        QVERIFY2(QFile::exists(GarminBackfillController::stagedPayloadPath(tmp.path(), a1.activityId,
+                                                                           fitBytesFor(a1.activityId))),
+                 "the downloaded activity's staged payload must survive on disk after cancel");
     }
 
     // =====================================================================
@@ -404,6 +413,10 @@ class TestGarminBackfillController : public QObject
     // distinguish a clean pause from a SIGKILL - both leave the same
     // backfill-state-<uid>.json, so resuming from it IS the crash-recovery
     // path (interruption class 2, design.md: "same as cancel - resume offered").
+    // DEC-083 (B-STAGE9-133): resumability now rests on the pending manifest,
+    // not the cursor - a1 stays PENDING (never promoted) after run 1, so DO
+    // 4/5's pending-skip, not a cursor exclusion, is what keeps run 2 from
+    // re-downloading it.
     // =====================================================================
     void freshControllerResumesFromPriorRunsPersistedCursor()
     {
@@ -446,66 +459,120 @@ class TestGarminBackfillController : public QObject
 
         const GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
         QVERIFY(bf.isOk());
-        QCOMPARE(bf.state.lastSuccessStartTimeGMT, a2.startTimeGMT);
+        QVERIFY2(bf.state.lastSuccessStartTimeGMT.isEmpty(), "staging alone must not advance the cursor");
     }
 
     // =====================================================================
-    // T-237 — B-STAGE9-112: dropping the pending entry AT the cursor (e.g.
-    // the dialog's missing-staged-payload drop) rewinds the persisted cursor,
-    // so a LATER run over the same range re-lists and re-downloads it rather
-    // than losing it forever.
+    // T-262 — B-STAGE9-149/DEC-084 clause 5 CONTROLLER branch: a stored
+    // cursor whose offset-bearing spelling names an instant PAST the
+    // requested range's end must not be adopted as the resume cursor. A TEXT
+    // compare reads "2026-09-02T23:00:00-10:00" as between the range's day
+    // stamps and resumes from it, so the fake's own since-filter (mirroring
+    // the real API's inclusive `>=`) drops every in-range activity. Fixed,
+    // the cursor falls back to rangeStartGmt and priorSuccess stays empty.
+    // Mutation-must-go-RED: restoring the TEXT `>=`/`<=` bounds here fails.
+    // =====================================================================
+    void staleCursorPastRangeEnd_offsetSpelling_fallsBackToRangeStart()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        const QString rangeStartGmt = QStringLiteral("2026-09-01 23:00:00");
+        const QString rangeEndGmt = QStringLiteral("2026-09-03 00:00:00");
+        const QString staleCursor =
+            QStringLiteral("2026-09-02T23:00:00-10:00"); // -> 2026-09-03T09:00:00Z, past rangeEndGmt
+
+        GarminSidecarStore::BackfillState st;
+        st.lastSuccessStartTimeGMT = staleCursor;
+        QVERIFY(GarminSidecarStore::saveBackfillState(tmp.path(), kUid, st));
+
+        GarminActivitySummary inRange;
+        inRange.activityId = QStringLiteral("4201");
+        inRange.startTimeGMT = QStringLiteral("2026-09-02 12:00:00");
+
+        FakeBackfillClient client;
+        client.listResult = {inRange};
+        client.okBytesById.insert(inRange.activityId, fitBytesFor(inRange.activityId));
+
+        GarminBackfillController ctrl(&client, tmp.path(), kUid);
+        const auto r = ctrl.start(rangeStartGmt, rangeEndGmt);
+
+        QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Done));
+        QCOMPARE(r.importedCount, 1);
+        QCOMPARE(client.listCallsSeen, QStringList({rangeStartGmt}));
+        QVERIFY2(client.downloadCallsSeen.contains(inRange.activityId),
+                 "the in-range activity must not be dropped by a wrongly-adopted stale cursor");
+
+        // DEC-083/-136: the controller never rewrites the cursor itself.
+        const GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(bf.isOk());
+        QCOMPARE(bf.state.lastSuccessStartTimeGMT, staleCursor);
+    }
+
+    // =====================================================================
+    // T-237 — B-STAGE9-112/DEC-083: dropping a pending entry AT-OR-BEFORE the
+    // cursor (e.g. the dialog's missing-staged-payload drop) rewinds the
+    // persisted cursor, so a LATER run re-lists and re-downloads it rather
+    // than losing it forever. DEC-083 clause 2 means the entry the cursor
+    // itself points at is always already promoted (never pending), so this
+    // shape now arises from a late-arriving activity OLDER than an
+    // already-promoted watermark - DEC-083's own disclosed scope gap - staged
+    // as pending and then abandoned.
     // =====================================================================
     void droppingPendingEntryAtCursorRewindsCursorSoALaterRunRelistsIt()
     {
         QTemporaryDir tmp;
         QVERIFY(tmp.isValid());
 
-        GarminActivitySummary a1, a2;
-        a1.activityId = QStringLiteral("4101");
-        a1.startTimeGMT = QStringLiteral("2026-04-01 00:00:00");
-        a2.activityId = QStringLiteral("4102");
-        a2.startTimeGMT = QStringLiteral("2026-04-02 00:00:00");
+        GarminActivitySummary older, newer;
+        older.activityId = QStringLiteral("4101");
+        older.startTimeGMT = QStringLiteral("2026-04-01 00:00:00");
+        newer.activityId = QStringLiteral("4102");
+        newer.startTimeGMT = QStringLiteral("2026-04-02 00:00:00");
 
-        {
-            FakeBackfillClient client;
-            client.listResult = {a1, a2};
-            client.okBytesById.insert(a1.activityId, fitBytesFor(a1.activityId));
-            client.okBytesById.insert(a2.activityId, fitBytesFor(a2.activityId));
-            GarminBackfillController ctrl(&client, tmp.path(), kUid);
-            const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-05-01 00:00:00"));
-            QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Done));
-        }
+        // DEC-083: the cursor advances ONLY via promotion (standing in here
+        // for the dialog's post-wizard call), never through the controller.
+        GarminSidecarStore::ImportedEntry newerEntry;
+        newerEntry.startTimeGMT = newer.startTimeGMT;
+        newerEntry.localFilename = QStringLiteral("garmin-4102.fit");
+        QVERIFY(GarminSidecarStore::recordPendingBackfill(tmp.path(), kUid, newer.activityId, newerEntry));
+        QVERIFY(GarminSidecarStore::promotePendingBackfill(tmp.path(), kUid, newer.activityId));
 
         const GarminSidecarStore::BackfillLoadResult before = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
         QVERIFY(before.isOk());
-        QCOMPARE(before.state.lastSuccessStartTimeGMT, a2.startTimeGMT); // a2 IS the cursor
+        QCOMPARE(before.state.lastSuccessStartTimeGMT, newer.startTimeGMT);
+
+        // A late-arriving `older` activity, older than the watermark, lands
+        // as a still-pending entry.
+        GarminSidecarStore::ImportedEntry olderEntry;
+        olderEntry.startTimeGMT = older.startTimeGMT;
+        olderEntry.localFilename = QStringLiteral("garmin-4101.fit");
+        QVERIFY(GarminSidecarStore::recordPendingBackfill(tmp.path(), kUid, older.activityId, olderEntry));
 
         // Simulate GarminBackfillDialog's missing-staged-payload drop (its own
-        // pendingLoad-driven loop, not exercised here) for a2.
-        QVERIFY(GarminSidecarStore::dropPendingBackfill(tmp.path(), kUid, a2.activityId));
+        // pendingLoad-driven loop, not exercised here) for `older`.
+        QVERIFY(GarminSidecarStore::dropPendingBackfill(tmp.path(), kUid, older.activityId));
 
         const GarminSidecarStore::BackfillLoadResult after = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
         QVERIFY(after.isOk());
         QCOMPARE(after.state.lastSuccessStartTimeGMT, QString());
 
-        // A later run over the SAME range must re-list AND re-download a2 -
-        // the rewound cursor is what puts it back into `filtered`.
+        // A later run over a range covering `older` must re-list AND
+        // re-download it - the cleared cursor (DO 4's strictly-before
+        // exclusion no longer applies with an empty priorSuccess) is what
+        // puts it back into `filtered`; it is no longer in `pending` either
+        // (dropped above), so DO 5's pending-skip does not re-exclude it.
         {
             FakeBackfillClient client;
-            client.listResult = {a1, a2};
-            client.okBytesById.insert(a1.activityId, fitBytesFor(a1.activityId));
-            client.okBytesById.insert(a2.activityId, fitBytesFor(a2.activityId));
+            client.listResult = {older};
+            client.okBytesById.insert(older.activityId, fitBytesFor(older.activityId));
             GarminBackfillController ctrl(&client, tmp.path(), kUid);
             const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-05-01 00:00:00"));
 
             QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Done));
-            QVERIFY2(client.downloadCallsSeen.contains(a2.activityId),
-                     "the rewound cursor must put a2 back into filtered on the next run");
+            QVERIFY2(client.downloadCallsSeen.contains(older.activityId),
+                     "the rewound cursor must put the dropped entry back into filtered on the next run");
         }
-
-        const GarminSidecarStore::BackfillLoadResult finalBf = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
-        QVERIFY(finalBf.isOk());
-        QCOMPARE(finalBf.state.lastSuccessStartTimeGMT, a2.startTimeGMT);
     }
 
     // =====================================================================
@@ -537,37 +604,48 @@ class TestGarminBackfillController : public QObject
     }
 
     // =====================================================================
-    // T-239 — DEC-078/B-STAGE9-112: an entry whose startTimeGMT equals BOTH
-    // the persisted cursor AND the range start, dropped via
+    // T-239 — DEC-078/B-STAGE9-112/DEC-083: an entry whose startTimeGMT
+    // equals BOTH the persisted cursor AND the range start, dropped via
     // dropPendingBackfill, must be re-listed by a later run over the SAME
     // range - the boundary case that defeated two prior repair rounds
-    // (DEC-078's "reviewer's midnight case").
+    // (DEC-078's "reviewer's midnight case"). DEC-083 clause 2 means the
+    // promoted entry itself is never pending, so the AT-the-cursor pending
+    // row here is an equal-second SIBLING (clause 4's own motif) of the
+    // promoted one, still awaiting its own promotion when it is abandoned.
     // =====================================================================
     void entryAtBothCursorAndRangeStartIsRelistedAfterDrop()
     {
         QTemporaryDir tmp;
         QVERIFY(tmp.isValid());
 
-        GarminActivitySummary a;
-        a.activityId = QStringLiteral("4301");
-        a.startTimeGMT = QStringLiteral("2026-04-01 00:00:00");
-        const QString rangeStart = a.startTimeGMT; // same value as a's own timestamp
+        const QString sharedTime = QStringLiteral("2026-04-01 00:00:00"); // equal-second siblings
+        GarminActivitySummary a1, a2;
+        a1.activityId = QStringLiteral("4301");
+        a1.startTimeGMT = sharedTime;
+        a2.activityId = QStringLiteral("4302");
+        a2.startTimeGMT = sharedTime;
+        const QString rangeStart = sharedTime; // same value as both activities' timestamp
         const QString rangeEnd = QStringLiteral("2026-04-10 00:00:00");
 
-        {
-            FakeBackfillClient client;
-            client.listResult = {a};
-            client.okBytesById.insert(a.activityId, fitBytesFor(a.activityId));
-            GarminBackfillController ctrl(&client, tmp.path(), kUid);
-            const auto r = ctrl.start(rangeStart, rangeEnd);
-            QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Done));
-        }
+        // DEC-083: promote a1 directly (standing in for the dialog's
+        // post-wizard promotion) so the watermark sits at `sharedTime`.
+        GarminSidecarStore::ImportedEntry e1;
+        e1.startTimeGMT = a1.startTimeGMT;
+        e1.localFilename = QStringLiteral("garmin-4301.fit");
+        QVERIFY(GarminSidecarStore::recordPendingBackfill(tmp.path(), kUid, a1.activityId, e1));
+        QVERIFY(GarminSidecarStore::promotePendingBackfill(tmp.path(), kUid, a1.activityId));
 
         const GarminSidecarStore::BackfillLoadResult before = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
         QVERIFY(before.isOk());
-        QCOMPARE(before.state.lastSuccessStartTimeGMT, a.startTimeGMT); // a IS the cursor AND rangeStart
+        QCOMPARE(before.state.lastSuccessStartTimeGMT, sharedTime); // a1 IS the cursor AND rangeStart
 
-        QVERIFY(GarminSidecarStore::dropPendingBackfill(tmp.path(), kUid, a.activityId));
+        // a2, the equal-second sibling, staged (still pending) after the fact.
+        GarminSidecarStore::ImportedEntry e2;
+        e2.startTimeGMT = a2.startTimeGMT;
+        e2.localFilename = QStringLiteral("garmin-4302.fit");
+        QVERIFY(GarminSidecarStore::recordPendingBackfill(tmp.path(), kUid, a2.activityId, e2));
+
+        QVERIFY(GarminSidecarStore::dropPendingBackfill(tmp.path(), kUid, a2.activityId));
 
         const GarminSidecarStore::BackfillLoadResult after = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
         QVERIFY(after.isOk());
@@ -575,13 +653,13 @@ class TestGarminBackfillController : public QObject
 
         {
             FakeBackfillClient client;
-            client.listResult = {a};
-            client.okBytesById.insert(a.activityId, fitBytesFor(a.activityId));
+            client.listResult = {a2};
+            client.okBytesById.insert(a2.activityId, fitBytesFor(a2.activityId));
             GarminBackfillController ctrl(&client, tmp.path(), kUid);
             const auto r = ctrl.start(rangeStart, rangeEnd);
 
             QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Done));
-            QVERIFY2(client.downloadCallsSeen.contains(a.activityId),
+            QVERIFY2(client.downloadCallsSeen.contains(a2.activityId),
                      "an entry at both the cursor and rangeStart must be re-listed after being dropped");
         }
     }
@@ -616,6 +694,109 @@ class TestGarminBackfillController : public QObject
         QVERIFY2(gotIds.contains(atBound.activityId),
                  "an activity exactly AT sinceGmt is inclusive and must be listed");
         QVERIFY2(gotIds.contains(after.activityId), "an activity after sinceGmt must be listed");
+    }
+
+    // =====================================================================
+    // T-251 — DEC-083 clause 4: an equal-second sibling of the persisted
+    // cursor, with NO pending row of its own (a fresh listing entry, never
+    // staged), must survive the exclusion filter. Mutation-must-go-RED:
+    // restoring the filter's `<=` in place of `<` excludes it.
+    // =====================================================================
+    void equalSecondSiblingWithNoPendingRowSurvivesTheFilter()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        GarminActivitySummary promoted, sibling;
+        promoted.activityId = QStringLiteral("4501");
+        promoted.startTimeGMT = QStringLiteral("2026-04-05 00:00:00");
+        sibling.activityId = QStringLiteral("4502");
+        sibling.startTimeGMT = promoted.startTimeGMT; // equal-second sibling
+
+        GarminSidecarStore::ImportedEntry entry;
+        entry.startTimeGMT = promoted.startTimeGMT;
+        entry.localFilename = QStringLiteral("garmin-4501.fit");
+        QVERIFY(GarminSidecarStore::recordPendingBackfill(tmp.path(), kUid, promoted.activityId, entry));
+        QVERIFY(GarminSidecarStore::promotePendingBackfill(tmp.path(), kUid, promoted.activityId));
+
+        FakeBackfillClient client;
+        client.listResult = {sibling}; // never staged - no pending row for it
+        client.okBytesById.insert(sibling.activityId, fitBytesFor(sibling.activityId));
+        GarminBackfillController ctrl(&client, tmp.path(), kUid);
+        const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-05-01 00:00:00"));
+
+        QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Done));
+        QVERIFY2(client.downloadCallsSeen.contains(sibling.activityId),
+                 "an equal-second sibling with no pending row must not be excluded by the cursor filter");
+    }
+
+    // =====================================================================
+    // T-252 — DEC-083 clause 5: an id already staged PENDING by a prior run
+    // must not be re-downloaded on a later run, even though clause 4 narrowed
+    // the cursor exclusion to strictly-before. Mutation-must-go-RED:
+    // removing the pending-skip check re-downloads it.
+    // =====================================================================
+    void pendingIdFromPriorRunIsNotReDownloaded()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        GarminActivitySummary a;
+        a.activityId = QStringLiteral("4601");
+        a.startTimeGMT = QStringLiteral("2026-04-06 00:00:00");
+
+        GarminSidecarStore::ImportedEntry entry;
+        entry.startTimeGMT = a.startTimeGMT;
+        entry.localFilename = QStringLiteral("garmin-4601.fit");
+        QVERIFY(GarminSidecarStore::recordPendingBackfill(tmp.path(), kUid, a.activityId, entry));
+
+        FakeBackfillClient client;
+        client.listResult = {a}; // still pending, never promoted
+        client.okBytesById.insert(a.activityId, fitBytesFor(a.activityId));
+        GarminBackfillController ctrl(&client, tmp.path(), kUid);
+        const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-05-01 00:00:00"));
+
+        QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Done));
+        QCOMPARE(r.importedCount, 0);
+        QVERIFY2(!client.downloadCallsSeen.contains(a.activityId), "a still-pending id must not be re-downloaded");
+        const GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(bf.isOk());
+        QVERIFY2(bf.state.pending.contains(a.activityId), "the pending entry must be untouched");
+    }
+
+    // =====================================================================
+    // T-253 — DEC-083 clauses 1/2/5: after staging a fresh activity, the
+    // on-disk cursor equals its PRE-STAGE value (`priorSuccess`, a concrete
+    // non-empty value here, seeded within this run's range so the case is
+    // not the vacuous empty one). Mutation-must-go-RED: restoring
+    // `advanced.lastSuccessStartTimeGMT = s.startTimeGMT` advances it to the
+    // newly-staged activity's own time instead.
+    // =====================================================================
+    void stagingLeavesOnDiskCursorAtItsPreStageValue()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        GarminSidecarStore::BackfillState seed;
+        seed.lastSuccessStartTimeGMT = QStringLiteral("2026-02-01 00:00:00"); // within this run's range
+        QVERIFY(GarminSidecarStore::saveBackfillState(tmp.path(), kUid, seed));
+
+        GarminActivitySummary a;
+        a.activityId = QStringLiteral("4701");
+        a.startTimeGMT = QStringLiteral("2026-04-07 00:00:00"); // after the seeded prior success
+
+        FakeBackfillClient client;
+        client.listResult = {a};
+        client.okBytesById.insert(a.activityId, fitBytesFor(a.activityId));
+        GarminBackfillController ctrl(&client, tmp.path(), kUid);
+        const auto r = ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-05-01 00:00:00"));
+
+        QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Done));
+        QCOMPARE(r.importedCount, 1);
+
+        const GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(bf.isOk());
+        QCOMPARE(bf.state.lastSuccessStartTimeGMT, seed.lastSuccessStartTimeGMT);
     }
 
     // =====================================================================
@@ -665,7 +846,15 @@ class TestGarminBackfillController : public QObject
 
         const GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
         QVERIFY(bf.isOk());
-        QCOMPARE(bf.state.lastSuccessStartTimeGMT, a1.startTimeGMT);
+        // DEC-083 (B-STAGE9-133) — staging alone never advances the cursor.
+        QVERIFY2(bf.state.lastSuccessStartTimeGMT.isEmpty(), "staging alone must not advance the cursor");
+        // B-STAGE9-139 — the durable-progress subject this test exists for:
+        // a1 stays pending, never promoted, and its staged bytes survive.
+        QVERIFY2(bf.state.pending.contains(a1.activityId),
+                 "the earlier activity must remain pending after the later download fails");
+        QVERIFY2(QFile::exists(GarminBackfillController::stagedPayloadPath(tmp.path(), a1.activityId,
+                                                                           fitBytesFor(a1.activityId))),
+                 "the earlier activity's staged payload must survive on disk");
     }
 
     // =====================================================================
@@ -1020,7 +1209,15 @@ class TestGarminBackfillController : public QObject
 
         const GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
         QVERIFY(bf.isOk());
-        QCOMPARE(bf.state.lastSuccessStartTimeGMT, a1.startTimeGMT);
+        // DEC-083 (B-STAGE9-133) — staging alone never advances the cursor.
+        QVERIFY2(bf.state.lastSuccessStartTimeGMT.isEmpty(), "staging alone must not advance the cursor");
+        // B-STAGE9-139 — the durable-progress subject this test exists for:
+        // a1 stays pending, never promoted, and its staged bytes survive.
+        QVERIFY2(bf.state.pending.contains(a1.activityId),
+                 "the earlier activity must remain pending after the session invalidates");
+        QVERIFY2(QFile::exists(GarminBackfillController::stagedPayloadPath(tmp.path(), a1.activityId,
+                                                                           fitBytesFor(a1.activityId))),
+                 "the earlier activity's staged payload must survive on disk");
     }
 
     // =====================================================================
@@ -1513,6 +1710,59 @@ class TestGarminBackfillController : public QObject
         QVERIFY(noStagedFileExistsFor(tmp.path(), a1.activityId));
         const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
         QVERIFY(!imported.contains(a1.activityId));
+    }
+
+    // =====================================================================
+    // T-260 — DEC-084 clause 3/5 (-146): OLDEST-first sort orders on INSTANT,
+    // not text, so two spellings of two different instants still sort
+    // correctly; and clause 5's filter never excludes an entry whose
+    // startTimeGMT fails to parse (reachability), while the sort comparator's
+    // (isValid, instant) ordering keeps std::sort well-defined rather than
+    // dropping or misordering it.
+    // =====================================================================
+    void mixedSpellingsSortByInstantAndUnparseableEntrySurvives()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        FakeBackfillClient client;
+        GarminActivitySummary older, newer, unparseable;
+        // TEXT and INSTANT order deliberately DIVERGE here: older's string
+        // sorts textually AFTER newer's (day "02" > day "01"), but its
+        // offset-spelling converts to an earlier instant than newer's naive
+        // 23:00 — a text-comparator mutant sorts these the wrong way round.
+        older.activityId = QStringLiteral("3001");
+        older.startTimeGMT = QStringLiteral("2026-02-02T01:00:00+03:00"); // -> 2026-02-01T22:00:00Z
+        newer.activityId = QStringLiteral("3002");
+        newer.startTimeGMT = QStringLiteral("2026-02-01 23:00:00"); // naive -> 2026-02-01T23:00:00Z
+        unparseable.activityId = QStringLiteral("3003");
+        unparseable.startTimeGMT = QStringLiteral("garbage-not-a-date");
+        // Scrambled input order (neither instant-sorted nor listing-position
+        // sorted) so a passing test cannot be an accident of input order.
+        client.listResult = {unparseable, newer, older};
+        for (const GarminActivitySummary& s : {older, newer, unparseable})
+            client.okBytesById.insert(s.activityId, fitBytesFor(s.activityId));
+
+        GarminBackfillController ctrl(&client, tmp.path(), kUid);
+        const GarminBackfillController::Result r =
+            ctrl.start(QStringLiteral("2026-01-01 00:00:00"), QStringLiteral("2026-03-01 00:00:00"));
+
+        QCOMPARE(int(r.outcome), int(GarminBackfillController::Outcome::Done));
+        // Not dropped: all three, including the unparseable one, were staged.
+        QCOMPARE(r.importedCount, 3);
+        // Instant-ordered (older before newer despite arriving after it in
+        // the listing), with the unparseable entry grouped at one end rather
+        // than interleaved or crashing std::sort.
+        QCOMPARE(client.downloadCallsSeen, QStringList({older.activityId, newer.activityId, unparseable.activityId}));
+
+        const GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(bf.isOk());
+        // DEC-083 clause 5 — recordPendingBackfill stages, it does not
+        // promote, so no lastSuccessStartTimeGMT is set by this controller
+        // run at all; the verbatim unparseable spelling still landed pending.
+        QVERIFY(bf.state.lastSuccessStartTimeGMT.isEmpty());
+        QVERIFY(bf.state.pending.contains(unparseable.activityId));
+        QCOMPARE(bf.state.pending.value(unparseable.activityId).startTimeGMT, unparseable.startTimeGMT);
     }
 };
 

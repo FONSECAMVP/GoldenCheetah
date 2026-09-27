@@ -677,10 +677,16 @@ class TestGarminConnectConnectPersist : public QObject
         QCOMPARE(entries.at(0)->id, QStringLiteral("AAA"));
         QCOMPARE(entries.at(1)->id, QStringLiteral("BBB"));
 
-        // (c) B's OWN imported-<B>.json is what gets created/used: a real download
-        // records into B's sidecar, and B's map holds only B's own history.
+        // (c) B's OWN sidecars are what get created/used: a real download stages
+        // into B's backfill-state as PENDING (DEC-080/B-STAGE9-111 — no direct
+        // imported-<B>.json write at readFile time, see T-048), and only the
+        // registration-completed promotion moves it into B's imported map, which
+        // then holds only B's own history.
+        const QString backfillB = GarminSidecarStore::backfillStateFilePath(tmp.path(), kUidB);
         QByteArray data;
         QVERIFY2(gcB.readFile(&data, entries.at(1)->name, entries.at(1)->id), "readFile must stage B's activity");
+        QVERIFY2(QFileInfo::exists(backfillB), "the active account B must create ITS OWN backfill-state-<B>.json");
+        gcB.rideRegistrationCompleted(QStringLiteral("garmin-BBB.fit")); // staged name, not entries[].name
         QVERIFY2(QFileInfo::exists(importedB), "the active account B must create ITS OWN imported-<B>.json");
         const GarminSidecarStore::ImportedMap mapB = GarminSidecarStore::loadImported(tmp.path(), kUidB);
         QVERIFY(mapB.isOk());
@@ -716,7 +722,7 @@ class TestGarminConnectConnectPersist : public QObject
         // see a byte-identical rewrite; the atomic-writer observer can. The
         // positive control (B's own sidecar WAS seen) is what stops this from
         // passing vacuously if the observer were never invoked (LSN-022).
-        QVERIFY2(observer.destinations.contains(importedB),
+        QVERIFY2(observer.destinations.contains(backfillB) || observer.destinations.contains(importedB),
                  "pre-condition: the atomic-write observer must have seen B's own sidecar write");
         QVERIFY2(!observer.destinations.contains(importedA),
                  "no write may target the prior account's imported-<A>.json during B's session");
@@ -1105,8 +1111,11 @@ class TestGarminConnectConnectPersist : public QObject
     }
 
     // T-243 (b) — sibling to (a): the same run against a v1 (post-migration)
-    // state must NOT over-fire the guard — the cursor still advances.
-    void v1BackfillStateStillAdvancesCursorOnReadFile()
+    // state must NOT over-fire the guard — recordPendingBackfill still
+    // writes. DEC-083 clause 1 (B-STAGE9-133): the cursor itself is a
+    // completeness watermark now advanced ONLY by promotion, so it stays at
+    // its seeded value through this download-time write, not V1A's own time.
+    void v1BackfillStateRecordsPendingAndLeavesCursorUntouchedOnReadFile()
     {
         QTemporaryDir tmp;
         QVERIFY(tmp.isValid());
@@ -1138,7 +1147,8 @@ class TestGarminConnectConnectPersist : public QObject
         const GarminSidecarStore::BackfillLoadResult after = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
         QVERIFY(after.isOk());
         QCOMPARE(after.state.schemaVersion, 1);
-        QCOMPARE(after.state.lastSuccessStartTimeGMT, QStringLiteral("2026-08-01 00:00:00")); // cursor advanced
+        QVERIFY2(after.state.pending.contains(QStringLiteral("V1A")), "T-243(b): readFile must record V1A pending");
+        QCOMPARE(after.state.lastSuccessStartTimeGMT, seed.lastSuccessStartTimeGMT); // untouched until promotion
     }
 
     // =====================================================================

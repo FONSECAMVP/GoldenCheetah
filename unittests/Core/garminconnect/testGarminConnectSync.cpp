@@ -23,8 +23,11 @@
 //   - short-circuit any activity already in imported-<uid>.json so the base
 //     machinery never issues a redundant readFile (DES-010 step 5a — Tier-1),
 //   - reject a concurrent sync while one is in progress (REQ-NF-Perf-002).
-// On a successful readFile, GarminConnect records the activity into
-// imported-<uid>.json and advances backfill-state (DES-010 steps 5e + 6).
+// On a successful readFile, GarminConnect records the activity as PENDING in
+// backfill-state (DES-010 step 5e, amended by DEC-080/B-STAGE9-111). The
+// cursor itself is untouched here — DEC-083 makes it a completeness
+// watermark, advanced only by promotion to imported-<uid>.json, a separate
+// step tested in T-244/T-245 below.
 //
 // Python-free: T-047 uses the REAL GarminDownloadChain (worker on a dedicated
 // thread) + a Python-free fake IGarminPyAdapter (records the thread + sinceGmt)
@@ -977,31 +980,219 @@ class TestGarminConnectSync : public QObject
         QVERIFY2(ok, "readFile must stage the fresh activity");
         QCOMPARE(data, makeFitBytes());
 
-        // The download is recorded into imported-<uid>.json with {startTimeGMT,
-        // stagedFilename} (DES-010 step 5e), keyed on Garmin's server-side time.
+        // DEC-080, B-STAGE9-111 — the download is recorded PENDING, not imported.
         GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
         QVERIFY(imported.isOk());
-        QVERIFY2(imported.contains(QStringLiteral("BBB")), "the fresh download must be recorded");
-        QCOMPARE(imported.value(QStringLiteral("BBB")).startTimeGMT, QStringLiteral("2026-07-05 09:15:00"));
-        // DEC-056 confirmed (Inspector, this pass): readFile() computes its own
-        // staged filename from remoteid alone (GarminConnect.cpp:~684/~747),
-        // independent of the entry->name this unit changed — NOT a dependent
-        // of this DEC, so the staged/recorded name is unaffected.
-        QCOMPARE(imported.value(QStringLiteral("BBB")).localFilename, QStringLiteral("garmin-BBB.fit"));
+        QVERIFY2(!imported.contains(QStringLiteral("BBB")), "T-048: an unpromoted download must not read as imported");
+        GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(bf.isOk());
+        QVERIFY2(bf.state.pending.contains(QStringLiteral("BBB")), "T-048: the fresh download must be pending");
+        QCOMPARE(bf.state.pending.value(QStringLiteral("BBB")).startTimeGMT, QStringLiteral("2026-07-05 09:15:00"));
+        QCOMPARE(bf.state.pending.value(QStringLiteral("BBB")).localFilename, QStringLiteral("garmin-BBB.fit"));
         // The pre-existing AAA record is preserved (read-modify-write merge).
         QVERIFY(imported.contains(QStringLiteral("AAA")));
 
-        // backfill-state's lastSuccessStartTimeGMT advances to BBB's startTimeGMT
-        // (DES-010 step 6).
+        // DEC-083 (B-STAGE9-133): the cursor is a completeness watermark now
+        // advanced ONLY by promotion, so this download-time write leaves it
+        // untouched (no prior success existed, so it stays empty).
+        QVERIFY2(bf.state.lastSuccessStartTimeGMT.isEmpty(), "T-048: download time must not advance the cursor");
+
+        // DEC-080, B-STAGE9-111 — no registration consumer on this route (no
+        // rideRegistrationCompleted caller exists here), so BBB is never
+        // promoted and is RE-OFFERED on the next listing.
+        QStringList errors2;
+        QList<CloudServiceEntry*> entries2 = gc.readdir(QString(), errors2, QDateTime(), QDateTime());
+        QCOMPARE(entries2.size(), 1);
+        QCOMPARE(entries2.at(0)->id, QStringLiteral("BBB"));
+    }
+
+    // =====================================================================
+    // T-244 / T-245 — DEC-080, B-STAGE9-111: promotion round-trip and
+    // abandonment via GarminConnect::rideRegistrationCompleted().
+    // =====================================================================
+
+    // T-244 (a) — a successful registration promotes.
+    void rideRegistrationCompletedPromotesPendingToImported()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QVERIFY2(connectAccount(tmp.path()), "pre-condition: the account must be connected (DEC-garmin-020)");
+
+        FakeSyncClient client;
+        GarminActivitySummary a1;
+        a1.activityId = QStringLiteral("PPP");
+        a1.startTimeGMT = QStringLiteral("2026-08-10 00:00:00");
+        client.listResult = {a1};
+        client.originalBytesById[QStringLiteral("PPP")] = makeZip(QStringLiteral("PPP.fit"), makeFitBytes());
+
+        GarminConnect gc(nullptr, &client, tmp.path(), kUid);
+        QStringList errors;
+        QList<CloudServiceEntry*> entries = gc.readdir(QString(), errors, QDateTime(), QDateTime());
+        QCOMPARE(entries.size(), 1);
+
+        QByteArray data;
+        QVERIFY(gc.readFile(&data, entries.at(0)->name, entries.at(0)->id));
+
         GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
         QVERIFY(bf.isOk());
-        QCOMPARE(bf.state.lastSuccessStartTimeGMT, QStringLiteral("2026-07-05 09:15:00"));
+        QVERIFY2(bf.state.pending.contains(QStringLiteral("PPP")), "T-244: readFile must record PPP pending");
 
-        // Second sync: BBB is now already-imported, so it too is short-circuited —
-        // the whole point of the sidecar (no redundant download).
+        gc.rideRegistrationCompleted(QStringLiteral("garmin-PPP.fit"));
+
+        bf = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(bf.isOk());
+        QVERIFY2(!bf.state.pending.contains(QStringLiteral("PPP")), "T-244: promotion must drop the pending entry");
+
+        GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
+        QVERIFY(imported.isOk());
+        QVERIFY2(imported.contains(QStringLiteral("PPP")), "T-244: promotion must record the completion");
+        QCOMPARE(imported.value(QStringLiteral("PPP")).startTimeGMT, QStringLiteral("2026-08-10 00:00:00"));
+        QCOMPARE(imported.value(QStringLiteral("PPP")).localFilename, QStringLiteral("garmin-PPP.fit"));
+
+        // T-254 — DEC-083 clause 2, promotion caller #1
+        // (GarminConnect::rideRegistrationCompleted): the cursor must advance
+        // to the promoted entry's own startTimeGMT.
+        QCOMPARE(bf.state.lastSuccessStartTimeGMT, QStringLiteral("2026-08-10 00:00:00"));
+
+        // T-243 side effect: no second download for an id already in `imported`.
         QStringList errors2;
         QList<CloudServiceEntry*> entries2 = gc.readdir(QString(), errors2, QDateTime(), QDateTime());
         QCOMPARE(entries2.size(), 0);
+    }
+
+    // T-244 (b) — Inspector correction to the original B-STAGE9-111 brief's DO
+    // item 3: the v0 guard must skip the pending write too, since
+    // `recordPendingBackfill` shares `serializeBackfillState`'s unconditional
+    // schema stamp with `saveBackfillState` (both DEC-079/B-STAGE9-127).
+    void v0BackfillStateSkipsPendingWriteToo()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QVERIFY2(connectAccount(tmp.path()), "pre-condition: the account must be connected (DEC-garmin-020)");
+
+        QVERIFY(QDir().mkpath(GarminSidecarStore::directoryFor(tmp.path())));
+        const QString v0Path = GarminSidecarStore::backfillStateFilePath(tmp.path(), kUid);
+        const QByteArray v0Json = QByteArray(
+            "{\"last_success_startTimeGMT\":\"2026-07-01 00:00:00\",\"range_start\":\"\",\"range_end\":\"\"}");
+        {
+            QFile f(v0Path);
+            QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
+            QCOMPARE(f.write(v0Json), qint64(v0Json.size()));
+        }
+        QVERIFY(QFile::setPermissions(v0Path, QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+
+        FakeSyncClient client;
+        GarminActivitySummary a1;
+        a1.activityId = QStringLiteral("V0P");
+        a1.startTimeGMT = QStringLiteral("2026-08-01 00:00:00");
+        client.listResult = {a1};
+        client.originalBytesById[QStringLiteral("V0P")] = makeZip(QStringLiteral("V0P.fit"), makeFitBytes());
+
+        GarminConnect gc(nullptr, &client, tmp.path(), kUid);
+        QStringList errors;
+        QList<CloudServiceEntry*> entries = gc.readdir(QString(), errors, QDateTime(), QDateTime());
+        QCOMPARE(entries.size(), 1);
+
+        QByteArray data;
+        QVERIFY2(gc.readFile(&data, entries.at(0)->name, entries.at(0)->id),
+                 "T-244(b): readFile against v0 must succeed");
+
+        QFile after(v0Path);
+        QVERIFY(after.open(QIODevice::ReadOnly));
+        QCOMPARE(after.readAll(), v0Json); // byte-identical: no schema_version, no pending
+    }
+
+    // T-247 — B-STAGE9-132 correction to T-244(b): DEC-079's amendment KEEPS
+    // recordImported() on the v0 arm (only the backfill-state write is skipped),
+    // so the download-time contract for a legacy athlete is unchanged from
+    // pre-slice-2, while backfill-state stays byte-identical to its seed.
+    void v0ReadFileRecordsImportedAndLeavesBackfillStateByteIdentical()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QVERIFY2(connectAccount(tmp.path()), "pre-condition: the account must be connected (DEC-garmin-020)");
+
+        QVERIFY(QDir().mkpath(GarminSidecarStore::directoryFor(tmp.path())));
+        const QString v0Path = GarminSidecarStore::backfillStateFilePath(tmp.path(), kUid);
+        const QByteArray v0Json = QByteArray(
+            "{\"last_success_startTimeGMT\":\"2026-07-01 00:00:00\",\"range_start\":\"\",\"range_end\":\"\"}");
+        {
+            QFile f(v0Path);
+            QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
+            QCOMPARE(f.write(v0Json), qint64(v0Json.size()));
+        }
+        QVERIFY(QFile::setPermissions(v0Path, QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+
+        FakeSyncClient client;
+        GarminActivitySummary a1;
+        a1.activityId = QStringLiteral("V0Q");
+        a1.startTimeGMT = QStringLiteral("2026-08-02 00:00:00");
+        client.listResult = {a1};
+        client.originalBytesById[QStringLiteral("V0Q")] = makeZip(QStringLiteral("V0Q.fit"), makeFitBytes());
+
+        GarminConnect gc(nullptr, &client, tmp.path(), kUid);
+        QStringList errors;
+        QList<CloudServiceEntry*> entries = gc.readdir(QString(), errors, QDateTime(), QDateTime());
+        QCOMPARE(entries.size(), 1);
+
+        QByteArray data;
+        QVERIFY2(gc.readFile(&data, entries.at(0)->name, entries.at(0)->id), "T-247: readFile against v0 must succeed");
+
+        QFile after(v0Path);
+        QVERIFY(after.open(QIODevice::ReadOnly));
+        QCOMPARE(after.readAll(), v0Json); // byte-identical: no schema_version, no pending
+
+        GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
+        QVERIFY(imported.isOk());
+        QVERIFY2(imported.contains(QStringLiteral("V0Q")), "T-247: v0 must still record at download time");
+    }
+
+    // T-245 — abandonment: readFile alone must never self-promote. Only an
+    // explicit rideRegistrationCompleted() call (the registration-succeeded
+    // signal) may move an entry out of pending; withholding it (an abandoned
+    // or failed registration) must leave `imported` and `pending` exactly as
+    // readFile left them.
+    void abandonedRegistrationLeavesEntryPendingNotImported()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QVERIFY2(connectAccount(tmp.path()), "pre-condition: the account must be connected (DEC-garmin-020)");
+
+        FakeSyncClient client;
+        GarminActivitySummary a1;
+        a1.activityId = QStringLiteral("QQQ");
+        a1.startTimeGMT = QStringLiteral("2026-08-11 00:00:00");
+        client.listResult = {a1};
+        client.originalBytesById[QStringLiteral("QQQ")] = makeZip(QStringLiteral("QQQ.fit"), makeFitBytes());
+
+        GarminConnect gc(nullptr, &client, tmp.path(), kUid);
+        QStringList errors;
+        QList<CloudServiceEntry*> entries = gc.readdir(QString(), errors, QDateTime(), QDateTime());
+        QCOMPARE(entries.size(), 1);
+
+        QByteArray data;
+        QVERIFY(gc.readFile(&data, entries.at(0)->name, entries.at(0)->id));
+
+        // No rideRegistrationCompleted() call here — the registration is
+        // treated as abandoned/failed.
+        GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
+        QVERIFY2(!imported.isOk() || !imported.contains(QStringLiteral("QQQ")),
+                 "T-245: an abandoned registration must not promote");
+        GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(bf.isOk());
+        QVERIFY2(bf.state.pending.contains(QStringLiteral("QQQ")), "T-245: the entry must remain pending");
+
+        // Tier-1 dedup consults `imported` only, so it is RE-OFFERED, not lost.
+        QStringList errors2;
+        QList<CloudServiceEntry*> entries2 = gc.readdir(QString(), errors2, QDateTime(), QDateTime());
+        QCOMPARE(entries2.size(), 1);
+        QCOMPARE(entries2.at(0)->id, QStringLiteral("QQQ"));
+
+        // A call naming a DIFFERENT staged file must not disturb QQQ either.
+        gc.rideRegistrationCompleted(QStringLiteral("garmin-ZZZ.fit"));
+        bf = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(bf.isOk());
+        QVERIFY2(bf.state.pending.contains(QStringLiteral("QQQ")), "T-245: an unrelated id must not promote QQQ");
     }
 };
 

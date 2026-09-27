@@ -296,6 +296,9 @@ class CloudService : public QObject {
             { Q_UNUSED(garminUserId); Q_UNUSED(tokenBlob); }
         virtual void disconnectService() {}
 
+        // DEC-080, B-STAGE9-111.
+        virtual void rideRegistrationCompleted(const QString &remoteId) { Q_UNUSED(remoteId); }
+
         // what is the path to the home directory on this store
         virtual QString home() { return "/"; }
 

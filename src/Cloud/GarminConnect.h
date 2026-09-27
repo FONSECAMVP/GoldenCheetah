@@ -112,6 +112,9 @@ class GarminConnect : public CloudService
     void persistConnectSuccess(const QString& garminUserId, const QString& tokenBlob) override;
     void disconnectService() override;
 
+    // DEC-080, B-STAGE9-111.
+    void rideRegistrationCompleted(const QString& remoteId);
+
     // REQ-007 closure Slice 3 — the DEC-016 retry table: ORIGINAL(FIT) →
     // unzip+sniff → stage garmin-<id>.fit; RateLimited fails fast (no retry);
     // Network/Unknown/not-FIT retry once as TCX → stage garmin-<id>.tcx.
@@ -251,6 +254,9 @@ class GarminConnect : public CloudService
     // into imported-<uid>.json and advance backfill-state's lastSuccessStartTimeGMT
     // to its startTimeGMT. No-op when the config dir / uid cannot be resolved.
     void recordImport(const QString& activityId, const QString& stagedFilename);
+
+    // DEC-080, B-STAGE9-111.
+    static QString activityIdFromStagedFilename(const QString& stagedFilename);
 
     // B-R007-01 / REQ-NF-Perf-003: post the readComplete notification as a QUEUED
     // self-post (deferred onto the event queue via m_client's event loop, on the

@@ -494,6 +494,11 @@ class TestGarminBackfillDialogLifetime : public QObject
         QVERIFY2(imported.contains(QStringLiteral("act-zip-1")),
                  "a RideCache-confirmed import must be recorded complete");
 
+        // T-255 — DEC-083 clause 2, promotion caller #2 (GarminBackfillDialog's
+        // wizard-completion sweep): the cursor must advance to the promoted
+        // entry's own startTimeGMT.
+        QCOMPARE(bf2.state.lastSuccessStartTimeGMT, startTimeGMT);
+
         delete dialog; // running == false here; ~GarminBackfillDialog closes+deletes store
         delete ctx;
     }
