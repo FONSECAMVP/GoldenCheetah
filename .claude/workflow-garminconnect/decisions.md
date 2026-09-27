@@ -96,6 +96,9 @@ Compact schema per `references/formats.md` § `decisions.md`. **The recap source
 | DEC-079 | B-STAGE9-79 slice 3, the legacy migration — where it runs and how a pre-slice-2 `imported` row is classified → DIALOG PRE-START SELF-CLASSIFICATION: an absent `schema_version` loads as version 0 and is the ONLY thing that identifies a legacy sidecar pair, because an individual `imported` row is byte-for-byte indistinguishable from a current completion row; the dialog is the one seam that holds both the uid/config-dir and a populated `RideCache`, so it exact-matches each legacy row and moves the unmatched ones into `pending` before `GarminBackfillController::start()` | accepted (Inspector, on `s979_record_split_investigator`'s three scored designs — ordinary technical placement call on Garmin-side code) | 2026-09-27 |
 | DEC-080 | B-STAGE9-111 cannot be built without touching `CloudService` code DEC-077 froze — whether to abandon DEC-071's both-routes requirement or narrow the freeze → NARROW THE FREEZE: DEC-077 stays absolute for REPAIRS and REWORKS of shared import logic (the `RideImportWizard` use-after-free, `ArchiveFile.cpp`'s GZIP arm, `CloudService.cpp:565`'s `gUncompress`) and is amended to permit an ADDITIVE, default-no-op virtual extension point, because every one of the investigator's three designs must add a call after ride registration and DEC-071's both-routes requirement is the reason this branch exists | accepted (Inspector, on `s979_record_split_investigator`'s explicit amendment-required verdict, unit B-STAGE9-111-design — ordinary scope call between two of this project's own accepted decisions, no external element) | 2026-09-27 |
 | DEC-081 | Garmin backfill timestamps are compared as TEXT at five sites while the adapter forwards whatever ISO-8601 spelling Garmin sent (B-STAGE9-128) — canonicalise, or make C++ instant-aware → CANONICALISE AT THE ADAPTER BOUNDARY: the adapter already owns the authoritative parse, so normalising each accepted summary to one `yyyy-MM-dd HH:mm:ss` UTC spelling stops raw variants ever reaching C++ persistence or comparison, instead of duplicating instant policy across store, controller, dialog and the test fake | accepted (Inspector, on `s979_record_split_investigator`'s three scored options, unit B-STAGE9-128-design — ordinary technical call on Garmin-side code) | 2026-09-27 |
+| DEC-082 | DEC-079's slice-3 legacy migration must move rows between `imported-<uid>.json` and `backfill-state-<uid>.json`, whose locks are per-path, and BOTH naive write orders lose data on a crash (B-STAGE9-130) → A THREE-PHASE, v0-PRESERVING STORE TRANSACTION: one new store entry point holds both path locks in a fixed order and writes state(v0+pending) → imported prune → state(v1), so the accepted `schemaVersion == 0` gate doubles as the restart proof and no new durable state is introduced | accepted (Inspector, on `s979_record_split_investigator`'s three scored options, unit B-STAGE9-130-options, and `garmin_codex_reviewer`'s independent SOUND-WITH-CONDITIONS pre-check, unit B-STAGE9-130-precheck — ordinary persistence-mechanism call on Garmin-side code, no external element) | 2026-09-27 |
+| DEC-083 | `lastSuccessStartTimeGMT` is written at download time but consumed as a completeness claim, which is one contradiction behind three findings (B-STAGE9-112, -126, -133 — the last being that the drop invented to fix the first two also runs on SUCCESS and wipes the cursor just advanced) → THE CURSOR BECOMES A COMPLETENESS WATERMARK: `recordImport()` stops writing it, promotion advances it only when no pending row at or before that time remains, abandonment keeps DEC-078's clear, the controller excludes only strictly-earlier entries, and already-pending ids are skipped in controller processing | accepted (Inspector, after `s979_record_split_investigator`'s pre-check rejected preserve-on-success alone, unit B-STAGE9-133-precheck, and `garmin_codex_reviewer` returned UNSOUND on the cheaper three-part narrowing and named this shape materially safer, unit B-STAGE9-133-dec-precheck — ordinary technical call on Garmin-side code, no external element) | 2026-09-27 |
+| DEC-084 | `startTimeGMT` is compared as TEXT, or parsed by one of three byte-identical helpers whose `setTimeSpec(Qt::UTC)` REINTERPRETS an explicit offset instead of converting it — one defect behind four findings (B-STAGE9-138 twice-patched, -143, -145, -146), and the third patch of one recognizer was due → ONE OFFSET-CORRECT INSTANT PRIMITIVE owns every comparison: header-only `src/Cloud/GarminTime.h` branches on `timeSpec()` (no zone in the spelling → DECLARE UTC; `Z` or an offset → CONVERT via `toUTC()`), the three copies are deleted, and the store's clause-2 guard plus the controller's filter, range bounds and OLDEST-first sort all compare its results. Complements DEC-081, supersedes nothing; the dialog's DEC-071 strict copy stays out | accepted (Inspector, taking the ARCHITECTURAL arm of inspector-cycle's repair-round gate one round early on a second consecutive blocker in the same three lines; the Qt semantics table it rests on measured independently by `s979_record_split_investigator`, unit DEC-084-semantics, which also proved the remedy first written on -138's row would have regressed the only spelling live data carries — ordinary technical call on Garmin-side code, no external element) | 2026-09-27 |
 
 ### Dormant index
 
@@ -4124,3 +4127,266 @@ Binding constraints on the implementation:
 No REQ/DES row changes. Regression coverage the investigator named: an equivalent-instant
 cursor/summary pair (`...+00:00` vs `...Z`) must neither re-download nor strand — one test in
 `testGarminBackfillController.cpp`, its twin in `testGarminSidecarStore.cpp`.
+
+## DEC-082 — slice 3's legacy migration persists as a three-phase, v0-preserving store transaction
+
+- Status: **accepted 2026-09-27** (Inspector, on three scored options from
+  `s979_record_split_investigator` (unit B-STAGE9-130-options) and an independent pre-check from
+  `garmin_codex_reviewer` (unit B-STAGE9-130-precheck) that returned SOUND-WITH-CONDITIONS. Two
+  agents, briefed separately, reached the same mechanism. Ordinary technical call — not a gate.)
+- Reversibility: medium — one new store entry point and its private helpers. An un-migrated
+  sidecar pair keeps loading exactly as it does now, so reverting means deleting the entry point.
+- Decided / last-reviewed: 2026-09-27
+- Serves: B-STAGE9-130 (blocking), and through it B-STAGE9-79 slice 3. Implements DEC-079's
+  placement; does not change it. Narrowly amends DEC-075 (see below).
+- Dependents: `src/Cloud/GarminSidecarStore.{h,cpp}`, `src/Cloud/GarminBackfillDialog.cpp`,
+  `unittests/Core/garminconnect/testGarminSidecarStore.cpp`,
+  `unittests/Core/garminconnect/testGarminBackfillDialogLifetime.cpp`.
+- Origin: B-STAGE9-130.
+
+### The problem that forces a decision
+
+DEC-079 settled WHERE the migration runs and HOW a legacy row is classified. It did not settle how
+the move is persisted, and it cannot be done with the store as it stands. The two sidecars have
+independent per-path locks (`GarminSidecarStore.cpp:150-169`), so the pass is not atomic, and
+neither order converges: state-then-prune leaves v1 with the legacy rows still in `imported` and
+the `schemaVersion == 0` gate never retries; prune-then-state leaves v0 with the misses
+unreconstructable. `serializeBackfillState` (`.cpp:121-137`) stamps the current version on every
+write and is shared by all three state writers, and `recordImported` (`.cpp:235-259`) only inserts.
+
+### The decision
+
+One new store entry point — `migrateLegacyImported(configDir, uid, unmatched)` — acquires both
+resolved-path locks in one documented global order, holds them across the whole pass, and writes:
+(1) backfill-state merging the unmatched rows into `pending` while KEEPING `schema_version` 0,
+(2) `imported-<uid>.json` rewritten without those rows, (3) backfill-state preserving `pending` and
+stamping v1. A re-run is still gated v0 after phase 1 or phase 2 and finishes the pass; only the
+fully split pair ever exposes v1. Option A scored 5/4/4/5.
+
+### Conditions, from the pre-check — these are binding, not advisory
+
+1. Phase 1 needs a PRIVATE explicit-version state writer. Do NOT make the public writers honour
+   `BackfillState::schemaVersion`: a default-constructed state is v0, which would leak a v0 stamp
+   into the NotFound/Torn self-healing writes. Every existing public writer stays pinned to v1.
+2. Both locks in one documented global order, held from load through phase 3.
+3. Phases 1 and 3 must use unlocked private helpers — `saveBackfillState`,
+   `recordPendingBackfill` and `dropPendingBackfill` each reacquire the same non-recursive mutex.
+   `loadBackfillState` is safe while held; it does not lock (`.cpp:262-318`).
+4. Phase 1 MERGES into existing `pending` rather than replacing it, the prune is one atomic
+   map rewrite, and v1 is stamped only after that rewrite succeeds. DEC-075's refusals
+   (SidecarPermissionsRejected, PendingManifestMalformed) apply before phase 1.
+5. Failure-injection coverage after each phase, each retried from its persisted intermediate.
+6. This is a narrow amendment to DEC-075, whose literal contract names
+   `recordPendingBackfill`/`dropPendingBackfill` as the only `pending` mutators: this one-shot,
+   store-local migration is the sole addition. Callers gain no pending-mutation ability.
+
+### The limit of the guarantee
+
+The two locks serialise WRITERS, not readers. A concurrent `loadImported()` can observe the
+deliberate v0, pruned-`imported` intermediate after phase 2 (`.cpp:157-158,201-232`). That does not
+affect crash convergence, and the mechanism must not be described as giving readers an atomic view
+of the pair.
+
+### Why not the alternatives
+
+A durable migration-intent journal (4/4/3/4) also converges, but adds a third sidecar file and with
+it a third permission/parse/recovery surface, to buy a property the v0 gate already provides. A
+state-owned completion projection that leaves `imported` inert (4/2/2/2) removes the cross-file move
+entirely, but requires a second long-lived on-disk layout, a dual-layout branch on every load, and
+would make every cursor write carry a potentially lifetime-sized completion map — against DEC-075's
+narrow state-mutator contract.
+
+### Cascade impact
+
+No REQ/DES row changes. B-STAGE9-130 becomes builder-ready on this decision. Tests: T-240 (reserved
+for slice 3 by DEC-079) plus the per-phase failure-injection arms condition 5 requires.
+
+## DEC-083 — the backfill cursor becomes a completeness watermark, advanced only by promotion
+
+- Status: **accepted 2026-09-27** (Inspector, on the independent pre-checks that killed the two
+  cheaper shapes: `s979_record_split_investigator` unit B-STAGE9-133-precheck rejected
+  preserve-on-success alone, and `garmin_codex_reviewer` unit B-STAGE9-133-dec-precheck returned
+  **UNSOUND** on the three-part narrowing and named the watermark materially safer. Ordinary
+  technical call on Garmin-side code — not a gate.)
+- Reversibility: medium — the cursor write moves from download time to promotion time behind the
+  store's own API; reverting means moving it back and restoring the unconditional clear.
+- Decided / last-reviewed: 2026-09-27
+- Serves: B-STAGE9-133 (blocking), and through it B-STAGE9-111 and B-STAGE9-79. Narrows DEC-078's
+  drop predicate rationale; keeps DEC-075's single-writer rule and DEC-076's locking untouched.
+- Dependents: `src/Cloud/GarminSidecarStore.{h,cpp}`, `src/Cloud/GarminConnect.cpp`,
+  `src/Cloud/GarminBackfillController.cpp`, `src/Cloud/GarminBackfillDialog.cpp`.
+
+### The problem that forces a decision
+
+`lastSuccessStartTimeGMT` is written at DOWNLOAD time but consumed as if it meant "everything at or
+before this is durably imported". Three findings are the same contradiction: B-STAGE9-112 (a pending
+entry at the cursor is unreachable), B-STAGE9-126 (any pending entry before it is unreachable), and
+now B-STAGE9-133 (the drop invented to fix those two also runs on SUCCESS, so every completed import
+wipes the cursor it just advanced). A fourth narrowing of the drop predicate would be the third
+round on one mechanism.
+
+### The decision
+
+The cursor means completeness, and only promotion may move it. Five clauses, all binding:
+
+1. `recordImport()` no longer writes the cursor. Download time writes a PENDING row and nothing
+   else. This structurally removes the pre-check's condition 1 — a failed pending write can no
+   longer be followed by a cursor that skips the activity.
+2. Promotion is its own store operation: record imported, remove the pending row, and advance the
+   cursor to that entry's `startTimeGMT` ONLY when no pending row at or before that time remains.
+   It takes the state-path lock across load and write, preserves every other pending row, applies
+   the same refusal rules as the existing writers, and keeps imported-write-before-pending-removal.
+3. `dropPendingBackfill` keeps DEC-078/B-STAGE9-126 clearing, for ABANDONMENT only. Under clause 2
+   the cursor can no longer sit past an unpromoted row, so the clear is now defence in depth — kept
+   because it costs re-listing, never loss, and T-235/T-241 pin it.
+4. `GarminBackfillController`'s exclusion filter drops only a `startTimeGMT` STRICTLY BEFORE the
+   prior success, not at-or-before. An equal-second sibling stays reachable; the adapter's listing
+   bound is already inclusive (`gc_garmin_adapter/garmin_client.py:431`, deliberate per
+   B-STAGE9-25) and Tier-1 imported-id dedup handles the duplicate.
+5. Controller processing skips ids already PENDING (pre-check condition 3). Without this, clause 4
+   lets an at-cursor pending row be re-downloaded and re-staged every run, since Tier-1 dedup reads
+   `imported`, not `pending`. The dialog's own pending re-offer is unaffected.
+
+### The limit of the guarantee — stated, not implied
+
+This makes the cursor honest about what HAS been imported. It does not make an activity published
+late, whose start time is strictly older than the watermark, reachable by incremental sync: nothing
+in the cursor model can, and the pre-check said so. That case belongs to the backfill dialog's
+explicit range, and the cost of the gap is re-listing, not loss — the same scope statement
+B-STAGE9-127 records. No lookback window is added here; adding one would need its own measurement.
+
+### Why not the alternatives
+
+- **Preserve the cursor on success, change nothing else** (the obvious fix): UNSOUND. A same-second
+  sibling that never got a pending row is excluded for ever by the controller's at-or-before filter
+  — B-STAGE9-112's class, re-opened. Rejected by two independent pre-checks.
+- **Preserve on success + the clause-4 filter + a promotion path, without the watermark**
+  (reliability 4 / scalability 4 / maintainability 4 / best practices 4): the pre-check found it
+  still leaves a failed pending write followed by an advanced cursor, and it keeps the cursor
+  meaning two things at once. Cheaper, and a fourth round on the same mechanism.
+- **This decision** (5 / 4 / 4 / 5): costs repeated listing while a row stays pending, plus the
+  promotion-and-cursor coordination in clause 2. Bought: the cursor's stated meaning becomes true by
+  construction, and the -112/-126/-133 class closes rather than narrows again.
+- **Drop the cursor entirely and dedup only by id**: rejected. Listing every activity on every sync
+  is a per-sync cost paid for ever against a Garmin API this project already rate-limits for.
+
+### Cascade impact
+
+No REQ/DES row changes. B-STAGE9-133 becomes builder-ready on this decision; B-STAGE9-111 cannot be
+committed before it lands. Tests: a success pin per promotion caller including the equal-time sibling
+(pre-check condition 4), plus a clause-5 pin that a pending id is not re-downloaded. T-235/T-239/
+T-241 stay as ABANDONMENT contracts and must not be rewritten to cover promotion.
+
+## DEC-084 — one offset-correct instant primitive owns every Garmin timestamp comparison
+
+- Status: **accepted 2026-09-27** (Inspector, taking the ARCHITECTURAL arm of inspector-cycle's
+  repair-round gate one round early: -138 produced two consecutive blockers inside the same three
+  lines, and a fourth narrowing of one recognizer is what that gate exists to refuse. Ordinary
+  technical call on Garmin-side code — not a human-in-the-loop gate.)
+- Reversibility: high — the primitive is additive; reverting means restoring the per-file copies.
+- Decided / last-reviewed: 2026-09-27
+- Serves: B-STAGE9-138, -143, -145, -146 (all blocking) and -144 (test gap); through them
+  B-STAGE9-133, and so DEC-083's clause-2 and clause-4 guarantees. Complements DEC-081 (which
+  normalises at the adapter) — it does NOT supersede it, and neither alone is sufficient.
+- Dependents: `src/Cloud/GarminTime.h` (new), `src/Cloud/GarminSidecarStore.cpp`,
+  `src/Cloud/GarminConnect.cpp`, `src/Cloud/GarminBackfillController.cpp`.
+
+### The problem that forces a decision
+
+Four findings are one defect: Garmin's `startTimeGMT` is compared as TEXT, or parsed by one of three
+byte-identical hand-rolled helpers that call `setTimeSpec(Qt::UTC)` — which REINTERPRETS the parsed
+fields instead of converting them, so an explicit-offset spelling names the wrong instant. B-STAGE9-138
+was patched twice inside the same three lines (text `>` → parsed `>`), and each patch left the class
+alive at sites the patch did not touch: the store's clause-2 `<=` (-143), two more copies of the helper
+(-145), and the controller's ordering and range compares (-146) — including the `std::sort` at
+`GarminBackfillController.cpp:363` that DEC-083's "the cursor only ever advances" silently rests on.
+
+### The measured semantics this decision is built on
+
+Verified on this checkout's Qt 6.8.2 under Australia/Hobart (UTC+10) by
+`s979_record_split_investigator`, unit DEC-084-semantics:
+
+| input | `setTimeSpec(Qt::UTC)` | `toUTC()` | correct |
+|---|---|---|---|
+| `2026-09-26 09:54:01` (naive; the ONLY live spelling) | `09:54:01Z` | `2026-09-25T23:54:01Z` | setTimeSpec |
+| `2026-09-01T00:00:00Z` | `00:00:00Z` | `00:00:00Z` | either |
+| `2026-09-01T02:00:00+02:00` | `02:00:00Z` | `00:00:00Z` | toUTC |
+| `2026-09-01T02:00:00` (ISO, naive) | `02:00:00Z` | `2026-08-31T16:00:00Z` | setTimeSpec |
+
+So NEITHER operation is correct alone, and the remedy shape first written onto -138's row
+(`toUTC()`, never `setTimeSpec`) would have REGRESSED the naive spelling — the only one live sidecars
+carry, and the exact form DEC-081's accepted adapter canonicaliser emits. `timeSpec()` after the parse
+distinguishes the cases reliably (`Qt::LocalTime` for naive, `Qt::UTC` for `Z`, `Qt::OffsetFromUTC`
+for an explicit offset), so the branch is decidable in-process.
+
+### The decision
+
+One primitive, `garminInstantFromString()`, in a new header-only `src/Cloud/GarminTime.h`, is the
+only way any comparison site turns a `startTimeGMT` into an instant. Four clauses, all binding:
+
+1. It parses `yyyy-MM-dd HH:mm:ss` first, then `Qt::ISODate`, then branches on `timeSpec()`: a
+   spelling that carried NO zone is `startTimeGMT`'s own UTC wall clock and is DECLARED UTC
+   (`setTimeSpec`); a spelling that carried `Z` or an explicit offset already names an instant and is
+   CONVERTED (`toUTC()`). It returns an invalid `QDateTime` on an unparseable input, and every caller
+   must keep treating invalid as "do not act", never as a zero instant.
+2. The three lenient copies — `GarminConnect.cpp:119-126`, `GarminBackfillController.cpp:105-112`,
+   `GarminSidecarStore.cpp:44-51` — are deleted and call the primitive.
+3. Every remaining TEXT comparison of a `startTimeGMT` compares primitive results instead:
+   `GarminSidecarStore.cpp:453-460` (clause-2 survivor `<=`, -143) and
+   `GarminBackfillController.cpp:352` (clause-4 filter), `:354` (range bounds), `:363` (the
+   OLDEST-first sort comparator, -146). Inclusive/exclusive boundaries are preserved exactly as
+   DEC-083 clause 2 and clause 4 state them; this changes the comparison's basis, not its edges.
+4. `GarminBackfillDialog.cpp:47-53` is OUT of scope and keeps its own copy. Its missing ISO fallback
+   is deliberate (DEC-071: an unparseable pending string stays pending rather than being guessed), so
+   routing it through the lenient primitive would convert a refusal into a match.
+
+5. **Invalid instants: no site may rely on their ordering** (added 2026-09-27 on B-STAGE9-147,
+   measured on this Qt 6.8.2 build — an invalid `QDateTime` compares less than every valid one, which
+   is a property this decision refuses to depend on). Every comparison site tests validity EXPLICITLY
+   and takes its own conservative branch, and the branch differs by which guarantee the site protects:
+   `GarminSidecarStore.cpp`'s clause-2 survivor guard treats an unparseable pending row as SURVIVING,
+   so the cursor does not advance (protects completeness); `GarminBackfillController.cpp`'s clause-4
+   filter and range bounds do NOT exclude an entry whose `startTimeGMT` fails to parse (protects
+   reachability — the native comparison would drop it from the listing for ever); and the OLDEST-first
+   sort comparator orders on the `(isValid, instant)` PAIR, so invalids group deterministically at one
+   end. That last point is not stylistic: a comparator that simply returns `false` when either side is
+   invalid makes every invalid entry equivalent to every valid one, equivalence stops being transitive,
+   the comparator is no longer a strict weak ordering, and `std::sort` becomes undefined behaviour.
+
+### The limit of the guarantee — stated, not implied
+
+This makes every comparison instant-correct for any spelling Garmin sends. It does NOT normalise what
+is PERSISTED: the stored cursor and pending rows keep the server's verbatim string, so a sidecar can
+still hold two spellings. That is DEC-081's job, and DEC-081 stays owed. Nor does it revisit
+DEC-083's limit — an activity published late, strictly older than the watermark, is still not
+reachable by incremental sync.
+
+### Why not the alternatives
+
+Scored reliability / scalability / maintainability / best-practices:
+
+- **A — header-only shared primitive (CHOSEN), 5/5/5/5.** One definition, no source-list edit in
+  either build system, so it cannot be silently absent from the qmake/installer build the way a new
+  `.cpp` can (`garmin-build-system-duality`); a missing include fails LOUDLY at compile time. All
+  three TUs and all 12 CMake garmin targets already compile the files that would include it.
+- **B — new `GarminTime.{h,cpp}` translation unit, 5/5/5/3.** Identical semantics, but it must be
+  added to BOTH `src/src.pro` and `src/CMakeLists.txt`. For a twelve-line pure function that buys
+  nothing, and this project has already shipped a REQ that was present in CMake and absent from
+  qmake. Rejected on build-system risk alone.
+- **C — repair the offset branch in each of the three copies in place, 2/1/1/1.** This is round 4 of
+  the same patch. It leaves three definitions free to drift, does not touch -143's or -146's text
+  compares at all, and the repair-round gate exists to refuse exactly this.
+- **D — rely on DEC-081's adapter canonicaliser alone, 2/3/4/2.** Rejected as insufficient, not
+  wrong: it cannot fix sidecars already on disk, it is unbuilt, and it leaves the C++ comparisons
+  correct only by the adapter's good behaviour. Defence in depth at the comparison is the point.
+
+### Tests owed (ids from STATE.md COUNTS, next T-258)
+
+- **T-258** — the primitive's own table: all four spellings above, each asserted against its absolute
+  UTC instant, plus an unparseable input returning invalid. This is the positive case B-STAGE9-144
+  says T-256/T-257 lack; a refusal-only suite cannot tell a working parser from a dead one.
+- **T-259** — the naive-spelling regression guard: a `yyyy-MM-dd HH:mm:ss` cursor and entry must
+  compare and advance identically regardless of the host zone. Run it under a non-UTC `TZ` so the
+  `toUTC()` trap above would fail it.
+- **T-260** — the controller's OLDEST-first ordering (-146): a listing mixing two spellings sorts by
+  instant, and the store's monotonic gate then advances rather than stalling.

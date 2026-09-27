@@ -67,79 +67,22 @@ per-file detail → wiki/map-detail.md (a file under a rolled-up dir IS mapped, 
 
 ## REGISTRIES — what exists (allocate next; never reuse, never re-create)
 RULE: registries POINT. No per-id detail, no per-id status here (LSN-035). Ledger = .claude/workflow-garminconnect/
-REQ  garmin:001–029 + 16 REQ-NF-* ids (10 traceability rows)   prd.md            next:garmin-030
-DEC  garmin:001–069                 decisions.md ## Decision index  next:garmin-070
-     REGISTRIES line was stale (still read "next:garmin-044") — corrected 2026-09-12 by the
-     Inspector, cross-verified against decisions.md's true max (`grep -oE 'DEC-[0-9]+'
-     decisions.md | sort -u`, highest DEC-050), no code changed.
-     43 allocated, all 43 have an ENTRY section as of 2026-09-05. The index carries 43 DEC rows + 1
-     `DEC-034/036 AMENDMENT` row.
-     DEC-040 = PROVIDER WATCHDOG (W3/S-1). The parked auto-downloader teardown draft is NOT DEC-040 and
-     carries NO id — it was styled "DEC-040" in 2026-08-26 session narrative only. See DEC-040's ID NOTE.
-     DEC-042/043 (2026-09-05) = the two Stage-5 release blockers (B-R028-17, A3-R028e-F1), accepted
-     (Option A / Option C respectively) and BOTH BUILT + execution-verified 2026-09-05 (TEST-158;
-     TEST-159+160) — both findings closed on executed evidence; see decisions.md entries for trade space.
-DES  garmin:001–014 (+001a,003a)    design.md                       next:garmin-015
-TEST garmin:T-001–T-209 (T-143–T-153 = DEC-040; T-161–T-163 = REQ-020 wizard; T-164–T-166 = REQ-022 OpenData; T-167–T-169 = REQ-023 store/uncompress; T-170–T-172 = REQ-024 Strava loop; T-176 REQ-009; T-177 REQ-014; T-179+T-194-196 REQ-010; T-201 REQ-013; T-202 REQ-NF-Build-001 (Stage 8 build-guard); T-203 REQ-NF-Sec-001+003 (Stage 8 sec-guard); T-204–T-206 REQ-NF-Reliab-001+002 (Stage 8 retry-schedule/torn-read/SIGKILL-write); T-207 REQ-NF-Obs-001 (Stage 8 structured qDebug trace); T-208 REQ-NF-i18n-001 (Stage 8 tr() coverage guard); T-209 B-STAGE9-12 (Stage 9 stderr-buffering fix + main.cpp source contract); T-210–T-211 B-STAGE9-29/DEC-056 (local-start-time entry naming) — T-212–T-226 B-STAGE9-78/DEC-070/-072/-073 (payload accept-set); per-id build state → traceability.md)   next:garmin-T-227
-     REGISTRIES line was stale (still read "next:garmin-T-173") — corrected 2026-09-12 by the
-     Inspector during the inspector-cycle pilot run, cross-verified against the ledger's true
-     max (grep for T-[0-9]+/TEST-[0-9]+ across traceability.md/decisions.md/findings.md/
-     STATE.md), no code changed.
-     T-154–T-156 BUILT 2026-09-04 (DEC-033: out-param correctness + syncNext/downloadNext clause-(e)
-     coverage, all passing). TEST-076 (pre-existing id, allocated long before this session, previously
-     unused/dead-code-pinned) also BUILT 2026-09-04 — closes B-R027-09. T-157 BUILT 2026-09-04 (B-R028-01
-     coverage: InSaveRideAutoProcess + restartInsteadOfRefresh combination) — closes B-R028-01, discharging
-     Stage 2 in full. T-158 BUILT 2026-09-05 (DEC-042: aParentTeardownInsideSaveRidesSecondAutoProcess
-     MustNotFreeItUnderThat — 99/99 both backends, orchestrator-independently mutation-proven) — closes
-     B-R028-17, one of Stage 5's two release blockers. T-159/T-160 BUILT 2026-09-05 (DEC-043:
-     readComplete-after-owner-teardown + athleteClose cancel/join/delete, watchdog 170/170 both backends,
-     orchestrator-independently mutation-proven) — closes A3-R028e-F1, the second and last one.
+REQ  garmin:001–029 + 16 REQ-NF-* ids (10 traceability rows)   prd.md                        next:garmin-030
+DEC  garmin:001–084 (index + full entries; DEC-040 ID NOTE covers the "parked teardown draft"
+     mislabel — cite decisions.md, never this line)   decisions.md ## Decision index   next:garmin-085
+DES  garmin:001–014 (+001a,003a)    design.md                                          next:garmin-015
+TEST garmin:T-001–T-260 (per-id REQ/DEC mapping + build state → traceability.md ONLY;
+     T-240 reserved by DEC-079/-082, T-258..T-260 by DEC-084, T-246 a declared never-written
+     gap; a grep for the max also sees a next-pointer, so trust this line and STATE COUNTS)
+     traceability.md                                                                  next:garmin-T-261
 VAL  garmin:001–018                 traceability.md ## Validations run · validations/archive/   next:garmin-019
 LSN  001–085  (contiguous; LSN-048 has an index line AND a cold entry — that is the file's two-tier
-     shape, not a duplicate)   lessons.md                          next:086
-     081 = caller-owned test budget · 082 = an unreadable input reported as non-blocking is failing
-     open · 083 = a gate whose actions cannot change its own pass criteria · 084 = `git checkout --`
-     on a file with PRIOR uncommitted changes discards all of them, not just the intended one ·
-     085 = a fixture-growth-cap / split-by-mechanism rule is a SKILL-level gap, not yet a rule — see
-     ORCH-061; lesson-miss, owed upstream to whoever maintains .claude/skills/quality-gated-dev-workflow/
-     lessons.md itself was compacted 2026-09-06 (librarian Job-3): hot index rows capped, full narrative
-     moved to each id's own `## LSN-NNN` cold entry — nothing deleted, see archive/state-history.md § 12.
-F    no F-### namespace — findings are `<cycle>-<seq>`; process series ORCH-001–062   next:ORCH-063
-     060 = informational, accept-with-note: 18 full `ctest -L garmin-fast` reruns logged across this
-     branch vs orchestration.md's one-run-per-final-content-version rule — lean-evidence protocol
-     adopted going forward (targeted test + 1 mutation per mechanism; full suite once per commit-ready
-     handoff; both Qt backends only for changed async/lifecycle targets)
-     061 = informational, deferred: a single QTest binary grew to ~8,874 lines / 87+ slots / a 512-seed
-     fuzzer, split declined (QTest can select functions but not exclude one) — proposed skill-level
-     fixture-growth-cap rule, NOT a project fix; see LSN-085
-     findings.md was compacted 2026-09-06 (librarian Job-3): 319 of 373 pre-existing rows had an
-     oversized cell, all capped to a pointer into archive/findings-detail.md — nothing deleted, bucket
-     membership verified identical by clv_findings.py before/after. Row count 373 → 375 (+ORCH-060/061).
-     052 = a real _minimal-QPA test-harness hang (kdialog config-write race), reproduction attempted and
-     NOT reproduced via ctest — non-blocking, does not affect the DEC-033/TEST-076 commit's own evidence
-     053 = shapeBC_timeoutBreaksTheListing's site-10 row is mutation-blind (single-activity fixture cannot
-     see a continue-vs-break defect); its new Cancelled sibling built alongside T-147 piece 3 does not have
-     this gap and is the genuine killing test for that site today
-     054 = OPEN, self-inflicted: `git checkout --` during piece 3b's mutation-proof restore wiped
-     CloudService.h's uncommitted DEC-040 Stage 2 pieces 1+2 content; reconstructed same session from
-     decisions.md + CloudService.cpp's intact usage contract, full 168-test suite re-passes both QPA
-     backends, but neither original mutation proof has been RE-RUN against the reconstructed bytes yet
-     055 = OPEN, reviewer finding: T-148's rows overwrite `cancelToken_` with a fresh default `CancelToken()`
-     via `driveSite`'s unconditional setter call, so they don't test the member's own construction-time
-     default — `driveSite` needs "no token supplied" to genuinely skip the setter
-     057 = OPEN, non-blocking: `CloudServiceAutoDownload::run()` reads `context->athlete->rideCache->rides()`
-     on the WORKER thread itself (CloudService.cpp:4188) — a different surface from A3-R028e-F1/DEC-043's
-     GUI-thread completion-slot UAF, found while scouting that fix, deliberately kept separate by user
-     decision 2026-09-05, no REQ allocated
-     058 = FIXED (local patch, 2026-09-05, non-blocking residue): `anti_duplication_guard.py` used to deny
-     the RESTORE half of the LSN-084 snapshot/restore convention; `_is_snapshot_restore()` now tolerates
-     decorated snapshot names — patch verified present in both copies, byte-identical, this session; NOT
-     yet shipped upstream (LSN-036 miss recorded) — full terms in findings.md
-     059 = OPEN, non-blocking, test-harness: TEST-160 drives a hand-mirrored stub `Athlete::close()`
-     (ProviderSeamStubs.cpp) because no garminconnect test target links the real Athlete.cpp — nothing
-     keeps stub and production in lockstep; verified matching by hand at DEC-043 closure, drift risk open
-     findings.md is SSOT for severity + disposition. An id is NOT unique alone (A3-R027 collides) — cite id
-     AND its Cycle-column value (ORCH-022).
+     shape, not a duplicate; per-id rule/check → lessons.md, hot index lines are the read)
+     lessons.md                                                                        next:086
+F    no F-### namespace — findings are `<cycle>-<seq>`; process series ORCH-001–062, true max
+     B-STAGE9-145 (grep `B-STAGE9-[0-9]+` for the real max before allocating; this pointer
+     does not cover that namespace); disposition/severity SSOT is findings.md, never here
+     (an id is NOT unique alone — cite id AND Cycle-column, ORCH-022)                   next:ORCH-063
 -- retired ledger (provenance only): aicoach:DEC-001–013, REQ-001–020, TEST-001–020 — these COLLIDE with the
    garmin ranges; always qualify (coach:DEC-NNN / garmin:DEC-NNN).
 why a number was reserved → wiki/registry-detail.md (DATED provenance, NOT a status source)
@@ -150,7 +93,7 @@ wiki/conventions.md     canonical locations · ID-namespace rule · anti-dup che
 wiki/glossary.md        project terms — read when a term is unfamiliar
 wiki/map-detail.md      per-file MAP detail — read when a rolled-up MAP line is too coarse
 wiki/registry-detail.md dated allocation provenance — read for WHY a number exists, never for whether it is done
-lessons.md              LSN-001..083 — read the guards matching this operation BEFORE acting
+lessons.md              LSN-001..085 — read the guards matching this operation BEFORE acting
 decisions.md ## Decision index   one line per DEC, active/dormant split — the Tier-1 decision head
 traceability.md         the REQ→DEC→DES→TEST→COMMIT spine — the ONLY home for per-id lifecycle status.
                         Take a status from its `Status (current)` column ONLY; the TEST(s) cell is dated
