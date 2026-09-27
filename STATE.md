@@ -97,8 +97,10 @@ TEAM:      builder `garmin_builder_stage9_v41` (w1:pM, Claude/Sonnet; v40 soft-l
            the pane's own status line, never on `agent start`'s reply) · reviewer
            `garmin_codex_reviewer` (w1:pD, Codex; brief it COLD every round) · investigator
            `s979_record_split_investigator` (w1:pR, Codex, `/new`-reset 2026-09-27 at 198k) ·
-           Inspector `garmin_inspector_v1_71` (w1:p38/w1:t20, Opus/auto); it retired v1_70's pane AND
-           tab, workspace at 4 panes / 2 tabs. Each successor retires its predecessor, never itself.
+           Inspector `garmin_inspector_v1_72` (w1:p39/w1:t31, Opus/auto); v1_71 retired v1_70's pane AND
+           tab. A successor started WITHOUT `--permission-mode auto` stops on a dialog whose FIRST option
+           is already selected — one `down`, not two, reaches "switch to auto mode"; simpler to start it
+           with the flag, as v1_72 was after that miss cost one relaunch. Each successor retires its predecessor, never itself.
            Codex `/new` then asks "where should the new conversation run?" — it needs a SECOND enter on
            option 1 (current checkout) or the next brief lands in that menu. Its footer `Context N%` is
            % USED, not remaining (0% verified fresh, 76% at the reader's 198k).
