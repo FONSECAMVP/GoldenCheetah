@@ -67,10 +67,10 @@ NEXT_GATE: **THE CANONICAL GATE IS `ctest -LE gate-exclude` (DEC-054, dod.md:16-
            **DEC-081**: canonicalise in the adapter, REJECT a non-zero fractional second (DEC-071's
            measured second-level compare must not be silently reshaped), rewrite sidecars once.
            NOT queued ahead of slice 3 or -111.
-           Reviewer's standing point that `GarminBackfillController::start()` still stamps v1
-           before self-classification is NOT a -127 defect: DEC-079 places slice 3's migration
-           before `start()`, so that route closes by construction when slice 3 lands. Tracked on
-           the -79 row. Do not re-file it against a unit that cannot fix it.
+           -127 has NO residual round — the shipped shape is a scoped conditional; the reviewer's
+           `start()`-stamps-v1 point is slice 3's under DEC-079's placement. Traces on the rows.
+           B-STAGE9-129 (comment-only, `GarminSidecarStore.h` documents the retired `==`) rides
+           the next commit; no builder round.
            NEXT: **B-STAGE9-111** (blocking, fully builder-ready under DEC-080), THEN slice 3
            (DEC-079 + its amendment, tests from T-240). Both are the blocking path to -79.
            LESSON, five instances (-118/-120/-123/-124/-126): a comment asserting a checkable fact
@@ -112,7 +112,7 @@ TEAM:      builder `garmin_builder_stage9_v36` (w1:pM, Claude/Sonnet; v35 soft-l
            verified) · reviewer `garmin_codex_reviewer` (w1:pD, Codex; `/new`-reset at 207k
            2026-09-27, fresh prompt verified; brief it COLD every round) · investigator
            `s979_record_split_investigator` (w1:pR, Codex, 145k) · Inspector
-           `garmin_inspector_v1_65` (w1:p32, Opus/auto); it closed v1_64's pane AND tab, workspace
+           `garmin_inspector_v1_66` (w1:p33, Opus/auto); it closed v1_65's pane AND tab, workspace
            down to 4 panes / 2 tabs. Each successor retires its predecessor, never itself.
            Codex soft-lands via `/new` (same pane/PID/name) — VERIFY the fresh prompt before
            dispatching, a brief into a `/new` is silently swallowed. The Claude builder needs
@@ -133,8 +133,8 @@ BUDGETS:   STATE 12kB cap, AT THE LINE — every add needs a matching trim of di
            hard; [BREACH] deliberately, B-STAGE9-97 carries the ~50-row pass. `insp_wake.sh` prints
            the retired 200B row cap — B-STAGE9-105 · DECIDX 80 rows/500 [ok] · LSN unmeasured.
 COUNTS:    REQ29+16 REQ-NF (next:garmin-030) · DEC81 (next:garmin-082) · DES14+2 lettered
-           (next:garmin-015) · TEST max T-243 (next:T-244; T-240 reserved by DEC-079) · findings 532 rows, max id
-           B-STAGE9-128 (next:B-STAGE9-129 — grep `B-STAGE9-[0-9]+` for the true max before
+           (next:garmin-015) · TEST max T-243 (next:T-244; T-240 reserved by DEC-079, so -111 takes T-244+ despite DEC-080's body) · findings 533 rows, max id
+           B-STAGE9-129 (next:B-STAGE9-130 — grep `B-STAGE9-[0-9]+` for the true max before
            allocating; the REGISTRIES pointer does not cover this namespace). Always re-number a reviewer's
            own finding ids; they collide every round.
            B-STAGE9-95 owns the T-212..T-234 traceability-cell backfill.
