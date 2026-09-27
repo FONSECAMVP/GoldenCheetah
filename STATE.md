@@ -1,4 +1,4 @@
-# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-27 by `garmin_inspector_v1_71`
+# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-27 by `garmin_inspector_v1_72`
 # Per-id lifecycle status lives ONLY in .claude/workflow-garminconnect/traceability.md (DEC-015 SSOT).
 # For a DEC's status read decisions.md. For a finding's severity/disposition read findings.md.
 # This file carries ONLY the Tier-0 cursor schema (references/state-and-tiers.md line 43-58). ALL
@@ -61,9 +61,10 @@ NEXT_GATE: **CANONICAL GATE = `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), 
            are ACCEPTED and committed `e15d863ba` on reviewer PASS at unit B-STAGE9-133-r5-rev, gate
            57/57. Both censuses now return ZERO `startTimeGMT` text compares in `src/Cloud`.
            NEXT: **slice 3 on B-STAGE9-130 / DEC-079 placement + DEC-082 persistence, tests from
-           T-240** — the last thing holding -79, and neither route closes it alone. Owed alongside it:
+           T-240** — the last thing holding -79, and neither route closes it alone. IN FLIGHT as unit
+           `B-STAGE9-130-s3-r1` (builder v42, dispatched 2026-09-27 by v1_72). Owed alongside it:
            the disposition pass on the 18 rows `clv_findings.py` still prints as OUTSTANDING (4 are
-           AppVeyor, not code), and the reviewer is at 186k — `/new`-reset it on the unit change.
+           AppVeyor, not code).
            LESSON (-132, -134 twice): scope a builder's PATHS to every target that COMPILES the changed
            contract. The full target set is on B-STAGE9-130's row — read it, do not re-derive it.
            LESSON, SEVEN instances (-118/-120/-123/-124/-126/-141/-142, and -129): a comment asserting
@@ -71,8 +72,6 @@ NEXT_GATE: **CANONICAL GATE = `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), 
            verdict — a reviewer's included, and its SEVERITY too: -128 and -137 were both filed
            BLOCKING and re-set against real on-disk data and the accepting row. Rows carry the traces.
            -111's built shape and its declared T-246 gap: its findings row.
-           Slice 3 (DEC-079 placement + DEC-082 persistence, tests from T-240) is NOT optional: a legacy
-           `imported` row reads as complete without it, and -79 closes on neither route alone.
            -78/-79 both come from the first live run on qmake `2e6e122a7`: CONNECT/MFA/DISCONNECT pass,
            SYNC FAILS, library stuck at 1146. -79's completion seam is settled
            by measurement — the three live sidecar entries match their imported/inner-FIT
@@ -86,19 +85,21 @@ NEXT_GATE: **CANONICAL GATE = `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), 
            real ZIP payloads, and the -78 regression fixture.
            NEVER commit the untracked `python3.13-3.13.5/`, `python3.13_*.tar.xz`/`.dsc`/`.asc`,
            `FITmetadata.json`.
-CHANGESET: HEAD `e15d863ba`, 23 ahead of `origin/garmin/req028-row-lifetime` (`git rev-list --count
+CHANGESET: HEAD `658df3d70`+, 25+ ahead of `origin/garmin/req028-row-lifetime` (`git rev-list --count
            origin/garmin/req028-row-lifetime..HEAD`; the master-relative count means nothing here).
            Code commits so far: `b82063118` slice 1, `54afaaf16` DEC-076's lock, `930329fec` slice 2
            + DEC-078, `ab0bb7586` -126/-125/-124, `4dacd8447` -127, `e15d863ba` -111/-133 (DEC-083/-084)
            — each gated and reviewer-read.
            B-STAGE9-106 binds: pre-commit stashes the tree, so never commit mid-round.
-TEAM:      builder `garmin_builder_stage9_v41` (w1:pM, Claude/Sonnet; v40 soft-landed pre-emptively at 178k
-           between rounds -- a 4-item round does not fit 72k of headroom; relaunch verified Sonnet+auto on
+TEAM:      builder `garmin_builder_stage9_v42` (w1:pM, Claude/Sonnet; soft-land pre-emptively AT A UNIT
+           SEAM, not at 250k -- v40 at 178k, v41 at 118k before slice 3, because a multi-round unit does
+           not fit the leftover headroom; relaunch verified Sonnet+auto on
            the pane's own status line, never on `agent start`'s reply) · reviewer
-           `garmin_codex_reviewer` (w1:pD, Codex; brief it COLD every round) · investigator
+           `garmin_codex_reviewer` (w1:pD, Codex, `/new`-reset 2026-09-27 at 186k, Context 0% verified;
+           brief it COLD every round) · investigator
            `s979_record_split_investigator` (w1:pR, Codex, `/new`-reset 2026-09-27 at 198k) ·
-           Inspector `garmin_inspector_v1_72` (w1:p39/w1:t31, Opus/auto); v1_71 retired v1_70's pane AND
-           tab. A successor started WITHOUT `--permission-mode auto` stops on a dialog whose FIRST option
+           Inspector `garmin_inspector_v1_72` (w1:p39/w1:t31, Opus/auto); v1_72 retired v1_71's pane AND
+           tab (w1:p38/w1:t20 gone, counts 5->4 panes / 3->2 tabs). A successor started WITHOUT `--permission-mode auto` stops on a dialog whose FIRST option
            is already selected — one `down`, not two, reaches "switch to auto mode"; simpler to start it
            with the flag, as v1_72 was after that miss cost one relaunch. Each successor retires its predecessor, never itself.
            Codex `/new` then asks "where should the new conversation run?" — it needs a SECOND enter on
@@ -116,9 +117,9 @@ TEAM:      builder `garmin_builder_stage9_v41` (w1:pM, Claude/Sonnet; v40 soft-l
            TRAP that cost v1_65 ~25k: `unknown` on your OWN pane is NOT "probably fine" (it read unknown
            at a real 235k/210k) — cross-check the footer's `tok Nk` at once; your session id is in the
            background-task output path. A builder's sample FREEZES for a long turn: that is the turn.
-           Reviewer held its r2-r5 context by DELIBERATE deviation from "brief it COLD" (r3+'s hunks are
-           not isolable from the cumulative diff, and the agent that filed a finding checks its own
-           repair). That unit is committed, so the deviation has EXPIRED: `/new` it before slice 3.
+           Holding a reviewer's context across rounds is a DELIBERATE deviation from "brief it COLD",
+           valid only while one unit's hunks are not isolable from its cumulative diff; it expires with
+           that unit's commit (-111/-133 precedent, discharged by the 2026-09-27 reset).
 RIGOR:     full (Phase 0 backfill 2026-07-11; A0-A5 + STRIDE + per-slice CLV)
 BUDGETS:   STATE 12kB cap, AT THE LINE — every add needs a matching trim of discharged narrative
            · WIKI 10,184B, breach cleared 2026-09-27 (librarian Job-3; REGISTRIES now POINTs only)
