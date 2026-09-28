@@ -4,7 +4,7 @@
 
 | Role | Runtime | Job | Typical name pattern |
 |---|---|---|---|
-| builder | Claude Code | TDD implementation, one REQ at a time | `garmin_builder_stageN` |
+| builder | Claude Code (Sonnet) | TDD implementation, one REQ at a time | `garmin_builder_stageN` |
 | reviewer | Codex | delta-check / re-review of new or fixed code | `garmin_codex_reviewer` |
 | investigator | Codex | isolated, read-only, parallel problem-solving | ad hoc, e.g. `pch_investigator` |
 
@@ -16,8 +16,10 @@ the Inspector — the Inspector runs the read-only scripts itself.
 These are separate long-lived herdr panes/processes, not to be confused with QGDW's own
 in-process Task-tool subagents (`qgdw-builder`, `qgdw-adversary`, `qgdw-scout`,
 `qgdw-librarian`, `qgdw-validator` — defined in `.claude/skills/quality-gated-dev-workflow/
-agents/`). Any of the 3 herdr-level agents may spawn QGDW subagents internally to scope a
-piece of technical work; that nesting belongs to the agent doing it, not the Inspector.
+agents/`). Spawning those is a Claude Code capability, and the roster is mixed: the
+builder (Claude Code) may spawn QGDW subagents internally; the reviewer and investigator
+(Codex) cannot — each gets everything it needs in the brief itself, and the Inspector scopes any subagent-grade work before
+dispatching to them. Any such nesting belongs to the agent doing it, not the Inspector.
 Only the outer pane's own report is the Inspector's concern.
 
 Always re-verify actual identity/topology fresh each cycle — herdr agent names, panes, and
@@ -25,15 +27,31 @@ even the Inspector's own cross-session identity can drift or reset silently betw
 Don't dispatch to a name you remember without confirming it still resolves to the agent you
 think it is.
 
-## Builder launch mode (auto mode + Sonnet, every launch)
+## Pane launch modes (per runtime)
 
-**Invariant: every Claude Code pane in the roster (the builder) runs in auto mode on
-Sonnet — at stage start, at soft-landing restart, at any from-zero refresh.** Not "accept
-edits on": a supervised pane one step short of auto stalls on its first Bash permission
-dialog, and nobody is piloting it to click through — the whole stage blocks on that
-dialog. Not the harness default either: `~/.claude/settings.json` sets `opus` and a prior
-session's `/model` switch dies with the process, so a relaunch without an explicit model
-flag silently comes back Opus.
+**Codex never writes the shared checkout.** The repo's `.codex/WORKFLOW.md` confines every
+Codex write to its own worktree (B-STAGE9-156), so a Codex pane never builds: the reviewer
+only reads, the investigator writes only under `/tmp`.
+
+**Codex panes (reviewer, investigator):** launch with `herdr agent start <name> --kind codex
+--pane <id>`. There is no `--permission-mode`/
+`--model` flag for Codex: set the approval mode once, and it carries over every later
+refresh because `/new` resets context without exiting the process
+(`token-budget-and-soft-landing.md` → "EXIT and restart cleanly", Codex branch). A fresh
+start may open on an "Update available" menu — send `escape` first. Verify
+a fresh pane is alive and settled at an input prompt (`herdr pane read <pane> --source
+visible`) before first dispatch — do not treat the start command's own success response
+as proof.
+
+**Claude Code pane (builder): auto mode + Sonnet, every launch.**
+
+**Invariant: every Claude Code pane in the roster runs in auto mode on Sonnet — at first launch, at
+soft-landing restart, at any from-zero refresh.** Not "accept edits on": a supervised
+pane one step short of auto stalls on its first Bash permission dialog, and nobody is
+piloting it to click through — the whole unit blocks on that dialog. Not the
+harness default either: `~/.claude/settings.json` sets `opus` and a prior session's
+`/model` switch dies with the process, so a relaunch without an explicit model flag
+silently comes back Opus.
 
 - **Launch it that way:** `herdr agent start <name> --kind claude --pane <id> --
   --permission-mode auto --model sonnet`. The launch flags are the reliable mechanism;
@@ -41,16 +59,14 @@ flag silently comes back Opus.
   (confirmed 2026-09-12) — don't rely on it to fix a pane that came up short.
 - **Verify before first dispatch:** read the fresh pane's visible status line for
   `auto mode on` and Sonnet as the active model. Do not treat the start command's own
-  success response as proof, and do not dispatch work to a builder whose mode and model
-  you haven't confirmed.
+  success response as proof, and do not dispatch work to a pane whose mode and
+  model you haven't confirmed.
 - **Any restart/refresh, same flags.** A plain restart with no args comes back in
-  "accept edits on" and on the `opus` default. Full restart procedure (exit, verify
-  process gone, re-rename): `token-budget-and-soft-landing.md` → "EXIT and restart
+  "accept edits on" and on the `opus` default, and the custom name is lost — re-rename.
+  Full restart procedure: `token-budget-and-soft-landing.md` → "EXIT and restart
   cleanly" owns the details; this section owns the standing rule.
-- Codex panes (reviewer, investigator) have no equivalent flag; their permission mode
-  carries over across `/new` because the process never exits.
-- The model half of the invariant is builder-only. The Inspector's OWN pane stays Opus
-  (`token-budget-and-soft-landing.md` → "Successor's first actions", step 0) and its
+- The model half of this invariant is roster-only. The Inspector's OWN pane stays
+  Opus (`token-budget-and-soft-landing.md` → "Successor's first actions", step 0) and its
   mirror rule is unchanged — switch to auto mode as the very first action on rebirth.
 
 ## Briefing rule
@@ -77,20 +93,28 @@ fresh from live state at each dispatch. Binding rules, all roles:
    prompt; a brief that "needs" a file is a brief that broke rule 4. Replies come back
    through the same channel, spilling to `/tmp/insp-exchange/<unit>.md` only on the
    declared over-cap exception. → `message-transport.md`
+7. **Ledger-scale work products are staging files, never reply payloads.** A librarian
+   compaction draft, archive append, or state-history move is written to its declared
+   staging path in the checkout; the reply carries only that path plus a ≤10-line
+   summary. The reply/spill channel moves verdicts and findings, not ledger content —
+   a multi-thousand-line draft through it is the exact failure this rule exists to
+   prevent.
 
-Ad-hoc agents (investigator) have no cached template: build the brief from the same block
-structure — ROLE, TASK/problem statement, verification target, SCOPE, DELIVER — under the
-same rules, dispatched with `--role adhoc`. The cache files are the canonical shapes;
-rewrite one only when the shape itself changes, and never store unit content in them.
+Ad-hoc agent (investigator): fill its shape cache `.claude/inspector-briefings/
+investigator.md` (ROLE, TASK/problem statement, verification target, SCOPE, DELIVER —
+the isolation rules ship inside the template), dispatched with `--role adhoc` under the
+30-line cap. The cache files are the canonical shapes; rewrite one only when the shape
+itself changes, and never store unit content in them.
 
 ## Reviewer-specific discipline
 
-**Baseline, every REQ, no exceptions:** before the Inspector does its own rebuild/rerun
-verification in step 5, dispatch the reviewer for a delta-check on the builder's actual diff.
-This applies to every builder GREEN report — logging, i18n, docs, config, anything — not
-just C++/UI code. The Inspector's own re-verification is a supplement to the reviewer's
-independent read, never a substitute for it; skipping the dispatch because a REQ "looks
-simple" is the exact failure mode this line exists to prevent.
+**Baseline, every REQ, no exceptions:** on every builder GREEN report — logging, i18n, docs,
+config, anything, not just C++/UI code — dispatch the reviewer for a delta-check on the
+builder's actual diff. Skipping the dispatch because a REQ "looks simple" is the exact
+failure mode this line exists to prevent. The reviewer works every round; the Inspector's
+own rebuild/rerun verification runs ONCE per unit, at the reviewer's PASS (step 5 acceptance
+gate) — never per round. The two checks supplement each other; neither substitutes for the
+other.
 
 **Escalation for lifetime-safety code:** for new C++ UI/lifetime-safety code (raw pointers,
 QPointer guards, nested-event-loop reentrancy), one clean delta-check pass is NOT enough —
@@ -99,6 +123,9 @@ pointer/lifetime logic. Each pass has independently found real, distinct bugs th
 one missed.
 
 ## Investigator-specific discipline
+
+Runtime facts: it is a Codex pane — launch and refresh it per "Pane launch modes"; it
+does not inherit the project's `PreToolUse` hook and cannot spawn QGDW subagents.
 
 Dispatch only when the builder is genuinely iterating/struggling on a non-trivial problem
 (multiple fix attempts, not just "taking a while" on a routine long build). Isolation is
@@ -125,9 +152,10 @@ numeric file read, not a work-correctness claim — doing it yourself does not c
 current context" before the first poll — that section is the measurement contract. Do not
 send `/status`, `/context`, prompts, or Enter to any pane to collect telemetry. Resolve
 each pane's live PID fresh on every tick (never from a remembered session), then run:
-- `scripts/claude_context.py --pid <pid>` for Claude Code panes (builder, and the
-  Inspector's own pane — pass `--threshold 210000` for the Inspector's own pane).
 - `scripts/codex_context.py --pid <pid>` for Codex panes (reviewer, investigator).
+- `scripts/claude_context.py --pid <pid>` for Claude Code panes — the builder
+  (default 250000 threshold) and the Inspector's own pane (pass `--threshold 210000`
+  for it).
 
 For each of the 4 numbers (builder, reviewer, investigator, yourself), track role, pane,
 session/PID when available, used tokens, sample time, threshold, and `below_threshold` /

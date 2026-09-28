@@ -25,16 +25,9 @@ mistakes.)
    Advisories untriggered for a long time and never recurred are archived (kept, not
    deleted). Guards are never auto-pruned.
 6. **The index row is a fixed-shape record, not a growing document.** It holds only the
-   five index fields (below) — never prose, never bold/caps emphasis, never a "REFINEMENT
-   N" narrative appended in place. Target ≤~200 chars. **On recurrence or correction: bump
-   `recur`/`saves`/`miss` and, if the rule itself changed, replace its one clause — never
-   append.** The story of *what happened this time* (date, evidence, what changed) is a new
-   dated sub-entry written to the **cold entry** below, not to the index row. An index line
-   that keeps growing is the guard failing at its own job — stop and move the content down.
-   The reverse direction is a defect too (LSN-035): when you add a cold-entry sub-entry,
-   bump the index row's `recur`/`saves`/`miss` counters in that SAME edit — an index that
-   still shows the pre-update numbers while its cold entry has already moved on is the same
-   drift, just running the other way.
+   five index fields (below), ≤200 chars, per the ledger writing contract
+   (`state-and-tiers.md`). On recurrence: bump `recur`/`miss`, replace the rule clause if it
+   changed, and add one dated line to the cold entry's `history` in the same edit.
 
 ## Lesson levels
 
@@ -48,15 +41,15 @@ mistakes.)
 
 Index (head of file, one line each):
 ```
-LSN-007 | op:create-file type:duplication | guard | recur:3 saves:5 miss:0 | check WIKI MAP before mkdir
-LSN-011 | op:decision type:cascade-miss   | advisory | recur:1 saves:0 miss:0 | flag dependents when DEC reversibility=expensive
+LSN-007 | op:create-file type:duplication | guard | recur:3 miss:0 | check WIKI MAP before mkdir
+LSN-011 | op:decision type:cascade-miss   | advisory | recur:1 miss:0 | flag dependents when DEC reversibility=expensive
 ```
 
 Cold entry (below the index / in archive once dormant):
 ```
 ## LSN-007
 sig:    create-file / duplication / directory      # the merge key
-level:  guard      since:P1   recur:3   saves:5   miss:0
+level:  guard      since:P1   recur:3   miss:0
 tags:   op:create-file, type:duplication
 trigger:about to create a file or directory
 mistake:created a folder that already existed under a different assumed path
@@ -70,22 +63,6 @@ The **sig** (signature) is a normalized `op / failure-class / object` key. New c
 a matching sig increment an existing lesson instead of creating a duplicate — this is what
 keeps the memory bounded and makes it *incremental* rather than ever-growing.
 
-**Recurrence, done right — add to the cold entry, don't rewrite the index:**
-```
-## LSN-034
-sig:    delegate / unverified-premise-in-briefing / traced-citation
-level:  guard      since:P2   recur:12   saves:10   miss:8
-rule:   briefing must order verify-by-content over verify-by-line-number for any citation
-### recurrence 2026-08-23 (2 instances, 1 per channel)
-ORCH-035: driver-tail labels swapped in briefing — caught (save): agent verified by
-content per rule, wrong labels were inert. A3-R038-F3: 3 stale citations, same paragraph —
-see cycles/a3-r038.md for detail.
-```
-**The failure mode this replaces:** an index line that grows a "REFINEMENT N" essay in
-bold/caps every time the lesson recurs, until the single row is tens of thousands of
-characters — this happened in this project's own `lessons.md` (one index row reached
-16k+ chars) and is exactly what this rule exists to prevent. If you're about to add more
-than a clause to an index line, you're writing a recurrence entry — it belongs above.
 
 ## The loop (capture → generalize → surface → verify → escalate → prune)
 
@@ -125,25 +102,19 @@ shown as reminders. Typical scopes:
 - when touching a **component** → `component:Cn` guards
 
 ### 3. Verify
-If a guard's check would fail, **stop and correct first** — that is the whole point. Then
-record the outcome:
-- guard prevented the mistake → `saves++` (the memory is working)
-- the mistake happened anyway, despite the guard → `miss++` (the guard is too weak)
+If a guard's check would fail, **stop and correct first** — that is the whole point. Record
+only the signal that changes behaviour: the mistake happened anyway despite the guard →
+`miss++` (the guard is too weak). Saves are not bookkept per event; a routine catch writes
+nothing.
 
-**Mechanism-enforced guards are harvested too:** whenever the deterministic hook denies or
-asks in-session, the orchestrator increments the linked lesson (deny that stopped a real
-clobber → `saves++`; deny of a LEGITIMATE operation → `miss++` on the guard AND a mechanism
-finding) as a byproduct. Without this, a hook can fire for months while its lesson reads
-`saves:0` and the loop never closes.
-
-**A guard's false positive is a mechanism bug (LSN-036).** When a deterministic guard
+**A guard's false positive is a mechanism bug.** When a deterministic guard
 denies an operation you believe is legitimate: never work around it (a bypass invented once
 gets reused on the next GENUINE catch). Reproduce the denial in isolation, classify it,
 record it as a finding + `miss`, and fix the mechanism. **Loosening any guard requires a
 two-directional behavior matrix**: genuine violations still denied AND the legitimate case
 now passing. **And the matrix must be re-verified after every skill update**: a reinstall
 replaces the deterministic mechanisms wholesale, so a fixed false positive can RETURN from
-an update with zero new code (field-proven: LSN-036 recurred exactly this way). Post-update
+an update with zero new code. Post-update
 routine: re-run the guard's behavior matrix — the bundled self-test now ships at
 `scripts/guard_selftest.py`: `python3 .claude/skills/quality-gated-dev-workflow/scripts/guard_selftest.py`
 (defaults to the sibling guard; pass the installed hook's path to test that copy instead) —
@@ -194,7 +165,7 @@ lessons few and high-value — they are the workflow's accumulated wisdom, not a
 
 Each error makes the next session smarter by exactly one checkable rule, deduped by
 signature and weighted by recurrence. The memory measures its own effectiveness
-(saves/misses) and escalates the rules that aren't working — so the system converges toward
+(misses) and escalates the rules that aren't working — so the system converges toward
 "the mistakes we used to make are now things we automatically check," at a cost of a few
 scoped lines per operation rather than an ever-growing log.
 
@@ -259,6 +230,6 @@ command in place.
 The script is stdlib-only Python 3 (no `jq`, no packages). Requires `python3` on PATH;
 verify with `python3 --version`. Disable temporarily via `/hooks` in Claude Code or
 `"disableAllHooks": true` in settings. When the hook denies or asks, its reason is ground
-truth — open the existing path or register the new one; never work around it. Each time it
-prevents a duplication, that's a `saves++` for LSN-007; if a duplication slips through anyway
-(e.g. an unusual creation syntax the parser missed), record a `miss` and widen the parser.
+truth — open the existing path or register the new one; never work around it. If a
+duplication slips through anyway (an unusual creation syntax the parser missed), record a
+`miss` and widen the parser.

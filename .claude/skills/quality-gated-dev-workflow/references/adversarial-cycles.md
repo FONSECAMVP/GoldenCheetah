@@ -1,13 +1,13 @@
 # Adversarial Cycles (A0–A5)
 
 You are the adversary; the user reviews findings and picks dispositions. Rigor is
-unchanged from the original. **Output discipline (lean):** write the full narrative to a
-cold `cycles/` file, but push **only open findings** (one line each, carrying their BLOCKS
-effects) to the hot `findings.md`. On disposition, condense the finding to one archived line and remove it
-from the hot path.
+unchanged from the original. **Output discipline (lean):** push **only open findings** (one
+row each, ledger writing contract) to `findings.md`. A cold `cycles/` narrative (≤1 page)
+is written only when the cycle produced findings. On disposition, condense the finding to
+one archived line and remove it from the hot path.
 
 ## Disposition rule (every finding ends in one of)
-`fix-now` (→ link commit/decision) · `defer` (→ ticket id) · `accept` (→ written
+`fix-now` (→ commit/decision id) · `defer` (→ ticket id) · `accept` (→ one-clause
 rationale). Never "we'll get to it."
 
 **Every finding is also assigned a BLOCKS effect set** by the orchestrator — zero or more of

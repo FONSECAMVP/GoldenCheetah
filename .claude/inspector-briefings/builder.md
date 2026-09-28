@@ -22,10 +22,15 @@ only when the shape itself changes.
 
 ## Cold-start check (before the FIRST dispatch to a newly started pane)
 
-`herdr pane read <pane> --source visible --lines 6` must show `auto mode on`;
-`tok 0k/0k` confirms genuinely fresh. Verify BEFORE dispatching, not after —
+`herdr pane read <pane> --source visible --lines 6` must show `auto mode on`
+and Sonnet; `tok 0k/0k` confirms genuinely fresh. Verify BEFORE dispatching —
 a pane one step short of auto stalls on its first Bash dialog with nobody to
 click through.
+
+## Pane note
+
+This pane's herdr AGENT NAME can show as empty (`herdr agent list` prints `-`),
+same as the reviewer pane. Address it by pane id if the name does not resolve.
 
 ## Template
 
@@ -48,12 +53,19 @@ SETTLED: <finding/DEC ids only> — do not redo, do not re-open.
 PATHS: allowed <exhaustive list>. NOT <list>.
 HARD HOLD: <frozen files + one-line reason>. CMake + ctest against ./build
 ARE allowed unless stated otherwise here.
-REPORT: run <test subsets only — the Inspector runs the full gate itself>.
-GREEN-or-blocked. Do NOT stage, do NOT commit. Report and stop.
+REPORT: run <test subsets only — the Inspector runs the full gate once, at
+reviewer acceptance>. GREEN-or-blocked. List changed paths, untracked paths,
+and diff size — the Inspector briefs the reviewer from this list and never
+opens the diff itself. Do NOT stage, do NOT commit. Report and stop.
 RULE: every claim in this brief is verify-don't-trust. Reasoning lives in
-the ledgers — cite by id, never into source comments. No comment may state
-a checkable fact about behaviour: make it an assertion or a test, or delete
-it. Prose-to-code <= 0.3 on new or touched files.
+the ledgers — cite by id, never into source comments.
+COMMENTS: the default is NONE. Write one only where code is non-obvious:
+one line, why-only — a DEC/REQ id pointer, a subtle-invariant warning, or a
+one-line why for a surprising choice. Never a function/file/class summary,
+never restate what the next lines do, never history or round narrative,
+never a checkable fact (that becomes an assertion or a test). If a comment
+needs a second line, rename the code or delete the comment. On touched
+lines, delete stale comments — never correct a comment.
 ```
 
 ## Dispatch mechanics

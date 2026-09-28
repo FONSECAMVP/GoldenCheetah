@@ -35,7 +35,7 @@ REQ  <lo>–<hi>  full:<loc>                      next:<n>
 DEC  <lo>–<hi>  index:<loc>                      next:<n>
 DES  <lo>–<hi>  <loc>                            next:<n>
 TEST <lo>–<hi>  <loc>                            next:<n>
-VAL  <lo>–<hi>  latest:<VAL-id> <verdict> · <loc> next:<n>
+VAL  <lo>–<hi>  <loc>                            next:<n>
 F    open→findings.md  resolved→archive/         next:F-<n>
 
 ## PAGES — wiki spokes (read the one named; don't explore blindly)
@@ -67,8 +67,8 @@ demand) — never in the hub.
 to the canonical file — never per-id detail or per-id status (that lives in exactly one
 canonical home; a restated copy is a second thing that drifts, and it is how a REGISTRIES
 block grows to 18k chars unnoticed). Every ID type gets a contiguous range plus a `next`
-counter and the canonical location of the full records. After editing WIKI.md, assert its
-size against the budget (`wc -c` / 4 vs the ~700-token cap) as a byproduct. Allocation = read `next`, use it, increment it
+counter and the canonical location of the full records. WIKI size is measured against
+the ~700-token cap at the wave gate (`STATE.BUDGETS`). Allocation = read `next`, use it, increment it
 here. IDs are never reused; a retired ID is marked `[retired]`, never recycled.
 
 ---
@@ -163,10 +163,10 @@ Triggers and the one-line edit each requires:
 
 | Structural change | WIKI edit |
 |---|---|
-| New file/dir created | add a MAP line |
+| New file/dir created | add a MAP line — only if no line or rolled-up parent dir covers it |
 | New ID allocated | bump the relevant `REGISTRIES.next`; extend the range |
 | New component / integration | add a line to `wiki/architecture.md` |
-| New validation run | bump `VAL.next`; update `latest:` |
+| New validation report file written | bump `VAL.next` |
 | Phase closed (archive-on-close) | repoint the MAP line `→ archive/...` |
 | New project term defined | add a `wiki/glossary.md` line |
 

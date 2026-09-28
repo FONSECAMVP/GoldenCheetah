@@ -101,20 +101,16 @@ callers do X", "nothing does Y", "symbol Z already exists", "this is safe becaus
 carry the command that established it and its result count (`grep -rn ... | wc -l` → 15),
 so the agent can falsify it in seconds. A claim you did not verify must be marked
 `UNVERIFIED — check before relying on this`. Design ledgers describe TARGET shape and run
-ahead of code: quote design for INTENT, quote disk for FACT (LSN-019/LSN-034 — one false
-premise cost a whole slice and would have shipped a cross-service regression).
+ahead of code: quote design for INTENT, quote disk for FACT.
 
 A claim citing a code LOCATION must name the symbol, never a bare line number — a line
-number is stale the moment anyone edits a line above it, the same failure this bites in
-code comments (qgdw-builder.md's COMMENTS rule). "The bug is in `downloadNext`'s retry
-loop" survives edits; "the bug is at line 2789" silently drifts onto the wrong line the
-next time anyone touches that file before the agent reads it (LSN-034).
+number is stale the moment anyone edits a line above it.
 
 **Git-truth.** Read-only agents cannot see live git, and any session-start snapshot is
 frozen. For any dispatch whose verdict depends on working-tree or commit state, paste a
 FRESH `git status --porcelain` + relevant `git log --oneline -- <paths>` into the briefing;
 brief the validator to scope out rows that are pending-merge so a merge-lag gap is never
-recorded as a substantive FAIL (LSN-016/LSN-023). The orchestrator owns git-truth; agents
+recorded as a substantive FAIL. The orchestrator owns git-truth; agents
 own content.
 
 **Precedence + one bounded question.** Every briefing carries an explicit precedence line
@@ -148,7 +144,7 @@ On every returned report, the orchestrator immediately:
    WIKI-EDITS-REQUIRED lines and commits drafts to live paths.
 
 A report that doesn't parse against its contract is re-requested once with the contract
-quoted; twice-failed = run the role inline and capture a lesson against `op:delegate`.
+quoted; twice-failed = run the role inline (Verification Gate, below).
 
 ## Verification Gate — double-check every report before merge
 
@@ -164,7 +160,11 @@ run three checks in order:
      feature); diff claimed `FILES` vs actual
      (`git status` / `git diff --stat`) — undeclared changes are scope violations; check
      `API-SURFACE` and `DEPENDENCIES` against governing DECs (an undeclared dependency is
-     drift, route to findings).
+     drift, route to findings). For a slice whose point is a guard, gate, or invariant, run
+     one mutation of the mechanism itself (break it; confirm the tests die). For a slice
+     that changes object lifetime, ownership, or concurrency, the evidence must be an
+     executed test (under a sanitizer where available) reproducing the hazard, with the
+     guard on the layer that performs the unsafe operation.
    - **validator / adversary** → spot-check 1–2 cited findings at their cited file/ID
      locations before accepting the verdict; a finding that doesn't reproduce downgrades
      the report to re-brief.
@@ -173,13 +173,8 @@ run three checks in order:
    - **librarian** → audit walked/mapped/skipped counts; spot-check 2–3 MAP lines against
      the tree; anomalies section present.
 
-   **Mutation-proof note.** Any time an evidence check involves applying and reverting a
-   mutation — a delegated A3 cycle's mutation list, or an ad hoc re-proof run here at the
-   Verification Gate — use A3's snapshot/restore convention (`adversarial-cycles.md:54-55`:
-   `cp f f.orig`, restore + `cmp`; never `git checkout --` on a file that may already carry
-   unrelated uncommitted content). `git checkout --` reverts the whole working-tree file to
-   HEAD, not just the mutated line — it does not matter whether the check originated as a
-   formal A3 cycle or the orchestrator's own inline verification (LSN-084).
+   **Mutations:** `cp f f.orig`, mutate, restore from the copy and `cmp` — never
+   `git checkout --` on a file that may carry uncommitted work.
 3. **Goal audit.** Re-read the briefing `TASK` and (for builds) the REQ acceptance
    criterion **verbatim**. The delivered work must satisfy that goal — the test must encode
    the criterion as written, not a weaker paraphrase; the diff must contain nothing outside
@@ -196,8 +191,8 @@ instruction, and is recorded as such — never penalized in re-briefing. Reports
 
 Pass → merge as byproduct. Fail → **re-brief once**, quoting the contract and the specific
 defect ("FILES lists 3 files; git shows 5 — account for tests/helpers.py and src/util.py").
-Fail twice → run the role inline this once and capture a lesson (`op:delegate | <agent> |
-<defect class>`); recurring defect classes justify tightening that agent's prompt.
+Fail twice → run the role inline this once. A defect class that recurs is a lesson
+candidate (`lessons-memory.md` threshold) and justifies tightening that agent's prompt.
 
 ## Non-delegation is a failure mode — watch for it
 
@@ -211,12 +206,9 @@ then does the next step's role-work itself. Counter-rules:
 - The orchestrator's own hands are limited to: briefings, verification, ledger merges,
   user conversations, single small edits. Anything else that matches a Delegation Table
   row gets dispatched.
-- Catching yourself mid-role-work: stop, capture `op:delegate` lesson, dispatch properly.
-- A closure declared without its seal is a form of the same failure — the status looks
-  correct until someone has to re-derive it from scratch (Scale discipline's **Seal-at-close**
-  rule, below).
+- Catching yourself mid-role-work: stop and dispatch properly.
 
-## Blocking effects & the behavioral matrix
+## Blocking effects & the scenario table
 
 **Severity and blocking effect are different things.** An agent reports *severity*
 (`blocking | non-blocking | informational`) — a technical judgement about the defect. The
@@ -246,100 +238,22 @@ global block.
 - Owner-separated builds and checkpoints may proceed only when their build outputs **and**
   source footprints are disjoint.
 
-### The behavioral matrix (twelve scenarios)
+### Scenario table
 
-Each scenario derives seven fields: severity · BLOCKS · scope · parallel read · parallel
-write · required evidence · termination condition.
-
-**S1 · production ASan defect on a shipped path**
-severity blocking · BLOCKS `{TASK:REQ-nnn, CHECKPOINT:REQ-nnn, RELEASE}` · scope: the owning
-slice and any release containing it · read: everything · write: any slice with disjoint paths,
-outputs and evidence inputs · evidence: sanitizer-instrumented rerun of the complete affected
-target, clean, on the final content version · terminates when the defect is repaired and that
-rerun is green.
-
-**S2 · harness-only defect invalidating one slice's evidence (production untouched)**
-severity blocking (for that evidence) · BLOCKS `{TASK:<repair>, CHECKPOINT:<slice>}` — add
-`RELEASE` only when release acceptance depends on that evidence · scope: the slice whose
-evidence is invalid · read: everything · write: every other slice, and disjoint documents ·
-evidence: the bounded repair plus a rerun of the complete affected target on the final content
-version · terminates when that rerun is green; the checkpoint is then permitted, and **no
-A-cycle, CLV, lesson, or registry entry is allocated** unless a bounded-repair exception fires
-(see `adversarial-cycles.md`) — or at the third same-class NOT-CLOSED round, at which point
-the only permitted exits are architectural remedy, pin, or downgrade+decouple — an unbounded
-repair loop is not S2 in progress, it is a defect in the repair policy itself.
-
-**S3 · stale internal / non-acceptance documentation**
-severity non-blocking · BLOCKS `{}` · scope: none until impact is demonstrated · read and
-write: unrestricted — **implementation, checkpoints and release work may all continue** ·
-evidence: none required to proceed · terminates when the document is corrected, or an effect
-is added if impact is later demonstrated.
-
-**S4 · unrelated dirty files in the worktree**
-severity informational · BLOCKS `{}` · scope: none · read and write: unrestricted · evidence:
-**path-scoped staging remains mandatory** (`git add -- <slice paths>`; never `git add -A`) ·
-terminates immediately — the slice commits carrying only its own paths.
-
-**S5 · requested verified checkpoint whose slice gate is green**
-severity n/a · BLOCKS `{}` · scope: none · read and write: unrestricted · evidence: **only the
-slice Verification Gate** — its own tests and touched suites green, contract and goal audit
-passed, path-scoped staging; unrelated release gates (wave full suite, clean-worktree build,
-full CLV, doc currency) are **not preconditions** · terminates when the checkpoint is
-committed.
-
-**S6 · hook false positive (a deterministic guard denies a legitimate operation)**
-severity blocking for that operation · BLOCKS `{TASK:<denied op>}` · scope: the denied
-operation only · read: everything · write: everything else · evidence: isolated reproduction,
-a finding plus a `miss` on the guard's lesson, and a two-directional behavior matrix (genuine
-violations still denied AND the legitimate case passing) · terminates when the mechanism is
-fixed and the matrix is green — **never by a bypass**; two unsuccessful material attempts
-return to the user.
-
-**S7 · read-only scouting while another task is blocked**
-severity informational · BLOCKS `{}` · scope: none — **no effect set ever suspends read-only
-work** · read: unrestricted · write: none while it stays read-only · evidence: none ·
-terminates immediately.
-
-**S8 · production defect blocks REQ-A; REQ-B has disjoint files and build artifacts**
-severity blocking (REQ-A) · BLOCKS `{TASK:REQ-A, CHECKPOINT:REQ-A, RELEASE}` · scope: REQ-A
-and release · read: everything · write: **REQ-B may continue** building and taking verified
-checkpoints, because its paths, ownership, generated artifacts and evidence inputs are
-disjoint — demonstrate that before starting · evidence: REQ-B's own slice gate; REQ-A's repair
-evidence separately · terminates with REQ-B checkpointing independently while release waits on
-REQ-A.
-
-**S9 · stale acceptance / compliance / migration / release documentation**
-severity blocking at release · BLOCKS `{RELEASE}` · scope: release only · read and write: all
-implementation continues and **verified checkpoints remain allowed** · evidence: the corrected
-document plus the release gate's own checks · terminates when the document is corrected and
-`RELEASE` is cleared.
-
-**S10 · a formatter or hook edits a tested/compiled input after a green run**
-severity informational (evidence-invalid, not a defect) · BLOCKS
-`{TASK:<rerun-target>, CHECKPOINT:<affected-slice>}` — add `RELEASE` only if the invalidated
-evidence was the release evidence · scope: the target whose content version changed · read:
-everything · write: disjoint slices · evidence: rebuild if needed and **rerun the complete
-affected target once for the new content version** · terminates when that rerun is green.
-This ordinary invalidation **does not automatically allocate a finding, lesson, VAL, ORCH, or
-registry entry**; it becomes a finding only if the rerun exposes a defect, or if the
-invalidation mechanism itself repeatedly fails.
-
-**S11 · 73 declared functions produce 78 executed QtTest cases**
-severity informational · BLOCKS `{}` · scope: none · read and write: unrestricted · evidence:
-both numbers reported separately, with the difference reconciled to `initTestCase`,
-`cleanupTestCase` and data rows · terminates as **PASS; create no finding**. A finding exists
-only when the runner's accounting cannot reconcile the difference.
-
-**S12 · user-requested unverified local snapshot**
-severity n/a · BLOCKS: **existing effects unchanged** — a snapshot preserves work; it does not
-clear or weaken any blocker · scope: unchanged · read and write: unchanged · evidence: explicit
-user authorization, local-only, `WIP`/`SNAPSHOT` at the start of the message, and every red or
-ungated item named · terminates with the snapshot committed locally; it **cannot be pushed,
-promoted, or treated as a verified checkpoint or release candidate**.
-
-**Re-verify this matrix after every skill update**, together with the `guard_selftest.py`
-post-update routine (`lessons-memory.md`) — a skill update replaces these documents wholesale,
-so a corrected semantic can return to its old form with zero new code.
+| Scenario | Severity | BLOCKS | Still permitted | Ends when |
+|---|---|---|---|---|
+| production defect (e.g. ASan) on a shipped path | blocking | `TASK, CHECKPOINT:<slice>, RELEASE` | everything disjoint | repaired + complete affected target rerun clean |
+| harness-only defect invalidating one slice's evidence | blocking | `TASK:<repair>, CHECKPOINT:<slice>` (+`RELEASE` only if release rests on it) | every other slice | bounded repair + rerun green; no A-cycle/CLV/lesson/registry entry; 3rd same-class round → remedy, pin, or waiver |
+| stale internal / non-acceptance docs | non-blocking | `{}` | everything | doc corrected |
+| unrelated dirty files | informational | `{}` | everything; path-scoped staging | immediately |
+| verified checkpoint, slice gate green | n/a | `{}` | everything; unrelated release gates are not preconditions | committed |
+| hook false positive | blocking for that op | `TASK:<denied op>` | everything else | mechanism fixed + two-directional matrix green; never a bypass |
+| read-only scouting while blocked | informational | `{}` | read-only always | immediately |
+| REQ-A blocked, REQ-B disjoint | blocking (A) | `TASK:A, CHECKPOINT:A, RELEASE` | REQ-B builds and checkpoints | A repaired |
+| stale acceptance/release docs | blocking at release | `RELEASE` | all implementation and checkpoints | doc corrected |
+| formatter/hook edited a tested input after green | informational | `TASK:<rerun>, CHECKPOINT:<slice>` | disjoint slices | one rerun of the affected target; no finding unless it fails |
+| declared ≠ executed test counts, reconcilable | informational | `{}` | everything | PASS, no finding |
+| user-requested unverified snapshot | n/a | existing effects unchanged | unchanged | committed locally, never pushed or promoted |
 
 ## Snapshot vs verified checkpoint vs release
 
@@ -411,44 +325,33 @@ declared QtTest functions producing 78 executed cases is normal) and is **not it
 finding**. It becomes a finding only when the runner's accounting cannot reconcile the
 difference.
 
-**Seal-at-close (kills the redo-to-reprove-it gap).** When a checkpoint/stage/piece is
-declared discharged or closed, its independent-verification evidence MUST be sealed —
-written to `.claude/evidence-seals/` or cited from an existing seal there — in the SAME edit
-that declares it closed in `STATE.md`/`findings.md`. Never defer the seal to "write it
-later": an unsealed closure claim is indistinguishable from an unverified one to the next
-reader, including a future session with no memory of this one. Field-proven 2026-09-05:
-Stage 4's first closure recorded a full independent re-verification in prose (`STATE.md`/
-`findings.md`) but wrote no durable seal; a later fresh-context session, unable to tell the
-claim from an untested assertion, re-ran the entire independent verification from scratch
-(full rebuild, both QPA backends, full `ctest -L garmin-fast`, CLV) ~5 hours later just to
-produce the seal that should already have existed — a complete, avoidable duplicate of the
-same evidence.
+**Evidence stays out of the ledgers.** The accounting above goes in the agent's report and
+the commit message. A closure row carries one pointer to it (commit hash, or a log path) in
+the same edit that closes it — never a prose re-telling, and never "seal it later".
 
-**Failed-gate governance.** On a FAIL, write **only**:
+**Failed-gate governance (canonical).** On a FAIL, write **only**:
 1. the current verdict;
 2. the evidence pointer, with the command and the exit code;
 3. the BLOCKS effects and their explicit scope;
 4. the next repair.
 
-Broad narratives, counts, registry rewrites, new lessons, compaction, and archive moves
-**wait until the repair passes**. *Exception:* a security or data-loss discovery may
-additionally record the minimum warning required to prevent unsafe use — and must not trigger
-an automatic governance wave.
+Everything else waits until the repair passes. *Exception:* a security or data-loss
+discovery may add the minimum warning required to prevent unsafe use.
 
 **Wave-gate checklist (run all five, once per wave/feature close):**
 1. full suite (the once-per-wave run);
 2. **clean-worktree configure+build of HEAD, including the production/main target** —
    `git worktree add` a throwaway, configure and build there; committed build files
    referencing untracked paths, and unit-green binaries that don't link, are only visible
-   here (LSN-018/ORCH-001 class). Build the actual shipped target explicitly, not only the
+   here. Build the actual shipped target explicitly, not only the
    test target — a test binary commonly compiles its own curated source subset and can stay
    green while the application itself has never linked;
 3. **MAP-freshness count** — in deny-only guard mode nothing nudges registration, so count
    tree entries not covered by a MAP line (directly or via parent rollup); past a handful,
    dispatch librarian sync;
-4. **row-bloat check** — `python3 scripts/row_health_check.py --root .`; informational (WARN,
-   not a gate FAIL) — flags any id-indexed ledger row, or STATE.md line, that has grown into
-   the LSN-034 shape; past a finding or two, dispatch librarian Job 3 (compaction);
+4. **budget check** — measure the hot artifacts into `STATE.BUDGETS` and run
+   `python3 scripts/row_health_check.py --root .` where the project has it (informational);
+   any breach dispatches librarian Job 3;
 5. wave-level incremental CLV.
 Prefer taking a **verified checkpoint** of each Verification-Gate-passed slice before starting
 the next (see *Snapshot vs verified checkpoint vs release*):
@@ -473,16 +376,10 @@ covering the task's scope. Pasting the whole MAP or whole index into a briefing 
 violation — slices only. And because the briefing IS the agent's orientation, agents must
 not re-read WIKI/STATE themselves (their prompts say so): one orientation, not two.
 
-**Budget telemetry (the skill tracks itself).** `STATE.BUDGETS` records current size vs
-cap for the hot artifacts: `WIKI <tok>/700 · DECIDX <tok>/500 · LSN <guards>/10 ·
-FINDINGS <open>`. Tokens are measured by proxy: `wc -c` bytes / 4 (or line count vs a line
-cap) — a number you can actually compute, not an estimate. The check is a **byproduct
-assertion**: immediately after editing a hot file, run the one-line measurement and compare
-to cap — a declared threshold nothing measures accumulates breach silently for months
-(field-proven: an 18k-char REGISTRIES block, 71 lint findings).
-**Any breach = dispatch librarian Job 3 (compaction)** before the next feature wave —
-compaction is scheduled work, not an emergency. This is how growth is *observed* instead of
-discovered when sessions get slow.
+**Budget telemetry.** `STATE.BUDGETS` records size vs cap for the hot artifacts
+(`WIKI <tok>/700 · DECIDX <tok>/500 · LSN <guards>/10 · ROWS <n> over cap`), measured by
+proxy (`wc -c` / 4) once per wave gate — not after every edit. Any breach dispatches
+librarian Job 3 before the next feature wave.
 
 ## Standard plays
 

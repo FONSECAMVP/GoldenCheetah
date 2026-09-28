@@ -66,8 +66,8 @@ Hard rules:
    names. Tiered loading: WIKI (Tier 0) → STATE → the one index/page you need (Tier 1) →
    one full entry by ID (Tier 2) → full corpus (Tier 3, explicit/release only). No blanket
    re-reading.
-3. **Three Options Doctrine.** Every decision = exactly three alternatives, each scored on
-   the Four Pillars, with a recommendation and concrete cascade impact, *before* the user
+3. **Three Options Doctrine.** Every decision = up to three genuinely viable alternatives
+   (two is honest when only two exist), each scored on the Four Pillars, with a recommendation and concrete cascade impact, *before* the user
    chooses. It applies to **architectural choices, irreversible actions, public API changes,
    and materially different trade-offs** — **not** to a uniquely determined local bug repair,
    which is applied under the existing task/finding and recorded in the normal test/commit
@@ -87,15 +87,12 @@ Hard rules:
    9-check walk only on explicit request or release. A FAIL blocks **exactly the effects
    assigned to it** — derived from the failed property, not from why the run was requested
    (`references/cross-layer-validation.md`).
-9. **Update-as-byproduct.** State, indexes, **and the wiki map** are updated as the *tail*
-   of the action that changed them — never a separate maintenance pass, and **never with a
-   permission request**: recording an observable fact (TEAM, BUDGETS, COUNTS, a trace row)
-   is the orchestrator's job, not a question for the user. The user is asked only for
-   decisions (via the doctrine) and finding dispositions. If you created a file or
-   allocated an ID and didn't update the wiki, the operation isn't done. **Byproducts are
-   the tail of a *passing* action:** on a gate FAIL the byproduct step is **deferred, not
-   partially performed** — write only the four-item failure record (Principle 13) and
-   nothing else.
+9. **Update-as-byproduct, at seams, tersely.** State, indexes, and the wiki map are
+   updated as the *tail* of the action that changed them, never as a separate pass and
+   never with a permission request. Write only at seams (unit closed, gate verdict,
+   decision taken, phase change), in fixed-shape rows with pointers, never investigation
+   prose: the **ledger writing contract** in `references/state-and-tiers.md`. On a gate
+   FAIL write only the failure record (Principle 13).
 10. **Learn from mistakes (incremental smartness), above a threshold.** Capture or promote
     a lesson only when at least one is true: the mistake **recurs**; it **crosses component
     or project boundaries**; it reveals a **defective workflow rule or mechanism**; or it
@@ -104,7 +101,7 @@ Hard rules:
     lesson**. When the threshold is met, capture a *checkable rule* in `lessons.md` (a
     lesson, not a story). Recurrence escalates it: advisory → **guard** (a hard
     precondition, checked at pre-flight) → proposed deterministic enforcement. The memory
-    tracks its own effectiveness (saves vs. misses). Mechanism:
+    tracks its own effectiveness (misses). Mechanism:
     `references/lessons-memory.md`.
 11. **Orchestrate, don't monologue.** With the team installed (`STATE.TEAM: on`) and
     `STATE.RIGOR` at standard/full, the main
@@ -112,7 +109,7 @@ Hard rules:
     Delegation Table, verifies every report through the **Verification Gate**, and remains
     the **single writer** of every governance file. Role-work — building a REQ, running a
     cycle, running CLV, researching a DEC — done inline while the team is installed is a
-    **process violation**: stop, capture a lesson against `op:delegate`, and re-dispatch.
+    **process violation**: stop and re-dispatch.
     The orchestrator's own hands touch only: ledger merges, briefings, verification,
     user conversations, and single small edits. Contracts and plays:
     `references/orchestration.md`.
@@ -145,10 +142,10 @@ Hard rules:
     unproven scope means `TASK:<active-slice>`, never a global block. **A blocker never
     means "nothing else runs" unless it can affect every independent operation.** Unrelated
     read-only work is always permitted; unrelated write work is permitted when paths,
-    ownership, generated artifacts and evidence inputs are disjoint. On a FAIL, write only:
-    the current verdict · the evidence pointer with command and exit code · the BLOCKS
-    effects and their explicit scope · the next repair. Effects, the parallel-work rule, the
-    twelve-scenario behavioral matrix, and the snapshot/checkpoint/release split:
+    ownership, generated artifacts and evidence inputs are disjoint. **On a FAIL, write
+    only:** verdict · evidence pointer (command + exit code) · BLOCKS effects and scope ·
+    next repair — everything else waits until the repair passes. Effects, the parallel-work
+    rule, the scenario table, and the snapshot/checkpoint/release split:
     `references/orchestration.md`.
 
 ---
@@ -182,7 +179,7 @@ REQ  001–045  full:prd.md                         next:046
 DEC  001–030  index:decisions.md head             next:031
 DES  001–035  design.md                           next:036
 TEST 001–044  tests/                              next:045
-VAL  001–013  latest:VAL-013 PASS · validations/  next:014
+VAL  001–013  validations/                       next:014
 LSN  001–012  active:9 guards:4 · lessons.md       next:013
 F    open→findings.md  resolved→archive/          next:F-018
 
@@ -224,8 +221,8 @@ inline is the *fallback* for TEAM:off, never a shortcut.
 ### Session start / recap / "continue my project"
 0. **ORIENT** — read `WIKI.md` (the map). 1. Read `STATE.md` (the cursor). 1b. **Schema check**
 — if STATE lacks fields the current schema defines (older project), backfill silently:
-record `TEAM: on(<n> agents)|off` (list `.claude/agents/qgdw-*.md` once), `BUDGETS`, and
-`COUNTS` without asking; a missing `RIGOR` gets the calibration proposal (the one
+record `TEAM: on(<n> agents)|off` (list `.claude/agents/qgdw-*.md` once) and `BUDGETS`
+without asking; a missing `RIGOR` gets the calibration proposal (the one
 legitimate ask), then is recorded. 2. Emit a 4-line status: phase · open ·
 blocking · next gate. 3. If `BLOCKING ≠ —`, load just those finding lines **with their BLOCKS
 effects**, so the status says what is actually stopped (and what is not); if
@@ -276,75 +273,30 @@ cheap — but it is mandatory, because a stale map is how the agent gets lost ag
 
 ---
 
-## Heavy mechanisms (unchanged rigor; condensed output)
+## Heavy mechanisms (details live in the named reference; this is the index)
 
-- **Cross-Layer Validation** — incremental over `STATE.CHANGESET` by default; full 9-check
-  walk on explicit request or release gate. Records one verdict line into `STATE.LAST_CLV`
-  and bumps `VAL.next` in WIKI REGISTRIES so the **validation history is visible at a
-  glance** (this is what keeps "many validation runs" from confusing you). **A FAIL is a
-  lesson-capture *candidate*** evaluated against the Principle-10 threshold **after the repair
-  passes** — and its effects come from the failed property, never from why the run was
-  requested. Details: `references/cross-layer-validation.md`.
-- **Three preservation/release operations** — a **snapshot commit** (explicitly unverified,
-  local-only, `WIP`/`SNAPSHOT` message naming every red or ungated item, explicit user
-  authorization, never pushed or promoted, leaves every existing effect active); a **verified
-  checkpoint** (the slice's own tests + touched suites green, contract and goal audit passed,
-  path-scoped staging — unrelated release gates are *not* preconditions); and a **release
-  commit** (all applicable acceptance and release gates, no open finding carrying
-  `RELEASE`/`DEPLOY`). Never call an unverified snapshot a checkpoint. Definitions:
-  `references/orchestration.md`.
-- **Cascade propagation** — load the changed DEC's dependents (one drill), queue them in
-  `STATE.CASCADE`, process one ID at a time, then a drift-scoped CLV over the touched IDs.
-  A *missed* cascade detected later is a lesson candidate (Principle 10 threshold).
-- **Adversarial cycles A0–A5** — full rigor, **one normal cycle per feature slice**; narrative
-  to cold `cycles/`, only open findings to `findings.md`, each carrying its BLOCKS effects. A
-  harness/scaffolding/process defect gets a direct bounded repair instead of a new cycle, and
-  two unsuccessful *material* repair attempts return to the user. Findings that touch system
-  structure also update
-  `wiki/architecture.md`'s "watch" list. **A5 is the richest lesson-harvest point** — turn
-  recurring retrospective findings into guards.
-- **Lessons memory** — detecting a mistake creates a **lesson *candidate***, not a lesson.
-  Capture happens **after the repair passes** and only when the Principle-10 threshold is met
-  (recurrence · crosses component/project boundaries · a defective workflow rule or mechanism ·
-  material security, data-loss, or irreversible-operation risk). A first-occurrence local
-  implementation or harness bug is **normally repaired without creating a lesson**. Once
-  captured: surface scoped guards at pre-flight; escalate on recurrence; track saves/misses.
-  Mechanism: `references/lessons-memory.md`.
-- **Deterministic anti-duplication guard (enforced, not just instructed).** This skill
-  bundles a `PreToolUse` hook (`scripts/anti_duplication_guard.py`) that, once installed,
-  fires before every `Write`/`Edit`/`Bash`. It **denies** re-creating a path that already
-  exists (the LSN-007 mistake — `mkdir` of an existing dir, redirect/`touch` over an existing
-  file) and **asks** when a new artifact isn't yet in the WIKI MAP. This is the escalation
-  endpoint of Principle 10: a guard that kept being missed became mechanism. Install it once
-  per project with `python3 scripts/install_hook.py` (see `references/lessons-memory.md`);
-  it writes the hook into `.claude/settings.json`. When the hook denies a genuine clobber,
-  its reason is ground truth — open the existing path or register the new one. But when it
-  denies an operation you believe is LEGITIMATE, that is a **mechanism bug, not an obstacle
-  to route around** (LSN-036 class): never invent a bypass — reproduce the denial in
-  isolation, record it as a finding + a `miss` on the guard's lesson, and fix the mechanism
-  with a two-directional behavior matrix (genuine violations still denied AND the legitimate
-  case passing). The denial carries `{TASK:<denied op>}` — it stops that operation, not the
-  session — and after two unsuccessful *material* repair attempts, return to the user. An
-  agent working around a hook is itself a mechanism bug of equal weight to a missed catch. If the hook isn't installed, the same rules apply by instruction.
-- **Archive-on-close** — when a phase closes, move its cycle/validation files to
-  `references/archive/` and update the WIKI MAP to point there; prune `recur:1` advisories
-  to `archive/lessons-dormant.md`. History stays ID-addressable; routine work never
-  re-ingests it.
-- **Budget telemetry & compaction (the skill tracks its own footprint).** `STATE.BUDGETS`
-  records hot-artifact size vs cap (`WIKI n/700 · DECIDX n/500 · LSN g/10 · FINDINGS n`),
-  refreshed as a byproduct of editing those files. A breach dispatches `qgdw-librarian`
-  Job 3 (compaction: MAP directory-rollup, active/dormant index split, lessons merge)
-  before the next feature wave. Evidence has single owners at scale: **the complete affected
-  suite runs once per final content version, by one designated owner** — verification runs
-  targeted checks and inspects the owner's command/log/exit code, A3 runs mutation tooling
-  only, and one wave gets ONE CLV, so nothing is executed or validated twice on the same
-  content version. A repair after a failed run, or any formatter/hook edit to a compiled or
-  executed input, creates a **new content version** and requires a fresh run of the complete
-  affected target (never of unrelated suites). At every
-  feature close / wave gate, one **clean-worktree configure+build of HEAD** runs — almost
-  every other gate runs inside the developer's working tree, and that blind spot is how a
-  feature ships inert behind a green suite or `master` stops building from a clean checkout.
-  Rules: `references/orchestration.md` (Scale discipline).
+- **Cross-Layer Validation** — incremental over `STATE.CHANGESET`; full 9-check walk only on
+  explicit request or at the release gate. Writes one `STATE.LAST_CLV` line; a FAIL's
+  effects come from the failed property. → `references/cross-layer-validation.md`
+- **Snapshot / verified checkpoint / release** — three distinct commits; never call an
+  unverified snapshot a checkpoint. → `references/orchestration.md`
+- **Cascade propagation** — queue the changed DEC's dependents in `STATE.CASCADE`, process
+  one ID at a time, then a drift-scoped CLV over the touched IDs.
+- **Adversarial cycles A0–A5** — one normal cycle per feature slice; only open findings go
+  hot; harness/process defects get a bounded repair, not a new cycle.
+  → `references/adversarial-cycles.md`
+- **Lessons memory** — a mistake is a lesson *candidate*; capture only above the
+  Principle-10 threshold, after the repair passes. → `references/lessons-memory.md`
+- **Anti-duplication guard** — a bundled `PreToolUse` hook denies re-creating existing
+  paths and asks when a new artifact is missing from the MAP. Install once with
+  `python3 scripts/install_hook.py`. A denial of a legitimate operation is a mechanism bug:
+  never bypass it. → `references/lessons-memory.md`
+- **Archive-on-close** — a closed phase's cycle/validation files move to
+  `references/archive/`; the MAP repoints there.
+- **Scale discipline** — each piece of evidence has one owner and one run per content
+  version; a clean-worktree build of HEAD runs at every wave gate; `STATE.BUDGETS` is
+  measured at the wave gate and a breach dispatches librarian Job 3.
+  → `references/orchestration.md`
 
 ---
 
@@ -373,56 +325,12 @@ independence, identical on rules).
 
 ### Verification Gate — every report is double-checked before anything merges
 
-No agent report enters the ledgers or the codebase on trust. On every return, the
-orchestrator runs three checks in order; failing any one means **re-brief once** (quoting
-the contract and the specific defect) and, on a second failure, run the role inline and
-capture a lesson against `op:delegate`.
-
-1. **Contract check** — does the report parse against the agent's declared format? All
-   mandatory fields present (builder's `NOTES` and `FILES` especially)? IDs only from the
-   allocated set?
-2. **Evidence check** — verify the report's central claims against reality, don't read
-   them: for a **builder**, independently re-run the feature's own tests plus any suites
-   the diff touches (targeted — the complete suite runs once per final content version by
-   one owner; inspect that owner's command, log and exit code rather than re-running the
-   same content version), and diff the claimed `FILES` list against the actual changes on
-   disk
-   (`git status`/`git diff --stat`); check
-   `API-SURFACE`/`DEPENDENCIES` against the governing DECs — an undeclared dependency or
-   surface is drift, not detail. **For any slice whose point is a guard, gate, or
-   invariant**, additionally run one orchestrator-executed mutation of the mechanism itself
-   (break the guard; confirm the tests die) — "tests pass" is not evidence a guard is
-   load-bearing; "tests fail when I break it" is. Snapshot discipline is mandatory:
-   `cp file file.orig` before mutating, restore from the copy and `cmp` — NEVER
-   `git checkout --` on a file carrying uncommitted work (LSN-032). **For any slice that
-   changes object lifetime, ownership, or concurrency**, the acceptance evidence must be an
-   *executed* test (under a sanitizer where available) reproducing the hazard — reasoning
-   about framework semantics is explicitly insufficient, and ask whether the guard sits on
-   the layer that performs the unsafe operation, not the layer that initiates it. For a
-   **validator/adversary**, spot-check 1–2 cited findings at their cited locations before
-   accepting the verdict. For a **scout**, confirm the options are three *real* candidates
-   and volatile claims carry sources.
-3. **Goal audit** — before the work is merged/committed, re-read the briefing's `TASK` and
-   the REQ's acceptance criterion **verbatim** and confirm the delivered work satisfies
-   *that goal*, not a nearby one: the test must encode the criterion as written (not a
-   weaker paraphrase), and the diff must contain nothing outside the briefed scope.
-   Out-of-scope changes are reverted or re-briefed — never silently kept.
-
-Every run's evidence is reported as **separate measurements** — command · environment ·
-declared · executed · pass/fail/skip · sanitizers · exit code — each an observed value or
-`N/A` with a concrete reason (`references/orchestration.md`). "N tests passed" alone is not
-evidence; a gate is **not** failed merely because an inapplicable measurement is `N/A`; and
-`declared ≠ executed` is expected wherever init/cleanup functions and data rows exist — it is
-a finding only when the runner's accounting cannot reconcile the difference.
-
-**Only after all three checks pass does the byproduct step run** (trace rows, STATE, WIKI,
-findings). On a failure the byproduct step is **deferred, not partially performed**: write the
-four-item failure record — verdict · evidence pointer with command and exit code · BLOCKS
-effects and their explicit scope · next repair — and nothing else. Counts, registry rewrites,
-narratives, compaction, archive moves and lesson capture wait until the repair passes; only a
-security or data-loss discovery may add the minimum warning needed to prevent unsafe use.
-The gate is cheap relative to what it prevents: an unverified builder report is exactly how
-wrong code enters a codebase with a green-looking ledger.
+No report enters the ledgers or the codebase on trust. Three checks, in order: **contract**
+(the report parses; IDs only from the allocated set) → **evidence** (re-run the central
+claims yourself, targeted; spot-check cited findings) → **goal audit** (the work satisfies
+the REQ's acceptance criterion verbatim, and nothing outside the briefed scope). Fail →
+re-brief once, quoting the defect; fail twice → run the role inline. Only after all three
+pass does the byproduct step run. Full procedure: `references/orchestration.md`.
 
 ---
 
@@ -486,20 +394,14 @@ For a project already underway (any version, or no workflow at all):
   map/registry.
 - **"Where does X live / does X exist?"** → WIKI MAP/REGISTRIES answers instantly; do not
   search.
-- **"Is anything broken?"** → incremental CLV over `CHANGESET`; verdict line + VAL bump on
-  green. A FAIL writes the four-item failure record only.
-- **A gate FAILed?** → write verdict · evidence pointer (command + exit code) · BLOCKS
-  effects and their scope · next repair. No counts, no registry work, no narrative, no lesson
-  until the repair passes. Then repair, rerun the complete affected target on the final
-  content version, and continue — a harness defect does **not** earn a new A-cycle or CLV
-  wave. Two unsuccessful *material* attempts → return to the user.
+- **"Is anything broken?"** → incremental CLV over `CHANGESET`; one verdict line.
+- **A gate FAILed?** → the failure record only (Principle 13); repair; rerun the complete
+  affected target once; continue. Two unsuccessful *material* attempts → return to the user.
 - **"Save my work now."** → which operation? A **verified checkpoint** if the slice's gate is
   green (unrelated red gates are irrelevant); a **snapshot** if it isn't — explicitly
   authorized, `WIP`/`SNAPSHOT`, every ungated item named, all existing effects still active.
-- **Made (or nearly made) a mistake?** → repair it. Capture a lesson only above the
-  Principle-10 threshold (recurrence · crosses components/projects · a defective workflow
-  rule · material security/data-loss/irreversible risk); on recurrence it becomes a guard
-  that's checked automatically next time.
+- **Made (or nearly made) a mistake?** → repair it; a lesson only above the Principle-10
+  threshold.
 - **Got lost / wrong context crept in?** → STOP, re-read `WIKI.md`, re-orient.
 
 If a `TodoList` tool is available, mirror `STATE.NEXT_GATE` conditions as todos.
@@ -514,7 +416,7 @@ If a `TodoList` tool is available, mirror `STATE.NEXT_GATE` conditions as todos.
 - `references/wiki-memory.md` — `WIKI.md` schema, spoke-page templates, orientation
   protocol, anti-duplication rules, maintenance triggers.
 - `references/lessons-memory.md` — lesson capture, generalization, scoping/tags, promotion
-  to guards, saves/misses, pruning, portable lessons.
+  to guards, misses, pruning, portable lessons.
 - `references/state-and-tiers.md` — `STATE.md` schema, indexes, tiered loading with the
   wiki at Tier 0, archive layout.
 - `references/three-options-doctrine.md` — proposal template, rubric, worked example.

@@ -5,7 +5,24 @@ description: Use when acting as the Inspector supervising builder/reviewer/inves
 
 # Inspector Cycle
 
-## Objective (read this before anything else)
+## Authority (read this before anything else)
+
+| Question | Only authority |
+|---|---|
+| How to set up, launch, brief, poll, refresh, retire agents; how every agent behaves | this skill + its `references/` |
+| Where the project is: stage, open/blocking ids, next unit, next gate | `STATE.md` + `traceability.md`/`decisions.md`/`findings.md` |
+| Who is running right now | live `herdr` |
+
+`STATE.md` is the project cursor (QGDW schema), never an operations manual: never read a
+roster, pane kind, launch flag, or tool quirk from it, and never write one into it. Its
+`TEAM:` field is QGDW's `on(<n> agents)|off`, not the herdr roster. When STATE and a
+reference disagree on how to operate, the reference wins — correct the STATE line.
+Briefing caches, predecessor notes, and rebirth prompts are hints. A user chat reply
+binds only the unit it answered; it becomes standing only as a DEC row. An operational
+lesson learned mid-cycle is proposed to the user as a reference edit, never parked in
+STATE or the product ledgers.
+
+## Objective
 
 There are three nested levels — never confuse them:
 
@@ -15,12 +32,6 @@ There are three nested levels — never confuse them:
    is progress, not the finish line.
 3. **Atomic decision/unit** — one REQ, DEC, or fix inside a stage. This is the unit the
    Inspector dispatches per builder turn — never a batch.
-4. Before your first poll, refresh, or succession action in a session, read the CORE
-   sections of `references/token-budget-and-soft-landing.md` per its own "Section map"
-   (thresholds, measurement cadence, no-scripts rule) — and read each procedure section
-   in full at the moment you execute it, not in advance. Acting on remembered
-   procedure is the failure this gate exists to prevent; reading at execution time is
-   the same gate, paid only when the event fires.
 
 **Default behavior: keep going.** Finishing an atomic unit → immediately identify and start
 the next one. Finishing a whole stage → immediately identify and start the next stage.
@@ -34,18 +45,6 @@ An ordinary architecture/tooling/design decision is NOT a stop condition — sco
 reliability, scalability, maintainability, and take the top-scored option yourself. 
 After stop by a human-in-the-loop blocker, and the blocker is resolved with the user, 
 you MUST proceed to the next step/stage/gate autonomously, you do not need reconfirmation by the user if you can continue.
-
-
-## Source of truth (binding order)
-
-1. This skill's references/ files.
-2. The ledgers: STATE.md, traceability.md, decisions.md, findings.md.
-3. Live herdr state.
-
-Nothing else is a rule. Briefing caches, predecessor notes, rebirth-prompt
-prose, and session notes are hints. A user chat reply binds only the atomic
-unit it answered; it becomes standing only as a DEC row. When a note and a
-reference file disagree, the reference wins. Re-read it; do not reconcile.
 
 ## Relationship to other skills (no collision)
 
@@ -65,18 +64,27 @@ Re-run this whole loop every time you resume as Inspector. Never assume yesterda
 topology, agent state, or ledger snapshot is still valid — re-derive each step fresh on
 session start/resume. Between wakes inside one session, that re-derivation is gated by the
 wake block's FINGERPRINT (see `references/herdr-polling-reference.md` → "Change
-fingerprint"): unchanged fingerprint + unchanged agent statuses → skip the step-2 tiered
-re-read and act on the block alone; changed fingerprint, topology movement, or a commit →
-full re-read. The fingerprint is recomputed by the wake script on every wake, so silent
-drift is still detected — what is skipped is only re-reading files proven unchanged.
+fingerprint"): fingerprint SAME or SELF + unchanged agent statuses → skip the step-2
+tiered re-read and act on the block alone; a NEW fingerprint or topology movement →
+full re-read. SELF means the change is your own: after any ledger write or commit
+(steps 6-7), run `scripts/insp_wake.sh --stamp` — an unstamped own write reads as NEW
+and forces the re-read. The fingerprint is recomputed by the wake script on every
+wake, so silent drift is still detected — what is skipped is only re-reading files
+proven unchanged or self-authored.
+
+### 0. setup (session start or resume, before any launch, poll, or refresh)
+Read `references/agent-roster-and-dispatch.md` (roles, runtimes, launch flags) and the CORE
+sections of `references/token-budget-and-soft-landing.md` per its "Section map". Read each
+procedure section in full at the moment you execute it — acting on remembered procedure is
+the failure this gate exists to prevent.
 
 ### 1. herdr
 Re-verify the live agent/pane/tab topology from scratch (`herdr agent list`, `workspace
 list`). Never trust a cached list from earlier in this conversation or from memory — it can
 silently reset. → `references/herdr-polling-reference.md`
 
-### 2. current stage
-Read `STATE.md` (root), then `.claude/workflow-garminconnect/{traceability,decisions,
+### 2. project cursor
+For project position only, read `STATE.md` (root), then `.claude/workflow-garminconnect/{traceability,decisions,
 findings}.md`, through QGDW's own `references/state-and-tiers.md` + `references/
 orchestration.md` tiered-loading model. Identify the single next atomic unit inside the
 current stage (or the next stage, if the current one just closed). Per-wake: this full read
@@ -95,9 +103,8 @@ episode; a pending librarian draft silences the re-dispatch. Review and commit t
 returned draft through step 7 like any ledger change.
 
 ### 3. delegate work
-Set/name the 3 standing agents for this stage — **builder** (Claude Code: model - Sonnet, TDD
-implementation), **reviewer** (Codex, delta-check), **investigator** (Codex, isolated
-parallel problem-solving). Brief each by filling its role template
+Set/name the 3 standing agents (builder, reviewer, investigator) exactly as
+`references/agent-roster-and-dispatch.md` defines their runtime and launch flags. Brief each by filling its role template
 (`.claude/inspector-briefings/<role>.md`) — history enters only as ledger ids and file
 paths, never as recap.
 
@@ -121,13 +128,24 @@ not work worth spending a supervised agent's own context on. 250k budget per sup
 — see `references/token-budget-and-soft-landing.md`) → soft-landing, not a hard kill. → `references/token-budget-and-soft-landing.md` + `references/herdr-polling-reference.md`
 
 ### 5. validate agent results
-On every builder GREEN report, actually dispatch the reviewer for a delta-check on the real
-diff FIRST — for every REQ, not just lifetime-safety C++ — before doing your own
-rebuild/rerun. Never accept a self-report as done, and never let your own re-verification
-substitute for the reviewer's independent read; they catch different bug classes. Read the
-actual diff/output yourself too before passing it on. On a QGDW gate FAIL, follow QGDW's
-failed-gate governance (blocker line only) and loop back to repair — don't proceed to
-document/commit.
+Two tiers: the reviewer works every round; your own eyes work once, at acceptance.
+
+**Round loop (every builder GREEN report):** dispatch the reviewer for a delta-check on the
+real diff — for every REQ, not just lifetime-safety C++ — and do nothing else with the diff
+yourself. Your per-round job is transport and ledger only: file each reviewer finding as one
+row under QGDW's ledger writing contract (id, severity, one clause, `file:symbol` — never the
+reviewer's mechanism prose), then re-brief the builder with finding ids. Do NOT read the diff and
+do NOT rerun/rebuild on non-final rounds — a diff the reviewer just rejected will not
+survive, so reading or testing it is spent context. Never accept a self-report as done, and
+never let your own re-verification substitute for the reviewer's independent read; they
+catch different bug classes.
+
+**Acceptance gate (once per unit):** when the reviewer's VERDICT line is PASS (nothing
+blocking, every prior finding CLOSED), then and only then verify with your own eyes: read
+the final diff, run the full gate once, and spot-check 1-2 of the reviewer's cited findings
+at their cited locations — you are verifying the reviewer on the diff that survived, not
+re-deriving its review. On a QGDW gate FAIL, follow QGDW's failed-gate governance (blocker
+line only) and loop back to repair — don't proceed to document/commit.
 
 **Repair-round bound (the rabbit-hole gate).** Before dispatching any repair round, count
 same-class rounds already run (builder GREEN + reviewer NOT-CLOSED each time). At 3, the
@@ -148,7 +166,7 @@ reliability/scalability/maintainability/best-practices — escalate to the user 
 there, not in the roster file). → `references/agent-roster-and-dispatch.md`
 
 ### 6. document
-Update `STATE.md`/`traceability.md`/`decisions.md`/`findings.md` per QGDW's own ledger
+Update `STATE.md`/`traceability.md`/`decisions.md`/`findings.md` — project facts only — per QGDW's own ledger
 discipline — id-collision grep before allocating any new id, status tokens only in the
 canonical ledger files, never "CLOSED" next to an id in `STATE.md`/`design.md`. → `
 references/project-state-and-next-step.md.It is compulsory avoid jargon and extended status on these documents,
@@ -158,14 +176,21 @@ this documents are a cursor not your diary, keep concise ideas according with th
 Verify each staged file's actual diff before staging — never `git add -A`. Expect the real
 pre-commit gate (clang-format/mypy --strict/ledger-drift-lint) to be the actual bar, not
 `ctest`/`pytest` green alone. → `references/project-state-and-next-step.md`
+After any ledger write or commit (steps 6-7), stamp your authorship:
+`scripts/insp_wake.sh --stamp` — otherwise your own edit reads as a NEW fingerprint
+next wake and forces the step-2 re-read.
 
 **Then go back to step 1.** Drive repeated cycles via the **background wake script**
 (`scripts/insp_wake.sh`): launch it as a background Bash task (`run_in_background: true`) as
 the LAST action of every turn. It blocks server-side at zero token cost on `herdr agent wait`
-until any supervised agent reaches idle/done/blocked, or the heartbeat fires (2 min while any
-agent is working — the context-sampling floor, since no context-threshold event exists; 5 min
-when all are settled), then exits and re-invokes you with one compact status block. Read the
-block, run one cycle pass (steps 1–7 as needed), then re-arm the wake and end the turn.
+until any supervised agent reaches idle/done/blocked, or the heartbeat fires (2-min floor
+while any agent is working — the context-sampling floor, since no context-threshold event
+exists — stretched automatically to 3 min when every working pane is under 85% of its
+context threshold and 5 min under 60%; 5 min when all are settled), then exits and
+re-invokes you with one compact status block — static sections (gate markers, hold/scope,
+ledger budgets) collapse to UNCHANGED one-liners, with every block's full copy in the wake
+log. Read the block, run one cycle pass (steps 1–7 as needed), then re-arm the wake and
+end the turn.
 **Invariant: never end a turn without a background wake armed** — a forgotten re-arm silently
 stops all supervision. **A wake is not a substitute for dispatching work.** Ending a turn with
 every agent idle and nothing dispatched is always an Inspector error, not a wait: the settled

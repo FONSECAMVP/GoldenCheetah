@@ -37,45 +37,11 @@ THE TDD LOOP (run it, in order, and show evidence):
            green. No silently expanded public API, no new dependencies without a governing
            DEC. Run the FULL suite at the end, not just your test.
 
-COMMENTS — the code carries the broad perspective, not the ledger. A comment is a brief
-pointer (a DEC/REQ id, a one-line reason for a non-obvious choice, a warning about a subtle
-invariant) — never a multi-paragraph narrative of an investigation. If a reader needs a
-paragraph to understand a choice, that reasoning belongs in the governing DEC, not inline;
-write well-named, well-structured code that speaks for itself and leave only the pointer.
-A pointer comment cites a SYMBOL, never a bare line number — a line number goes stale the
-moment anyone edits a line above it, and nobody re-verifies a comment's citation when they
-touch unrelated code nearby. Write `// DEC-038: see saveRide's autoProcess guard`, not
-`// DEC-038: see line 2910`; a line number is fine beside the symbol as a convenience, never
-as the sole identifier.
-"Brief" is a length bound, not just a citation format: an id plus ONE line of rationale — if
-honoring the choice needs a second paragraph, that reasoning belongs in the id's own record,
-not a longer comment. A real instance from this project: DEC-042/B-R028-17 govern a pair of
-QPointer self-bail guards two lines apart in `saveRide` (CloudService.cpp), and the FIRST got
-an 8-line block —
-```
-// DEC-042 (B-R028-17): either autoProcess call below can nest a QEventLoop
-// (e.g. FixElevation::postProcess) and suspend this frame; a parent
-// teardown (Qt destroying this dialog directly via
-// QObjectPrivate::deleteChildren() on athlete-tab close) delivered into
-// that loop frees `this` while saveRide is still on the stack. Held
-// before the first call because it can suspend too; one check after the
-// second suffices, since only ride->recalculateDerivedSeries() runs
-// between them and it touches `ride`, not `this`.
-QPointer<CloudServiceSyncDialog> self(this);
-```
-while the SECOND, over the paired check two lines later, is the shape every comment should
-have:
-```
-// DEC-042: self-bail after saveRide's own suspension, not just at the call site
-if (self.isNull()) return false;
-```
-Both cite DEC-042 correctly — the citation rule above is being followed in both. But the
-first transcribes a whole investigation inline; nothing in it is WRONG, it simply belongs in
-DEC-042's own cold entry in decisions.md, not in the source. Write it instead as
-`// DEC-042: nested-QEventLoop self-bail, held before either autoProcess call (see
-decisions.md)`, and move which call can suspend, why the check sits before the first call
-rather than after, and why one check after the second suffices into DEC-042's record — the
-comment cites the id, the id's record carries the full why.
+COMMENTS — default none. Where code is non-obvious, one line, why-only: an id pointer, a
+subtle-invariant warning, or the reason for a surprising choice. Cite a SYMBOL, never a bare
+line number. Investigation reasoning (what was measured, which path suspends, why this
+check and not that one) goes in the test name and the commit message — never into a
+comment, and never into a DEC entry: a DEC records the decision, not the investigation.
 
 REPORT FORMAT — return exactly this; the orchestrator updates trace/STATE from it:
 ```

@@ -1,7 +1,7 @@
 # The Three Options Doctrine
 
-Never let the user make an uninformed decision. When a decision is needed, present three
-scored alternatives, recommend, and explain cascade impact — *before* the user chooses.
+Never let the user make an uninformed decision. When a decision is needed, present up to
+three genuinely viable scored alternatives, recommend, and explain cascade impact — *before* the user chooses.
 Rigor is unchanged from the original; only storage is lean (proposal is ephemeral chat;
 one cold entry + one index line persist).
 
@@ -65,18 +65,16 @@ backup-dependent — which pushes DEC-011 toward blue-green." Name the specific 
 and how it changes.
 
 ## On choice — what persists (lean)
-1. Append the **full entry** to `decisions.md` below the index (cold; Tier 2).
+1. Append the **full entry** to `decisions.md` below the index (cold; Tier 2), within the
+   DEC shape of the ledger writing contract (`state-and-tiers.md`) — the chat proposal is
+   not copied in.
 2. Add **one line** to the Decision Index (Tier 1).
 3. Patch `STATE.md` **only if** the decision adds a dependent or is a one-way door
    (so cascades and risk stay visible at Tier 0).
 
-**A decision that gets revisited or corrected later gets a new dated entry appended below
-its original full entry — never an in-place rewrite that piles the whole revision history
-into one paragraph.** The full entry documents the choice made at the time; a later
-correction is its own short, dated addendum (what changed, why, evidence), same as a
-lesson's recurrence sub-entry (`lessons-memory.md`). If a full entry is growing across
-multiple editing sessions rather than being written once and appended-to sparingly, that's
-the bloat pattern this rule exists to stop.
+**A revisited decision gets one dated line** (what changed + pointer); a changed choice is
+a new DEC that supersedes it. A full entry is written once — one that keeps growing across
+sessions is carrying investigation that belongs in tests and commit messages.
 
 ## Who owns the decision — and batching
 
@@ -92,18 +90,16 @@ rather than interrupting N times. This removes interruptions without removing ri
 test is reversibility and residual risk, not effort.
 
 ## Anti-patterns
-- **False trio** — three genuinely plausible options, no strawman padding. On a real
-  decision, if you can only find two, say so and ask the user to help find a third. On a
+- **False trio** — no strawman padding. On a real decision, if only two options are
+  viable, present two and say so. On a
   *uniquely determined repair* there is no trio to find: the doctrine doesn't apply — apply
   the repair and report it (see **When it does NOT apply**).
 - **Generic cascade impact** — always name the concrete downstream step.
 - **Hidden recommendation** — one clear sentence, anchored in the user's constraints.
-- **Skipping "obvious" choices** — present alternatives anyway; the user may know
-  constraints you don't.
 - **Treating cheap and one-way decisions the same** — reversibility sets how much debate
   is warranted; tag it.
-- **Treating a lean toward X as decided** — still present three; let the user pick X with
-  informed conviction.
+- **Treating a lean toward X as decided** — still present the viable alternatives; let the
+  user pick X with informed conviction.
 - **Prose as machine input** — an option whose correctness requires a machine to
   unambiguously interpret human prose (Markdown, comments) is not viable at any score — the
-  viable options change where the fact lives (DEC-064 doctrine), not how the prose is parsed.
+  viable options change where the fact lives, not how the prose is parsed.

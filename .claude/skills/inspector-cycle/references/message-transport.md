@@ -53,7 +53,8 @@ with ONLY that path between the markers.
 ```
 
 **Dispatch is asynchronous. Never block a turn on a reply.** `--mode send` returns as
-soon as the pane starts working. The Inspector then arms `insp_wake.sh`, ends its turn,
+soon as the pane starts working. Into an already-`working` pane it exits 2 `send_failed`
+even though the payload landed — read the pane before re-sending. The Inspector then arms `insp_wake.sh`, ends its turn,
 and collects on the wake that reports that agent idle/done:
 
 ```bash
@@ -109,6 +110,11 @@ Three properties, each closing one way a stray exchange directory appears:
 Spill files are never cited in a ledger row, never referenced by a later brief, and
 never read in a later cycle. Cite the `findings.md` id instead.
 
+The spill exception covers over-cap reports and findings lists — never ledger-scale
+drafts (compaction drafts, archive appends, state-history moves): those are staging
+files at a declared path in the checkout, and the reply carries the path plus a ≤10-line
+summary (`agent-roster-and-dispatch.md` → "Briefing rule", rule 7).
+
 ## Enforcement (this is mechanical, not just prose)
 
 Prose rules get improvised around — an invented exchange directory is exactly what
@@ -120,9 +126,12 @@ that looks like. Two mechanisms make the rule hold:
   exiting 2 with the rule quoted.
 - **A `PreToolUse` hook.** `hooks/guard_exchange_paths.py`, wired via
   `hooks/settings-snippet.json`, denies any `Write`/`Edit` whose path matches a
-  brief/report/findings exchange pattern outside `/tmp/insp-exchange/`. It fires for
-  the Inspector and for any supervised Claude Code pane that inherits the project
-  settings, so neither side can re-create `~/gc-insp-exchange/` by improvisation.
+  brief/report/findings exchange pattern outside `/tmp/insp-exchange/`. It is a Claude
+  Code hook: it covers the Inspector's own pane and the builder — the Codex
+  reviewer and investigator do not inherit it, and on their side the rule rests on the
+  brief's own DELIVER contract plus `dispatch.py`'s reply classification. A Codex worker
+  that writes a stray exchange file anyway is a transport violation to record as a
+  finding, not an enforced path.
 
 A hook denial is a design signal, not an obstacle to route around: it means a brief
 or a reply was about to become a file. Fix the transport, do not relocate the path.

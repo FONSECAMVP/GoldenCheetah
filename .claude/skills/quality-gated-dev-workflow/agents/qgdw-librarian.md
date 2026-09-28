@@ -52,11 +52,11 @@ Your briefing names which budget(s) breached. Apply the matching compaction:
   no live dependents below a '## Dormant index' divider (draft the split; orchestrator
   applies). Never delete a line; dormant is still one line per DEC.
 3 Lessons over ~10 guards for one op-tag -> merge near-duplicate guards by signature into
-  one broader checkable rule (sum their recur/saves counters); archive advisories with
+  one broader checkable rule (sum their recur/miss counters); archive advisories with
   recur:1 and no trigger in 2+ phases to archive/lessons-dormant.md.
 4 Findings table crowded with resolved lines -> condense resolved to one archived line each
   (this should already happen at disposition; fix any leakage).
-5 Any single index/table row (lessons, decisions, findings, trace) over ~300 chars ->
+5 Any single index/table row (lessons, decisions, findings, trace) over ~200 chars ->
   the row has had narrative appended in place instead of routed to its cold entry
   (`lessons-memory.md` / `three-options-doctrine.md` / `state-and-tiers.md`). Split it: keep
   a fixed-shape row (id, status/counters, one clause) and move everything else — dated,

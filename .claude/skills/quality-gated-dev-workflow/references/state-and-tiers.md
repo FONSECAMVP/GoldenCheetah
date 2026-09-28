@@ -48,16 +48,16 @@ PHASE:     <0|1|2|3> · <sub-step / feature + stage>
 OPEN:      <REQ-ids with (stage)>
 BLOCKING:  <finding-id[EFFECT;EFFECT] … | —> # ids + BLOCKS effects; detail in findings.md
 CASCADE:   <DEC-ids + trigger | —>
-LAST_CLV:  <VAL-id> <PASS|FAIL> · <n WARN(summary)>
+LAST_CLV:  <date or VAL-id> <PASS|FAIL> · <n WARN(summary)>
 NEXT_GATE: <gate name> → <remaining conditions>
 CHANGESET: <ids touched since LAST_CLV>      # seeds incremental CLV
 TEAM:      on(<n> agents) | off              # qgdw subagents installed? checked at session start
 RIGOR:     light | standard | full [(REQ-nnn@full)]   # tier from Phase 0 calibration (+ per-feature overrides)
-BUDGETS:   WIKI <n>/700 · DECIDX <n>/500 · LSN <n>g/10 · FINDINGS <n> · STATE <n>kB/12 · ROW <n>B/200   # tokens/lines/bytes vs caps
-COUNTS:    REQ<n> DEC<n> DES<n> TEST<n> · last commit <#>
+BUDGETS:   WIKI <n>/700 · DECIDX <n>/500 · LSN <n>g/10 · ROWS <n> over cap   # measured at the wave gate
 ```
 
-`OPEN/BLOCKING/CASCADE` carry IDs only — never inlined detail. `CHANGESET` is appended on
+`OPEN/BLOCKING/CASCADE` carry IDs only — never inlined detail. STATE never restates the
+map: id counters live only in WIKI REGISTRIES. `CHANGESET` is appended on
 change and cleared when CLV goes green over it.
 
 **`BLOCKING` carries effects, not just ids.** Each entry is `F-nnn[EFFECT;EFFECT]`, where an
@@ -79,8 +79,7 @@ open finding's effects intersect that gate.
 lack fields the current schema defines. At orientation, backfill missing fields as a
 byproduct — never stall on them and never ask permission for the observable ones:
 - **Observable facts → record silently:** `TEAM` (list `.claude/agents/qgdw-*.md` once),
-  `BUDGETS` (measure the hot files), `COUNTS` (from the registries), `CHANGESET` (∅ if
-  unknown — the next CLV rebuilds it).
+  `BUDGETS` (measure the hot files), `CHANGESET` (∅ if unknown — the next CLV rebuilds it).
 - **Judgment fields → one proper ask:** a missing `RIGOR` means the project predates
   proportional rigor — run the calibration NOW as a standard three-options proposal from
   the project's current signals (size, users, exposure, data), then record it. That is the
@@ -108,44 +107,46 @@ F-018 | [TASK:REQ-028;CHECKPOINT:REQ-028;RELEASE] | use-after-free on the late-c
 F-022 | []                                        | stale internal note in wiki/architecture.md
 ```
 
-**Every index/table row above is a fixed-shape record, not a growing document** — same
-rule as the lessons index (`lessons-memory.md`): no prose, no bold/caps narrative, target
-≤~200 chars, never append. A finding that gets corrected, re-scoped, or re-investigated
-gets that story in its `cycles/` narrative (cold); a decision that gets refined gets it in
-its own full entry below the index (cold) — the row itself only ever gets a field replaced
-(status, effect set, one-clause description) or its counters bumped. A row that's growing
-is the same failure mode as an index line that grows: move the content down, don't pile it
-into the row.
+Every row follows the ledger writing contract below.
 
 The wiki's PAGES section names these so the agent knows they exist and when to read them.
+
+## Ledger writing contract (the one place these rules live)
+
+Ledgers are a cursor and an index, not a diary. Writing them costs tokens on every read
+that follows, so write less, less often:
+
+1. **When — at seams only:** a unit accepted or closed, a gate verdict, a decision taken, a
+   phase change. A step, a round in flight, or a re-read writes nothing; a repair round
+   adds at most a new finding row.
+2. **Rows — fixed shape, ≤200 chars:** id · status · effects · one clause · one pointer.
+   Correcting a row replaces a field; it never appends.
+3. **DEC full entry — ≤~40 lines:** question · options (one line each with R/S/M/BP) ·
+   chosen + why (≤3 lines) · cascade and dependents (≤3 lines) · reversibility. A revision
+   is one dated line; a changed choice is a new DEC.
+4. **No investigation prose in any ledger.** Mechanisms, measurements, round history, and
+   reviewer back-and-forth live in the test, the commit message, or an agent report; the
+   ledger holds a pointer (commit hash, test id, path:symbol, report path).
+5. **One fact, one home.** Every other file points; nothing is restated or summarised.
+6. **Over a cap = wrong home.** Move the content to where rule 4 sends it; never compress
+   prose to squeeze it under the cap.
 
 ## Update-as-byproduct
 
 | Operation | STATE patch | Index patch | WIKI patch |
 |---|---|---|---|
 | Start feature | OPEN+=REQ; CHANGESET+=REQ | trace row | — (unless new file) |
-| Create test/source file | CHANGESET+=id | trace row | **MAP line + TEST.next** |
+| Create test/source file | CHANGESET+=id | trace row (TEST ids only) | MAP line only if no line or parent dir covers it; **TEST.next** |
 | Accept a decision | CASCADE if new dependent | decision index +1 | **DEC.next** |
 | Disposition a finding | BLOCKING-=id | findings line→archive | — |
-| CLV green | LAST_CLV; CHANGESET cleared | — | **VAL.next; latest:** |
+| CLV green | LAST_CLV; CHANGESET cleared | — | — (VAL.next only when a report file is written) |
 | **Gate FAIL** | **verdict + blocker line (id[effects]) ONLY** | — | **— (no bump, no registry)** |
 | Close a phase | PHASE; NEXT_GATE | — | **MAP repoint → archive** |
 
-**The index patch above is not deferred follow-up — it happens in the SAME edit as the
-cold-entry write.** Writing a decision's or requirement's full entry while leaving its
-index-row bump for "later" is the index falling behind its own prose (LSN-035) — exactly
-the drift CLV Check 6's no-duplicate-home sub-check (`cross-layer-validation.md`) exists to
-catch, and it should never have a live case to catch.
-
-If `STATE.md` (and, on structural change, `WIKI.md`) weren't touched, the operation isn't
-finished.
-
-**The Gate FAIL row is deliberately narrow.** On a failure write only the current verdict, the
-evidence pointer (command + exit code), the BLOCKS effects with their explicit scope, and the
-next repair. Counts, registry rewrites, index edits, WIKI patches, narratives, compaction,
-archive moves and lesson capture all wait until the repair passes — the byproduct step is
-deferred, not partially performed. Only a security or data-loss discovery may add the minimum
-warning needed to prevent unsafe use.
+The index patch happens in the SAME edit as the cold-entry write, never later. An
+operation that moved the cursor isn't finished until STATE reflects it; an operation that
+didn't move it writes nothing. The Gate FAIL row follows failed-gate governance
+(`orchestration.md`).
 
 ## Lessons at pre-flight
 Guards from `lessons.md` are loaded *by tag* at the start of the matching operation (not

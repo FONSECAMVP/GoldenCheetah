@@ -6,7 +6,7 @@ Follow QGDW's own tiered-loading model (`.claude/skills/quality-gated-dev-workfl
 references/state-and-tiers.md`) — don't re-derive it:
 
 1. Root `WIKI.md` first (the map — what exists and where), then root `STATE.md` (the
-   cursor — current stage, live PIDs/topology narrative, "Next" section).
+   project cursor — QGDW schema fields only; topology comes from live `herdr`, never STATE).
 2. `.claude/workflow-garminconnect/traceability.md`, `decisions.md`, `findings.md` — the
    real ledger; status lives ONLY here (or in `decisions.md` for DEC status), never in
    `STATE.md`/`design.md` prose.
@@ -35,13 +35,16 @@ references/state-and-tiers.md`) — don't re-derive it:
   For `TEST`/`T-NNN` ids specifically, treat both prefixes as one counter (the project
   silently switched prefixes once). Cross-verify by grepping the ledger for that same
   prefix before allocating, to catch a `REGISTRIES` line that's gone stale — never infer a
-  number from a neighboring row or from memory of a past count.
+  number from a neighboring row or from memory of a past count. A reviewer's own finding
+  ids always collide — re-number them before transcribing.
 - **Id collisions, per-REQ finding namespace (`B-R<REQ>-NN`):** there is no `REGISTRIES`
   entry per finding-cycle — grep `findings.md` directly for that exact `B-R<REQ>-` prefix
   and take its true max. Do this BEFORE briefing a reviewer/scout to assign ids, not just
   before writing the ledger row yourself.
 - **Status placement:** `ledger-drift-lint` rejects any line in `STATE.md`/`design.md` that
-  pairs an id with a status token (`GREEN`/`CLOSED`/`DEFERRED`/etc). Say "committed
+  pairs an id with a status token (`GREEN`/`CLOSED`/`DEFERRED`/etc). Closing a `findings.md`
+  row means flipping the disposition cell's LEADING token to `closed`; edit a row by
+  matching its tail, never `split("|")`/join, and escape pipes as `\|`. Say "committed
   `<hash>`" there instead — status itself lives only in the canonical ledger files.
 - **Independent second opinion before a DEC bends a standing rule** (a lesson, an
   architectural exception, a "can't be done" conclusion): dispatch a separate, fresh,
@@ -62,7 +65,8 @@ references/state-and-tiers.md`) — don't re-derive it:
   `ledger_drift_lint.py`), not `ctest`/`pytest` green alone — budget a fix-and-retry cycle.
   If clang-format reformats files in a failed attempt, rebuild + rerun the affected test
   target directly to confirm the reformat was cosmetic before re-staging and retrying
-  (never `--amend`).
+  (never `--amend`). Never commit mid-round, ledgers included: pre-commit's stash empties the
+  diff the reviewer is reading (B-STAGE9-106) — hold commits from dispatch to verdict.
 
 ## If a QGDW skill package bug surfaces mid-cycle
 

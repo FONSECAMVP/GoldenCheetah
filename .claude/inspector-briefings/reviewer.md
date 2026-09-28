@@ -56,6 +56,10 @@ instance of the same root mechanism, NEW means a different mechanism
 (say which).
 Repair-round state (Inspector-supplied fact line, not recap): stated
 class <name or NONE on round 1>, consecutive-same count <n>.
+VERDICT: PASS | FAIL — the terminal line of your reply. PASS only when
+nothing is blocking AND every prior finding is CLOSED; otherwise FAIL.
+The Inspector's acceptance gate fires on this line mechanically — no
+prose verdicts.
 ```
 
 ## Dispatch mechanics

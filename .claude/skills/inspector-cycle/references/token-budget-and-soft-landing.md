@@ -37,29 +37,30 @@ bare percentage, assume a model capacity, or treat `idle`/`done` as zero tokens.
 read-only scripts itself, directly, every poll tick (including against its own pane); it is
 a mechanical file read, not work worth spending a supervised LLM's own context on.
 
-- **Claude Code panes** (builder, and the Inspector's own pane): `scripts/claude_context.py
-  --pid <pid>` reads the process's own session transcript (`~/.claude/projects/<project>/
-  <session-id>.jsonl`, located via the pane's live PID, never a remembered session id or a
-  newest-by-mtime guess) and sums the latest assistant turn's `input_tokens +
-  cache_creation_input_tokens + cache_read_input_tokens` — the same fields
-  `~/.claude/statusline.sh` sums into its `tok Nk` figure (Claude Code 2.1.261's
-  `context_window.total_input_tokens`). Output tokens are excluded, same as the footer.
-  Sidechain (Task-tool subagent) usage events are skipped — they aren't the pane's own
-  context. Pass `--threshold 210000` when reading the Inspector's own pane; the default
-  `250000` applies to a supervised worker.
-- **Codex panes** (reviewer, investigator): `scripts/codex_context.py --pid <pid>` reads the
-  unique rollout file currently open by the pane's Codex process, then selects the latest
-  `event_msg` / `token_count` record's `info.last_token_usage.total_tokens`. This includes
-  cached context; do not subtract cached input or add reasoning/output again. Neither
-  `info.total_token_usage` nor a session database's `tokens_used` is current context.
+- **Codex panes** (reviewer, investigator): `scripts/codex_context.py --pid <pid>`
+  reads the unique rollout file currently open by the pane's Codex process, then selects
+  the latest `event_msg` / `token_count` record's `info.last_token_usage.total_tokens`.
+  This includes cached context; do not subtract cached input or add reasoning/output
+  again. Neither `info.total_token_usage` nor a session database's `tokens_used` is
+  current context. The default `250000` threshold applies to every supervised worker.
+- **Claude Code panes** (builder, and the Inspector's own pane): `scripts/
+  claude_context.py --pid <pid>` reads the process's own session transcript
+  (`~/.claude/projects/<project>/ <session-id>.jsonl`, located via the pane's live PID,
+  never a remembered session id or a newest-by-mtime guess) and sums the latest assistant
+  turn's `input_tokens + cache_creation_input_tokens + cache_read_input_tokens` — the
+  same fields `~/.claude/statusline.sh` sums into its `tok Nk` figure (Claude Code
+  2.1.261's `context_window.total_input_tokens`). Output tokens are excluded, same as
+  the footer. Sidechain (Task-tool subagent) usage events are skipped — they aren't the
+  pane's own context. The investigator takes the default `250000` threshold; pass
+  `--threshold 210000` only when reading the Inspector's own pane.
 
 For each pane, get its current process identity without touching its input, then run the
 matching reader:
 
 ```bash
 herdr pane process-info --pane <live-pane-id>
-python3 .claude/skills/inspector-cycle/scripts/claude_context.py --pid <claude-pid>   # builder / Inspector's own pane
 python3 .claude/skills/inspector-cycle/scripts/codex_context.py --pid <codex-pid>     # reviewer / investigator
+python3 .claude/skills/inspector-cycle/scripts/claude_context.py --pid <claude-pid>   # builder / Inspector's own pane (--threshold 210000 for the latter)
 ```
 
 Use the `pid` of the `name: "claude"` or `name: "codex"` entry (as appropriate) in
@@ -77,7 +78,9 @@ may have no transcript/rollout content yet until its first turn. Missing/ambiguo
 incomplete records, and compaction without a new usage sample stay unknown; do not carry
 the old session's count forward. An old timestamp in an idle, unchanged session is its last
 reported count. If a working agent's sample stops advancing across polls, flag telemetry as
-stale and do not claim it is safely below threshold. These are last-reported measurements,
+stale and do not claim it is safely below threshold. An `unknown` on your OWN pane is never
+"probably fine": cross-check your footer's `tok Nk` at once. A Codex footer's `Context N%` is
+% used, not remaining. These are last-reported measurements,
 not predictions of in-flight growth.
 
 Both readers only read files and exit; neither polls in the background, sends keystrokes,
@@ -90,7 +93,9 @@ Field semantics: [Claude status-line documentation](https://code.claude.com/docs
 Recheck a reader's field assumptions if the underlying transcript/rollout format changes.
 
 **Known unknown case: a mid-session model fallback rotates the transcript (Claude Code
-panes only).** Confirmed 2026-09-12 on the builder pane: a rate-limit auto-fallback (see
+panes only — the investigator and the Inspector's own pane).**
+Confirmed 2026-09-12 on what was then the builder pane (Claude Code at the time): a
+rate-limit auto-fallback (see
 `herdr-cli-operational-knowledge.md`'s "silently auto-fall-back" note) switched the running
 `claude` process to a non-Anthropic backend (`glm-5.3-flash[1m]`, visible as an unprompted
 `/model` entry in scrollback) and, in doing so, started writing to a BRAND NEW, still-empty
@@ -103,9 +108,8 @@ is no reliable field in the new file linking it back to the prior one's accumula
 - **Detect it:** `unknown` / "no recent usage event" persisting across 2+ poll ticks for a
   pane that is otherwise visibly active (`blocked`/`working`, not a fresh idle pane) — check
   `herdr pane read <pane> --source visible` scrollback for an unprompted `/model` switch
-  to an id that isn't the pane's expected model — Sonnet for the builder
-  (`agent-roster-and-dispatch.md` → "Builder launch mode"), Opus for the Inspector's own
-  pane.
+  to an id that isn't the pane's expected model — Sonnet for the builder, Opus for
+  the Inspector's own pane (`agent-roster-and-dispatch.md` → "Pane launch modes").
 - **Recover, for that pane, that tick only:** read the visible footer instead (`herdr pane
   read <pane> --source visible --lines 12`, the `tok Nk/Mk` figure, first number, per the
   general Claude Code footer semantics above). Keep re-attempting `claude_context.py` every
@@ -141,25 +145,30 @@ in-flight process costs more to recover later than a short, controlled pause doe
    reports; don't guess from the outside, and don't treat a `done`/`idle` snapshot as
    permanent (a fresh turn can start again within seconds).
 3. **EXIT and restart cleanly:**
-   - Claude Code pane: `/exit` then a separate `enter` keypress — drops to a plain shell
-     prompt; verify the old process is actually gone, THEN `herdr agent start <newname>
-     --kind claude --pane <same-id> -- --permission-mode auto --model sonnet` re-establishes
-     tracking (the old custom name is lost, re-rename if needed) **and launches the fresh
-     session already in auto mode and on Sonnet** — the builder's standing model
-     (`agent-roster-and-dispatch.md` → "Builder launch mode"). A plain restart with no args
-     comes back in "accept edits on" — one step short of auto — and will stall on the first
-     Bash permission dialog with nobody piloting it to click through.You MUST activate auto
-     mode in the next way : The `--permission-mode auto` launch flag is the reliable
-     mechanism: verify by reading the fresh pane's visible status line for `auto mode on`
-     before treating the restart as complete, not just by trusting the start command's own
-     success response. Same discipline for the model: the harness default is `opus`
-     (`~/.claude/settings.json`) and a prior session's `/model` switch does not survive the
-     process exit, so the `--model sonnet` flag rides on every relaunch and the same
-     status-line read must show Sonnet before the restart counts as complete. Builder only
-     — the Inspector's own pane stays Opus (see "Successor's first actions", step 0).
-   - Codex pane: `/new` is lighter — resets context but keeps the SAME process/pane/agent
-     name; there is no old process to verify gone and nothing to restart, and its permission
-     mode (whatever it was) carries over since the process itself never exited.
+   - Codex pane (reviewer, investigator): `/new` is lighter — resets context but
+     keeps the SAME process/pane/agent name; there is no old process to verify gone and
+     nothing to restart, and its permission mode (whatever it was) carries over since the
+     process itself never exited. `/new` then asks where the conversation should run —
+     send a second `enter` for option 1 (current checkout), and read the pane for a fresh
+     prompt before dispatching: a brief sent into that menu is silently swallowed.
+   - Claude Code pane (builder): `/exit` then a separate `enter` keypress — drops
+     to a plain shell prompt; verify the old process is actually gone, THEN `herdr
+     agent start <newname> --kind claude --pane <same-id> -- --permission-mode auto
+     --model sonnet` re-establishes tracking (the old custom name is lost, re-rename if
+     needed) **and launches the fresh session already in auto mode and on Sonnet** —
+     the roster's standing model for Claude panes (`agent-roster-and-dispatch.md` → "Pane launch
+     modes"). A plain restart with no args comes back in "accept edits on" — one step
+     short of auto — and will stall on the first Bash permission dialog with nobody
+     piloting it to click through. The `--permission-mode auto` launch flag is the
+     reliable mechanism (`shift+tab` via `herdr agent send-keys` does NOT reliably
+     change the mode): verify by reading the fresh pane's visible status line for
+     `auto mode on` before treating the restart as complete, not just by trusting the
+     start command's own success response. Same discipline for the model: the harness
+     default is `opus` (`~/.claude/settings.json`) and a prior session's `/model`
+     switch does not survive the process exit, so the `--model sonnet` flag rides on
+     every relaunch and the same status-line read must show Sonnet before the restart
+     counts as complete. Roster panes only — the Inspector's own pane stays Opus (see
+     "Successor's first actions", step 0).
 4. **Re-brief** the fresh agent using the briefing rule in `agent-roster-and-dispatch.md`
    (fill the role template in `.claude/inspector-briefings/<role>.md`, dispatch it with
    `scripts/dispatch.py` per `message-transport.md`), carrying forward: current
@@ -187,9 +196,10 @@ agency) retire YOU — not the other way around.**
 
 At ~210k of your own tokens:
 1. Recognize the threshold and confirm you're at a safe stopping point (real, substantive
-   work, not deferral) and update status documentation,`STATE.md`, the ledgers for the Successor — same discipline as any soft-landing.
+   work, not deferral) and record the project position in `STATE.md` and the ledgers (project facts only — nothing about agents or tooling) — same discipline as any soft-landing.
 2. Spawn a successor: `herdr tab create` a clean new tab (never squeeze into a busy one),
-   then `herdr agent start <new-name> --kind claude --pane <new-pane-id>`. **Name it by
+   then `herdr agent start <new-name> --kind claude --pane <new-pane-id> -- --permission-mode
+   auto --model opus` (the flags remove step 0's auto-mode dialog). **Name it by
    incrementing your OWN version suffix**, not an arbitrary label: the first Inspector in a
    project session is `garmin_inspector_v1_0`; each succession bumps the minor number
    (`v1_0` → `v1_1` → `v1_2` → ...) — herdr agent names only allow lowercase letters,
@@ -208,8 +218,8 @@ At ~210k of your own tokens:
         never assume.
 
         FIRST ACTIONS:
-        1. Skill steps 0-2: environment, live topology, then STATE.md + the three
-          ledgers. The cursor there names the current stage and the next unit.
+        1. Skill steps 0-2: setup references, live herdr topology, then STATE.md + the
+          three ledgers for project position only (stage, next unit).
         2. State, from what you just read, what is running and what is next.
         3. Verify `<new-name>` and `<old-name>` against `herdr agent list`; retire the
           idle predecessor `<old-name>` per the skill.
@@ -264,7 +274,7 @@ On receiving a rebirth prompt, before anything else:
    stage) immediately — do not wait for, or ask for, a manual briefing from the
    predecessor. The skill's whole design (re-derive every step fresh from live state, never
    trust a cached snapshot) is exactly what makes a cold Inspector self-orienting: reading
-   `STATE.md`, the ledgers, and live herdr topology yourself tells you what's running and
+   live herdr topology tells you what's running, and `STATE.md` plus the ledgers tell you
    what the next atomic unit is, the same way it would after any ordinary topology reset.
 2. Once you can state, from evidence you just read yourself, what's currently running and
    what's next — you are oriented. Re-verify the predecessor's pane id via `herdr agent

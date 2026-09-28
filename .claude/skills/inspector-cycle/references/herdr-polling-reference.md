@@ -21,9 +21,11 @@ Recheck your messaging identity periodically through that manager's own tools.
 
 Preferred: run `scripts/insp_wake.sh` as a background Bash task (`run_in_background: true`)
 as the last action of every turn. It blocks server-side at zero token cost on `herdr agent
-wait` until a supervised agent reaches idle/done/blocked, or the heartbeat fires (2 min while
-any agent is working — the context-sampling floor, since Herdr supplies no
-context-threshold event; 15 min when all are settled), then exits and re-invokes the
+wait` until a supervised agent reaches idle/done/blocked, or the heartbeat fires (2-min
+floor while any agent is working — the context-sampling floor, since Herdr supplies no
+context-threshold event — auto-stretched by measured headroom: 3 min when every working
+pane is under 85% of its context threshold, 5 min under 60%; 5 min when all are
+settled), then exits and re-invokes the
 Inspector with one compact status block. Never end a turn without a background wake armed; a
 forgotten re-arm silently stops all supervision. The script fails loudly on unresolved agent
 names — rename the roster agents, do not edit remembered pane ids into it. Do not relax the
@@ -44,20 +46,25 @@ earlier intervention.
    Record the next action, owner, and check time. Confirm any watcher is healthy.
 
 **Change fingerprint (ledger re-read gate):** the wake block ends with a FINGERPRINT
-line — one hash over the stat of `STATE.md` + the 3 ledgers and the repo HEAD. The
-working-tree dirty-set is deliberately excluded: step 2 re-reads ledgers, and builder
-source edits must not re-trigger it — dirty paths remain visible every wake in the
-block's hold/scope section. Unchanged fingerprint + unchanged agent statuses since the
-last wake you handled → skip the step-2 tiered ledger re-read and act on the block
-alone. Full re-read stays mandatory on session start/resume, topology movement,
-fingerprint change, or any commit. The fingerprint is recomputed by the wake script on
-every wake, so silent ledger drift is still detected; what is skipped is only re-reading
-files proven unchanged.
+line — one hash over the stat of `STATE.md` + the 3 ledgers and the repo HEAD, tagged
+SAME / SELF / NEW. The working-tree dirty-set is deliberately excluded: step 2 re-reads
+ledgers, and builder source edits must not re-trigger it — dirty paths print in the
+block's hold/scope section on change, with the full copy of every block in the wake log.
+SAME (identical to the previous block) or SELF + unchanged agent statuses since the last
+wake you handled → skip the step-2 tiered ledger re-read and act on the block alone.
+SELF means the fingerprint matches the self-authorship stamp: after any ledger write or
+commit, run `scripts/insp_wake.sh --stamp`, or your own edit reads as NEW and forces the
+re-read. Full re-read stays mandatory on session start/resume, topology movement, or a
+NEW fingerprint. The fingerprint is recomputed by the wake script on every wake, so
+silent ledger drift is still detected; what is skipped is only re-reading files proven
+unchanged or self-authored.
 
 **Wake log:** every block is also appended to the wake log (`/tmp/insp_wake.log` by
 default, override with `WAKELOG=`). Check times, coverage gaps, and unchanged readings
 live in that file — read the tail on demand — instead of being restated in chat; the
-Inspector's own context is the scarcest pane on the board.
+Inspector's own context is the scarcest pane on the board. Static sections (gate
+markers, hold/scope, ledger budgets) that did not change since the previous block
+collapse to one UNCHANGED line in the block; their full content is still in the log.
 
 Monitoring reads metadata, output, and files; it never sends `/status`, Enter, or
 composer-clearing keys. Report meaningful changes, actions, and coverage gaps

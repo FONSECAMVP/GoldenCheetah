@@ -56,7 +56,7 @@ discipline) — no release on a HEAD that only builds against a dirty tree.
    ordinary staleness, and re-syncing the copies is not the fix — removing the second home
    is.
    **Row-bloat sub-check:** an id-indexed ledger row that has grown into a multi-KB narrative
-   instead of splitting into its cold entry (the LSN-034 anti-pattern) is a WARN here, not a
+   instead of pointing to its evidence (ledger writing contract, `state-and-tiers.md`) is a WARN here, not a
    FAIL — informational, does not block. Mechanizable: `python3 scripts/row_health_check.py
    --root .` (exit 1 lists every offending row/line and its cap, one per ledger); run it
    alongside this check, not as a gate.
@@ -90,23 +90,13 @@ Rules that override the table:
 
 ## Output (the only thing written hot)
 ```
-LAST_CLV: VAL-013 PASS · 1 WARN(trace-sync REQ-009)
+LAST_CLV: 2026-09-28 PASS · 1 WARN(trace-sync REQ-009)
 ```
-Full per-check detail goes to a cold `validations/` report (archived on phase close). On
-**green**, the run bumps `VAL.next` and updates `latest:` in the WIKI REGISTRIES, so the
-**validation history is visible at a glance from the brain** — this is what keeps many
-validation runs from disorienting the agent.
+An incremental PASS writes only that line. A cold `validations/VAL-NNN.md` report (and the
+`VAL.next` bump) is written only for a FULL walk or to hold a FAIL's detail.
 
-**On FAIL, write only these four things:**
-1. the current verdict;
-2. the evidence pointer, with the command and the exit code;
-3. the BLOCKS effects and their explicit scope;
-4. the next repair.
-
-The `VAL.next` bump, the `latest:` update, registry rewrites, counts, narratives, compaction,
-archive moves and any lesson evaluation **wait until the repair passes**. (A security or
-data-loss discovery may additionally record the minimum warning required to prevent unsafe
-use, and must not trigger an automatic governance wave.) A remediation with genuine
+**On FAIL:** failed-gate governance (`orchestration.md`) — four items, nothing else until
+the repair passes. A remediation with genuine
 alternatives goes through the Three Options Doctrine; a uniquely determined repair does not —
 apply it under the existing task/finding and record it in the normal test/commit report.
 

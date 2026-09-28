@@ -83,6 +83,6 @@ open questions and prevents re-litigation. If nothing was investigated-and-clear
 LESSON-CANDIDATES:  (only recurring/process mistakes, phrased as checkable rules)
 <op-tag> | <rule that would have prevented it>
 
-NARRATIVE: <the full cycle write-up, structured by the cycle's sections>
+NARRATIVE: <≤30 lines, structured by the cycle's sections; omit if CLEAN>
 ```
 Do not assign final F-numbers or write any file — the orchestrator owns IDs and ledgers.
