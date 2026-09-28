@@ -26,8 +26,9 @@ wiki/                    5 spokes → PAGES
                          test_clv_findings.py (its 18 synthetic self-tests)
                          archive/state-history.md = ALL superseded STATE narrative (§ 9 = the pre-2026-08-30 cursor,
                          § 11 = the full pre-2026-09-06 STATE.md, § 12 = that pass's BUDGETS breach detail)
-                         archive/findings-detail.md = full pre-compaction cell content for any findings.md row
-                         capped 2026-09-06 (addressed by `<ID> (line n, cycle)` — an id is not unique alone, ORCH-022)
+                         archive/ = verbatim pre-compaction text (2026-09-06, 2026-09-28): findings-detail.md
+                         (rows marked ↗), findings-notes.md, decisions-full.md (full DEC entries + old index
+                         rows), traceability-history.md (full REQ rows ↗ + dated slice records) — Tier 3 only
 .claude/workflow-aicoach/   CLOSED ledger (AI Coach) — provenance only, OWN DEC/REQ/TEST numbering
 .claude/agents/ hooks/ settings.json   5 qgdw agent defs · installed guard + drift-lint copies · hook wiring
 .claude/skills/          VENDOR TERRITORY, replaced wholesale on update — never put project files here (ORCH-004)
@@ -71,18 +72,16 @@ REQ  garmin:001–029 + 16 REQ-NF-* ids (10 traceability rows)   prd.md         
 DEC  garmin:001–084 (index + full entries; DEC-040 ID NOTE covers the "parked teardown draft"
      mislabel — cite decisions.md, never this line)   decisions.md ## Decision index   next:garmin-085
 DES  garmin:001–014 (+001a,003a)    design.md                                          next:garmin-015
-TEST garmin:T-001–T-260 (per-id REQ/DEC mapping + build state → traceability.md ONLY;
-     T-240 reserved by DEC-079/-082, T-258..T-260 by DEC-084, T-246 a declared never-written
-     gap; a grep for the max also sees a next-pointer, so trust this line and STATE COUNTS)
-     traceability.md                                                                  next:garmin-T-261
+TEST garmin:T-001–T-263 incl. T-261b (per-id mapping → traceability.md ONLY; T-240 used by
+     slice 3; T-246 a declared never-written gap; B-STAGE9-95 owns the T-212..T-234 cell backfill)
+     traceability.md                                                                  next:garmin-T-264
 VAL  garmin:001–018                 traceability.md ## Validations run · validations/archive/   next:garmin-019
 LSN  001–085  (contiguous; LSN-048 has an index line AND a cold entry — that is the file's two-tier
      shape, not a duplicate; per-id rule/check → lessons.md, hot index lines are the read)
      lessons.md                                                                        next:086
-F    no F-### namespace — findings are `<cycle>-<seq>`; process series ORCH-001–062, true max
-     B-STAGE9-145 (grep `B-STAGE9-[0-9]+` for the real max before allocating; this pointer
-     does not cover that namespace); disposition/severity SSOT is findings.md, never here
-     (an id is NOT unique alone — cite id AND Cycle-column, ORCH-022)                   next:ORCH-063
+F    no F-### namespace — findings are `<cycle>-<seq>`; process series ORCH-001–062, Stage-9
+     series B-STAGE9-001–156 (a reviewer's own ids always collide — re-number); disposition/
+     severity SSOT is findings.md (cite id AND Cycle-column, ORCH-022)   next:ORCH-063 · next:B-STAGE9-157
 -- retired ledger (provenance only): aicoach:DEC-001–013, REQ-001–020, TEST-001–020 — these COLLIDE with the
    garmin ranges; always qualify (coach:DEC-NNN / garmin:DEC-NNN).
 why a number was reserved → wiki/registry-detail.md (DATED provenance, NOT a status source)
