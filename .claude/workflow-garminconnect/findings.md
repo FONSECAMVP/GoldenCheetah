@@ -571,7 +571,7 @@ notes are in `archive/findings-notes.md`. Row shape: ledger writing contract (QG
 | B-STAGE9-158 | reviewer 09-28 | blocking BLOCKS: {STAGE:9;B-STAGE9-130} | skipped migration (null cache/no imported) pauses backfill | fixed r3 | DEC-087 |
 | B-STAGE9-159 | reviewer 09-28 | blocking BLOCKS: {STAGE:9;B-STAGE9-130} | added comments still multi-line prose (slice-3 files) | fixed r6 | r5 line list; then non-blocking |
 | B-STAGE9-160 | reviewer 09-28 | non-blocking | phase-2 compact re-serialize may reformat hand-edited rows; values kept | accept-with-note | store writes Compact |
-| B-STAGE9-161 | builder r3 09-28 | non-blocking | GarminConnect.cpp recordImport v0 cursor-skip now dead under DEC-087 | open | DEC-087 b7 |
+| B-STAGE9-161 | builder r3 09-28 | non-blocking | GarminConnect.cpp recordImport v0 cursor-skip now dead under DEC-087 | fixed; T-243a/T-244b/T-247 re-pinned | DEC-083, DEC-087 |
 | B-STAGE9-162 | reviewer 09-28 | blocking BLOCKS: {STAGE:9;B-STAGE9-130} | NotFound imported still writes phase 1 before phase 3 | fixed r4 | DEC-087 b3 |
 | B-STAGE9-163 | insp gate 09-28 | blocking BLOCKS: {STAGE:9;B-STAGE9-130} | new dialog tr() string absent from 13 .ts catalogs (i18n guard) | fixed | 13 .ts rows, reviewer PASS |
 | B-STAGE9-164 | insp gate 09-28 | blocking | compaction 9f99d95cf moved DEC-054 gc-arms sentinel out of its fixed slot | fixed | sentinel restored |

@@ -28,7 +28,7 @@ LAST_CLV:  clv_findings.py 2026-09-28: 0 MALFORMED / 0 UNKNOWN-* / 0 NEEDS-DISPO
            9 OUTSTANDING / 561 rows.
 NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not `-L garmin-fast`
            (B-STAGE9-115). -128 is subsumed by DEC-084 (landed in `e15d863ba`).
-           -78/-79 discharged by the 2026-09-29 live run. -161/-165 non-blocking.
+           -78/-79 discharged by the 2026-09-29 live run. -161 fixed; -165 non-blocking.
            NEXT: human gate — PUSH `garmin/req028-row-lifetime` (SSH URL; HTTPS origin has no
            credential helper), then the AppVeyor run closes -48/-54/-57/-71.
            -79's completion seam is settled by measurement: no tolerance window without new
@@ -36,7 +36,7 @@ NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not 
            KEEP `~/.goldencheetah/Andy/config/garminconnect/backfill/`'s two live staged files —
            the -78 regression fixture. NEVER commit the untracked `python3.13-3.13.5/`,
            `python3.13_*.tar.xz`/`.dsc`/`.asc`, `FITmetadata.json`.
-CHANGESET: 32 commits ahead of `origin/garmin/req028-row-lifetime`. Code commits:
+CHANGESET: 33 commits ahead of `origin/garmin/req028-row-lifetime`. Code commits:
            `b82063118` slice 1, `54afaaf16` DEC-076's lock, `930329fec` slice 2 + DEC-078,
            `ab0bb7586` -126/-125/-124, `4dacd8447` -127, `e15d863ba` -111/-133, `5226bdbf6` slice 3
            (-130/-154/-155/-157..-159/-162/-163, DEC-087).

@@ -1063,11 +1063,11 @@ class TestGarminConnectConnectPersist : public QObject
                  "nothing may be recorded for the disconnected account either");
     }
 
-    // T-243 (a) — DEC-079 amendment, B-STAGE9-127: an unversioned (v0) backfill
-    // state seeded directly on disk must survive a successful readFile()
-    // unchanged in its schemaVersion and cursor, while the imported map still
-    // gains the activity (recordImported is unconditional).
-    void v0BackfillStateSurvivesReadFileCursorUnchangedButImportRecorded()
+    // T-243 (a) — DEC-083 clause 1: an unversioned (v0) backfill state seeded
+    // directly on disk must survive a successful readFile() unchanged in its
+    // schemaVersion and cursor, and the activity lands in pending, same as a
+    // v1 state (B-STAGE9-161).
+    void v0BackfillStateSurvivesReadFileCursorUnchangedButPendingRecorded()
     {
         QTemporaryDir tmp;
         QVERIFY(tmp.isValid());
@@ -1102,12 +1102,13 @@ class TestGarminConnectConnectPersist : public QObject
 
         const GarminSidecarStore::BackfillLoadResult after = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
         QVERIFY(after.isOk());
-        QCOMPARE(after.state.schemaVersion, 0); // T-243: DEC-079 amendment — no cursor save on v0
+        QCOMPARE(after.state.schemaVersion, 0); // DEC-087 b1: the writer preserves a loaded v0
         QCOMPARE(after.state.lastSuccessStartTimeGMT, QStringLiteral("2026-07-01 00:00:00"));
+        QVERIFY2(after.state.pending.contains(QStringLiteral("V0A")), "readFile must record V0A pending");
 
         const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
-        QVERIFY(imported.isOk());
-        QVERIFY2(imported.entries.contains(QStringLiteral("V0A")), "recordImported must still run unconditionally");
+        QVERIFY2(!imported.isOk() || !imported.entries.contains(QStringLiteral("V0A")),
+                 "download time must not write imported directly, even on a v0 state");
     }
 
     // T-243 (b) — sibling to (a): the same run against a v1 (post-migration)

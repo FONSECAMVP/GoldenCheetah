@@ -913,16 +913,10 @@ void GarminConnect::recordImport(const QString& activityId, const QString& stage
     entry.startTimeGMT = startTimeGMT;
     entry.localFilename = stagedFilename;
 
-    // DES-010 step 5e — DEC-079 amendment, B-STAGE9-127/-132, DEC-080/B-STAGE9-111.
     // DEC-083 clause 1: download time writes the PENDING row and nothing
     // else — the cursor is a completeness watermark, advanced only by
     // promotion (rideRegistrationCompleted -> GarminSidecarStore::promotePendingBackfill).
-    const GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(dir, uid);
-    if (bf.isOk() && bf.state.schemaVersion == 0) {
-        GarminSidecarStore::recordImported(dir, uid, activityId, entry);
-    } else {
-        GarminSidecarStore::recordPendingBackfill(dir, uid, activityId, entry);
-    }
+    GarminSidecarStore::recordPendingBackfill(dir, uid, activityId, entry);
 
     // DES-010 step 7 (OUT OF SCOPE this slice — REQ-NF-Obs-001): the ErrorBus
     // success event (count + duration) is a later item. TODO(REQ-NF-Obs-001).

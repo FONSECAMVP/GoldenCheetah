@@ -1060,11 +1060,10 @@ class TestGarminConnectSync : public QObject
         QCOMPARE(entries2.size(), 0);
     }
 
-    // T-244 (b) — Inspector correction to the original B-STAGE9-111 brief's DO
-    // item 3: the v0 guard must skip the pending write too, since
-    // `recordPendingBackfill` shares `serializeBackfillState`'s unconditional
-    // schema stamp with `saveBackfillState` (both DEC-079/B-STAGE9-127).
-    void v0BackfillStateSkipsPendingWriteToo()
+    // T-244 (b) — B-STAGE9-161: DEC-083 clause 1 makes download time write a
+    // pending row unconditionally, on v0 exactly as on v1; DEC-087 b1 is what
+    // keeps the resulting file's schema_version at 0.
+    void v0BackfillStateRecordsPendingAndPreservesSchemaVersion()
     {
         QTemporaryDir tmp;
         QVERIFY(tmp.isValid());
@@ -1097,16 +1096,15 @@ class TestGarminConnectSync : public QObject
         QVERIFY2(gc.readFile(&data, entries.at(0)->name, entries.at(0)->id),
                  "T-244(b): readFile against v0 must succeed");
 
-        QFile after(v0Path);
-        QVERIFY(after.open(QIODevice::ReadOnly));
-        QCOMPARE(after.readAll(), v0Json); // byte-identical: no schema_version, no pending
+        const GarminSidecarStore::BackfillLoadResult after = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(after.isOk());
+        QCOMPARE(after.state.schemaVersion, 0);
+        QVERIFY2(after.state.pending.contains(QStringLiteral("V0P")), "T-244(b): readFile must record V0P pending");
     }
 
-    // T-247 — B-STAGE9-132 correction to T-244(b): DEC-079's amendment KEEPS
-    // recordImported() on the v0 arm (only the backfill-state write is skipped),
-    // so the download-time contract for a legacy athlete is unchanged from
-    // pre-slice-2, while backfill-state stays byte-identical to its seed.
-    void v0ReadFileRecordsImportedAndLeavesBackfillStateByteIdentical()
+    // T-247 — B-STAGE9-161: a v0 athlete's download-time write is pending-only,
+    // same as v1; `imported` gains the entry only through promotion.
+    void v0ReadFileRecordsPendingNotImported()
     {
         QTemporaryDir tmp;
         QVERIFY(tmp.isValid());
@@ -1138,13 +1136,14 @@ class TestGarminConnectSync : public QObject
         QByteArray data;
         QVERIFY2(gc.readFile(&data, entries.at(0)->name, entries.at(0)->id), "T-247: readFile against v0 must succeed");
 
-        QFile after(v0Path);
-        QVERIFY(after.open(QIODevice::ReadOnly));
-        QCOMPARE(after.readAll(), v0Json); // byte-identical: no schema_version, no pending
+        const GarminSidecarStore::BackfillLoadResult after = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(after.isOk());
+        QCOMPARE(after.state.schemaVersion, 0);
+        QVERIFY2(after.state.pending.contains(QStringLiteral("V0Q")), "T-247: v0 must record pending at download time");
 
         GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
-        QVERIFY(imported.isOk());
-        QVERIFY2(imported.contains(QStringLiteral("V0Q")), "T-247: v0 must still record at download time");
+        QVERIFY2(!imported.isOk() || !imported.contains(QStringLiteral("V0Q")),
+                 "T-247: download time must not write imported directly, even on v0");
     }
 
     // T-245 — abandonment: readFile alone must never self-promote. Only an
