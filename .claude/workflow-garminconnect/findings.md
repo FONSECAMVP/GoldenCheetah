@@ -411,12 +411,12 @@ notes are in `archive/findings-notes.md`. Row shape: ledger writing contract (QG
 | B-OBS001-02 | Rev Obs-001 09-12 | non-blocking | ObsCapture static state unsynchronized; ctor race | FIXED | — ↗ |
 | B-I18N001-01 | Rev i18n-001 09-12 | blocking | tr() context mismatch: extraction vs runtime resolve | FIXED | — ↗ |
 | B-I18N001-02 | Rev i18n-001 09-12 | non-blocking | Merge script left absolute paths in 5 msg blocks | FIXED | — ↗ |
-| B-STAGE9-01 | Stage9 connect 09-13 | blocking BLOCKS: {STAGE:9, TASK:REQ-002, TASK:REQ-009, TASK:REQ-012, TASK:REQ-017} | Adapter never calls Py_Initialize w/o GC_WANT_PYTHON | FIXED | DEC-052,173135907 ↗ |
+| B-STAGE9-01 | Stage9 connect 09-13 | blocking BLOCKS: {STAGE:9, TASK:REQ-002, TASK:REQ-009, TASK:REQ-012, TASK:REQ-017} | No Py_Initialize w/o GC_WANT_PYTHON | FIXED | DEC-052,173135907 ↗ |
 | B-STAGE9-02 | Rev DEC-052 09-13 | blocking | PyProcessBootstrap.cpp missing from qmake NO_PCH_SOURCES | FIXED | — ↗ |
 | B-STAGE9-03 | Rev DEC-052 09-13 | blocking | Bare bootstrap call skips inittab hook on restart | FIXED | — ↗ |
 | B-STAGE9-04 | Rev DEC-052 09-13 | non-blocking | Doc claims GIL always released; false for ext-init | SUPERSEDED | B-STAGE9-05 ↗ |
 | B-STAGE9-05 | Rev DEC-052 fix 09-13 | blocking | PyGILState_Check fix could steal unrelated thread's GIL | FIXED | — ↗ |
-| B-STAGE9-06 | Stage9 retest2 09-13 | blocking BLOCKS: {STAGE:9, TASK:REQ-002, TASK:REQ-009, TASK:REQ-012, TASK:REQ-017} | curl_cffi ImpersonateError via libcurl symbol interposition | FIXED | 0c05f7c18 ↗ |
+| B-STAGE9-06 | Stage9 retest2 09-13 | blocking BLOCKS: {STAGE:9, TASK:REQ-002, TASK:REQ-009, TASK:REQ-012, TASK:REQ-017} | curl_cffi ImpersonateError: libcurl symbol clash | FIXED | 0c05f7c18 ↗ |
 | B-STAGE9-07 | pch_investigator 09-13 | non-blocking | Py_SetProgramName dangling temp wstring ptr (<=3.12) | FIXED | 28958dc16 ↗ |
 | B-STAGE9-08 | Rev chain 8rnd 09-13 | blocking | exceptionType field: 8 rounds of untrusted-string bypass | FIXED | — ↗ |
 | B-STAGE9-09 | Stage9 retest4 09-13 | blocking BLOCKS: {STAGE:9, TASK:REQ-002, TASK:REQ-003} | full_name_id missing on real lib; raises unclassified | FIXED | 4cffe2835 ↗ |
@@ -489,7 +489,7 @@ notes are in `archive/findings-notes.md`. Row shape: ledger writing contract (QG
 | B-STAGE9-76 | insp v1_54 09-24 | non-blocking BLOCKS: {} | LastTest.log unreliable count source for multi-label run | open | — ↗ |
 | B-STAGE9-77 | insp v1_55 09-24 | non-blocking BLOCKS: {} | reviewer's format-stability reasoning was wrong basis | open | — ↗ |
 | B-STAGE9-78 | insp v1_55+user 09-26 | blocking BLOCKS: {STAGE:9;CHECKPOINT:STAGE:9} | downloaded files are ZIP not FIT; imports never happen | open | — ↗ |
-| B-STAGE9-79 | insp v1_55+user 09-26 | blocking BLOCKS: {STAGE:9;CHECKPOINT:STAGE:9} | cancel/fail still marks activity imported permanently | code complete s1-s3; live re-run with -78 | DEC-071 ↗ |
+| B-STAGE9-79 | insp v1_55+user 09-26 | blocking BLOCKS: {STAGE:9;CHECKPOINT:STAGE:9} | cancel/fail still marks activity imported permanently | code done; live re-run w/ -78 | DEC-071 ↗ |
 | B-STAGE9-80 | insp v1_55+user 09-26 | non-blocking BLOCKS: {} | backfill dialog has no Qt parent, opens behind settings | open | — ↗ |
 | B-STAGE9-81 | insp v1_55 09-26 | non-blocking BLOCKS: {} | backfill run emits zero log lines; silent failure unseen | open | — ↗ |
 | B-STAGE9-82 | insp v1_56 09-26 | non-blocking BLOCKS: {} | ledger commit stashes builder's in-flight edits mid-round | open | — ↗ |

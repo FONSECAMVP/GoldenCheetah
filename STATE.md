@@ -19,7 +19,7 @@ OPEN:      Two blocking code defects from the live run, both Garmin-side, both d
                `RideImportWizard`'s raw `Context*` (DEC-077/-080 / B-STAGE9-116) — HARD HOLD.
              · B-STAGE9-79 (DEC-071) — dedup ledger records an activity at download time, so a
                cancelled import orphans it. Slices 1-3 committed (`b82063118`, `54afaaf16`,
-               `930329fec`, slice 3 at HEAD); awaits the live re-run with -78. Under DEC-075 the store,
+               `930329fec`, `5226bdbf6`); awaits the live re-run with -78. Under DEC-075 the store,
                not its callers, holds the invariant. History -> findings.md + DEC-076.
 BLOCKING:
   B-STAGE9-78[CHECKPOINT:STAGE:9]
@@ -46,9 +46,9 @@ NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not 
            KEEP `~/.goldencheetah/Andy/config/garminconnect/backfill/`'s two live staged files —
            the -78 regression fixture. NEVER commit the untracked `python3.13-3.13.5/`,
            `python3.13_*.tar.xz`/`.dsc`/`.asc`, `FITmetadata.json`.
-CHANGESET: HEAD = slice 3 commit, 30 ahead of `origin/garmin/req028-row-lifetime`. Code commits:
+CHANGESET: 31 commits ahead of `origin/garmin/req028-row-lifetime`. Code commits:
            `b82063118` slice 1, `54afaaf16` DEC-076's lock, `930329fec` slice 2 + DEC-078,
-           `ab0bb7586` -126/-125/-124, `4dacd8447` -127, `e15d863ba` -111/-133, then slice 3
+           `ab0bb7586` -126/-125/-124, `4dacd8447` -127, `e15d863ba` -111/-133, `5226bdbf6` slice 3
            (-130/-154/-155/-157..-159/-162/-163, DEC-087).
 TEAM:      on(5 agents)
 RIGOR:     full (Phase 0 backfill 2026-07-11; A0-A5 + STRIDE + per-slice CLV)
