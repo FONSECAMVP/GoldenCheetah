@@ -99,7 +99,7 @@ Compact schema per `references/formats.md` § `decisions.md`. **The recap source
 | DEC-082 | B-STAGE9-130 crash-safe migration → THREE-PHASE v0-PRESERVING TRANSACTION: fixed-order locks, three writes | accepted | 2026-09-27 |
 | DEC-083 | lastSuccessStartTimeGMT contradiction → CURSOR BECOMES COMPLETENESS WATERMARK: recordImport stops writing it | accepted | 2026-09-27 |
 | DEC-084 | startTimeGMT setTimeSpec REINTERPRETS offset → ONE OFFSET-CORRECT INSTANT PRIMITIVE, GarminTime.h | accepted | 2026-09-27 |
-| DEC-085 | B-STAGE9-156 worktree mandate vs inspector-cycle → WORKTREE MANDATE DOES NOT BIND a supervised round | accepted | 2026-09-28 |
+| DEC-086 | B-STAGE9-156 builder runtime → Claude Code builder; Codex only in read-only roles | accepted | 2026-09-28 |
 
 ### Dormant index
 
@@ -107,6 +107,7 @@ Compact schema per `references/formats.md` § `decisions.md`. **The recap source
 
 | DEC | Question → chosen option | Status | Date |
 |-----|--------------------------|--------|------|
+| DEC-085 | B-STAGE9-156 worktree mandate vs inspector-cycle → WORKTREE MANDATE DOES NOT BIND a supervised round | superseded 2026-09-28 by DEC-086 | 2026-09-28 |
 | DEC-005 | Phase-1 CloudService capabilities (Query\|Download) | accepted (recording-only; any other value contradicts REQ-011) | 2026-05-17 |
 | DEC-008 | Testing toolchain → A extend the incumbent (QTest+CTest C++ / pytest+coverage.py Python) | accepted · one-shot, executed | 2026-05-17 |
 | DEC-009 | Style/quality toolchain → A existing clang-format/clang-tidy + `ruff` + `mypy --strict` on new Python | accepted · one-shot, executed | 2026-05-17 |
@@ -1350,7 +1351,7 @@ Dormant — the remainder is the Garmin dialog-lifetime family and every one sti
 - Full record: archive/decisions-full.md
 
 ## DEC-085 — the `.codex/` worktree mandate does not bind an inspector-cycle-supervised round
-- Status: accepted 2026-09-28
+- Status: superseded 2026-09-28 by DEC-086 (the user chose the Claude Code builder instead)
 - Chose: the .codex worktree mandate does not bind a builder round supervised under inspector-cycle; such a builder implements in the integration checkout instead.
 - Binding:
   1. A builder dispatched by the Inspector under inspector-cycle implements in the integration checkout.
@@ -1360,3 +1361,13 @@ Dormant — the remainder is the Garmin dialog-lifetime family and every one sti
   5. A standing note goes in the roster reference so the next Inspector does not re-litigate it.
 - Dependents: .claude/skills/inspector-cycle/references/agent-roster-and-dispatch.md
 - Full record: archive/decisions-full.md
+
+## DEC-086 — the inspector-cycle builder runs on Claude Code; Codex keeps read-only roles only
+- Status: accepted 2026-09-28 (user decision at the B-STAGE9-156 gate; supersedes DEC-085)
+- Chose: the builder pane is Claude Code (auto mode + Sonnet); reviewer and investigator stay Codex. The `.codex/WORKFLOW.md` worktree mandate stays untouched and binding on every Codex pane.
+- Binding:
+  1. No Codex pane writes the shared checkout: the reviewer only reads, the investigator writes only under `/tmp`.
+  2. The builder launches with `--kind claude -- --permission-mode auto --model sonnet`, on every start and restart.
+  3. `.codex/` is not edited by this decision.
+- Dependents: `.claude/skills/inspector-cycle/references/agent-roster-and-dispatch.md`, `.claude/inspector-briefings/builder.md`, B-STAGE9-156
+- Full record: this entry (written under the ledger writing contract; no archive copy)

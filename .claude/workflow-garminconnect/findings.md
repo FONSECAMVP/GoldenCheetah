@@ -566,4 +566,4 @@ notes are in `archive/findings-notes.md`. Row shape: ledger writing contract (QG
 | B-STAGE9-153 | Inspector 09-27 | non-blocking BLOCKS: {} | roster ref flips builder to Codex, conflicts w/ TEAM line | closed | — ↗ |
 | B-STAGE9-154 | reviewer 09-27 | blocking BLOCKS: {STAGE:9;B-STAGE9-130;B-STAGE9-79} | dialog ignores migrate() bool; v1 stamp on half-migration | open | — ↗ |
 | B-STAGE9-155 | reviewer 09-27 | blocking BLOCKS: {STAGE:9;B-STAGE9-130;B-STAGE9-79} | phase-2 prune drops undecoded raw imported rows | open | — ↗ |
-| B-STAGE9-156 | insp v1_72 09-27 | blocking BLOCKS: {STAGE:9;B-STAGE9-130;B-STAGE9-154;B-STAGE9-155} | Codex worktree mandate conflicts w/ shared-checkout roster | closed | B-STAGE9-153 ↗ |
+| B-STAGE9-156 | insp v1_72 09-27 | blocking BLOCKS: {STAGE:9;B-STAGE9-130;B-STAGE9-154;B-STAGE9-155} | Codex worktree mandate conflicts w/ shared-checkout roster | closed | DEC-086 ↗ |
