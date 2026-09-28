@@ -488,8 +488,8 @@ notes are in `archive/findings-notes.md`. Row shape: ledger writing contract (QG
 | B-STAGE9-75 | insp v1_54 09-24 | blocking BLOCKS: {STAGE:9;CHECKPOINT:STAGE:9} | 4 new PyErr_SetString literals fail i18n-tr-wrap guard | fixed | B-STAGE9-75-fix-review ↗ |
 | B-STAGE9-76 | insp v1_54 09-24 | non-blocking BLOCKS: {} | LastTest.log unreliable count source for multi-label run | open | — ↗ |
 | B-STAGE9-77 | insp v1_55 09-24 | non-blocking BLOCKS: {} | reviewer's format-stability reasoning was wrong basis | open | — ↗ |
-| B-STAGE9-78 | insp v1_55+user 09-26 | blocking BLOCKS: {STAGE:9;CHECKPOINT:STAGE:9} | downloaded files are ZIP not FIT; imports never happen | open | — ↗ |
-| B-STAGE9-79 | insp v1_55+user 09-26 | blocking BLOCKS: {STAGE:9;CHECKPOINT:STAGE:9} | cancel/fail still marks activity imported permanently | code done; live re-run w/ -78 | DEC-071 ↗ |
+| B-STAGE9-78 | insp v1_55+user 09-26 | blocking BLOCKS: {STAGE:9;CHECKPOINT:STAGE:9} | downloaded files are ZIP not FIT; imports never happen | fixed; live 09-29 library 1146→1148 | DEC-070 ↗ |
+| B-STAGE9-79 | insp v1_55+user 09-26 | blocking BLOCKS: {STAGE:9;CHECKPOINT:STAGE:9} | cancel/fail still marks activity imported permanently | fixed; live 09-29 cancel re-offers, v1 | DEC-071 ↗ |
 | B-STAGE9-80 | insp v1_55+user 09-26 | non-blocking BLOCKS: {} | backfill dialog has no Qt parent, opens behind settings | open | — ↗ |
 | B-STAGE9-81 | insp v1_55 09-26 | non-blocking BLOCKS: {} | backfill run emits zero log lines; silent failure unseen | open | — ↗ |
 | B-STAGE9-82 | insp v1_56 09-26 | non-blocking BLOCKS: {} | ledger commit stashes builder's in-flight edits mid-round | open | — ↗ |
@@ -575,3 +575,4 @@ notes are in `archive/findings-notes.md`. Row shape: ledger writing contract (QG
 | B-STAGE9-162 | reviewer 09-28 | blocking BLOCKS: {STAGE:9;B-STAGE9-130} | NotFound imported still writes phase 1 before phase 3 | fixed r4 | DEC-087 b3 |
 | B-STAGE9-163 | insp gate 09-28 | blocking BLOCKS: {STAGE:9;B-STAGE9-130} | new dialog tr() string absent from 13 .ts catalogs (i18n guard) | fixed | 13 .ts rows, reviewer PASS |
 | B-STAGE9-164 | insp gate 09-28 | blocking | compaction 9f99d95cf moved DEC-054 gc-arms sentinel out of its fixed slot | fixed | sentinel restored |
+| B-STAGE9-165 | user live 09-29 | non-blocking | mobile login 429s logged each auth; fallback auth still ok | open | goldencheetah.log |
