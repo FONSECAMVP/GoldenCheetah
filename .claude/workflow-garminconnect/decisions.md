@@ -100,6 +100,7 @@ Compact schema per `references/formats.md` § `decisions.md`. **The recap source
 | DEC-083 | lastSuccessStartTimeGMT contradiction → CURSOR BECOMES COMPLETENESS WATERMARK: recordImport stops writing it | accepted | 2026-09-27 |
 | DEC-084 | startTimeGMT setTimeSpec REINTERPRETS offset → ONE OFFSET-CORRECT INSTANT PRIMITIVE, GarminTime.h | accepted | 2026-09-27 |
 | DEC-086 | B-STAGE9-156 builder runtime → Claude Code builder; Codex only in read-only roles | accepted | 2026-09-28 |
+| DEC-087 | B-STAGE9-154 v0 stamp class → WRITERS PRESERVE v0: only migration phase 3 stamps v1 | accepted | 2026-09-28 |
 
 ### Dormant index
 
@@ -933,6 +934,7 @@ Dormant — the remainder is the Garmin dialog-lifetime family and every one sti
 - Full record: archive/decisions-full.md
 
 ## DEC-054 — B-STAGE9-16 remedy: the default verification scope becomes fail-safe (default-include ctest gate with an explicit opt-out label; lint scope widened to every new Garmin-owned path; two coverage guards)
+<!-- gc-arms/v1 {"dec": "DEC-054", "patterns": ["unittests/Core/stderrbuf/*"]} -->
 - Status: accepted (Inspector, Three-Options Doctrine)
 - Chose: Routine gate becomes ctest -LE gate-exclude (default-include, explicit opt-out); lint regex enumeration widened to every new Garmin-owned path; two new coverage guards added.
 - Binding:
@@ -943,7 +945,6 @@ Dormant — the remainder is the Garmin dialog-lifetime family and every one sti
   5. ctest stays OUT of pre-commit; the gate lives in the documented acceptance command and required merge validation instead.
   6. B-STAGE9-12's stderr-buffering test may not land RED into the default gate; it must either land its fix or register with gate-exclude plus a reason naming the hold.
   7. Corrects DEC-010's cascade prose: the live .pre-commit-config.yaml has no ctest hook at all; ratifies the config (no ctest in pre-commit) as intended, superseding that clause of DEC-010.
-  8. The comment `<!-- gc-arms/v1 {"dec": "DEC-054", "patterns": ["unittests/Core/stderrbuf/*"]} -->` is the Arms declaration pre-arming this empty managed root (see DEC-057/059/060/064).
 - Dependents: unittests/buildguard/CMakeLists.txt, .pre-commit-config.yaml, DEC-010, B-STAGE9-12, B-STAGE9-16, garmin_gate_coverage_guard.py, garmin_lint_ownership_guard.py
 - Full record: archive/decisions-full.md
 
@@ -1371,3 +1372,17 @@ Dormant — the remainder is the Garmin dialog-lifetime family and every one sti
   3. `.codex/` is not edited by this decision.
 - Dependents: `.claude/skills/inspector-cycle/references/agent-roster-and-dispatch.md`, `.claude/inspector-briefings/builder.md`, B-STAGE9-156
 - Full record: this entry (written under the ledger writing contract; no archive copy)
+
+## DEC-087 — store writers preserve an on-disk v0; only the migration's phase 3 stamps v1
+- Status: accepted 2026-09-28 (Inspector technical decision; repair-round bound, B-STAGE9-154 class round 2)
+- Chose: the v0 invariant moves into the store's single write choke point. Per-writer refusals are replaced, not extended.
+- Binding:
+  1. Every public backfill-state writer re-stamps the version it loaded when that state is Ok and v0; it never stamps v1 over it.
+  2. Only migrateLegacyImported's phase 3 stamps v1.
+  3. An Ok v0 athlete whose imported file is NotFound migrates as a no-op: phase 3 only, no phase-1 write.
+  4. A skipped migration (null RideCache) never pauses ordinary backfill; the v0 gate retries on the next open.
+  5. Amended 2026-09-28 (B-STAGE9-157 round 2): the dialog passes the exact imported-file bytes it classified; the store refuses, writing nothing, if the file under lock differs. Key-set checks are not enough.
+  6. NotFound and torn states keep DEC-075's self-healing write (DEC-079 binding 10).
+  7. Supersedes DEC-079 binding 8 and B-STAGE9-154's per-writer refusal remedy.
+- Dependents: src/Cloud/GarminSidecarStore.{h,cpp}, src/Cloud/GarminBackfillDialog.cpp, B-STAGE9-154, B-STAGE9-157, B-STAGE9-158
+- Full record: this entry

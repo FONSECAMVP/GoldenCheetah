@@ -25,18 +25,68 @@
 //     (DES-002: parse failure is a soft fallback, NOT a hard crash).
 // Writes go through AtomicFile::writeOver at 0600 (DES-006, REQ-NF-Reliab-002).
 
+#include "AtomicFile.h"
 #include "GarminSidecarStore.h"
 
 #include <QByteArray>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QThread>
 
 #include <memory>
 #include <vector>
+
+namespace {
+
+// DEC-082 condition 5: path-targeted failure injectors for migrateLegacyImported's three phases.
+
+// Fails every write to backfill-state-<uid>.json — isolates phase 1.
+class FailAllBackfillStateWrites : public AtomicFile::TmpWriter
+{
+  public:
+    qint64 write(QFileDevice& f, const QByteArray& bytes) override
+    {
+        if (f.fileName().contains(QStringLiteral("backfill-state-")))
+            return -1;
+        return f.write(bytes);
+    }
+};
+
+// Fails every write to imported-<uid>.json — isolates phase 2.
+class FailAllImportedWrites : public AtomicFile::TmpWriter
+{
+  public:
+    qint64 write(QFileDevice& f, const QByteArray& bytes) override
+    {
+        if (f.fileName().contains(QStringLiteral("imported-")))
+            return -1;
+        return f.write(bytes);
+    }
+};
+
+// Lets phase 1's write succeed but fails phase 3's — isolates phase 3.
+class FailSecondBackfillStateWrite : public AtomicFile::TmpWriter
+{
+  public:
+    int seen = 0;
+    qint64 write(QFileDevice& f, const QByteArray& bytes) override
+    {
+        if (f.fileName().contains(QStringLiteral("backfill-state-"))) {
+            ++seen;
+            if (seen > 1)
+                return -1;
+        }
+        return f.write(bytes);
+    }
+};
+
+} // namespace
 
 class TestGarminSidecarStore : public QObject
 {
@@ -49,6 +99,23 @@ class TestGarminSidecarStore : public QObject
                                                     QFileDevice::ExeGroup | QFileDevice::ReadOther |
                                                     QFileDevice::WriteOther | QFileDevice::ExeOther;
         return (p & groupOther) != QFileDevice::Permissions();
+    }
+
+    static void seedLegacyPair(const QString& athletePath, const QString& uid, const QByteArray& backfillStateBytes,
+                               const QByteArray& importedBytes)
+    {
+        QVERIFY(QDir().mkpath(GarminSidecarStore::directoryFor(athletePath)));
+        QFile state(GarminSidecarStore::backfillStateFilePath(athletePath, uid));
+        QVERIFY(state.open(QIODevice::WriteOnly));
+        state.write(backfillStateBytes);
+        state.close();
+        QVERIFY(state.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+
+        QFile imported(GarminSidecarStore::importedFilePath(athletePath, uid));
+        QVERIFY(imported.open(QIODevice::WriteOnly));
+        imported.write(importedBytes);
+        imported.close();
+        QVERIFY(imported.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner));
     }
 
   private slots:
@@ -1035,6 +1102,544 @@ class TestGarminSidecarStore : public QObject
         QCOMPARE(r.state.lastSuccessStartTimeGMT, QStringLiteral("2026-03-15T00:00:00.0"));
         QVERIFY2(r.state.pending.contains(QStringLiteral("555")),
                  "a concurrent recordPendingBackfill entry must survive concurrent saveBackfillState calls (DEC-076)");
+    }
+
+    void saveBackfillRange_preservesV0Sidecar_rangeStillWrites()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("154001");
+
+        seedLegacyPair(
+            athlete.path(), uid,
+            QByteArrayLiteral(
+                "{\"last_success_startTimeGMT\":\"2026-01-01T00:00:00.0\",\"range_start\":\"2026-01-01T00:00:00.0\","
+                "\"range_end\":\"2026-06-01T00:00:00.0\",\"pending\":{}}"),
+            QByteArrayLiteral("{}"));
+
+        QVERIFY2(GarminSidecarStore::saveBackfillRange(athlete.path(), uid, QStringLiteral("2026-02-01T00:00:00.0"),
+                                                       QStringLiteral("2026-07-01T00:00:00.0")),
+                 "an Ok, v0 sidecar must still accept a non-migration range write");
+
+        const GarminSidecarStore::BackfillLoadResult r = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QVERIFY(r.isOk());
+        QCOMPARE(r.state.schemaVersion, 0);
+        QCOMPARE(r.state.rangeStart, QStringLiteral("2026-02-01T00:00:00.0"));
+        QCOMPARE(r.state.rangeEnd, QStringLiteral("2026-07-01T00:00:00.0"));
+    }
+
+    void recordPendingBackfill_preservesV0Sidecar()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("158002");
+
+        seedLegacyPair(
+            athlete.path(), uid,
+            QByteArrayLiteral(
+                "{\"last_success_startTimeGMT\":\"2026-01-01T00:00:00.0\",\"range_start\":\"2026-01-01T00:00:00.0\","
+                "\"range_end\":\"2026-06-01T00:00:00.0\",\"pending\":{}}"),
+            QByteArrayLiteral("{}"));
+
+        GarminSidecarStore::ImportedEntry e;
+        e.startTimeGMT = QStringLiteral("2026-03-01T00:00:00.0");
+        e.localFilename = QStringLiteral("garmin-1.fit");
+        QVERIFY2(GarminSidecarStore::recordPendingBackfill(athlete.path(), uid, QStringLiteral("1"), e),
+                 "an Ok, v0 sidecar must still accept a non-migration pending write");
+
+        const GarminSidecarStore::BackfillLoadResult r = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QVERIFY(r.isOk());
+        QCOMPARE(r.state.schemaVersion, 0);
+        QVERIFY(r.state.pending.contains(QStringLiteral("1")));
+    }
+
+    void dropPendingBackfill_preservesV0Sidecar()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("158003");
+
+        seedLegacyPair(
+            athlete.path(), uid,
+            QByteArrayLiteral(
+                "{\"last_success_startTimeGMT\":\"2026-01-01T00:00:00.0\",\"range_start\":\"2026-01-01T00:00:00.0\","
+                "\"range_end\":\"2026-06-01T00:00:00.0\",\"pending\":{\"1\":{\"startTimeGMT\":\"2026-03-01T00:00:00."
+                "0\","
+                "\"local_filename\":\"garmin-1.fit\"}}}"),
+            QByteArrayLiteral("{}"));
+
+        QVERIFY2(GarminSidecarStore::dropPendingBackfill(athlete.path(), uid, QStringLiteral("1")),
+                 "an Ok, v0 sidecar must still accept a non-migration pending drop");
+
+        const GarminSidecarStore::BackfillLoadResult r = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QVERIFY(r.isOk());
+        QCOMPARE(r.state.schemaVersion, 0);
+        QVERIFY(!r.state.pending.contains(QStringLiteral("1")));
+    }
+
+    void promotePendingBackfill_preservesV0Sidecar()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("158004");
+
+        seedLegacyPair(
+            athlete.path(), uid,
+            QByteArrayLiteral("{\"last_success_startTimeGMT\":\"\",\"range_start\":\"2026-01-01T00:00:00.0\","
+                              "\"range_end\":\"2026-06-01T00:00:00.0\",\"pending\":{\"1\":{\"startTimeGMT\":\"2026-03-"
+                              "01T00:00:00.0\","
+                              "\"local_filename\":\"garmin-1.fit\"}}}"),
+            QByteArrayLiteral("{}"));
+
+        QVERIFY2(GarminSidecarStore::promotePendingBackfill(athlete.path(), uid, QStringLiteral("1")),
+                 "an Ok, v0 sidecar must still accept a non-migration promotion");
+
+        const GarminSidecarStore::BackfillLoadResult r = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QVERIFY(r.isOk());
+        QCOMPARE(r.state.schemaVersion, 0);
+        QVERIFY(!r.state.pending.contains(QStringLiteral("1")));
+        const GarminSidecarStore::ImportedMap imp = GarminSidecarStore::loadImported(athlete.path(), uid);
+        QVERIFY(imp.contains(QStringLiteral("1")));
+    }
+
+    // DEC-079 clause 10: NotFound must keep DEC-075's self-healing write — the new v0 guard must not swallow it too.
+    void saveBackfillRange_notFound_stillWritesSelfHealing()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("154002");
+
+        QVERIFY(GarminSidecarStore::saveBackfillRange(athlete.path(), uid, QStringLiteral("2026-02-01T00:00:00.0"),
+                                                      QStringLiteral("2026-07-01T00:00:00.0")));
+
+        const GarminSidecarStore::BackfillLoadResult r = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QVERIFY(r.isOk());
+        QCOMPARE(r.state.schemaVersion, 1);
+        QCOMPARE(r.state.rangeStart, QStringLiteral("2026-02-01T00:00:00.0"));
+        QCOMPARE(r.state.rangeEnd, QStringLiteral("2026-07-01T00:00:00.0"));
+    }
+
+    // B-STAGE9-155/DEC-082 condition 4: phase 2 prunes the RAW object, not decoded entries
+
+    void migrateLegacyImported_nonObjectImportedMember_survivesPrune()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("155001");
+
+        seedLegacyPair(
+            athlete.path(), uid,
+            QByteArrayLiteral(
+                "{\"last_success_startTimeGMT\":\"2026-01-01T00:00:00.0\",\"range_start\":\"2026-01-01T00:00:00.0\","
+                "\"range_end\":\"2026-06-01T00:00:00.0\",\"pending\":{}}"),
+            QByteArrayLiteral(
+                "{\"malformed\":\"not-an-object\","
+                "\"moveMe\":{\"startTimeGMT\":\"2026-02-02T00:00:00.0\",\"local_filename\":\"garmin-moveMe.fit\"}}"));
+
+        GarminSidecarStore::ImportedEntry moveMe;
+        moveMe.startTimeGMT = QStringLiteral("2026-02-02T00:00:00.0");
+        moveMe.localFilename = QStringLiteral("garmin-moveMe.fit");
+        QHash<QString, GarminSidecarStore::ImportedEntry> unmatched;
+        unmatched.insert(QStringLiteral("moveMe"), moveMe);
+        // The dialog's classification snapshot: whatever loadImported reads back right after seeding.
+        const GarminSidecarStore::ImportedMap classified = GarminSidecarStore::loadImported(athlete.path(), uid);
+        QVERIFY(classified.isOk());
+
+        QVERIFY(GarminSidecarStore::migrateLegacyImported(athlete.path(), uid, unmatched, classified.rawBytes,
+                                                          classified.isOk()));
+
+        const QString importedPath = GarminSidecarStore::importedFilePath(athlete.path(), uid);
+        QFile f(importedPath);
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        const QByteArray bytes = f.readAll();
+        f.close();
+        QJsonParseError err{};
+        const QJsonDocument doc = QJsonDocument::fromJson(bytes, &err);
+        QVERIFY2(err.error == QJsonParseError::NoError && doc.isObject(), "the pruned file must still be valid JSON");
+        const QJsonObject obj = doc.object();
+        QVERIFY2(obj.contains(QStringLiteral("malformed")),
+                 "a member the parser could not decode was never classified into `unmatched` and must survive pruning");
+        QCOMPARE(obj.value(QStringLiteral("malformed")).toString(), QStringLiteral("not-an-object"));
+        QVERIFY2(!obj.contains(QStringLiteral("moveMe")), "the migrated row must still be pruned");
+
+        const GarminSidecarStore::BackfillLoadResult st = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QVERIFY(st.isOk());
+        QCOMPARE(st.state.schemaVersion, 1);
+        QVERIFY(st.state.pending.contains(QStringLiteral("moveMe")));
+    }
+
+    // DEC-079/DEC-082 (B-STAGE9-130, T-240) — migrateLegacyImported
+
+    void backfill_notFoundSelfHealingWriteStampsCurrentVersion()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("777001");
+
+        GarminSidecarStore::ImportedEntry e;
+        e.startTimeGMT = QStringLiteral("2026-01-01T00:00:00.0");
+        e.localFilename = QStringLiteral("garmin-1.fit");
+        QVERIFY(GarminSidecarStore::recordPendingBackfill(athlete.path(), uid, QStringLiteral("1"), e));
+
+        const GarminSidecarStore::BackfillLoadResult r = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QVERIFY(r.isOk());
+        QCOMPARE(r.state.schemaVersion, 1);
+    }
+
+    void migrateLegacyImported_movesUnmatched_keepsMatched_preservesExistingPending_stampsV1()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("240001");
+
+        seedLegacyPair(
+            athlete.path(), uid,
+            QByteArrayLiteral(
+                "{\"last_success_startTimeGMT\":\"2026-01-01T00:00:00.0\",\"range_start\":\"2026-01-01T00:00:00.0\","
+                "\"range_end\":\"2026-06-01T00:00:00.0\",\"pending\":{\"999\":{\"startTimeGMT\":\"2026-01-05T00:00:00."
+                "0\","
+                "\"local_filename\":\"garmin-999.fit\"}}}"),
+            QByteArrayLiteral(
+                "{\"keepMe\":{\"startTimeGMT\":\"2026-02-01T00:00:00.0\",\"local_filename\":\"garmin-keepMe.fit\"},"
+                "\"moveMe\":{\"startTimeGMT\":\"2026-02-02T00:00:00.0\",\"local_filename\":\"garmin-moveMe.fit\"}}"));
+
+        GarminSidecarStore::ImportedEntry moveMe;
+        moveMe.startTimeGMT = QStringLiteral("2026-02-02T00:00:00.0");
+        moveMe.localFilename = QStringLiteral("garmin-moveMe.fit");
+        QHash<QString, GarminSidecarStore::ImportedEntry> unmatched;
+        unmatched.insert(QStringLiteral("moveMe"), moveMe);
+        const GarminSidecarStore::ImportedMap classified = GarminSidecarStore::loadImported(athlete.path(), uid);
+        QVERIFY(classified.isOk());
+
+        QVERIFY(GarminSidecarStore::migrateLegacyImported(athlete.path(), uid, unmatched, classified.rawBytes,
+                                                          classified.isOk()));
+
+        const GarminSidecarStore::BackfillLoadResult st = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QVERIFY(st.isOk());
+        QCOMPARE(st.state.schemaVersion, 1);
+        QCOMPARE(st.state.lastSuccessStartTimeGMT, QStringLiteral("2026-01-01T00:00:00.0"));
+        QVERIFY2(st.state.pending.contains(QStringLiteral("999")), "a pre-existing pending entry must survive phase 1");
+        QVERIFY2(st.state.pending.contains(QStringLiteral("moveMe")), "the unmatched row must be merged into pending");
+
+        const GarminSidecarStore::ImportedMap imp = GarminSidecarStore::loadImported(athlete.path(), uid);
+        QVERIFY(imp.isOk());
+        QVERIFY2(imp.contains(QStringLiteral("keepMe")), "a RideCache-matched row must stay in imported");
+        QVERIFY2(!imp.contains(QStringLiteral("moveMe")), "a migrated row must be pruned from imported");
+    }
+
+    // DEC-082 condition 5, phase 1.
+    void migrateLegacyImported_phase1WriteFails_leavesPairUntouched_retryConverges()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("240002");
+
+        seedLegacyPair(
+            athlete.path(), uid,
+            QByteArrayLiteral(
+                "{\"last_success_startTimeGMT\":\"2026-01-01T00:00:00.0\",\"range_start\":\"2026-01-01T00:00:00.0\","
+                "\"range_end\":\"2026-06-01T00:00:00.0\",\"pending\":{\"999\":{\"startTimeGMT\":\"2026-01-05T00:00:00."
+                "0\","
+                "\"local_filename\":\"garmin-999.fit\"}}}"),
+            QByteArrayLiteral(
+                "{\"keepMe\":{\"startTimeGMT\":\"2026-02-01T00:00:00.0\",\"local_filename\":\"garmin-keepMe.fit\"},"
+                "\"moveMe\":{\"startTimeGMT\":\"2026-02-02T00:00:00.0\",\"local_filename\":\"garmin-moveMe.fit\"}}"));
+
+        GarminSidecarStore::ImportedEntry moveMe;
+        moveMe.startTimeGMT = QStringLiteral("2026-02-02T00:00:00.0");
+        moveMe.localFilename = QStringLiteral("garmin-moveMe.fit");
+        QHash<QString, GarminSidecarStore::ImportedEntry> unmatched;
+        unmatched.insert(QStringLiteral("moveMe"), moveMe);
+        const GarminSidecarStore::ImportedMap classified = GarminSidecarStore::loadImported(athlete.path(), uid);
+        QVERIFY(classified.isOk());
+
+        FailAllBackfillStateWrites failer;
+        AtomicFile::setTmpWriterForTest(&failer);
+        QVERIFY2(!GarminSidecarStore::migrateLegacyImported(athlete.path(), uid, unmatched, classified.rawBytes,
+                                                            classified.isOk()),
+                 "a failed phase-1 write must fail the whole call");
+        AtomicFile::setTmpWriterForTest(nullptr);
+
+        const GarminSidecarStore::BackfillLoadResult st = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QVERIFY(st.isOk());
+        QCOMPARE(st.state.schemaVersion, 0);
+        QVERIFY2(!st.state.pending.contains(QStringLiteral("moveMe")), "a failed phase-1 write must merge nothing");
+        const GarminSidecarStore::ImportedMap imp = GarminSidecarStore::loadImported(athlete.path(), uid);
+        QVERIFY2(imp.contains(QStringLiteral("moveMe")), "imported must be untouched when phase 1 never committed");
+
+        QVERIFY(GarminSidecarStore::migrateLegacyImported(athlete.path(), uid, unmatched, classified.rawBytes,
+                                                          classified.isOk()));
+        const GarminSidecarStore::BackfillLoadResult st2 = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QCOMPARE(st2.state.schemaVersion, 1);
+        QVERIFY(st2.state.pending.contains(QStringLiteral("moveMe")));
+        const GarminSidecarStore::ImportedMap imp2 = GarminSidecarStore::loadImported(athlete.path(), uid);
+        QVERIFY(!imp2.contains(QStringLiteral("moveMe")));
+    }
+
+    // DEC-082 condition 5, phase 2.
+    void migrateLegacyImported_phase2WriteFails_stateStaysV0PendingMerged_importedUntouched_retryConverges()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("240003");
+
+        seedLegacyPair(
+            athlete.path(), uid,
+            QByteArrayLiteral(
+                "{\"last_success_startTimeGMT\":\"2026-01-01T00:00:00.0\",\"range_start\":\"2026-01-01T00:00:00.0\","
+                "\"range_end\":\"2026-06-01T00:00:00.0\",\"pending\":{\"999\":{\"startTimeGMT\":\"2026-01-05T00:00:00."
+                "0\","
+                "\"local_filename\":\"garmin-999.fit\"}}}"),
+            QByteArrayLiteral(
+                "{\"keepMe\":{\"startTimeGMT\":\"2026-02-01T00:00:00.0\",\"local_filename\":\"garmin-keepMe.fit\"},"
+                "\"moveMe\":{\"startTimeGMT\":\"2026-02-02T00:00:00.0\",\"local_filename\":\"garmin-moveMe.fit\"}}"));
+
+        GarminSidecarStore::ImportedEntry moveMe;
+        moveMe.startTimeGMT = QStringLiteral("2026-02-02T00:00:00.0");
+        moveMe.localFilename = QStringLiteral("garmin-moveMe.fit");
+        QHash<QString, GarminSidecarStore::ImportedEntry> unmatched;
+        unmatched.insert(QStringLiteral("moveMe"), moveMe);
+        const GarminSidecarStore::ImportedMap classified = GarminSidecarStore::loadImported(athlete.path(), uid);
+        QVERIFY(classified.isOk());
+
+        FailAllImportedWrites failer;
+        AtomicFile::setTmpWriterForTest(&failer);
+        QVERIFY2(!GarminSidecarStore::migrateLegacyImported(athlete.path(), uid, unmatched, classified.rawBytes,
+                                                            classified.isOk()),
+                 "a failed phase-2 write must fail the whole call");
+        AtomicFile::setTmpWriterForTest(nullptr);
+
+        const GarminSidecarStore::BackfillLoadResult st = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QVERIFY(st.isOk());
+        QCOMPARE(st.state.schemaVersion, 0);
+        QVERIFY2(st.state.pending.contains(QStringLiteral("999")), "pre-existing pending must survive phase 1");
+        QVERIFY2(st.state.pending.contains(QStringLiteral("moveMe")), "phase 1 must have committed the merge");
+        const GarminSidecarStore::ImportedMap imp = GarminSidecarStore::loadImported(athlete.path(), uid);
+        QVERIFY2(imp.contains(QStringLiteral("moveMe")), "a failed phase-2 write must leave imported untouched");
+        QVERIFY(imp.contains(QStringLiteral("keepMe")));
+
+        QVERIFY(GarminSidecarStore::migrateLegacyImported(athlete.path(), uid, unmatched, classified.rawBytes,
+                                                          classified.isOk()));
+        const GarminSidecarStore::BackfillLoadResult st2 = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QCOMPARE(st2.state.schemaVersion, 1);
+        QVERIFY(st2.state.pending.contains(QStringLiteral("moveMe")));
+        const GarminSidecarStore::ImportedMap imp2 = GarminSidecarStore::loadImported(athlete.path(), uid);
+        QVERIFY(!imp2.contains(QStringLiteral("moveMe")));
+        QVERIFY(imp2.contains(QStringLiteral("keepMe")));
+    }
+
+    // DEC-082 condition 5, phase 3.
+    void migrateLegacyImported_phase3WriteFails_importedAlreadyPruned_stateStaysV0_retryConverges()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("240004");
+
+        seedLegacyPair(
+            athlete.path(), uid,
+            QByteArrayLiteral(
+                "{\"last_success_startTimeGMT\":\"2026-01-01T00:00:00.0\",\"range_start\":\"2026-01-01T00:00:00.0\","
+                "\"range_end\":\"2026-06-01T00:00:00.0\",\"pending\":{\"999\":{\"startTimeGMT\":\"2026-01-05T00:00:00."
+                "0\","
+                "\"local_filename\":\"garmin-999.fit\"}}}"),
+            QByteArrayLiteral(
+                "{\"keepMe\":{\"startTimeGMT\":\"2026-02-01T00:00:00.0\",\"local_filename\":\"garmin-keepMe.fit\"},"
+                "\"moveMe\":{\"startTimeGMT\":\"2026-02-02T00:00:00.0\",\"local_filename\":\"garmin-moveMe.fit\"}}"));
+
+        GarminSidecarStore::ImportedEntry moveMe;
+        moveMe.startTimeGMT = QStringLiteral("2026-02-02T00:00:00.0");
+        moveMe.localFilename = QStringLiteral("garmin-moveMe.fit");
+        QHash<QString, GarminSidecarStore::ImportedEntry> unmatched;
+        unmatched.insert(QStringLiteral("moveMe"), moveMe);
+        const GarminSidecarStore::ImportedMap classified = GarminSidecarStore::loadImported(athlete.path(), uid);
+        QVERIFY(classified.isOk());
+
+        FailSecondBackfillStateWrite failer;
+        AtomicFile::setTmpWriterForTest(&failer);
+        QVERIFY2(!GarminSidecarStore::migrateLegacyImported(athlete.path(), uid, unmatched, classified.rawBytes,
+                                                            classified.isOk()),
+                 "a failed phase-3 write must fail the whole call");
+        AtomicFile::setTmpWriterForTest(nullptr);
+
+        const GarminSidecarStore::BackfillLoadResult st = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QVERIFY(st.isOk());
+        QCOMPARE(st.state.schemaVersion, 0);
+        QVERIFY2(st.state.pending.contains(QStringLiteral("moveMe")), "phase 1's merge must survive a failed phase 3");
+        const GarminSidecarStore::ImportedMap imp = GarminSidecarStore::loadImported(athlete.path(), uid);
+        QVERIFY2(!imp.contains(QStringLiteral("moveMe")), "phase 2 already committed before phase 3 failed");
+        QVERIFY(imp.contains(QStringLiteral("keepMe")));
+
+        // Retry as the dialog would: reclassify from the current imported map (moveMe already gone).
+        QVERIFY(GarminSidecarStore::migrateLegacyImported(
+            athlete.path(), uid, QHash<QString, GarminSidecarStore::ImportedEntry>(), imp.rawBytes, imp.isOk()));
+        const GarminSidecarStore::BackfillLoadResult st2 = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QCOMPARE(st2.state.schemaVersion, 1);
+        QVERIFY2(st2.state.pending.contains(QStringLiteral("moveMe")), "the earlier phase-1 merge must not be lost");
+        const GarminSidecarStore::ImportedMap imp2 = GarminSidecarStore::loadImported(athlete.path(), uid);
+        QVERIFY(imp2.contains(QStringLiteral("keepMe")));
+    }
+
+    // DEC-082 (defence in depth).
+    void migrateLegacyImported_refusesAlreadyMigratedV1Pair()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("240005");
+
+        seedLegacyPair(
+            athlete.path(), uid,
+            QByteArrayLiteral(
+                "{\"last_success_startTimeGMT\":\"2026-01-01T00:00:00.0\",\"range_start\":\"2026-01-01T00:00:00.0\","
+                "\"range_end\":\"2026-06-01T00:00:00.0\",\"schema_version\":1,\"pending\":{}}"),
+            QByteArrayLiteral(
+                "{\"stillHere\":{\"startTimeGMT\":\"2026-02-02T00:00:00.0\",\"local_filename\":\"garmin-x.fit\"}}"));
+
+        GarminSidecarStore::ImportedEntry e;
+        e.startTimeGMT = QStringLiteral("2026-02-02T00:00:00.0");
+        e.localFilename = QStringLiteral("garmin-x.fit");
+        QHash<QString, GarminSidecarStore::ImportedEntry> unmatched;
+        unmatched.insert(QStringLiteral("stillHere"), e);
+        const GarminSidecarStore::ImportedMap classified = GarminSidecarStore::loadImported(athlete.path(), uid);
+        QVERIFY(classified.isOk());
+
+        QVERIFY2(!GarminSidecarStore::migrateLegacyImported(athlete.path(), uid, unmatched, classified.rawBytes,
+                                                            classified.isOk()),
+                 "an already-migrated (v1) pair must be untouched");
+        const GarminSidecarStore::ImportedMap imp = GarminSidecarStore::loadImported(athlete.path(), uid);
+        QVERIFY2(imp.contains(QStringLiteral("stillHere")),
+                 "a RideCache-matched legacy row must stay in imported and never be moved");
+    }
+
+    // DEC-087 b3/B-STAGE9-158/B-STAGE9-162.
+    void migrateLegacyImported_notFoundImported_noOpStampsV1()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("158001");
+
+        QVERIFY(QDir().mkpath(GarminSidecarStore::directoryFor(athlete.path())));
+        QFile state(GarminSidecarStore::backfillStateFilePath(athlete.path(), uid));
+        QVERIFY(state.open(QIODevice::WriteOnly));
+        state.write(QByteArrayLiteral(
+            "{\"last_success_startTimeGMT\":\"2026-01-01T00:00:00.0\",\"range_start\":\"2026-01-01T00:00:00.0\","
+            "\"range_end\":\"2026-06-01T00:00:00.0\",\"pending\":{}}"));
+        state.close();
+        QVERIFY(state.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+
+        FailSecondBackfillStateWrite failer;
+        AtomicFile::setTmpWriterForTest(&failer);
+        QVERIFY(GarminSidecarStore::migrateLegacyImported(
+            athlete.path(), uid, QHash<QString, GarminSidecarStore::ImportedEntry>(), QByteArray(), false));
+        AtomicFile::setTmpWriterForTest(nullptr);
+
+        const GarminSidecarStore::BackfillLoadResult st = GarminSidecarStore::loadBackfillState(athlete.path(), uid);
+        QVERIFY(st.isOk());
+        QCOMPARE(st.state.schemaVersion, 1);
+        QVERIFY(st.state.pending.isEmpty());
+
+        const GarminSidecarStore::ImportedMap imp = GarminSidecarStore::loadImported(athlete.path(), uid);
+        QCOMPARE(imp.status, GarminSidecarStore::LoadStatus::NotFound);
+    }
+
+    // DEC-087 b5/B-STAGE9-157.
+    void migrateLegacyImported_unclassifiedImportedKey_refusesWritesNothing()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("157001");
+
+        seedLegacyPair(
+            athlete.path(), uid,
+            QByteArrayLiteral(
+                "{\"last_success_startTimeGMT\":\"2026-01-01T00:00:00.0\",\"range_start\":\"2026-01-01T00:00:00.0\","
+                "\"range_end\":\"2026-06-01T00:00:00.0\",\"pending\":{}}"),
+            QByteArrayLiteral(
+                "{\"keepMe\":{\"startTimeGMT\":\"2026-02-01T00:00:00.0\",\"local_filename\":\"garmin-keepMe.fit\"}}"));
+
+        // The dialog classified the file before "surprise" landed (e.g. a concurrent import completing).
+        const GarminSidecarStore::ImportedMap classified = GarminSidecarStore::loadImported(athlete.path(), uid);
+        QVERIFY(classified.isOk());
+
+        QFile imported(GarminSidecarStore::importedFilePath(athlete.path(), uid));
+        QVERIFY(imported.open(QIODevice::WriteOnly));
+        imported.write(QByteArrayLiteral(
+            "{\"keepMe\":{\"startTimeGMT\":\"2026-02-01T00:00:00.0\",\"local_filename\":\"garmin-keepMe.fit\"},"
+            "\"surprise\":{\"startTimeGMT\":\"2026-02-03T00:00:00.0\",\"local_filename\":\"garmin-surprise.fit\"}}"));
+        imported.close();
+        QVERIFY(imported.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+
+        const QString statePath = GarminSidecarStore::backfillStateFilePath(athlete.path(), uid);
+        const QString importedPath = GarminSidecarStore::importedFilePath(athlete.path(), uid);
+        QFile stateBefore(statePath);
+        QVERIFY(stateBefore.open(QIODevice::ReadOnly));
+        const QByteArray stateBytesBefore = stateBefore.readAll();
+        stateBefore.close();
+        QFile importedBefore(importedPath);
+        QVERIFY(importedBefore.open(QIODevice::ReadOnly));
+        const QByteArray importedBytesBefore = importedBefore.readAll();
+        importedBefore.close();
+
+        QVERIFY2(!GarminSidecarStore::migrateLegacyImported(athlete.path(), uid,
+                                                            QHash<QString, GarminSidecarStore::ImportedEntry>(),
+                                                            classified.rawBytes, classified.isOk()),
+                 "an imported file that changed under lock after classification must refuse the whole migration");
+
+        QFile stateAfter(statePath);
+        QVERIFY(stateAfter.open(QIODevice::ReadOnly));
+        QCOMPARE(stateAfter.readAll(), stateBytesBefore);
+        QFile importedAfter(importedPath);
+        QVERIFY(importedAfter.open(QIODevice::ReadOnly));
+        QCOMPARE(importedAfter.readAll(), importedBytesBefore);
+    }
+
+    // DEC-087 b5/B-STAGE9-157.
+    void migrateLegacyImported_importedValueChangedUnderLock_refusesWritesNothing()
+    {
+        QTemporaryDir athlete;
+        QVERIFY(athlete.isValid());
+        const QString uid = QStringLiteral("157002");
+
+        seedLegacyPair(
+            athlete.path(), uid,
+            QByteArrayLiteral(
+                "{\"last_success_startTimeGMT\":\"2026-01-01T00:00:00.0\",\"range_start\":\"2026-01-01T00:00:00.0\","
+                "\"range_end\":\"2026-06-01T00:00:00.0\",\"pending\":{}}"),
+            QByteArrayLiteral(
+                "{\"keepMe\":{\"startTimeGMT\":\"2026-02-01T00:00:00.0\",\"local_filename\":\"garmin-keepMe.fit\"}}"));
+
+        const GarminSidecarStore::ImportedMap classified = GarminSidecarStore::loadImported(athlete.path(), uid);
+        QVERIFY(classified.isOk());
+
+        // A concurrent writer overwrites "keepMe"'s value under the SAME key — key set unchanged, bytes differ.
+        QFile imported(GarminSidecarStore::importedFilePath(athlete.path(), uid));
+        QVERIFY(imported.open(QIODevice::WriteOnly));
+        imported.write(QByteArrayLiteral("{\"keepMe\":{\"startTimeGMT\":\"2026-03-01T00:00:00.0\",\"local_filename\":"
+                                         "\"garmin-keepMe-overwritten.fit\"}}"));
+        imported.close();
+        QVERIFY(imported.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+
+        const QString statePath = GarminSidecarStore::backfillStateFilePath(athlete.path(), uid);
+        const QString importedPath = GarminSidecarStore::importedFilePath(athlete.path(), uid);
+        QFile stateBefore(statePath);
+        QVERIFY(stateBefore.open(QIODevice::ReadOnly));
+        const QByteArray stateBytesBefore = stateBefore.readAll();
+        stateBefore.close();
+        QFile importedBefore(importedPath);
+        QVERIFY(importedBefore.open(QIODevice::ReadOnly));
+        const QByteArray importedBytesBefore = importedBefore.readAll();
+        importedBefore.close();
+
+        QVERIFY2(!GarminSidecarStore::migrateLegacyImported(athlete.path(), uid,
+                                                            QHash<QString, GarminSidecarStore::ImportedEntry>(),
+                                                            classified.rawBytes, classified.isOk()),
+                 "a row overwritten under the same key after classification must refuse the whole migration");
+
+        QFile stateAfter(statePath);
+        QVERIFY(stateAfter.open(QIODevice::ReadOnly));
+        QCOMPARE(stateAfter.readAll(), stateBytesBefore);
+        QFile importedAfter(importedPath);
+        QVERIFY(importedAfter.open(QIODevice::ReadOnly));
+        QCOMPARE(importedAfter.readAll(), importedBytesBefore);
     }
 };
 

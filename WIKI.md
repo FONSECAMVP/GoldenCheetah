@@ -69,8 +69,8 @@ per-file detail → wiki/map-detail.md (a file under a rolled-up dir IS mapped, 
 ## REGISTRIES — what exists (allocate next; never reuse, never re-create)
 RULE: registries POINT. No per-id detail, no per-id status here (LSN-035). Ledger = .claude/workflow-garminconnect/
 REQ  garmin:001–029 + 16 REQ-NF-* ids (10 traceability rows)   prd.md                        next:garmin-030
-DEC  garmin:001–086 (index + full entries; DEC-040 ID NOTE covers the "parked teardown draft"
-     mislabel — cite decisions.md, never this line)   decisions.md ## Decision index   next:garmin-087
+DEC  garmin:001–087 (index + full entries; DEC-040 ID NOTE covers the "parked teardown draft"
+     mislabel — cite decisions.md, never this line)   decisions.md ## Decision index   next:garmin-088
 DES  garmin:001–014 (+001a,003a)    design.md                                          next:garmin-015
 TEST garmin:T-001–T-263 incl. T-261b (per-id mapping → traceability.md ONLY; T-240 used by
      slice 3; T-246 a declared never-written gap; B-STAGE9-95 owns the T-212..T-234 cell backfill)
@@ -81,7 +81,7 @@ LSN  001–085  (contiguous; LSN-048 has an index line AND a cold entry — that
      lessons.md                                                                        next:086
 F    no F-### namespace — findings are `<cycle>-<seq>`; process series ORCH-001–062, Stage-9
      series B-STAGE9-001–156 (a reviewer's own ids always collide — re-number); disposition/
-     severity SSOT is findings.md (cite id AND Cycle-column, ORCH-022)   next:ORCH-063 · next:B-STAGE9-157
+     severity SSOT is findings.md (cite id AND Cycle-column, ORCH-022)   next:ORCH-063 · next:B-STAGE9-165
 -- retired ledger (provenance only): aicoach:DEC-001–013, REQ-001–020, TEST-001–020 — these COLLIDE with the
    garmin ranges; always qualify (coach:DEC-NNN / garmin:DEC-NNN).
 why a number was reserved → wiki/registry-detail.md (DATED provenance, NOT a status source)

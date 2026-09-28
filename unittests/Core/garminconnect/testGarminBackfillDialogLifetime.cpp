@@ -200,6 +200,23 @@ QDateTime garminTimeToUtc(const QString& s)
     dt.setTimeSpec(Qt::UTC);
     return dt;
 }
+
+void seedSidecarPair(const QString& configDir, const QString& uid, const QByteArray& backfillStateBytes,
+                     const QByteArray& importedBytes)
+{
+    QVERIFY(QDir().mkpath(GarminSidecarStore::directoryFor(configDir)));
+    QFile state(GarminSidecarStore::backfillStateFilePath(configDir, uid));
+    QVERIFY(state.open(QIODevice::WriteOnly));
+    state.write(backfillStateBytes);
+    state.close();
+    QVERIFY(state.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+
+    QFile imported(GarminSidecarStore::importedFilePath(configDir, uid));
+    QVERIFY(imported.open(QIODevice::WriteOnly));
+    imported.write(importedBytes);
+    imported.close();
+    QVERIFY(imported.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+}
 } // namespace
 
 class TestGarminBackfillDialogLifetime : public QObject
@@ -657,6 +674,199 @@ class TestGarminBackfillDialogLifetime : public QObject
         QVERIFY(bf.isOk());
         QVERIFY2(bf.state.pending.contains(QStringLiteral("act-zip-1")),
                  "an entry that could not be safely evaluated must stay pending");
+
+        delete dialog; // running == false here; ~GarminBackfillDialog closes+deletes store
+        delete ctx;
+    }
+
+    // B-STAGE9-130 (DEC-079/DEC-082, T-240)
+    void legacyV0PairMigratesUnmatchedKeepsMatchedInImported()
+    {
+        resetCounters();
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        Context* ctx = new Context;
+        Athlete athlete;
+        RideCache rideCache;
+        athlete.rideCache = &rideCache;
+        ctx->athlete = &athlete;
+
+        const QString matchedTime = QStringLiteral("2026-03-01 08:00:00");
+        const QString unmatchedTime = QStringLiteral("2026-03-02 09:00:00");
+
+        seedSidecarPair(
+            tmp.path(), kUid,
+            QByteArrayLiteral("{\"last_success_startTimeGMT\":\"2026-01-01 00:00:00\","
+                              "\"range_start\":\"2026-01-01 00:00:00\",\"range_end\":\"2026-06-01 00:00:00\"}"),
+            QByteArray("{\"matched\":{\"startTimeGMT\":\"" + matchedTime.toUtf8() +
+                       "\",\"local_filename\":\"garmin-matched.fit\"},\"unmatched\":{\"startTimeGMT\":\"" +
+                       unmatchedTime.toUtf8() + "\",\"local_filename\":\"garmin-unmatched.fit\"}}"));
+
+        // Real staged file avoids B-STAGE9-112's missing-file drop — unrelated to what this test checks.
+        const QString backfillDir = GarminSidecarStore::directoryFor(tmp.path()) + "/backfill";
+        QVERIFY(QDir().mkpath(backfillDir));
+        QFile staged(backfillDir + "/garmin-unmatched.fit");
+        QVERIFY(staged.open(QIODevice::WriteOnly));
+        staged.write("FIT");
+        staged.close();
+
+        g_rideCacheMatchedDates << garminTimeToUtc(matchedTime); // "matched" confirms; "unmatched" does not
+
+        FakeBackfillClient client; // always lists empty — this run is migration-only
+        GarminConnect* store = new GarminConnect;
+        store->configDir = tmp.path();
+        store->uid = kUid;
+        store->client = &client;
+
+        GarminBackfillDialog* dialog = new GarminBackfillDialog(ctx, store, nullptr);
+        QVERIFY(dialog->start());
+        dialog->startClicked();
+
+        const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
+        QVERIFY2(imported.contains(QStringLiteral("matched")), "a RideCache-matched legacy row must stay in imported");
+        QVERIFY2(!imported.contains(QStringLiteral("unmatched")),
+                 "an unmatched legacy row must be pruned from imported");
+
+        const GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(bf.isOk());
+        QCOMPARE(bf.state.schemaVersion, 1);
+        QVERIFY2(bf.state.pending.contains(QStringLiteral("unmatched")),
+                 "an unmatched legacy row must be migrated to pending");
+
+        delete dialog; // running == false here; ~GarminBackfillDialog closes+deletes store
+        delete ctx;
+    }
+
+    // B-STAGE9-130
+    void alreadyMigratedV1PairIsUntouched()
+    {
+        resetCounters();
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        Context* ctx = new Context;
+        Athlete athlete;
+        RideCache rideCache;            // deliberately no match added: reclassifying
+        athlete.rideCache = &rideCache; // this row would call it unmatched
+        ctx->athlete = &athlete;
+
+        seedSidecarPair(
+            tmp.path(), kUid,
+            QByteArrayLiteral("{\"last_success_startTimeGMT\":\"2026-01-01 00:00:00\","
+                              "\"range_start\":\"2026-01-01 00:00:00\",\"range_end\":\"2026-06-01 00:00:00\","
+                              "\"schema_version\":1,\"pending\":{}}"),
+            QByteArrayLiteral("{\"stillHere\":{\"startTimeGMT\":\"2026-03-02 09:00:00\","
+                              "\"local_filename\":\"garmin-x.fit\"}}"));
+
+        FakeBackfillClient client;
+        GarminConnect* store = new GarminConnect;
+        store->configDir = tmp.path();
+        store->uid = kUid;
+        store->client = &client;
+
+        GarminBackfillDialog* dialog = new GarminBackfillDialog(ctx, store, nullptr);
+        QVERIFY(dialog->start());
+        dialog->startClicked();
+
+        const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
+        QVERIFY2(imported.contains(QStringLiteral("stillHere")), "a v1 pair must never be reclassified or pruned");
+        const GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(bf.isOk());
+        QCOMPARE(bf.state.schemaVersion, 1);
+        QVERIFY2(!bf.state.pending.contains(QStringLiteral("stillHere")), "a v1 pair's row must never move to pending");
+
+        delete dialog; // running == false here; ~GarminBackfillDialog closes+deletes store
+        delete ctx;
+    }
+
+    // B-STAGE9-154
+    void failedMigrationDoesNotProceedAsSuccess()
+    {
+        resetCounters();
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        Context* ctx = new Context;
+        Athlete athlete;
+        RideCache rideCache; // present but deliberately no match: stays unmatched
+        athlete.rideCache = &rideCache;
+        ctx->athlete = &athlete;
+
+        const QString unmatchedTime = QStringLiteral("2026-03-02 09:00:00");
+        seedSidecarPair(
+            tmp.path(), kUid,
+            QByteArrayLiteral("{\"last_success_startTimeGMT\":\"2026-01-01 00:00:00\","
+                              "\"range_start\":\"2026-01-01 00:00:00\",\"range_end\":\"2026-06-01 00:00:00\"}"),
+            QByteArray("{\"unmatched\":{\"startTimeGMT\":\"" + unmatchedTime.toUtf8() +
+                       "\",\"local_filename\":\"garmin-unmatched.fit\"}}"));
+
+        FakeBackfillClient client;
+        GarminConnect* store = new GarminConnect;
+        store->configDir = tmp.path();
+        store->uid = kUid;
+        store->client = &client;
+
+        GarminBackfillDialog* dialog = new GarminBackfillDialog(ctx, store, nullptr);
+        QVERIFY(dialog->start());
+
+        // Forces migrateLegacyImported()'s phase-2 write to fail (same technique as
+        // failedRecordImportedLeavesEntryStillPending).
+        ImportedWriteFailureInjector importedWriteFailureInjector;
+        AtomicFile::setTmpWriterForTest(&importedWriteFailureInjector);
+
+        dialog->startClicked();
+
+        AtomicFile::setTmpWriterForTest(nullptr);
+
+        QCOMPARE(client.listCalls, 0);
+        QCOMPARE(g_backfillClientCalls, 0);
+        QCOMPARE(g_rideImportWizardConstructions, 0);
+
+        const GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(bf.isOk());
+        QCOMPARE(bf.state.schemaVersion, 0);
+
+        delete dialog; // running == false here; ~GarminBackfillDialog closes+deletes store
+        delete ctx;
+    }
+
+    // DEC-087 b4/B-STAGE9-158
+    void nullRideCacheSkipsMigration_ordinaryBackfillStillWritesV0()
+    {
+        resetCounters();
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        Context* ctx = new Context;
+        Athlete athlete; // rideCache left null (default) — migration must be skipped, not the whole run
+        ctx->athlete = &athlete;
+
+        seedSidecarPair(
+            tmp.path(), kUid,
+            QByteArrayLiteral("{\"last_success_startTimeGMT\":\"2026-01-01 00:00:00\","
+                              "\"range_start\":\"2026-01-01 00:00:00\",\"range_end\":\"2026-06-01 00:00:00\"}"),
+            QByteArrayLiteral("{\"unmatched\":{\"startTimeGMT\":\"2026-03-02 09:00:00\","
+                              "\"local_filename\":\"garmin-unmatched.fit\"}}"));
+
+        FakeBackfillClient client;
+        GarminConnect* store = new GarminConnect;
+        store->configDir = tmp.path();
+        store->uid = kUid;
+        store->client = &client;
+
+        GarminBackfillDialog* dialog = new GarminBackfillDialog(ctx, store, nullptr);
+        QVERIFY(dialog->start());
+        dialog->startClicked();
+
+        QCOMPARE(client.listCalls, 1); // ordinary backfill ran rather than pausing on a v0 refusal
+
+        const GarminSidecarStore::ImportedMap imported = GarminSidecarStore::loadImported(tmp.path(), kUid);
+        QVERIFY2(imported.contains(QStringLiteral("unmatched")), "a null RideCache must skip migration entirely");
+
+        const GarminSidecarStore::BackfillLoadResult bf = GarminSidecarStore::loadBackfillState(tmp.path(), kUid);
+        QVERIFY(bf.isOk());
+        QCOMPARE(bf.state.schemaVersion, 0);
 
         delete dialog; // running == false here; ~GarminBackfillDialog closes+deletes store
         delete ctx;

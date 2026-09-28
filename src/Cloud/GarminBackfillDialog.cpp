@@ -189,6 +189,44 @@ void GarminBackfillDialog::startClicked()
     const QString rangeStart = toGarminTime(from->date(), QTime(0, 0, 0));
     const QString rangeEnd = toGarminTime(to->date(), QTime(23, 59, 59));
 
+    if (!context.isNull()) {
+        const GarminSidecarStore::BackfillLoadResult legacyState =
+            GarminSidecarStore::loadBackfillState(configDir, uid);
+        if (legacyState.isOk() && legacyState.state.schemaVersion == 0) {
+            const GarminSidecarStore::ImportedMap legacyImported = GarminSidecarStore::loadImported(configDir, uid);
+            if (legacyImported.isOk() || legacyImported.status == GarminSidecarStore::LoadStatus::NotFound) {
+                QPointer<Athlete> athleteGuard = context->athlete;
+                QPointer<RideCache> rideCacheGuard = athleteGuard.isNull() ? nullptr : athleteGuard->rideCache;
+                if (!athleteGuard.isNull() && !rideCacheGuard.isNull()) {
+                    RideCache* const rideCache = rideCacheGuard.data();
+                    QHash<QString, GarminSidecarStore::ImportedEntry> unmatched;
+                    // DEC-087 b5: the classification snapshot, so the store can refuse a row that changed after it.
+                    const QByteArray classifiedImportedBytes =
+                        legacyImported.isOk() ? legacyImported.rawBytes : QByteArray();
+                    const bool classifiedImportedPresent = legacyImported.isOk();
+                    for (auto it = legacyImported.entries.constBegin(); it != legacyImported.entries.constEnd(); ++it) {
+                        const QDateTime startUtc = parsePendingStartTimeUtc(it.value().startTimeGMT);
+                        if (startUtc.isValid() && rideCache->getRide(startUtc) != nullptr)
+                            continue; // RideCache-matched: stays completion, kept in imported
+                        unmatched.insert(it.key(), it.value());
+                    }
+                    if (!GarminSidecarStore::migrateLegacyImported(configDir, uid, unmatched, classifiedImportedBytes,
+                                                                   classifiedImportedPresent)) {
+                        // B-STAGE9-154: abort rather than fall through as success — keeps the v0 retry gate live.
+                        running = false;
+                        startButton->setEnabled(true);
+                        from->setEnabled(true);
+                        to->setEnabled(true);
+                        cancelButton->setText(tr("Close"));
+                        progressLabel->setText(tr("Migration failed; click Start to retry."));
+                        progressBar->setVisible(false);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
     // B-R010-05 — `store` is owned by this dialog and, unlike `this`/`context`,
     // is deliberately NOT deleted while `running` is true (see ~GarminBackfill-
     // Dialog below): capturing it directly is safe across the nested loop

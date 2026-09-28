@@ -13599,6 +13599,11 @@ Ajuste de Torque - define um valor absoluto em libra força por polegada quadrad
         <translation type="unfinished"></translation>
     </message>
     <message>
+        <location filename="../../Cloud/GarminBackfillDialog.cpp" line="219"/>
+        <source>Migration failed; click Start to retry.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
         <location filename="../../Cloud/GarminBackfillDialog.cpp" line="221"/>
         <source>Paused after importing %1 activities.</source>
         <translation type="unfinished"></translation>

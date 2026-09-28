@@ -40,6 +40,7 @@
 #ifndef GC_GarminSidecarStore_h
 #define GC_GarminSidecarStore_h
 
+#include <QByteArray>
 #include <QHash>
 #include <QString>
 
@@ -78,6 +79,8 @@ class GarminSidecarStore
         LoadStatus status = LoadStatus::NotFound;
         QString path; // the sidecar path (DES-008 %1 arg), set in every case
         QHash<QString, ImportedEntry> entries;
+        QByteArray rawBytes; // DEC-087 b5: exact on-disk bytes at load time when status==Ok — the store byte-compares
+                             // this at migration time
 
         bool isOk() const { return status == LoadStatus::Ok; }
         bool isRejected() const { return status == LoadStatus::SidecarPermissionsRejected; }
@@ -222,6 +225,11 @@ class GarminSidecarStore
     // manifest).
     static bool promotePendingBackfill(const QString& athleteConfigDir, const QString& garminUserId,
                                        const QString& activityId);
+
+    // DEC-079/DEC-082/DEC-087 (B-STAGE9-130) b5.
+    static bool migrateLegacyImported(const QString& athleteConfigDir, const QString& garminUserId,
+                                      const QHash<QString, ImportedEntry>& unmatched,
+                                      const QByteArray& classifiedImportedBytes, bool classifiedImportedPresent);
 };
 
 #endif // GC_GarminSidecarStore_h

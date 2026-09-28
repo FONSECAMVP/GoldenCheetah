@@ -489,7 +489,7 @@ notes are in `archive/findings-notes.md`. Row shape: ledger writing contract (QG
 | B-STAGE9-76 | insp v1_54 09-24 | non-blocking BLOCKS: {} | LastTest.log unreliable count source for multi-label run | open | — ↗ |
 | B-STAGE9-77 | insp v1_55 09-24 | non-blocking BLOCKS: {} | reviewer's format-stability reasoning was wrong basis | open | — ↗ |
 | B-STAGE9-78 | insp v1_55+user 09-26 | blocking BLOCKS: {STAGE:9;CHECKPOINT:STAGE:9} | downloaded files are ZIP not FIT; imports never happen | open | — ↗ |
-| B-STAGE9-79 | insp v1_55+user 09-26 | blocking BLOCKS: {STAGE:9;CHECKPOINT:STAGE:9} | cancel/fail still marks activity imported permanently | open | — ↗ |
+| B-STAGE9-79 | insp v1_55+user 09-26 | blocking BLOCKS: {STAGE:9;CHECKPOINT:STAGE:9} | cancel/fail still marks activity imported permanently | code complete s1-s3; live re-run with -78 | DEC-071 ↗ |
 | B-STAGE9-80 | insp v1_55+user 09-26 | non-blocking BLOCKS: {} | backfill dialog has no Qt parent, opens behind settings | open | — ↗ |
 | B-STAGE9-81 | insp v1_55 09-26 | non-blocking BLOCKS: {} | backfill run emits zero log lines; silent failure unseen | open | — ↗ |
 | B-STAGE9-82 | insp v1_56 09-26 | non-blocking BLOCKS: {} | ledger commit stashes builder's in-flight edits mid-round | open | — ↗ |
@@ -540,7 +540,7 @@ notes are in `archive/findings-notes.md`. Row shape: ledger writing contract (QG
 | B-STAGE9-127 | investigator 09-27 | blocking BLOCKS: {STAGE:9;B-STAGE9-79} | every state write stamps v1, skipping legacy v0 migration | closed | 4dacd8447 ↗ |
 | B-STAGE9-128 | reviewer 09-27 | non-blocking BLOCKS: {} | cursor compared as text; offset spellings sort wrong | open | DEC-081 ↗ |
 | B-STAGE9-129 | insp v1_66 09-27 | non-blocking BLOCKS: {} | header doc-comment still states old '==' drop predicate | open | — ↗ |
-| B-STAGE9-130 | investigator 09-27 | blocking BLOCKS: {STAGE:9;B-STAGE9-79} | legacy migration needs atomic 2-file move; none converge | open | DEC-082 ↗ |
+| B-STAGE9-130 | investigator 09-27 | blocking BLOCKS: {STAGE:9;B-STAGE9-79} | legacy migration needs atomic 2-file move; none converge | fixed s3 (T-240, gate 57/57) | DEC-082, DEC-087 ↗ |
 | B-STAGE9-131 | reviewer 09-27 | blocking BLOCKS: {STAGE:9;B-STAGE9-111;B-STAGE9-79} | GUI-sync promote hook skipped on generation change | fixed | B-STAGE9-111-r2-rev ↗ |
 | B-STAGE9-132 | insp v1_66 09-27 | blocking BLOCKS: {STAGE:9;B-STAGE9-111;B-STAGE9-79} | v0 sync records nothing in imported map; dedup dead | fixed | T-247 ↗ |
 | B-STAGE9-133 | reviewer 09-27 | blocking BLOCKS: {STAGE:9;B-STAGE9-111;B-STAGE9-79} | successful promotion wipes durable resume cursor | closed | e15d863ba ↗ |
@@ -564,6 +564,14 @@ notes are in `archive/findings-notes.md`. Row shape: ledger writing contract (QG
 | B-STAGE9-151 | reviewer 09-27 | non-blocking BLOCKS: {} | comment points to deleted symbol kGarminTimeFormat | fixed | e15d863ba ↗ |
 | B-STAGE9-152 | Inspector 09-27 | non-blocking BLOCKS: {} | STATE.md commit landed while builder was mid-round | CLOSED | — ↗ |
 | B-STAGE9-153 | Inspector 09-27 | non-blocking BLOCKS: {} | roster ref flips builder to Codex, conflicts w/ TEAM line | closed | — ↗ |
-| B-STAGE9-154 | reviewer 09-27 | blocking BLOCKS: {STAGE:9;B-STAGE9-130;B-STAGE9-79} | dialog ignores migrate() bool; v1 stamp on half-migration | open | — ↗ |
-| B-STAGE9-155 | reviewer 09-27 | blocking BLOCKS: {STAGE:9;B-STAGE9-130;B-STAGE9-79} | phase-2 prune drops undecoded raw imported rows | open | — ↗ |
+| B-STAGE9-154 | reviewer 09-27 | blocking BLOCKS: {STAGE:9;B-STAGE9-130;B-STAGE9-79} | dialog ignores migrate() bool; v1 stamp on half-migration | fixed r3 via DEC-087 | DEC-087 ↗ |
+| B-STAGE9-155 | reviewer 09-27 | blocking BLOCKS: {STAGE:9;B-STAGE9-130;B-STAGE9-79} | phase-2 prune drops undecoded raw imported rows | fixed r2; residual B-STAGE9-160 | — ↗ |
 | B-STAGE9-156 | insp v1_72 09-27 | blocking BLOCKS: {STAGE:9;B-STAGE9-130;B-STAGE9-154;B-STAGE9-155} | Codex worktree mandate conflicts w/ shared-checkout roster | closed | DEC-086 ↗ |
+| B-STAGE9-157 | reviewer 09-28 | blocking BLOCKS: {STAGE:9;B-STAGE9-130} | stale unmatched: row added after dialog classify gets v1 unclassified | fixed r4 | DEC-087 |
+| B-STAGE9-158 | reviewer 09-28 | blocking BLOCKS: {STAGE:9;B-STAGE9-130} | skipped migration (null cache/no imported) pauses backfill | fixed r3 | DEC-087 |
+| B-STAGE9-159 | reviewer 09-28 | blocking BLOCKS: {STAGE:9;B-STAGE9-130} | added comments still multi-line prose (slice-3 files) | fixed r6 | r5 line list; then non-blocking |
+| B-STAGE9-160 | reviewer 09-28 | non-blocking | phase-2 compact re-serialize may reformat hand-edited rows; values kept | accept-with-note | store writes Compact |
+| B-STAGE9-161 | builder r3 09-28 | non-blocking | GarminConnect.cpp recordImport v0 cursor-skip now dead under DEC-087 | open | DEC-087 b7 |
+| B-STAGE9-162 | reviewer 09-28 | blocking BLOCKS: {STAGE:9;B-STAGE9-130} | NotFound imported still writes phase 1 before phase 3 | fixed r4 | DEC-087 b3 |
+| B-STAGE9-163 | insp gate 09-28 | blocking BLOCKS: {STAGE:9;B-STAGE9-130} | new dialog tr() string absent from 13 .ts catalogs (i18n guard) | fixed | 13 .ts rows, reviewer PASS |
+| B-STAGE9-164 | insp gate 09-28 | blocking | compaction 9f99d95cf moved DEC-054 gc-arms sentinel out of its fixed slot | fixed | sentinel restored |
