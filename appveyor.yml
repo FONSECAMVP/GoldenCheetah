@@ -4,6 +4,7 @@ skip_tags: true
 branches:
   only:
     - master
+    - garmin/req028-row-lifetime
 
 image:
   - Visual Studio 2022
