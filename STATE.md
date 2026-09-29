@@ -33,6 +33,8 @@ NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not 
            reported on the fork (f79668d5e, 238d4a259, 2e6e122a7, ee06ea6e1), and no webhook is visible.
            NEXT: human gate — the user connects AppVeyor to FONSECAMVP/GoldenCheetah (or starts a
            build of this branch); its result closes -48/-54/-57/-71.
+           `appveyor.yml:4-6` builds `master` only: a push will not trigger this branch; needs a manual/API
+           build or a branch-filter edit (user choice).
            -79's completion seam is settled by measurement: no tolerance window without new
            measurement (DEC-071).
            KEEP `~/.goldencheetah/Andy/config/garminconnect/backfill/`'s two live staged files —
