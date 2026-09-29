@@ -649,7 +649,21 @@ RaisedExc takeRaisedException(PyObject* module)
 {
     RaisedExc info;
 
+    // B-STAGE9-173: shipped Windows/macOS installers embed Python 3.11 (no PyErr_GetRaisedException).
+#if PY_VERSION_HEX >= 0x030C0000
     PyRef exc(PyErr_GetRaisedException()); // new ref; clears the indicator
+#else
+    PyObject* excType = nullptr;
+    PyObject* excValue = nullptr;
+    PyObject* excTraceback = nullptr;
+    PyErr_Fetch(&excType, &excValue, &excTraceback); // new refs; clears the indicator
+    PyErr_NormalizeException(&excType, &excValue, &excTraceback);
+    if (excValue && excTraceback)
+        PyException_SetTraceback(excValue, excTraceback); // does not steal excTraceback
+    Py_XDECREF(excType);
+    Py_XDECREF(excTraceback);
+    PyRef exc(excValue); // new ref; ownership now held by PyRef
+#endif
     if (!exc) {
         // DES-008 developer diagnostic: rawMessage is never displayed in the UI.
         info.message = QStringLiteral("unknown embedded Python error"); // T208-ALLOW:I18N-TR-WRAP
