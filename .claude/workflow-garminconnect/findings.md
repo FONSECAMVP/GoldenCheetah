@@ -578,3 +578,8 @@ notes are in `archive/findings-notes.md`. Row shape: ledger writing contract (QG
 | B-STAGE9-165 | user live 09-29 | non-blocking | mobile login 429s logged each auth; fallback auth still ok | accept-with-note | upstream garminconnect 0.3.15 client.py strategy log; gc_obs auth ok |
 | B-STAGE9-166 | user live 09-29 | blocking BLOCKS: {STAGE:9} | Backfill dialog opens behind modal Athlete settings; unusable until it closes | fixed; user-verified live 09-29 | reviewer PASS |
 | B-STAGE9-167 | user live 09-29 | non-blocking | pre-fix ZIP .fit staged files re-offered via v0 migration; reuse skips sniff | accept-with-note | pre-fix only, DEC-072 |
+| B-STAGE9-168 | AppVeyor ci.1 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | Win leg: root vcpkg.json forces manifest mode; `vcpkg install gsl` refused | fixed | vcpkg --classic, rev CLOSED |
+| B-STAGE9-169 | AppVeyor ci.1 09-29 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | Linux leg: Qt/6.8/gcc_64 absent; image has flat Qt/6.8.3 (-60 premise false) | fixed | rev2 CLOSED |
+| B-STAGE9-170 | AppVeyor ci.1 09-29 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS leg: FTDI D2XX zip now 403 to scripts; no D2XX cache on fork | fixed | rev2 CLOSED |
+| B-STAGE9-171 | reviewer 09-29 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | Linux leg: D2XX wget also 403s on empty cache; unguarded under set -e | fixed | rev2 CLOSED |
+| B-STAGE9-172 | reviewer 09-29 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS D2XX: zip lacking dmg/files aborts; partial D2XX/ skips refetch | fixed; residual pinned | DEC-088 marker gate |

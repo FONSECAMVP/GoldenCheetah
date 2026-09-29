@@ -101,6 +101,7 @@ Compact schema per `references/formats.md` § `decisions.md`. **The recap source
 | DEC-084 | startTimeGMT setTimeSpec REINTERPRETS offset → ONE OFFSET-CORRECT INSTANT PRIMITIVE, GarminTime.h | accepted | 2026-09-27 |
 | DEC-086 | B-STAGE9-156 builder runtime → Claude Code builder; Codex only in read-only roles | accepted | 2026-09-28 |
 | DEC-087 | B-STAGE9-154 v0 stamp class → WRITERS PRESERVE v0: only migration phase 3 stamps v1 | accepted | 2026-09-28 |
+| DEC-088 | D2XX CI fetch completeness → MARKER after upstream-recipe copy; malformed-vendor-archive residual PINNED | accepted | 2026-09-29 |
 
 ### Dormant index
 
@@ -1385,4 +1386,14 @@ Dormant — the remainder is the Garmin dialog-lifetime family and every one sti
   6. NotFound and torn states keep DEC-075's self-healing write (DEC-079 binding 10).
   7. Supersedes DEC-079 binding 8 and B-STAGE9-154's per-writer refusal remedy.
 - Dependents: src/Cloud/GarminSidecarStore.{h,cpp}, src/Cloud/GarminBackfillDialog.cpp, B-STAGE9-154, B-STAGE9-157, B-STAGE9-158
+- Full record: this entry
+
+## DEC-088 — fork CI D2XX fetch: completion marker, malformed vendor archive pinned as accepted residual
+- Status: accepted 2026-09-29 (Inspector technical decision; repair-round cap, B-STAGE9-172 class round 3)
+- Chose: pin-DEC. The fetch copies what the upstream recipe copied and writes `D2XX/.gc-d2xx-complete` last; consumers gate on marker + version.
+- Binding:
+  1. A 403, partial cache or stale-version cache → refetch or build without D2XX (user-accepted 2026-09-29 for fork CI).
+  2. Accepted false negative: a structurally valid FTDI archive lacking its own header is certified; the build then fails loudly at compile — same as the unmodified upstream recipe.
+  3. No further content-recognition rounds on the vendor archive.
+- Dependents: appveyor/{linux,macos}/{install,before_build}.sh, B-STAGE9-170, B-STAGE9-171, B-STAGE9-172
 - Full record: this entry
