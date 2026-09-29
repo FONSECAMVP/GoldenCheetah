@@ -38,7 +38,8 @@ NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not 
            KEEP `~/.goldencheetah/Andy/config/garminconnect/backfill/`'s two live staged files —
            the -78 regression fixture. NEVER commit the untracked `python3.13-3.13.5/`,
            `python3.13_*.tar.xz`/`.dsc`/`.asc`, `FITmetadata.json`.
-CHANGESET: fork branch at `238d4a259` (pushed 2026-09-29); local `origin/` ref is stale. Code commits:
+CHANGESET: fork branch at `238d4a259` (pushed 2026-09-29); local-only after it: `859c44d5d` (-166)
+           + ledger commits — push needs user OK. Code commits:
            `b82063118` slice 1, `54afaaf16` DEC-076's lock, `930329fec` slice 2 + DEC-078,
            `ab0bb7586` -126/-125/-124, `4dacd8447` -127, `e15d863ba` -111/-133, `5226bdbf6` slice 3
            (-130/-154/-155/-157..-159/-162/-163, DEC-087).
