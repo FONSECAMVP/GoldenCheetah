@@ -575,6 +575,6 @@ notes are in `archive/findings-notes.md`. Row shape: ledger writing contract (QG
 | B-STAGE9-162 | reviewer 09-28 | blocking BLOCKS: {STAGE:9;B-STAGE9-130} | NotFound imported still writes phase 1 before phase 3 | fixed r4 | DEC-087 b3 |
 | B-STAGE9-163 | insp gate 09-28 | blocking BLOCKS: {STAGE:9;B-STAGE9-130} | new dialog tr() string absent from 13 .ts catalogs (i18n guard) | fixed | 13 .ts rows, reviewer PASS |
 | B-STAGE9-164 | insp gate 09-28 | blocking | compaction 9f99d95cf moved DEC-054 gc-arms sentinel out of its fixed slot | fixed | sentinel restored |
-| B-STAGE9-165 | user live 09-29 | non-blocking | mobile login 429s logged each auth; fallback auth still ok | open | goldencheetah.log |
+| B-STAGE9-165 | user live 09-29 | non-blocking | mobile login 429s logged each auth; fallback auth still ok | accept-with-note | upstream garminconnect 0.3.15 client.py strategy log; gc_obs auth ok |
 | B-STAGE9-166 | user live 09-29 | blocking BLOCKS: {STAGE:9} | Backfill dialog opens behind modal Athlete settings; unusable until it closes | fixed; user-verified live 09-29 | reviewer PASS |
 | B-STAGE9-167 | user live 09-29 | non-blocking | pre-fix ZIP .fit staged files re-offered via v0 migration; reuse skips sniff | accept-with-note | pre-fix only, DEC-072 |

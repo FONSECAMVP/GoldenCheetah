@@ -1,4 +1,4 @@
-# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-29 by `garmin_inspector_v1_74`
+# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-29 by `garmin_inspector_v1_75`
 # Project cursor only (QGDW Tier-0 schema, quality-gated-dev-workflow references/state-and-tiers.md).
 # Id counters live in WIKI.md REGISTRIES only.
 # Per-id status lives ONLY in .claude/workflow-garminconnect/traceability.md (DEC-015 SSOT);
@@ -28,7 +28,7 @@ LAST_CLV:  clv_findings.py 2026-09-28: 0 MALFORMED / 0 UNKNOWN-* / 0 NEEDS-DISPO
            9 OUTSTANDING / 561 rows.
 NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not `-L garmin-fast`
            (B-STAGE9-115). -128 is subsumed by DEC-084 (landed in `e15d863ba`).
-           -78/-79 discharged by the 2026-09-29 live run. -161/-166 fixed; -165/-167 non-blocking.
+           -78/-79 discharged by the 2026-09-29 live run. -161/-166 fixed; -165/-167 accept-with-note.
            Pushed 2026-09-29 over SSH: fork branch = `238d4a259`. No CI status or check run has ever
            reported on the fork (238d4a259, 2e6e122a7, ee06ea6e1), and no webhook is visible.
            NEXT: human gate — the user connects AppVeyor to FONSECAMVP/GoldenCheetah (or starts a
