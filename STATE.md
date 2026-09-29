@@ -31,7 +31,7 @@ NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not 
            -78/-79 discharged by the 2026-09-29 live run. -161/-166 fixed; -165/-167 accept-with-note.
            First fork AppVeyor run (ci.1, `26d6b6da5`) failed at setup on all 3 legs: -168..-172, fixed in
            `c26162841`. Upstream master is green on AppVeyor (Joern-R/goldencheetah-knhd8).
-           NEXT: AppVeyor build of `c26162841` (CI setup fixes -168..-172, DEC-088) on the fork;
+           NEXT: AppVeyor build ci.2 (54806263) of `ffa2c2156` (fixes -168..-172, DEC-088) on the fork;
            its result closes -48/-54/-57/-71.
            AppVeyor connected 2026-09-29 (fork webhook live); `appveyor.yml` branch filter now includes
            this branch (fork-only CI edit — revert before any upstream PR).
