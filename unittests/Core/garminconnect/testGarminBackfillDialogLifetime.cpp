@@ -47,9 +47,11 @@
 #include "GarminSidecarStore.h"
 
 #include <QDateTime>
+#include <QDialog>
 #include <QDir>
 #include <QFile>
 #include <QPointer>
+#include <QPushButton>
 #include <QString>
 #include <QStringList>
 #include <QTemporaryDir>
@@ -870,6 +872,60 @@ class TestGarminBackfillDialogLifetime : public QObject
 
         delete dialog; // running == false here; ~GarminBackfillDialog closes+deletes store
         delete ctx;
+    }
+
+    // =====================================================================
+    // B-STAGE9-166 — start() must make the dialog application-modal so it
+    // stacks above the app-modal Athlete settings dialog. Reverting the
+    // setWindowModality() call in start() goes RED here.
+    // =====================================================================
+    void startMakesTheDialogApplicationModal()
+    {
+        resetCounters();
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        Context* ctx = new Context;
+        Athlete athlete;
+        ctx->athlete = &athlete;
+
+        FakeBackfillClient client;
+        GarminConnect* store = new GarminConnect;
+        store->configDir = tmp.path();
+        store->uid = kUid;
+        store->client = &client;
+
+        GarminBackfillDialog* dialog = new GarminBackfillDialog(ctx, store, nullptr);
+        QVERIFY(dialog->start());
+
+        QVERIFY2(dialog->isModal(), "the dialog must be modal so it isn't stuck behind app-modal settings");
+        QCOMPARE(dialog->windowModality(), Qt::ApplicationModal);
+
+        delete dialog; // running == false here; ~GarminBackfillDialog closes+deletes store
+        delete ctx;
+    }
+
+    // =====================================================================
+    // B-STAGE9-166 probe (DEC-030 methodology): confirm, rather than assume,
+    // that Qt's ApplicationModal input block exempts a modal widget's own
+    // child windows — the fact the fix above relies on so RideImportWizard
+    // and any QMessageBox (both parented to `this`) stay interactive during
+    // a run instead of being blocked the same way settings was.
+    // =====================================================================
+    void applicationModalDialogDoesNotBlockItsOwnChildWindow()
+    {
+        QDialog modalParent;
+        modalParent.setWindowModality(Qt::ApplicationModal);
+        modalParent.show();
+
+        QDialog child(&modalParent);
+        QPushButton button(QStringLiteral("child"), &child);
+        int clicks = 0;
+        connect(&button, &QPushButton::clicked, [&clicks]() { ++clicks; });
+        child.show();
+
+        QTest::mouseClick(&button, Qt::LeftButton);
+        QCOMPARE(clicks, 1);
     }
 };
 

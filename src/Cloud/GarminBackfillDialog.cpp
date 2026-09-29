@@ -154,7 +154,11 @@ bool GarminBackfillDialog::start()
     connect(startButton, &QPushButton::clicked, this, &GarminBackfillDialog::startClicked);
     connect(cancelButton, &QPushButton::clicked, this, &GarminBackfillDialog::cancelClicked);
 
+    // B-STAGE9-166: settings is exec()-modal; only a modal dialog stacks above it and takes input.
+    setWindowModality(Qt::ApplicationModal);
     QWidget::show();
+    raise();
+    activateWindow();
     return true;
 }
 
