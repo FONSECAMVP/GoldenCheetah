@@ -1,4 +1,4 @@
-# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-29 by `garmin_inspector_v1_75`
+# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-30 by `garmin_inspector_v1_76`
 # Project cursor only (QGDW Tier-0 schema, quality-gated-dev-workflow references/state-and-tiers.md).
 # Id counters live in WIKI.md REGISTRIES only.
 # Per-id status lives ONLY in .claude/workflow-garminconnect/traceability.md (DEC-015 SSOT);
@@ -31,8 +31,9 @@ NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not 
            -78/-79 discharged by the 2026-09-29 live run. -161/-166 fixed; -165/-167 accept-with-note.
            First fork AppVeyor run (ci.1, `26d6b6da5`) failed at setup on all 3 legs: -168..-172, fixed in
            `c26162841`. Upstream master is green on AppVeyor (Joern-R/goldencheetah-knhd8).
-           NEXT: AppVeyor build ci.2 (54806263) of `ffa2c2156` (fixes -168..-172, DEC-088) on the fork;
-           its result closes -48/-54/-57/-71.
+           ci.2 (54806263) failed all 3 legs: -173 (Win+mac, Python 3.11 API) fixed `dce1079e2`;
+           -174 (Linux qmake ICU path) fixed in the following commit.
+           NEXT: push to the fork (needs user approval) → AppVeyor ci.3; its result closes -48/-54/-57/-71.
            AppVeyor connected 2026-09-29 (fork webhook live); `appveyor.yml` branch filter now includes
            this branch (fork-only CI edit — revert before any upstream PR).
            -79's completion seam is settled by measurement: no tolerance window without new

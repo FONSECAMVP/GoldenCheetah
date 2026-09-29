@@ -73,7 +73,8 @@ init:
       sudo update-alternatives --set gcc "/usr/bin/gcc-11"
       # Setup QT 6.8
       export QTDIR=$HOME/Qt/6.8
-      export LD_LIBRARY_PATH=$QTDIR/lib:$LD_LIBRARY_PATH
+      # B-STAGE9-174: the ICU libs qmake needs live in $QTDIR; match upstream's loader path.
+      export LD_LIBRARY_PATH=$QTDIR:$LD_LIBRARY_PATH
       export PATH=$QTDIR/bin:$PATH
       qmake --version
     else

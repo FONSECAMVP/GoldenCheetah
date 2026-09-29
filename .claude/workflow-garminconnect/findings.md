@@ -584,4 +584,4 @@ notes are in `archive/findings-notes.md`. Row shape: ledger writing contract (QG
 | B-STAGE9-171 | reviewer 09-29 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | Linux leg: D2XX wget also 403s on empty cache; unguarded under set -e | fixed | rev2 CLOSED |
 | B-STAGE9-172 | reviewer 09-29 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS D2XX: zip lacking dmg/files aborts; partial D2XX/ skips refetch | fixed; residual pinned | DEC-088 marker gate |
 | B-STAGE9-173 | AppVeyor ci.2 09-29 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | Win+mac legs: PyEmbeddedAdapter.cpp:652 3.12 API; CI Python 3.11 | fixed | PY_VERSION_HEX shim, rev PASS |
-| B-STAGE9-174 | AppVeyor ci.2 09-29 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | Linux leg: Qt/6.8 qmake needs libicui18n.so.73, absent (exit 127) | open | — |
+| B-STAGE9-174 | AppVeyor ci.2 09-29 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | Linux leg: Qt/6.8 qmake needs libicui18n.so.73, absent (exit 127) | fixed | upstream loader path, rev PASS |
