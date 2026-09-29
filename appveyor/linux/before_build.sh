@@ -25,8 +25,11 @@ sed -i "s|^#HTPATH|HTPATH|" src/gcconfig.pri
 sed -i "s|#\(DEFINES += GC_WANT_R.*\)|\1|" src/gcconfig.pri
 # Enable CloudDB
 sed -i "s|^#CloudDB|CloudDB|" src/gcconfig.pri
-# D2XX
-sed -i "s|#\(D2XX_INCLUDE =.*\)|\1 ../D2XX/release|" src/gcconfig.pri
+# D2XX - gated on install.sh's completion marker, not a file list (B-STAGE9-172)
+D2XX_VERSION=1.4.27
+if [ -f D2XX/.gc-d2xx-complete ] && [ "$(cat D2XX/.gc-d2xx-complete)" = "$D2XX_VERSION" ]; then
+    sed -i "s|#\(D2XX_INCLUDE =.*\)|\1 ../D2XX/release|" src/gcconfig.pri
+fi
 # SAMPLERATE
 sed -i "s|#\(SAMPLERATE_INSTALL =\).*|\1 /usr|" src/gcconfig.pri
 # SRMIO

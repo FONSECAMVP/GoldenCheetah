@@ -34,17 +34,36 @@ cd srmio
 sudo make install
 cd ..
 
-# D2XX - refresh cache if folder is empty
-if [ -z "$(ls -A D2XX)" ]; then
-    mkdir -p D2XX
-    curl -O https://ftdichip.com/wp-content/uploads/2021/05/D2XX1.4.24.zip
-    unzip D2XX1.4.24.zip
-    hdiutil mount D2XX1.4.24.dmg
-    cp /Volumes/dmg/release/build/libftd2xx.1.4.24.dylib D2XX
-    cp /Volumes/dmg/release/build/libftd2xx.a D2XX
-    cp /Volumes/dmg/release/*.h D2XX
+# D2XX - marker-gated: D2XX/.gc-d2xx-complete (written last, after dylib +
+# .a + headers are all copied) means D2XX/ is populated; anything else
+# refetches, and a 403/short zip/incomplete dmg prints one WARNING instead of
+# aborting the leg under set -e (B-STAGE9-172).
+D2XX_VERSION=1.4.24
+if [ ! -f D2XX/.gc-d2xx-complete ] || [ "$(cat D2XX/.gc-d2xx-complete)" != "$D2XX_VERSION" ]; then
+    rm -rf D2XX D2XX.tmp
+    mkdir -p D2XX.tmp
+    if curl -sS -o D2XX.tmp/D2XX1.4.24.zip "${D2XX_URL:-https://ftdichip.com/wp-content/uploads/2021/05/D2XX1.4.24.zip}" \
+        && unzip -tq D2XX.tmp/D2XX1.4.24.zip >/dev/null 2>&1 \
+        && unzip -q D2XX.tmp/D2XX1.4.24.zip -d D2XX.tmp \
+        && hdiutil attach D2XX.tmp/D2XX1.4.24.dmg -mountpoint D2XX.tmp/mnt -nobrowse -quiet \
+        && cp D2XX.tmp/mnt/release/build/libftd2xx.1.4.24.dylib D2XX.tmp/ \
+        && cp D2XX.tmp/mnt/release/build/libftd2xx.a D2XX.tmp/ \
+        && cp D2XX.tmp/mnt/release/*.h D2XX.tmp/ \
+        && hdiutil detach D2XX.tmp/mnt -quiet \
+        && rm -rf D2XX.tmp/mnt D2XX.tmp/D2XX1.4.24.zip D2XX.tmp/D2XX1.4.24.dmg \
+        && echo "$D2XX_VERSION" > D2XX.tmp/.gc-d2xx-complete \
+        && mv D2XX.tmp D2XX; then
+        :
+    else
+        hdiutil detach D2XX.tmp/mnt -quiet 2>/dev/null || true
+        echo "WARNING (B-STAGE9-172): D2XX archive fetch/extract failed; building without D2XX support."
+        rm -rf D2XX.tmp
+        mkdir -p D2XX
+    fi
 fi
-sudo cp D2XX/libftd2xx.1.4.24.dylib /usr/local/lib
+if [ -f D2XX/.gc-d2xx-complete ]; then
+    sudo cp D2XX/libftd2xx.1.4.24.dylib /usr/local/lib
+fi
 
 # Python ${PYTHON_VERSION} for embedding (system Python is too old for sip-tools)
 brew install python@${PYTHON_VERSION}

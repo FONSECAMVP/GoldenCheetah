@@ -28,10 +28,13 @@ sed -i "" "s|^#LIBZ|LIBZ|" src/gcconfig.pri
 # SRMIO
 sed -i "" "s|#\(SRMIO_INSTALL =.*\)|\1 /usr/local|" src/gcconfig.pri
 
-# D2XX
-sed -i "" "s|libftd2xx.dylib|@executable_path/../Frameworks/libftd2xx.1.4.24.dylib|" src/FileIO/D2XX.cpp
-sed -i "" "s|#\(D2XX_INCLUDE =.*\)|\1 ../D2XX|" src/gcconfig.pri
-sed -i "" "s|#\(D2XX_LIBS    =.*\)|\1 -L../D2XX -lftd2xx|" src/gcconfig.pri
+# D2XX - gated on install.sh's completion marker, not a file list (B-STAGE9-172)
+D2XX_VERSION=1.4.24
+if [ -f D2XX/.gc-d2xx-complete ] && [ "$(cat D2XX/.gc-d2xx-complete)" = "$D2XX_VERSION" ]; then
+    sed -i "" "s|libftd2xx.dylib|@executable_path/../Frameworks/libftd2xx.1.4.24.dylib|" src/FileIO/D2XX.cpp
+    sed -i "" "s|#\(D2XX_INCLUDE =.*\)|\1 ../D2XX|" src/gcconfig.pri
+    sed -i "" "s|#\(D2XX_LIBS    =.*\)|\1 -L../D2XX -lftd2xx|" src/gcconfig.pri
+fi
 
 # ICAL
 sed -i "" "s|#\(ICAL_INSTALL =.*\)|\1 /usr/local|" src/gcconfig.pri

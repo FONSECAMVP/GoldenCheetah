@@ -72,7 +72,7 @@ init:
       # Select gcc-11 for AppImage backward compatibility
       sudo update-alternatives --set gcc "/usr/bin/gcc-11"
       # Setup QT 6.8
-      export QTDIR=$HOME/Qt/6.8/gcc_64
+      export QTDIR=$HOME/Qt/6.8
       export LD_LIBRARY_PATH=$QTDIR/lib:$LD_LIBRARY_PATH
       export PATH=$QTDIR/bin:$PATH
       qmake --version
@@ -105,7 +105,7 @@ install:
 - cmd: if not exist gc-ci-libs.zip appveyor DownloadFile "https://github.com/GoldenCheetah/WindowsSDK/releases/download/v0.1.1/gc-ci-libs.zip"
 - cmd: 7z x -y gc-ci-libs.zip -oC:\libs
 # GSL
-- cmd: vcpkg install gsl:x64-windows
+- cmd: vcpkg install --classic gsl:x64-windows
 
 # Get jom
 - cmd: if not exist jom_1_1_3.zip appveyor DownloadFile "https://download.qt.io/official_releases/jom/jom_1_1_3.zip"

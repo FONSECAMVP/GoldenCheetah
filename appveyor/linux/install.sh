@@ -15,11 +15,26 @@ sudo apt-get update -qq
 sudo apt-get install -qq r-base-dev
 R --version
 
-# D2XX - refresh cache if folder is empty
-if [ -z "$(ls -A D2XX)" ]; then
-    mkdir -p D2XX
-    wget --no-verbose https://ftdichip.com/wp-content/uploads/2022/07/libftd2xx-x86_64-1.4.27.tgz
-    tar xf libftd2xx-x86_64-1.4.27.tgz -C D2XX
+# D2XX - marker-gated: D2XX/.gc-d2xx-complete (written last, after the whole
+# release/ tree is extracted) means D2XX/ is populated; anything else
+# refetches, and a 403/short archive prints one WARNING instead of aborting
+# the leg under set -e (B-STAGE9-172).
+D2XX_VERSION=1.4.27
+if [ ! -f D2XX/.gc-d2xx-complete ] || [ "$(cat D2XX/.gc-d2xx-complete)" != "$D2XX_VERSION" ]; then
+    rm -rf D2XX D2XX.tmp
+    mkdir -p D2XX.tmp
+    if wget --no-verbose -O D2XX.tmp/libftd2xx.tgz "${D2XX_URL_LINUX:-https://ftdichip.com/wp-content/uploads/2022/07/libftd2xx-x86_64-1.4.27.tgz}" \
+        && tar xf D2XX.tmp/libftd2xx.tgz -C D2XX.tmp \
+        && [ -d D2XX.tmp/release ] \
+        && rm -f D2XX.tmp/libftd2xx.tgz \
+        && echo "$D2XX_VERSION" > D2XX.tmp/.gc-d2xx-complete \
+        && mv D2XX.tmp D2XX; then
+        :
+    else
+        echo "WARNING (B-STAGE9-172): D2XX archive fetch/extract failed; building without D2XX support."
+        rm -rf D2XX.tmp
+        mkdir -p D2XX
+    fi
 fi
 
 # SRMIO
