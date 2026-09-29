@@ -29,8 +29,8 @@ LAST_CLV:  clv_findings.py 2026-09-28: 0 MALFORMED / 0 UNKNOWN-* / 0 NEEDS-DISPO
 NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not `-L garmin-fast`
            (B-STAGE9-115). -128 is subsumed by DEC-084 (landed in `e15d863ba`).
            -78/-79 discharged by the 2026-09-29 live run. -161/-166 fixed; -165/-167 accept-with-note.
-           Pushed 2026-09-29 over SSH: fork branch = `238d4a259`. No CI status or check run has ever
-           reported on the fork (238d4a259, 2e6e122a7, ee06ea6e1), and no webhook is visible.
+           Pushed 2026-09-29 over SSH: fork branch = `f79668d5e`. No CI status or check run has ever
+           reported on the fork (f79668d5e, 238d4a259, 2e6e122a7, ee06ea6e1), and no webhook is visible.
            NEXT: human gate — the user connects AppVeyor to FONSECAMVP/GoldenCheetah (or starts a
            build of this branch); its result closes -48/-54/-57/-71.
            -79's completion seam is settled by measurement: no tolerance window without new
@@ -38,8 +38,8 @@ NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not 
            KEEP `~/.goldencheetah/Andy/config/garminconnect/backfill/`'s two live staged files —
            the -78 regression fixture. NEVER commit the untracked `python3.13-3.13.5/`,
            `python3.13_*.tar.xz`/`.dsc`/`.asc`, `FITmetadata.json`.
-CHANGESET: fork branch at `238d4a259` (pushed 2026-09-29); local-only after it: `859c44d5d` (-166)
-           + ledger commits — push needs user OK. Code commits:
+CHANGESET: fork branch at `f79668d5e` (pushed 2026-09-29, incl. `859c44d5d` -166); later ledger-only
+           commits stay local until the next user-approved push. Code commits:
            `b82063118` slice 1, `54afaaf16` DEC-076's lock, `930329fec` slice 2 + DEC-078,
            `ab0bb7586` -126/-125/-124, `4dacd8447` -127, `e15d863ba` -111/-133, `5226bdbf6` slice 3
            (-130/-154/-155/-157..-159/-162/-163, DEC-087).
