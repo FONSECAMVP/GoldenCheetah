@@ -31,8 +31,8 @@ NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not 
            -78/-79 discharged by the 2026-09-29 live run. -161/-166 fixed; -165/-167 accept-with-note.
            Pushed 2026-09-29 over SSH: fork branch = `f79668d5e`. No CI status or check run has ever
            reported on the fork (f79668d5e, 238d4a259, 2e6e122a7, ee06ea6e1), and no webhook is visible.
-           NEXT: human gate — the user connects AppVeyor to FONSECAMVP/GoldenCheetah (or starts a
-           build of this branch); its result closes -48/-54/-57/-71.
+           NEXT: AppVeyor build 54805953 of `26d6b6da5` (ci.appveyor.com/project/FONSECAMVP/goldencheetah);
+           its result closes -48/-54/-57/-71.
            AppVeyor connected 2026-09-29 (fork webhook live); `appveyor.yml` branch filter now includes
            this branch (fork-only CI edit — revert before any upstream PR).
            -79's completion seam is settled by measurement: no tolerance window without new
