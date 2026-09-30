@@ -31,9 +31,11 @@ NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not 
            -78/-79 discharged by the 2026-09-29 live run. -161/-166 fixed; -165/-167 accept-with-note.
            First fork AppVeyor run (ci.1, `26d6b6da5`) failed at setup on all 3 legs: -168..-172, fixed in
            `c26162841`. Upstream master is green on AppVeyor (Joern-R/goldencheetah-knhd8).
-           ci.2 (54806263) failed all 3 legs: -173 (Win+mac, Python 3.11 API) fixed `dce1079e2`;
-           -174 (Linux qmake ICU path) fixed in the following commit.
-           NEXT: push to the fork (needs user approval) → AppVeyor ci.3; its result closes -48/-54/-57/-71.
+           ci.2 failed all 3 legs: -173 fixed `dce1079e2`, -174 fixed `4b5eaa79c`.
+           ci.3 (54809173): Win built the installer and passed the DEC-069 check but hit the 60-min cap;
+           Linux -175, macOS -176 timeout. Cause: fork CI recipe lagged upstream → DEC-089 sync
+           (-175..-181 fixed, reviewer PASS). Next run may be cold-cache; DEC-089/4 lets it warm.
+           NEXT: push to the fork (needs user approval) → AppVeyor ci.4; its result closes -48/-54/-57/-71.
            AppVeyor connected 2026-09-29 (fork webhook live); `appveyor.yml` branch filter now includes
            this branch (fork-only CI edit — revert before any upstream PR).
            -79's completion seam is settled by measurement: no tolerance window without new

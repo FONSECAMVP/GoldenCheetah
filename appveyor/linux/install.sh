@@ -37,8 +37,12 @@ if [ ! -f D2XX/.gc-d2xx-complete ] || [ "$(cat D2XX/.gc-d2xx-complete)" != "$D2X
     fi
 fi
 
-# SRMIO
-if [ -z "$(ls -A srmio)" ]; then
+# SRMIO - gated on srmio's own build artifact (.libs/libsrmio.a), not a
+# non-empty directory (B-STAGE9-178: a failed genautomake.sh/configure/make
+# left srmio/ non-empty but unbuilt, and SAVE_CACHE_ON_ERROR cached that).
+if [ ! -f srmio/.libs/libsrmio.a ]; then
+    rm -rf srmio
+    sudo apt-get install -qq autoconf automake libtool build-essential
     git clone https://github.com/rclasen/srmio.git
     cd srmio
     sh genautomake.sh

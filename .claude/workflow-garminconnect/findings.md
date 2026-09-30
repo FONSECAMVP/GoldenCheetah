@@ -585,3 +585,10 @@ notes are in `archive/findings-notes.md`. Row shape: ledger writing contract (QG
 | B-STAGE9-172 | reviewer 09-29 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS D2XX: zip lacking dmg/files aborts; partial D2XX/ skips refetch | fixed; residual pinned | DEC-088 marker gate |
 | B-STAGE9-173 | AppVeyor ci.2 09-29 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | Win+mac legs: PyEmbeddedAdapter.cpp:652 3.12 API; CI Python 3.11 | fixed | PY_VERSION_HEX shim, rev PASS |
 | B-STAGE9-174 | AppVeyor ci.2 09-29 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | Linux leg: Qt/6.8 qmake needs libicui18n.so.73, absent (exit 127) | fixed | upstream loader path, rev PASS |
+| B-STAGE9-175 | AppVeyor ci.3 09-30 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | Linux leg: branch predates upstream e27be4772 autotools apt line; aclocal missing | fixed | DEC-089 sync, rev PASS |
+| B-STAGE9-176 | AppVeyor ci.3 09-30 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS leg: 60-min timeout mid-compile; fork on sonoma, upstream monterey 81893217c | fixed | DEC-089 monterey, rev PASS |
+| B-STAGE9-177 | AppVeyor ci.3 09-30 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | Win leg: installer + DEC-069 check pass, job hits 60 min at cache save | fixed | DEC-089/4 cache + -j2; run unproven |
+| B-STAGE9-178 | reviewer 09-30 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | srmio cache name unchanged; ci.3's unconfigured srmio/ still restorable | fixed | rev2 CLOSED |
+| B-STAGE9-179 | reviewer 09-30 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | windows/after_build.ps1: windeployqt/makensis exit codes unchecked | fixed | rev2 CLOSED |
+| B-STAGE9-180 | reviewer 09-30 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macos/after_build.sh:120 drops upstream pip shebang/_sysconfigdata fix | fixed | rev2 CLOSED |
+| B-STAGE9-181 | reviewer 09-30 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | windows/*.ps1: no ErrorActionPreference Stop; cmdlet errors pass | fixed | rev3 CLOSED |

@@ -102,6 +102,7 @@ Compact schema per `references/formats.md` § `decisions.md`. **The recap source
 | DEC-086 | B-STAGE9-156 builder runtime → Claude Code builder; Codex only in read-only roles | accepted | 2026-09-28 |
 | DEC-087 | B-STAGE9-154 v0 stamp class → WRITERS PRESERVE v0: only migration phase 3 stamps v1 | accepted | 2026-09-28 |
 | DEC-088 | D2XX CI fetch completeness → MARKER after upstream-recipe copy; malformed-vendor-archive residual PINNED | accepted | 2026-09-29 |
+| DEC-089 | Fork CI recipe lag behind upstream → SYNC appveyor.yml + appveyor/** to upstream/master, re-apply fork deltas | accepted | 2026-09-30 |
 
 ### Dormant index
 
@@ -1396,4 +1397,16 @@ Dormant — the remainder is the Garmin dialog-lifetime family and every one sti
   2. Accepted false negative: a structurally valid FTDI archive lacking its own header is certified; the build then fails loudly at compile — same as the unmodified upstream recipe.
   3. No further content-recognition rounds on the vendor archive.
 - Dependents: appveyor/{linux,macos}/{install,before_build}.sh, B-STAGE9-170, B-STAGE9-171, B-STAGE9-172
+- Full record: this entry
+
+## DEC-089 — fork CI recipe synced to upstream master; fork-only deltas re-applied on top
+- Status: accepted 2026-09-30 (Inspector technical decision; architectural remedy, repair-round bound)
+- Why: branch base 40db2bc8e predates 14 upstream CI commits; ci.1-ci.3 each hit a missing one (B-STAGE9-175/-176, 31b6685bf cache-on-error).
+- Chose: B of 3 — (A) keep patching per CI run: unbounded runs; (C) merge all upstream/master: product blast radius. B = CI files only, recipe green upstream 2026-09-26.
+- Binding:
+  1. appveyor.yml and appveyor/** start from upstream/master content; only fork deltas with a ledger id are re-applied (Garmin payload DEC-058/-067/-069, DEC-088 D2XX gate, B-STAGE9-42/-56 pins, branch filter).
+  2. An upstream CI step that needs source-tree files this branch lacks is adapted to this branch and reported, never silently dropped.
+  3. The branch filter entry stays fork-only; revert before any upstream PR.
+  4. Fork-only cache deltas (60-min hosted cap; cold Qwt build costs 14.5 min Win at -j1, 20.7 min macOS): qwt/srmio cache keys drop the `appveyor.yml` dependency; Windows Qwt builds with -j2; SAVE_CACHE_ON_ERROR stays true until the first green run. Revert all before any upstream PR.
+- Dependents: appveyor.yml, appveyor/**, B-STAGE9-175, B-STAGE9-176, B-STAGE9-177
 - Full record: this entry
