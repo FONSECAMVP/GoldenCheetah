@@ -1,4 +1,4 @@
-# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-10-01 by `garmin_inspector_v1_77`
+# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-10-01 by `garmin_inspector_v1_78`
 # Project cursor only (QGDW Tier-0 schema, quality-gated-dev-workflow references/state-and-tiers.md).
 # Id counters live in WIKI.md REGISTRIES only.
 # Per-id status lives ONLY in .claude/workflow-garminconnect/traceability.md (DEC-015 SSOT);
@@ -49,12 +49,12 @@ NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not 
            KEEP `~/.goldencheetah/Andy/config/garminconnect/backfill/`'s two live staged files —
            the -78 regression fixture. NEVER commit the untracked `python3.13-3.13.5/`,
            `python3.13_*.tar.xz`/`.dsc`/`.asc`, `FITmetadata.json`.
-CHANGESET: fork branch at `25857ba43` (pushed 2026-10-01); later commits stay local until the next
+CHANGESET: fork branch at `898484d85` (pushed 2026-10-01); later commits stay local until the next
            user-approved push. Code commits:
            `b82063118` slice 1, `54afaaf16` DEC-076's lock, `930329fec` slice 2 + DEC-078,
            `ab0bb7586` -126/-125/-124, `4dacd8447` -127, `e15d863ba` -111/-133, `5226bdbf6` slice 3
            (-130/-154/-155/-157..-159/-162/-163, DEC-087).
 TEAM:      on(5 agents)
 RIGOR:     full (Phase 0 backfill 2026-07-11; A0-A5 + STRIDE + per-slice CLV)
-BUDGETS:   WIKI ~2,550tok/700 [BREACH] · DECIDX ~8kB · ROWS 1 over 4kB (DEC-029 slice) · ledgers
+BUDGETS:   WIKI ~645tok/700 · DECIDX ~8kB · ROWS 1 over 4kB (DEC-029 slice) · ledgers
            compacted 2026-09-28: findings 76kB, decisions 134kB, traceability 48kB

@@ -70,3 +70,67 @@ src/*.o,moc_*,qrc_*,*_yacc*,*_lex*   [SKIP] generated in-source qmake build arti
 .claude/workflow-garminconnect/   ACTIVE ledger (Garmin Connect, Phase 2.2) — file-by-file breakdown → wiki/conventions.md
 .claude/workflow-aicoach/   CLOSED ledger (AI Coach, SHIPPED, src/Coach/) — provenance only, own DEC/REQ/TEST numbering (see REGISTRIES) — file-by-file breakdown → wiki/conventions.md
 
+
+## Pre-compaction MAP narrative 2026-10-01
+
+## MAP — directory manifest (authoritative; check before creating ANYTHING)
+WIKI.md · STATE.md · lessons.md   hub · SOLE live cursor (DEC-015) · LSN rules (index head is the hot read)
+wiki/                    5 spokes → PAGES
+.claude/skills/inspector-cycle/   project-authored Claude Code skill (not a vendor package) — Inspector's own
+                         herdr-stage-delegate-poll-validate-document-commit supervision loop; SKILL.md +
+                         references/ only, no scripts/hooks. Source of truth also kept at
+                         /home/andy/Downloads/inspector-cycle/ (authoring copy).
+.claude/workflow-INDEX.md   ledger index; names the active ledger
+.claude/workflow-garminconnect/   ACTIVE ledger: prd decisions design traceability findings dod ambiguities intake
+                         options-catalog + cycles/archive/ validations/archive/ (ALL closed runs; 2026-08-30 the
+                         last 3 cycles + 9 VALs moved here). There is no active/ dir — which means NO CYCLE OR
+                         VALIDATION IS OPEN, and nothing more. Three separate things, because they are separately
+                         true: (a) no active cycle/validation report; (b) the 41-path documentation + gate-repair
+                         slice IS COMMITTED (2026-09-06, user decision, with the O-R027-01 reconciliation, the
+                         fd7639f7a traceability repair and the STATE/WIKI cursor-drift corrections folded in —
+                         exact paths in STATE.md ## COMMIT MANIFEST; the commit is the child of `3b8226ec4`);
+                         (c) nothing is pushed. Take the live state from STATE.md, never
+                         from the absence of a directory.
+                         scripts/ = clv-lite.sh (runner) + clv_findings.py (THE canonical CLV Check 5) +
+                         test_clv_findings.py (its 18 synthetic self-tests)
+                         archive/state-history.md = ALL superseded STATE narrative (§ 9 = the pre-2026-08-30 cursor,
+                         § 11 = the full pre-2026-09-06 STATE.md, § 12 = that pass's BUDGETS breach detail)
+                         archive/ = verbatim pre-compaction text (2026-09-06, 2026-09-28): findings-detail.md
+                         (rows marked ↗), findings-notes.md, decisions-full.md (full DEC entries + old index
+                         rows), traceability-history.md (full REQ rows ↗ + dated slice records) — Tier 3 only
+.claude/workflow-aicoach/   CLOSED ledger (AI Coach) — provenance only, OWN DEC/REQ/TEST numbering
+.claude/agents/ hooks/ settings.json   5 qgdw agent defs · installed guard + drift-lint copies · hook wiring
+.claude/skills/          VENDOR TERRITORY, replaced wholesale on update — never put project files here (ORCH-004)
+.claude/worktrees/       untracked evidence worktrees — do not edit in place
+.claude/evidence-seals/  in-tree commit-safety seals (rt8+). **TRACKED, not untracked** — the five
+                         DEC040-Stage2-*.log seals were committed in `fd7639f7a` and git history is now
+                         their only durable copy; ../GoldenCheetah-recovery/ does NOT exist on this host
+                         (B-STAGE9-74, 2026-09-24). Do not delete them expecting a copy elsewhere.
+../GoldenCheetah-recovery/DEC-040/   **ABSENT on this host — verified 2026-09-24 (B-STAGE9-74).** Described
+                         below as originally established, retained only so the convention is legible —
+                         durable DEC-040 evidence: pre-repair-*, post-deletelater-*, full-verification-*, rt8-*.
+                         House convention per set: manifest.txt + sha256-per-file.txt (+ tar.gz/archive.sha256
+                         for the archived ones). Seal order: content first, indexes LAST, nothing written after.
+                         Session scratchpads under /tmp (rt3–rt7) are NOT durable — copy seals here
+scripts/                 project-owned mechanisms (CANONICAL, not .claude/skills/): ledger_drift_lint.py + its
+                         test · test_anti_duplication_guard_flags.py (ORCH-043 two-directional matrix; targets the
+                         INSTALLED .claude/hooks/ copy, kept here so a skill reinstall cannot delete it)
+util/                    dev scripts (fit, bundles, linters, rpi) — UPSTREAM-owned, not ours
+src/                     app C++, 13 dirs: ANT Charts Cloud Coach Core FileIO Gui Metrics Planning Python R
+                         Resources Train — roles → wiki/architecture.md
+src/Cloud/               THE ACTIVE CODE: CloudService + GarminConnect worker/adapter/token/sidecar/download seams
+src/Python/garminconnect/   vendored Python adapter pkg (own tests + pyproject)
+src/Coach/               AI Coach — SHIPPED, ledger closed
+unittests/               QTest units, Core/ + Gui/. Core/coach CMakeLists+stubs COMMITTED (DEC-028), added
+                         UNCONDITIONALLY — a guard would silently skip a tracked test
+test/                    ride/workout/measurement FIXTURE DATA — not test code
+docs/                    WORKFLOW_GUIDE · QGDW_SKILL_RETROSPECTIVE · REQ028_PROCESS_AUDIT · BUILD_NOTES ·
+                         MODERNIZATION · project_analysis · COACH_*
+doc/                     LEGACY doc archive — name collides with wiki/, content unrelated; never conflate
+contrib/ qwt/ deprecated/   vendored third-party · bundled Qwt · retired source
+CMakeLists.txt CMakePresets.json vcpkg.json   CMake build (migration alongside qmake) · build.pro src/src.pro qmake
+.clang-format .clang-tidy .pre-commit-config.yaml   style/lint (pre-commit scoped to Garmin paths, DEC-010)
+appveyor.yml appveyor/ .github/ISSUE_TEMPLATE/   dated CI + per-OS scripts; issue templates only, no workflows
+INSTALL-* BUILD_DEPENDENCIES_INSTALL.sh README.md CONTRIBUTING.md COPYING .git* .vscode/   docs, standard, editor
+build/ .mypy_cache/ .ruff_cache/ src/*.o,moc_*,qrc_*,*_yacc*,*_lex*   [SKIP] generated, untracked+gitignored
+per-file detail → wiki/map-detail.md (a file under a rolled-up dir IS mapped, via its parent)
