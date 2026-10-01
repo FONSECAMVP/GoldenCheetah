@@ -599,3 +599,5 @@ notes are in `archive/findings-notes.md`. Row shape: ledger writing contract (QG
 | B-STAGE9-186 | AppVeyor ci.6 10-01 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | qwt cache key qwtconfig.pri.in froze lib-less copies | fixed | qwt/lib content-keyed, cold legs prime; PASS |
 | B-STAGE9-187 | AppVeyor ci.6 10-01 | non-blocking | push while a build is queued: clone_depth 1 loses its commit, later legs fail | accept-with-note | push only after the running build ends |
 | B-STAGE9-188 | AppVeyor ci.9 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS DEC-069 check: bundled python3.11 absent at mounted-DMG path | open | — |
+| B-STAGE9-189 | rev B-STAGE9-188-r1 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | -srcfolder .app puts Contents at DMG root; check path still misses python | open | appveyor.yml:211 |
+| B-STAGE9-190 | rev B-STAGE9-188-r1 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS check: abort-on-error shell skips PY_RC capture + detach | open | appveyor.yml:211-214 |
