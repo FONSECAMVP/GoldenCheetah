@@ -80,8 +80,8 @@ LSN  001–085  (contiguous; LSN-048 has an index line AND a cold entry — that
      shape, not a duplicate; per-id rule/check → lessons.md, hot index lines are the read)
      lessons.md                                                                        next:086
 F    no F-### namespace — findings are `<cycle>-<seq>`; process series ORCH-001–062, Stage-9
-     series B-STAGE9-001–184 (a reviewer's own ids always collide — re-number); disposition/
-     severity SSOT is findings.md (cite id AND Cycle-column, ORCH-022)   next:ORCH-063 · next:B-STAGE9-185
+     series B-STAGE9-001–185 (a reviewer's own ids always collide — re-number); disposition/
+     severity SSOT is findings.md (cite id AND Cycle-column, ORCH-022)   next:ORCH-063 · next:B-STAGE9-186
 -- retired ledger (provenance only): aicoach:DEC-001–013, REQ-001–020, TEST-001–020 — these COLLIDE with the
    garmin ranges; always qualify (coach:DEC-NNN / garmin:DEC-NNN).
 why a number was reserved → wiki/registry-detail.md (DATED provenance, NOT a status source)
