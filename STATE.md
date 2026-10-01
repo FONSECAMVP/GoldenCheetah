@@ -38,8 +38,9 @@ NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not 
            ci.4 (54816113): Linux GREEN (-54/-57 fixed); Win -182 fixed `f52975a52`; macOS timed out
            cold and a timeout saves no cache → DEC-089/5 primes it (-183 fixed).
            ci.5 (`a83c21f50`): Linux GREEN; Win failed on qwt -j2 race (-184 fixed `97a5d7a9e`, pushed);
-           macOS primed qwt but its log shows no cache restore/save (-185, under investigation).
-           NEXT: ci.6 (`97a5d7a9e`) expect Win+Linux green; macOS depends on -185. All 3 green closes -48/-71.
+           macOS primed qwt but shell `exit` skipped cache save (-185 fixed, local, unpushed).
+           NEXT: ci.6 (`97a5d7a9e`) expect Win+Linux green, macOS re-primes unsaved. Push -185 (needs
+           user approval) → ci.7 saves the macOS cache → ci.8 all 3 green closes -48/-71.
            AppVeyor connected 2026-09-29 (fork webhook live); `appveyor.yml` branch filter now includes
            this branch (fork-only CI edit — revert before any upstream PR).
            -79's completion seam is settled by measurement: no tolerance window without new

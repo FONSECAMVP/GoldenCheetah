@@ -1408,6 +1408,6 @@ Dormant — the remainder is the Garmin dialog-lifetime family and every one sti
   2. An upstream CI step that needs source-tree files this branch lacks is adapted to this branch and reported, never silently dropped.
   3. The branch filter entry stays fork-only; revert before any upstream PR.
   4. Fork-only cache deltas (60-min hosted cap; cold Qwt build costs 14.5 min Win at -j1, 20.7 min macOS): qwt/srmio cache keys drop the `appveyor.yml` dependency; Windows Qwt stays -j1 (-j2 raced Debug/Release moc, B-STAGE9-184); SAVE_CACHE_ON_ERROR stays true until the first green run. Revert all before any upstream PR.
-  5. macOS cache priming (a hosted-cap timeout skips cache save, ci.4): if the Qwt library is absent at job start, the macOS leg builds SRMIO + Qwt, prints an explicit "cache priming, intentional failure" line and exits non-zero before `sub-src`, so save-on-error stores them. Fork-only; revert before any upstream PR.
+  5. macOS cache priming (a hosted-cap timeout skips cache save, ci.4): if the Qwt library is absent at job start, the macOS leg builds SRMIO + Qwt, prints an explicit "cache priming, intentional failure" line and fails with a non-zero command status before `sub-src` — never shell `exit`, which ends the AppVeyor session before cache save (B-STAGE9-185) — so save-on-error stores them. Fork-only; revert before any upstream PR.
 - Dependents: appveyor.yml, appveyor/**, B-STAGE9-175, B-STAGE9-176, B-STAGE9-177
 - Full record: this entry

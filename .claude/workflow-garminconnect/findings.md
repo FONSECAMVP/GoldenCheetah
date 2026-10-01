@@ -595,4 +595,4 @@ notes are in `archive/findings-notes.md`. Row shape: ledger writing contract (QG
 | B-STAGE9-182 | AppVeyor ci.4 09-30 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | Win leg: EAP Stop turns native stderr (R --version) into a fatal error | fixed | Invoke-NativeChecked, rev PASS |
 | B-STAGE9-183 | reviewer 10-01 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | DEC-089/5 qwt step: failed make sub-qwt no longer fails the step | fixed | make || exit 1, rev PASS |
 | B-STAGE9-184 | AppVeyor ci.5 10-01 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | Win qwt jom -j2 races Debug/Release moc dir: Permission denied | fixed | jom -j1 as upstream, rev PASS |
-| B-STAGE9-185 | AppVeyor ci.5 10-01 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS job logs no cache restore/update; DEC-089/5 priming may never save | fix-now | — |
+| B-STAGE9-185 | AppVeyor ci.5 10-01 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS job logs no cache restore/update; DEC-089/5 priming may never save | fixed | step fails by command status, no shell exit; rev PASS |

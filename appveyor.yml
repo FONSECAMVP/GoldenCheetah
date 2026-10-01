@@ -157,17 +157,17 @@ build_script:
 
 # Linux / macOS
 - sh: qmake build.pro -r QMAKE_CXXFLAGS_WARN_ON+="-Wno-unused-private-field -Wno-c++11-narrowing -Wno-deprecated-declarations -Wno-deprecated-register -Wno-nullability-completeness -Wno-sign-compare -Wno-inconsistent-missing-override" QMAKE_CFLAGS_WARN_ON+="-Wno-deprecated-declarations -Wno-sign-compare"
-# DEC-089/5: a hosted-cap timeout skips cache-save even with SAVE_CACHE_ON_ERROR; fail on purpose after a cold macOS Qwt build so it gets saved.
+# DEC-089/5: fail on purpose after a cold macOS Qwt build so it is cache-saved; never shell `exit` (ends the session before cache save, B-STAGE9-185).
 - sh: >-
     if test ! -f qwt/lib/libqwt.a; then
-      GC_QWT_WAS_COLD=true;
-      make -j2 sub-qwt || exit 1;
-    else
-      GC_QWT_WAS_COLD=false;
-    fi;
-    if ! $CI_LINUX && $GC_QWT_WAS_COLD; then
-      echo "DEC-089/5: Qwt/SRMIO cache priming complete; intentional failure, re-run for the real build";
-      exit 1;
+      make -j2 sub-qwt && {
+        if $CI_LINUX; then
+          true;
+        else
+          echo "DEC-089/5: Qwt/SRMIO cache priming complete; intentional failure, re-run for the real build";
+          false;
+        fi;
+      };
     fi
 - sh: make -j2 sub-src
 
