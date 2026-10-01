@@ -464,10 +464,10 @@ notes are in `archive/findings-notes.md`. Row shape: ledger writing contract (QG
 | B-STAGE9-51 | reviewer 09-20 | blocking BLOCKS: {TASK:B-STAGE9-36;CHECKPOINT:B-STAGE9-36} | heading regex \b matches counterfeit shadow heading | fixed | — ↗ |
 | B-STAGE9-52 | reviewer 09-20 | non-blocking BLOCKS: {} | docstring says entry needs own Arms bullet (stale) | fixed | — ↗ |
 | B-STAGE9-53 | reviewer 09-20 | blocking BLOCKS: {TASK:B-STAGE9-36;CHECKPOINT:B-STAGE9-36} | next() takes first dup heading, skips real entry | fixed | — ↗ |
-| B-STAGE9-54 | investigator 09-20 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | AppImage build infeasible: missing many host tools | open | — ↗ |
+| B-STAGE9-54 | investigator 09-20 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | AppImage build infeasible: missing many host tools | fixed | DEC-065: AppVeyor ci.4 Linux green, 07babb430 ↗ |
 | B-STAGE9-56 | reviewer 09-20 | non-blocking BLOCKS: {} | sha256 pin verified exact; pipeline lacks pipefail | open | — ↗ |
 | B-STAGE9-55 | reviewer 09-20 | non-blocking BLOCKS: {} | DEC-063 cites stale '55-site' census (actually 47) | open | — ↗ |
-| B-STAGE9-57 | investigator 09-20 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | no no-sudo AppImage path: py AppImage not linkable SDK | open | — ↗ |
+| B-STAGE9-57 | investigator 09-20 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | no no-sudo AppImage path: py AppImage not linkable SDK | fixed | DEC-065: AppVeyor ci.4 Linux green, 07babb430 ↗ |
 | B-STAGE9-58 | insp v1_46 09-20 | non-blocking BLOCKS: {} | context.py froze stale token count across pane rotate | open | — ↗ |
 | B-STAGE9-59 | reviewer 09-20 | blocking BLOCKS: {TASK:DEC-058;CHECKPOINT:STAGE:9} | Linux CI smoke never proves adapter is in AppImage bundle | closed | DEC-067 ↗ |
 | B-STAGE9-60 | investigator 09-20 | blocking BLOCKS: {TASK:DEC-065;CHECKPOINT:STAGE:9} | QTDIR path wrong on Linux; qmake --version fails | closed | B-STAGE9-42-60-review ↗ |
@@ -592,3 +592,4 @@ notes are in `archive/findings-notes.md`. Row shape: ledger writing contract (QG
 | B-STAGE9-179 | reviewer 09-30 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | windows/after_build.ps1: windeployqt/makensis exit codes unchecked | fixed | rev2 CLOSED |
 | B-STAGE9-180 | reviewer 09-30 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macos/after_build.sh:120 drops upstream pip shebang/_sysconfigdata fix | fixed | rev2 CLOSED |
 | B-STAGE9-181 | reviewer 09-30 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | windows/*.ps1: no ErrorActionPreference Stop; cmdlet errors pass | fixed | rev3 CLOSED |
+| B-STAGE9-182 | AppVeyor ci.4 09-30 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | Win leg: EAP Stop turns native stderr (R --version) into a fatal error | fixed | Invoke-NativeChecked, rev PASS |

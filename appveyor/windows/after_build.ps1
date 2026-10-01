@@ -1,7 +1,17 @@
 $ErrorActionPreference = 'Stop'
 
-# B-STAGE9-179: PowerShell does not fail the step on a native command's
-# non-zero exit; every native call below is checked against $LASTEXITCODE.
+# B-STAGE9-182: native stderr must not abort under Stop; a nonzero exit still fails the leg (B-STAGE9-179).
+function Invoke-NativeChecked {
+    param([Parameter(Mandatory)][ScriptBlock]$Command)
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $Command
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
 
 # Python version configuration - update this when upgrading Python
 $PYTHON_EMBED_VERSION="3.11.9"
@@ -17,33 +27,27 @@ if (-not (Test-Path 'C:\Python')) {
   (Get-Content C:\Python\python$py_ver._pth) -replace '#import site', 'import site' | Set-Content C:\Python\python$py_ver._pth
   # Enable pip in embedded Python
   Start-FileDownload "https://bootstrap.pypa.io/get-pip.py" "get-pip.py"
-  C:\Python\python.exe get-pip.py --no-warn-script-location
-  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  Invoke-NativeChecked { C:\Python\python.exe get-pip.py --no-warn-script-location }
   # Upgrade pip to ensure you have the latest version
-  C:\Python\python -m pip install --upgrade pip
-  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  Invoke-NativeChecked { C:\Python\python -m pip install --upgrade pip }
   # Install your project's dependencies from a requirements.txt file
-  C:\Python\python -m pip install --upgrade --only-binary :all: -r src\Python\requirements.txt -t C:\Python\lib\site-packages
-  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  Invoke-NativeChecked { C:\Python\python -m pip install --upgrade --only-binary :all: -r src\Python\requirements.txt -t C:\Python\lib\site-packages }
   # DEC-058 constraints 3,4,8,9,15: adapter's own step, after requirements.txt,
   # using the BUNDLED interpreter (this embedded C:\Python, xcopy'd wholesale
   # into src\release below), not the build-time C:\Python311-x64 `python`;
   # --no-deps, deps stay above
-  C:\Python\python -m pip install --no-deps src\Python\garminconnect -t C:\Python\lib\site-packages
-  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  Invoke-NativeChecked { C:\Python\python -m pip install --no-deps src\Python\garminconnect -t C:\Python\lib\site-packages }
 }
 
 Set-Location src\release
 
 # Copy dependencies
-& windeployqt --release GoldenCheetah.exe
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Invoke-NativeChecked { windeployqt --release GoldenCheetah.exe }
 Copy-Item "c:\libs\10_Precompiled_DLL\usbexpress_3.5.1\USBXpress\USBXpress_API\Host\x64\SiUSBXp.dll" .
 Copy-Item "c:\libs\10_Precompiled_DLL\libsamplerate64\lib\libsamplerate-0.dll" .
 Copy-Item "c:\OpenSSL-Win64\bin\lib*.dll" .
 Copy-Item "c:\OpenSSL-Win64\license.txt" "OpenSSL License.txt"
-xcopy /s /i /e /q C:\Python .
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Invoke-NativeChecked { xcopy /s /i /e /q C:\Python . }
 Copy-Item "C:\Python\LICENSE.txt" "PYTHON LICENSE.txt"
 Copy-Item "c:\tools\vcpkg\installed\x64-windows\bin\gsl*.dll" .
 
@@ -58,8 +62,7 @@ Copy-Item "..\Resources\win32\gc.ico" .
 Copy-Item "..\Resources\win32\GC3.8-Master-W64-QT6.nsi" .
 
 # Build the installer
-& makensis .\GC3.8-Master-W64-QT6.nsi
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Invoke-NativeChecked { makensis .\GC3.8-Master-W64-QT6.nsi }
 Move-Item "GoldenCheetah_v3.8_64bit_Windows.exe" "..\..\GoldenCheetah_v3.8_x64.exe"
 
 Set-Location ..\..

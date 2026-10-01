@@ -1,26 +1,33 @@
 $ErrorActionPreference = 'Stop'
 
-# B-STAGE9-179: PowerShell does not fail the step on a native command's
-# non-zero exit; every native call below is checked against $LASTEXITCODE.
+# B-STAGE9-182: native stderr must not abort under Stop; a nonzero exit still fails the leg (B-STAGE9-179).
+function Invoke-NativeChecked {
+    param([Parameter(Mandatory)][ScriptBlock]$Command)
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $Command
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
 
 # Get the libraries
 if (-not (Test-Path 'C:\LIBS')) {
   Start-FileDownload "https://github.com/GoldenCheetah/WindowsSDK/releases/download/v0.1.1/gc-ci-libs.zip"
-  7z x -y gc-ci-libs.zip -oC:\LIBS
-  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  Invoke-NativeChecked { 7z x -y gc-ci-libs.zip -oC:\LIBS }
 }
 
 # Get jom
 if (-not (Test-Path 'C:\JOM')) {
   Start-FileDownload "https://download.qt.io/official_releases/jom/jom_1_1_3.zip"
-  7z x -y jom_1_1_3.zip -oC:\JOM\
-  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  Invoke-NativeChecked { 7z x -y jom_1_1_3.zip -oC:\JOM\ }
 }
 
 # GSL
 # B-STAGE9-168: root vcpkg.json forces manifest mode; --classic keeps this a classic-mode install.
-vcpkg install --classic gsl:x64-windows
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Invoke-NativeChecked { vcpkg install --classic gsl:x64-windows }
 
 # Get R
 if (-not (Test-Path 'C:\R')) {
@@ -31,5 +38,4 @@ if (-not (Test-Path 'C:\R')) {
   $rProc = Start-Process -FilePath .\R-win.exe -ArgumentList "/VERYSILENT /DIR=C:\R" -NoNewWindow -Wait -PassThru
   if ($rProc.ExitCode -ne 0) { exit $rProc.ExitCode }
 }
-C:\R\bin\R --version
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Invoke-NativeChecked { C:\R\bin\R --version }
