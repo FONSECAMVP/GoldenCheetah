@@ -34,8 +34,11 @@ NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not 
            ci.2 failed all 3 legs: -173 fixed `dce1079e2`, -174 fixed `4b5eaa79c`.
            ci.3 (54809173): Win built the installer and passed the DEC-069 check but hit the 60-min cap;
            Linux -175, macOS -176 timeout. Cause: fork CI recipe lagged upstream → DEC-089 sync
-           (-175..-181 fixed, reviewer PASS). Next run may be cold-cache; DEC-089/4 lets it warm.
-           NEXT: push to the fork (needs user approval) → AppVeyor ci.4; its result closes -48/-54/-57/-71.
+           (-175..-181 fixed, reviewer PASS).
+           ci.4 (54816113): Linux GREEN (-54/-57 fixed); Win -182 fixed `f52975a52`; macOS timed out
+           cold and a timeout saves no cache → DEC-089/5 primes it (-183 fixed).
+           NEXT: push (needs user approval) → ci.5: expect Win+Linux green, macOS red by design while
+           priming. Then ci.6 (warm macOS) closes -48/-71.
            AppVeyor connected 2026-09-29 (fork webhook live); `appveyor.yml` branch filter now includes
            this branch (fork-only CI edit — revert before any upstream PR).
            -79's completion seam is settled by measurement: no tolerance window without new

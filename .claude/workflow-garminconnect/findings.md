@@ -593,3 +593,4 @@ notes are in `archive/findings-notes.md`. Row shape: ledger writing contract (QG
 | B-STAGE9-180 | reviewer 09-30 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macos/after_build.sh:120 drops upstream pip shebang/_sysconfigdata fix | fixed | rev2 CLOSED |
 | B-STAGE9-181 | reviewer 09-30 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | windows/*.ps1: no ErrorActionPreference Stop; cmdlet errors pass | fixed | rev3 CLOSED |
 | B-STAGE9-182 | AppVeyor ci.4 09-30 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | Win leg: EAP Stop turns native stderr (R --version) into a fatal error | fixed | Invoke-NativeChecked, rev PASS |
+| B-STAGE9-183 | reviewer 10-01 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | DEC-089/5 qwt step: failed make sub-qwt no longer fails the step | fixed | make || exit 1, rev PASS |
