@@ -38,9 +38,9 @@ NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not 
            ci.4 (54816113): Linux GREEN (-54/-57 fixed); Win -182 fixed `f52975a52`; macOS timed out
            cold and a timeout saves no cache → DEC-089/5 primes it (-183 fixed).
            ci.5 (`a83c21f50`): Linux GREEN; Win failed on qwt -j2 race (-184 fixed `97a5d7a9e`, pushed);
-           macOS primed qwt but shell `exit` skipped cache save (-185 fixed, local, unpushed).
-           NEXT: ci.6 (`97a5d7a9e`) expect Win+Linux green, macOS re-primes unsaved. Push -185 (needs
-           user approval) → ci.7 saves the macOS cache → ci.8 all 3 green closes -48/-71.
+           macOS primed qwt but shell `exit` skipped cache save (-185 fixed `439463ddb`, pushed).
+           NEXT: ci.6 (`97a5d7a9e`) expect Win+Linux green, macOS re-primes unsaved. ci.7 (`439463ddb`,
+           queued) should save the macOS cache → ci.8 (needs a user-approved push) all 3 green closes -48/-71.
            AppVeyor connected 2026-09-29 (fork webhook live); `appveyor.yml` branch filter now includes
            this branch (fork-only CI edit — revert before any upstream PR).
            -79's completion seam is settled by measurement: no tolerance window without new
@@ -48,7 +48,7 @@ NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not 
            KEEP `~/.goldencheetah/Andy/config/garminconnect/backfill/`'s two live staged files —
            the -78 regression fixture. NEVER commit the untracked `python3.13-3.13.5/`,
            `python3.13_*.tar.xz`/`.dsc`/`.asc`, `FITmetadata.json`.
-CHANGESET: fork branch at `97a5d7a9e` (pushed 2026-10-01); later commits stay local until the next
+CHANGESET: fork branch at `439463ddb` (pushed 2026-10-01); later commits stay local until the next
            user-approved push. Code commits:
            `b82063118` slice 1, `54afaaf16` DEC-076's lock, `930329fec` slice 2 + DEC-078,
            `ab0bb7586` -126/-125/-124, `4dacd8447` -127, `e15d863ba` -111/-133, `5226bdbf6` slice 3
