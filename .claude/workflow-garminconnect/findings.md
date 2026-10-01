@@ -598,9 +598,9 @@ notes are in `archive/findings-notes.md`. Row shape: ledger writing contract (QG
 | B-STAGE9-185 | AppVeyor ci.5 10-01 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS: no cache restore/save; DEC-089/5 priming unsaved | fixed | fail by command status, not exit; rev PASS |
 | B-STAGE9-186 | AppVeyor ci.6 10-01 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | qwt cache key qwtconfig.pri.in froze lib-less copies | fixed | qwt/lib content-keyed, cold legs prime; PASS |
 | B-STAGE9-187 | AppVeyor ci.6 10-01 | non-blocking | push while a build is queued: clone_depth 1 loses its commit, later legs fail | accept-with-note | push only after the running build ends |
-| B-STAGE9-188 | AppVeyor ci.9 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS DEC-069 check: bundled python3.11 absent at mounted-DMG path | open | — |
+| B-STAGE9-188 | AppVeyor ci.9 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS DEC-069 check: python3.11 not at mounted-DMG path | fixed | abs mount, find 1 python, status end; PASS |
 | B-STAGE9-189 | rev -188-r1 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | check hard-coded the .app path; -srcfolder may put Contents at root | fixed | find exactly one interpreter; PASS |
 | B-STAGE9-190 | rev -188-r1 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS check: abort-on-error shell skips PY_RC capture + detach | fixed | rc captured, detach always runs; rev PASS |
 | B-STAGE9-191 | rev -188-r2 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS check: `|| true` hid a failed detach; green with DMG mounted | fixed | detach rc kept; python rc first; PASS |
 | B-STAGE9-192 | rev -188-r3 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS check ends by shell exit, skips finalization (as -185) | fixed | no exit; ci.8: cache saved after false |
-| B-STAGE9-193 | Inspector r4 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | 2 final [ ] tests: without sh -e a python fail is hidden | open | appveyor.yml:222-223 |
+| B-STAGE9-193 | Inspector r4 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | 2 final [ ] tests: without sh -e a python fail is hidden | fixed | single && verdict line; rev PASS |

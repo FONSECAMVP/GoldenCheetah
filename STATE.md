@@ -41,8 +41,8 @@ NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not 
            ci.6: Win hit 60-min cap (qwt rebuilt every run); Linux/mac lost the commit (-187, pushed
            mid-queue). Root cause -186: dependency-keyed qwt cache froze lib-less copies; fixed, local.
            ci.8 (`898484d85`) primed: all 3 legs saved qwt/lib and stopped by design (DEC-089/5).
-           ci.9 (`2682b0ebb`): Win + Linux GREEN on warm cache; macOS -188 (DEC-069 check path) → builder.
-           NEXT: fix -188, user-approved push → ci.10 all 3 green closes -48/-71.
+           ci.9 (`2682b0ebb`): Win + Linux GREEN on warm cache; macOS -188 fixed (-189..-193, rev PASS).
+           NEXT: user-approved push → ci.10; all 3 green closes -48/-71 (mac ls output settles DMG layout).
            AppVeyor connected 2026-09-29 (fork webhook live); `appveyor.yml` branch filter now includes
            this branch (fork-only CI edit — revert before any upstream PR).
            -79's completion seam is settled by measurement: no tolerance window without new
