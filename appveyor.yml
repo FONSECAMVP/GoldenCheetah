@@ -205,12 +205,24 @@ test_script:
       git log -1 >> GCversionMacOS.txt
       shasum -a 256 GoldenCheetah_v3.8_x64.dmg | cut -f 1 -d ' ' >> GCversionMacOS.txt
       cat GCversionMacOS.txt
-      mkdir -p "$PWD/gcmacos-installroot"
-      hdiutil attach GoldenCheetah_v3.8_x64.dmg -nobrowse -readonly -noautoopen -mountpoint "$PWD/gcmacos-installroot" || exit 1
-      gcmacos-installroot/GoldenCheetah.app/Contents/Frameworks/Python.framework/Versions/$PYTHON_VERSION/bin/python$PYTHON_VERSION -I -s -c 'import gc_garmin_adapter.garmin_client as m, os, sys; r = os.path.realpath("gcmacos-installroot") + os.sep; ok = os.path.realpath(m.__file__).startswith(r) and m._gc is not None and m._gc.__name__ == "garminconnect" and os.path.realpath(m._gc.__file__).startswith(r) and callable(m._gc.Garmin) and all(isinstance(x := getattr(m._gc.exceptions, e), type) and issubclass(x, BaseException) for e in ("GarminConnectAuthenticationError", "GarminConnectConnectionError", "GarminConnectTooManyRequestsError")); sys.exit(0 if ok else 1)'
-      PY_RC=$?
-      hdiutil detach "$PWD/gcmacos-installroot" -quiet || hdiutil detach "$PWD/gcmacos-installroot" -force
-      [ $PY_RC -eq 0 ] || exit 1
+      GC_MNT="$(/bin/pwd -P)/gcmacos-installroot"
+      mkdir -p "$GC_MNT"
+      if hdiutil attach GoldenCheetah_v3.8_x64.dmg -nobrowse -readonly -noautoopen -mountpoint "$GC_MNT"; then
+        ls "$GC_MNT" || true
+        GC_PY_RC=0
+        GC_PYS=$(find "$GC_MNT" -type f -path "*/Python.framework/Versions/$PYTHON_VERSION/bin/python$PYTHON_VERSION" 2>/dev/null) || true
+        GC_PY_N=$(printf "%s\n" "$GC_PYS" | grep -c .) || true
+        if [ "$GC_PY_N" -eq 1 ]; then
+          "$GC_PYS" -I -s -c 'import gc_garmin_adapter.garmin_client as m, os, sys; r = os.path.realpath("gcmacos-installroot") + os.sep; ok = os.path.realpath(m.__file__).startswith(r) and m._gc is not None and m._gc.__name__ == "garminconnect" and os.path.realpath(m._gc.__file__).startswith(r) and callable(m._gc.Garmin) and all(isinstance(x := getattr(m._gc.exceptions, e), type) and issubclass(x, BaseException) for e in ("GarminConnectAuthenticationError", "GarminConnectConnectionError", "GarminConnectTooManyRequestsError")); sys.exit(0 if ok else 1)' || GC_PY_RC=$?
+        else
+          echo "DEC-069: expected exactly one bundled python$PYTHON_VERSION in the DMG, found $GC_PY_N"; GC_PY_RC=1
+        fi
+        GC_DET_RC=0
+        hdiutil detach "$GC_MNT" -quiet || hdiutil detach "$GC_MNT" -force || GC_DET_RC=1
+        [ "$GC_PY_RC" -eq 0 ] && [ "$GC_DET_RC" -eq 0 ]
+      else
+        false
+      fi
     fi
 
 artifacts:
