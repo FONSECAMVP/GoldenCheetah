@@ -601,4 +601,5 @@ notes are in `archive/findings-notes.md`. Row shape: ledger writing contract (QG
 | B-STAGE9-188 | AppVeyor ci.9 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS DEC-069 check: bundled python3.11 absent at mounted-DMG path | open | — |
 | B-STAGE9-189 | rev -188-r1 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | check hard-coded the .app path; -srcfolder may put Contents at root | fixed | find exactly one interpreter; PASS |
 | B-STAGE9-190 | rev -188-r1 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS check: abort-on-error shell skips PY_RC capture + detach | fixed | rc captured, detach always runs; rev PASS |
-| B-STAGE9-191 | rev B-STAGE9-188-r2 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS check: `|| true` masks a failed detach; job green with DMG mounted | open | appveyor.yml:220-221 |
+| B-STAGE9-191 | rev -188-r2 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS check: `|| true` masks a failed detach; job green with DMG mounted | fixed | detach rc kept; python rc first; PASS |
+| B-STAGE9-192 | rev -188-r3 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS check ends by shell exit: skips artifact/cache finalization (as -185) | open | appveyor.yml:210,222-223 |
