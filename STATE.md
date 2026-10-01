@@ -40,7 +40,7 @@ NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not 
            ci.5 (`a83c21f50`): Linux GREEN; Win -184 fixed `97a5d7a9e`; mac -185 fixed `439463ddb`.
            ci.6: Win hit 60-min cap (qwt rebuilt every run); Linux/mac lost the commit (-187, pushed
            mid-queue). Root cause -186: dependency-keyed qwt cache froze lib-less copies; fixed, local.
-           NEXT: ci.7 (`439463ddb`) cannot pass (-186). Push -186 after ci.7 ends (needs user approval, -187) →
+           NEXT: ci.7 cancelled by user; `25857ba43` pushed → ci.8 priming:
            one priming run saves qwt/lib on all legs → next run all 3 green closes -48/-71.
            AppVeyor connected 2026-09-29 (fork webhook live); `appveyor.yml` branch filter now includes
            this branch (fork-only CI edit — revert before any upstream PR).
@@ -49,7 +49,7 @@ NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not 
            KEEP `~/.goldencheetah/Andy/config/garminconnect/backfill/`'s two live staged files —
            the -78 regression fixture. NEVER commit the untracked `python3.13-3.13.5/`,
            `python3.13_*.tar.xz`/`.dsc`/`.asc`, `FITmetadata.json`.
-CHANGESET: fork branch at `439463ddb` (pushed 2026-10-01); later commits stay local until the next
+CHANGESET: fork branch at `25857ba43` (pushed 2026-10-01); later commits stay local until the next
            user-approved push. Code commits:
            `b82063118` slice 1, `54afaaf16` DEC-076's lock, `930329fec` slice 2 + DEC-078,
            `ab0bb7586` -126/-125/-124, `4dacd8447` -127, `e15d863ba` -111/-133, `5226bdbf6` slice 3
