@@ -602,4 +602,5 @@ notes are in `archive/findings-notes.md`. Row shape: ledger writing contract (QG
 | B-STAGE9-189 | rev -188-r1 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | check hard-coded the .app path; -srcfolder may put Contents at root | fixed | find exactly one interpreter; PASS |
 | B-STAGE9-190 | rev -188-r1 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS check: abort-on-error shell skips PY_RC capture + detach | fixed | rc captured, detach always runs; rev PASS |
 | B-STAGE9-191 | rev -188-r2 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS check: `|| true` hid a failed detach; green with DMG mounted | fixed | detach rc kept; python rc first; PASS |
-| B-STAGE9-192 | rev -188-r3 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS check ends by shell exit: skips artifact/cache finalization (as -185) | open | appveyor.yml:210,222-223 |
+| B-STAGE9-192 | rev -188-r3 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS check ends by shell exit, skips finalization (as -185) | fixed | no exit; ci.8: cache saved after false |
+| B-STAGE9-193 | Inspector r4 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | 2 final [ ] tests: without sh -e a python fail is hidden | open | appveyor.yml:222-223 |
