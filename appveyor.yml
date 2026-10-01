@@ -152,8 +152,7 @@ build_script:
 
 # Windows
 - cmd: qmake.exe build.pro -r -spec win32-msvc
-# DEC-089/4: -j1 -> -j2 (60-min hosted cap; cold Qwt build cost)
-- cmd: if not exist qwt\lib\qwt.lib jom -j2 sub-qwt
+- cmd: if not exist qwt\lib\qwt.lib jom -j1 sub-qwt
 - cmd: jom -j2 sub-src
 
 # Linux / macOS

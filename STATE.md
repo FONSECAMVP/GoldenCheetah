@@ -1,4 +1,4 @@
-# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-09-30 by `garmin_inspector_v1_76`
+# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-10-01 by `garmin_inspector_v1_77`
 # Project cursor only (QGDW Tier-0 schema, quality-gated-dev-workflow references/state-and-tiers.md).
 # Id counters live in WIKI.md REGISTRIES only.
 # Per-id status lives ONLY in .claude/workflow-garminconnect/traceability.md (DEC-015 SSOT);
@@ -37,8 +37,10 @@ NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not 
            (-175..-181 fixed, reviewer PASS).
            ci.4 (54816113): Linux GREEN (-54/-57 fixed); Win -182 fixed `f52975a52`; macOS timed out
            cold and a timeout saves no cache → DEC-089/5 primes it (-183 fixed).
-           NEXT: push (needs user approval) → ci.5: expect Win+Linux green, macOS red by design while
-           priming. Then ci.6 (warm macOS) closes -48/-71.
+           ci.5 (`a83c21f50`): Win failed at qwt build, -j2 race (-184 fixed: -j1 as upstream);
+           Linux/macOS still running at last check.
+           NEXT: after ci.5 ends, push -184 (needs user approval) → ci.6: expect all 3 legs green
+           with macOS warm; that closes -48/-71.
            AppVeyor connected 2026-09-29 (fork webhook live); `appveyor.yml` branch filter now includes
            this branch (fork-only CI edit — revert before any upstream PR).
            -79's completion seam is settled by measurement: no tolerance window without new
