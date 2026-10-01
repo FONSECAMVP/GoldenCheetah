@@ -93,10 +93,8 @@ cache:
 - C:\R -> appveyor.yml
 - C:\Python -> src\Python\requirements.txt, appveyor.yml
 - c:\tools\vcpkg\installed\
-# DEC-089/4: drop the appveyor.yml dependency on qwt/srmio (60-min hosted cap;
-# every recipe edit during this resync was invalidating a 14.5min Win / 20.7min
-# macOS cold Qwt rebuild for no reason tied to Qwt's own inputs).
-- qwt -> qwt/qwtconfig.pri.in
+# DEC-089/4: drop the appveyor.yml dependency on srmio; qwt caches the built lib only, content-keyed (B-STAGE9-186).
+- qwt/lib
 - srmio
 - D2XX
 - src\Python\SIP\release\sip_lib.lib -> src\Python\SIP\goldencheetah.sip
@@ -152,21 +150,18 @@ build_script:
 
 # Windows
 - cmd: qmake.exe build.pro -r -spec win32-msvc
-- cmd: if not exist qwt\lib\qwt.lib jom -j1 sub-qwt
+# DEC-089/5: cold Qwt is built then the step fails by exit /b so it is cache-saved.
+- cmd: if not exist qwt\lib\qwt.lib (jom -j1 sub-qwt && echo DEC-089/5 Qwt cache priming complete; intentional failure, re-run for the real build & exit /b 1)
 - cmd: jom -j2 sub-src
 
 # Linux / macOS
 - sh: qmake build.pro -r QMAKE_CXXFLAGS_WARN_ON+="-Wno-unused-private-field -Wno-c++11-narrowing -Wno-deprecated-declarations -Wno-deprecated-register -Wno-nullability-completeness -Wno-sign-compare -Wno-inconsistent-missing-override" QMAKE_CFLAGS_WARN_ON+="-Wno-deprecated-declarations -Wno-sign-compare"
-# DEC-089/5: fail on purpose after a cold macOS Qwt build so it is cache-saved; never shell `exit` (ends the session before cache save, B-STAGE9-185).
+# DEC-089/5: fail on purpose after a cold Qwt build so it is cache-saved; never shell `exit` (ends the session before cache save, B-STAGE9-185).
 - sh: >-
     if test ! -f qwt/lib/libqwt.a; then
       make -j2 sub-qwt && {
-        if $CI_LINUX; then
-          true;
-        else
-          echo "DEC-089/5: Qwt/SRMIO cache priming complete; intentional failure, re-run for the real build";
-          false;
-        fi;
+        echo "DEC-089/5: Qwt/SRMIO cache priming complete; intentional failure, re-run for the real build";
+        false;
       };
     fi
 - sh: make -j2 sub-src

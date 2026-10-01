@@ -37,10 +37,11 @@ NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not 
            (-175..-181 fixed, reviewer PASS).
            ci.4 (54816113): Linux GREEN (-54/-57 fixed); Win -182 fixed `f52975a52`; macOS timed out
            cold and a timeout saves no cache → DEC-089/5 primes it (-183 fixed).
-           ci.5 (`a83c21f50`): Linux GREEN; Win failed on qwt -j2 race (-184 fixed `97a5d7a9e`, pushed);
-           macOS primed qwt but shell `exit` skipped cache save (-185 fixed `439463ddb`, pushed).
-           NEXT: ci.6 (`97a5d7a9e`) expect Win+Linux green, macOS re-primes unsaved. ci.7 (`439463ddb`,
-           queued) should save the macOS cache → ci.8 (needs a user-approved push) all 3 green closes -48/-71.
+           ci.5 (`a83c21f50`): Linux GREEN; Win -184 fixed `97a5d7a9e`; mac -185 fixed `439463ddb`.
+           ci.6: Win hit 60-min cap (qwt rebuilt every run); Linux/mac lost the commit (-187, pushed
+           mid-queue). Root cause -186: dependency-keyed qwt cache froze lib-less copies; fixed, local.
+           NEXT: ci.7 (`439463ddb`) cannot pass (-186). Push -186 after ci.7 ends (needs user approval, -187) →
+           one priming run saves qwt/lib on all legs → next run all 3 green closes -48/-71.
            AppVeyor connected 2026-09-29 (fork webhook live); `appveyor.yml` branch filter now includes
            this branch (fork-only CI edit — revert before any upstream PR).
            -79's completion seam is settled by measurement: no tolerance window without new
