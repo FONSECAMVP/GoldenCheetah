@@ -601,7 +601,7 @@ notes are in `archive/findings-notes.md`. Row shape: ledger writing contract (QG
 | B-STAGE9-188 | AppVeyor ci.9 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS DEC-069 check: python3.11 not at mounted-DMG path | fixed | abs mount, find 1 python, status end; PASS |
 | B-STAGE9-189 | rev -188-r1 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | check hard-coded the .app path; -srcfolder may put Contents at root | fixed | find exactly one interpreter; PASS |
 | B-STAGE9-190 | rev -188-r1 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS check: abort-on-error shell skips PY_RC capture + detach | fixed | rc captured, detach always runs; rev PASS |
-| B-STAGE9-191 | rev -188-r2 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS check: `\|\| true` hid a failed detach; green with DMG mounted | fixed | detach rc kept; python rc first; PASS |
+| B-STAGE9-191 | rev -188-r2 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS check: `\|\| true` hid failed detach; green w/ DMG mounted | fixed | detach rc kept; python rc first; PASS |
 | B-STAGE9-192 | rev -188-r3 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS check ends by shell exit, skips finalization (as -185) | fixed | no exit; ci.8: cache saved after false |
 | B-STAGE9-193 | Inspector r4 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | 2 final [ ] tests: without sh -e a python fail is hidden | fixed | single && verdict line; rev PASS |
 | B-STAGE10-01 | rev UPR-1-r1 10-02 | blocking | plan misses CloudServiceSyncDialog::start (AddCloudWizard.cpp:1130) | fixed | wt contract; rev r2 CLOSED |
