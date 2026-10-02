@@ -1,4 +1,4 @@
-# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-10-02 by `garmin_inspector_v1_80`
+# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-10-02 by `garmin_inspector_v1_81`
 # Project cursor only (QGDW Tier-0 schema, quality-gated-dev-workflow references/state-and-tiers.md).
 # Id counters live in WIKI.md REGISTRIES only.
 # Per-id status lives ONLY in .claude/workflow-garminconnect/traceability.md (DEC-015 SSOT);
@@ -17,7 +17,7 @@ OPEN:      Stage 10 · upstream hand-off (DEC-090): PR 1 Garmin-only branch `gar
            reviewer PASS; Garmin-off build GREEN (0 GarminConnect symbols). Branch committed by user `2c292d072`
            (local, pre-scrub; author identity auto-set). Amended by user to `acc6e9bd6` (UPR-4 scrub in, 0 ids;
            B-STAGE10-13 deferred). UPR-3 blocked by B-STAGE10-14: branch lacks Garmin appveyor packaging; UPR-3a port
-           unstaged in worktree (7 CI files, +37; contract /tmp/upr1/ci-contract.md; filter /tmp/upr1/ci-forkonly.patch), in review. Fork-only filter revert staged on
+           `476630af5` (7 CI files, reviewer PASS) + fork-only filter `994d338a1` (last commit). Fork-only filter revert staged on
            local branch `garmin/upstream-pr` (`62b10f292`, worktree /tmp/gc-upstream-pr). Frozen upstream,
            NOT this branch's: `ArchiveFile.cpp` GZIP arm, `CloudService.cpp:565` `gUncompress`,
            `RideImportWizard` raw `Context*` (DEC-077/-080 / B-STAGE9-116) — HARD HOLD.
@@ -32,7 +32,7 @@ NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not 
            (B-STAGE9-115). -128 is subsumed by DEC-084 (landed in `e15d863ba`).
            Fork CI history ci.1..ci.10 (-168..-193, DEC-089): findings.md rows; ci.10 is the first
            all-3-leg pass. macOS DMG root holds GoldenCheetah.app (ci.10 ls output).
-           NEXT: UPR-3a appveyor port, fork-only filter commit, then UPR-3 fork CI push (user-approved). Never push while a build is queued (-187).
+           NEXT: UPR-3 push `garmin/upstream-garmin` to origin for fork CI — awaits user approval (DEC-090/5). Never push while a build is queued (-187).
            AppVeyor connected 2026-09-29 (fork webhook live); `appveyor.yml` branch filter now includes
            this branch (fork-only CI edit — revert before any upstream PR).
            -79's completion seam is settled by measurement: no tolerance window without new
