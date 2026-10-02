@@ -32,7 +32,8 @@ NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not 
            (B-STAGE9-115). -128 is subsumed by DEC-084 (landed in `e15d863ba`).
            Fork CI history ci.1..ci.10 (-168..-193, DEC-089): findings.md rows; ci.10 is the first
            all-3-leg pass. macOS DMG root holds GoldenCheetah.app (ci.10 ls output).
-           NEXT: UPR-3 fork CI on `994d338a1` (pushed 2026-10-02, user-approved): all 3 legs + DEC-069 check. Never push while a build is queued (-187).
+           NEXT: ci.11 on `994d338a1` failed on fork infra (B-STAGE10-15/-16) → UPR-3b fork-only infra commit
+           (DEC-091, builder), then re-push (user approval) once ci.11's macOS leg ends. Never push while a build is queued (-187).
            AppVeyor connected 2026-09-29 (fork webhook live); `appveyor.yml` branch filter now includes
            this branch (fork-only CI edit — revert before any upstream PR).
            -79's completion seam is settled by measurement: no tolerance window without new

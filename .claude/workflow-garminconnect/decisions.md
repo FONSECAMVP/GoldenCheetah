@@ -104,6 +104,7 @@ Compact schema per `references/formats.md` § `decisions.md`. **The recap source
 | DEC-088 | D2XX CI fetch completeness → MARKER after upstream-recipe copy; malformed-vendor-archive residual PINNED | accepted | 2026-09-29 |
 | DEC-089 | Fork CI recipe lag behind upstream → SYNC appveyor.yml + appveyor/** to upstream/master, re-apply fork deltas | accepted | 2026-09-30 |
 | DEC-090 | Upstream hand-off → Garmin-only PR from upstream/master, then separate Coach PR | accepted | 2026-10-02 |
+| DEC-091 | Upstream-branch fork CI fails on fork infra → FORK-ONLY infra commit (DEC-088/-089 deltas), dropped with the filter | accepted | 2026-10-02 |
 
 ### Dormant index
 
@@ -1425,3 +1426,10 @@ Dormant — the remainder is the Garmin dialog-lifetime family and every one sti
   5. Opening each PR, and every push, is a user-approved action. Draft text: /tmp/garmin-upstream-pr-draft.md.
 - Dependents: appveyor.yml, src/Cloud/**, src/Python/garminconnect/**, src/Coach/**, B-STAGE9-116 (frozen upstream)
 - Full record: this entry
+
+## DEC-091 — upstream-branch fork CI: fork infra deltas ride in fork-only commits
+- Status: accepted 2026-10-02 (Inspector, technical; amends DEC-090/3)
+- Why: ci.11 on `994d338a1` failed on fork infra only (B-STAGE10-15/-16); no Garmin step reached.
+- Chose: 1 of 3 — (2) port the infra deltas into the PR commits: pollutes PR 1 with fork tuning; (3) accept ci.10 proof: not this branch's build. 1 = re-apply the DEC-088/-089 fork deltas (cache keys/priming, -j2, D2XX gating) as fork-only commits after the filter.
+- Binding: every fork-only commit sits after the Garmin commits and is dropped before the PR; Garmin commits unchanged.
+- Dependents: appveyor.yml, appveyor/**, B-STAGE10-14/-15/-16

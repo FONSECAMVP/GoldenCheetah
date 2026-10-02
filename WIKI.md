@@ -20,12 +20,12 @@ build/ caches src/*.o,moc_*  [SKIP] generated
 
 ## REGISTRIES (point only; ledger .claude/workflow-garminconnect/; notes → wiki/registry-detail.md)
 REQ garmin:001–030 +16 NF           next:garmin-031
-DEC garmin:001–090                  next:garmin-091
+DEC garmin:001–091                  next:garmin-092
 DES garmin:001–014(+001a,003a)      next:garmin-015
 TEST garmin:T-001–T-263(+261b)      next:garmin-T-264
 VAL garmin:001–018                  next:garmin-019
 LSN 001–087                         next:088
-F  ORCH-001–067 · B-STAGE9-001–193 · B-STAGE10-01–11 (SSOT findings.md)   next:ORCH-068 · B-STAGE10-12
+F  ORCH-001–067 · B-STAGE9-001–193 · B-STAGE10-01–16 (SSOT findings.md)   next:ORCH-068 · B-STAGE10-17
 aicoach:DEC/REQ/TEST ids COLLIDE with garmin — always prefix
 
 ## PAGES
