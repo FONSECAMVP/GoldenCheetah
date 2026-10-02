@@ -17,7 +17,7 @@ OPEN:      Stage 10 · upstream hand-off (DEC-090): PR 1 Garmin-only branch `gar
            reviewer PASS; Garmin-off build GREEN (0 GarminConnect symbols). Branch committed by user `2c292d072`
            (local, pre-scrub; author identity auto-set). Amended by user to `acc6e9bd6` (UPR-4 scrub in, 0 ids;
            B-STAGE10-13 deferred). UPR-3 blocked by B-STAGE10-14: branch lacks Garmin appveyor packaging; UPR-3a port
-           `476630af5` (7 CI files, reviewer PASS) + fork-only filter `994d338a1` (last commit). Fork-only filter revert staged on
+           `476630af5` (7 CI files, reviewer PASS) + fork-only `994d338a1` filter, `40712ef4a` infra (DEC-091). Fork-only filter revert staged on
            local branch `garmin/upstream-pr` (`62b10f292`, worktree /tmp/gc-upstream-pr). Frozen upstream,
            NOT this branch's: `ArchiveFile.cpp` GZIP arm, `CloudService.cpp:565` `gUncompress`,
            `RideImportWizard` raw `Context*` (DEC-077/-080 / B-STAGE9-116) — HARD HOLD.
@@ -32,8 +32,8 @@ NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not 
            (B-STAGE9-115). -128 is subsumed by DEC-084 (landed in `e15d863ba`).
            Fork CI history ci.1..ci.10 (-168..-193, DEC-089): findings.md rows; ci.10 is the first
            all-3-leg pass. macOS DMG root holds GoldenCheetah.app (ci.10 ls output).
-           NEXT: ci.11 on `994d338a1` failed on fork infra (B-STAGE10-15/-16) → UPR-3b fork-only infra commit
-           (DEC-091, builder), then re-push (user approval) once ci.11's macOS leg ends. Never push while a build is queued (-187).
+           NEXT: ci.11 on `994d338a1` failed on fork infra (B-STAGE10-15/-16); fork-only infra commit `40712ef4a`
+           (DEC-091, rev PASS). Re-push needs user approval; a cold Qwt cache fails run 1 on purpose (re-run). Never push while a build is queued (-187).
            AppVeyor connected 2026-09-29 (fork webhook live); `appveyor.yml` branch filter now includes
            this branch (fork-only CI edit — revert before any upstream PR).
            -79's completion seam is settled by measurement: no tolerance window without new
