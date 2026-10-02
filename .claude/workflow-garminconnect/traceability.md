@@ -69,7 +69,7 @@ made one non-functional comment fix, landed in this commit. Not pushed, not merg
 | REQ-NF-Obs-001 | Structured logs (gc_obs trace) | TEST VERIFIED (Stage 8) · COMMITTED e69dfa027, 2026-09-12 | DEC-001, DEC-022, DEC-023, DEC-051, DEC-054 | DES-008 | T-207, T-209 | e69dfa027 ↗ |
 | REQ-NF-i18n-001 | tr() i18n coverage + source guard | TEST VERIFIED + COMMITTED da9ef33fa, 2026-09-12 | DEC-001, DEC-004 | DES-003, DES-008 | T-208 | da9ef33fa ↗ |
 | REQ-NF-Build-001 | CMake flag GC_WANT_GARMINCONNECT guard | TEST VERIFIED (Stage 8), not yet committed (2026-09-12) | DEC-001, DEC-011 | DES-007 | T-202 | — ↗ |
-| REQ-NF-Pkg-001 | Installer bundles Python deps | REOPENED 2026-09-19 | DEC-001, DEC-011, DEC-049 | DES-007 | — | — ↗ |
+| REQ-NF-Pkg-001 | Installer bundles Python deps | VERIFIED 2026-10-02 AppVeyor ci.10, payload import on all 3 legs (DEC-069; startup path not covered) | DEC-001, DEC-011, DEC-049, DEC-065, DEC-069 | DES-007 | — | 774ba3533 ↗ |
 
 ## DES index
 

@@ -458,7 +458,7 @@ notes are in `archive/findings-notes.md`. Row shape: ledger writing contract (QG
 | B-STAGE9-45 | reviewer 09-20 | blocking BLOCKS: {TASK:B-STAGE9-38;CHECKPOINT:B-STAGE9-38} | cached module accepted w/o real provenance check | closed | DEC-066 ↗ |
 | B-STAGE9-46 | reviewer 09-20 | blocking BLOCKS: {TASK:B-STAGE9-38;CHECKPOINT:B-STAGE9-38} | test allows vacuous pass, override untested | fixed | B-STAGE9-38-u3-r4 ↗ |
 | B-STAGE9-47 | reviewer 09-20 | non-blocking BLOCKS: {} | header comments assert false exclusivity claims | open | B-STAGE9-38-u3-r5 ↗ |
-| B-STAGE9-48 | investigator 09-20 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | live run used dev binary, not an installer artifact | open | — ↗ |
+| B-STAGE9-48 | investigator 09-20 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | live run used dev binary, not an installer artifact | fixed | DEC-065: ci.10 774ba3533 all 3 installers green ↗ |
 | B-STAGE9-49 | reviewer 09-20 | blocking BLOCKS: {TASK:B-STAGE9-36;CHECKPOINT:B-STAGE9-36} | json.loads collapses dup keys, guard authorizes wrongly | fixed | B-STAGE9-36-r3-review ↗ |
 | B-STAGE9-50 | reviewer 09-20 | blocking BLOCKS: {TASK:B-STAGE9-36;CHECKPOINT:B-STAGE9-36} | strip() eats unicode WS, bypasses sentinel match | fixed | B-STAGE9-36-r3-review ↗ |
 | B-STAGE9-51 | reviewer 09-20 | blocking BLOCKS: {TASK:B-STAGE9-36;CHECKPOINT:B-STAGE9-36} | heading regex \b matches counterfeit shadow heading | fixed | — ↗ |
@@ -481,7 +481,7 @@ notes are in `archive/findings-notes.md`. Row shape: ledger writing contract (QG
 | B-STAGE9-68 | insp v1_51/52 09-24 | non-blocking BLOCKS: {} | mkdir guard regex misparses redirection as 2nd operand | open | — ↗ |
 | B-STAGE9-69 | reviewer 09-24 | non-blocking BLOCKS: {} | hostile-hook test restore not exception-safe | open | — ↗ |
 | B-STAGE9-70 | insp v1_52 09-24 | blocking BLOCKS: {} | ctest garmin-py fails: 3/7 PyProcessBootstrap cases | fixed | B-STAGE9-70-fix ↗ |
-| B-STAGE9-71 | insp v1_53 09-24 | blocking BLOCKS: {STAGE:9} | CI proves payload ships on Linux leg only, not all 3 | open | DEC-069 ↗ |
+| B-STAGE9-71 | insp v1_53 09-24 | blocking BLOCKS: {STAGE:9} | CI proves payload ships on Linux leg only, not all 3 | fixed | DEC-069: ci.10 774ba3533 payload check passes on all 3 ↗ |
 | B-STAGE9-72 | reviewer 09-24 | blocking BLOCKS: {} | Py_Finalize with no ledger release after -70 fix | fixed | B-STAGE9-72-fix ↗ |
 | B-STAGE9-73 | reviewer 09-24 | non-blocking BLOCKS: {} | hdiutil detach failure masked by earlier PY_RC check | open | — ↗ |
 | B-STAGE9-74 | insp v1_54 09-24 | non-blocking BLOCKS: {} | WIKI.md wrongly claims seals untracked/recoverable | fixed | — ↗ |
