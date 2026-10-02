@@ -20,18 +20,23 @@
  */
 
 #include "PythonEmbed.h"
-#include "Utils.h"
 #include "Settings.h"
 #include <stdexcept>
 
 #include <QtGlobal>
 #include <QMessageBox>
-#include <QProcess>
 
 #ifdef slots // clashes with python headers
 #undef slots
 #endif
 #include <Python.h>
+
+// The process-level interpreter is now owned by the shared
+// PyProcessBootstrap (main.cpp calls it before any Garmin worker can start);
+// PythonEmbed only registers its inittab entry ahead of that first init and
+// then attaches under the GIL. See PyProcessBootstrap.h for the contract.
+#include "PyProcessBootstrap.h"
+#include "PythonDeploymentLocator.h"
 
 // we only really support Python 3, so lets only work on that basis
 #if PY_MAJOR_VERSION >= 3
@@ -40,12 +45,31 @@
 
 // global instance of embedded python
 PythonEmbed *python;
-PyThreadState *mainThreadState;
 
 // SIP module with GoldenCheetah Bindings
 extern "C" {
 extern PyObject *PyInit_goldencheetah(void);
 };
+
+// preInitHook: CPython's inittab contract requires this
+// to run before the interpreter's FIRST Py_Initialize — PyProcessBootstrap
+// invokes it synchronously just before Py_InitializeFromConfig(), only on
+// the call that performs real first-time initialization. Declared in
+// PythonEmbed.h (external linkage, Python-free signature) so main.cpp can
+// pass it to PyProcessBootstrap::ensureInitialized() itself whenever
+// GC_WANT_PYTHON is compiled in — even on a run where scripting is currently
+// disabled (GC_EMBED_PYTHON false / --no-python) and PythonEmbed is never
+// constructed at all. Without that, a later internal restart
+// (main.cpp's do{}while(restarting), same process) that enables scripting
+// would find the interpreter already initialized by someone else (e.g. the
+// bare Garmin-only bootstrap call) with this hook never having run — CPython
+// requires the inittab populated before the FIRST Py_Initialize, no
+// exceptions after the fact.
+void registerGoldenCheetahInittab()
+{
+    printd("PyImport_AppendInittab: goldencheetah\n");
+    PyImport_AppendInittab("goldencheetah", PyInit_goldencheetah);
+}
 
 QString
 PythonEmbed::buildVersion()
@@ -57,142 +81,15 @@ PythonEmbed::~PythonEmbed()
 {
 }
 
+// Forwarding wrapper: src/Gui/Pages.cpp's
+// browsePythonDir() calls this directly to validate a user-picked folder, so
+// it must survive the extraction. The actual search-and-validate logic now
+// lives in PythonDeploymentLocator::validate(), shared with
+// PyProcessBootstrap's bootstrap so the two initialisers can no longer
+// compute different homes for the same inputs.
 bool PythonEmbed::pythonInstalled(QString &pybin, QString &pypath, QString PYTHONHOME)
 {
-    QStringList names; names << QString("python3.%1").arg(PYTHON3_VERSION) << QString("bin/python3.%1").arg(PYTHON3_VERSION) << "python3" << "bin/python3" << "python" << "bin/python";
-    QString pythonbinary;
-    if (PYTHONHOME=="") {
-
-        // where to check
-        QString path = QProcessEnvironment::systemEnvironment().value("PATH", "");
-        printd("PATH=%s\n", path.toStdString().c_str());
-
-        // what we found
-        QStringList installnames;
-
-        // lets search
-        foreach(QString name, names) {
-            installnames = Utils::searchPath(path, name, true);
-            if (installnames.count() >0) break;
-        }
-
-        printd("Binary found:%d\n", (int)installnames.count());
-        // if we failed, its not installed
-        if (installnames.count()==0) return false;
-
-        // lets just use the first one we found
-        pythonbinary = installnames[0];
-        pybin=pythonbinary;
-
-    } else {
-
-        // look for python3 or python in PYTHONHOME
-#ifdef WIN32
-        QString ext= QString(".exe");
-#else
-        QString ext= QString("");
-#endif
-        foreach(QString name, names) {
-            QString filename = PYTHONHOME + QDir::separator() + name + ext;
-            if (QFileInfo(filename).exists() && QFileInfo(filename).isExecutable()) {
-                pythonbinary=filename;
-                pybin=pythonbinary;
-                printd("Binary found\n");
-                break;
-            }
-        }
-        // not found give up straight away
-        if (pythonbinary == "") return false;
-    }
-
-#ifdef WIN32
-        // ugh. QProcess doesn't like spaces or backslashes. POC.
-        pythonbinary=pythonbinary.replace("\\", "/");
-        pythonbinary="\"" + pythonbinary + "\"";
-#endif
-
-    // get the version and path via an interaction
-    printd("Running: %s\n", pythonbinary.toStdString().c_str());
-    QProcess py;
-    py.setProgram(pythonbinary);
-
-    // set the arguments
-    QStringList args;
-    args << "-c";
-    args << QString("import sys\n"
-                    "print('ZZ',sys.version_info.major,'ZZ')\n"
-                    "print('ZZ',sys.version_info.minor,'ZZ')\n"
-                    "print('ZZ', '%1'.join(sys.path), 'ZZ')\n"
-                    "quit()\n").arg(PATHSEP);
-    py.setArguments(args);
-    py.setProcessChannelMode(QProcess::ForwardedErrorChannel);
-
-    // If checking a specific PYTHONHOME (e.g. bundled), ensure the process uses it
-    // and doesn't get confused by local user environment variables.
-    if (!PYTHONHOME.isEmpty()) {
-        QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-        env.insert("PYTHONHOME", PYTHONHOME);
-        env.remove("PYTHONPATH"); // Ensure isolation from user's python libs
-        py.setProcessEnvironment(env);
-    }
-
-    py.start();
-
-    // failed to start python
-    if (py.waitForStarted(500) == false) {
-        fprintf(stderr, "Failed to start: %s\n", pythonbinary.toStdString().c_str());
-        py.terminate();
-        return false;
-    }
-
-    // wait for output, should be rapid
-    if (py.waitForReadyRead(4000)==false) {
-        fprintf(stderr, "Didn't get output: %s\n", pythonbinary.toStdString().c_str());
-        py.terminate();
-        return false;
-    }
-
-    // get output
-    QString output = py.readAll();
-
-    // close if it didn't already
-    if (py.waitForFinished(500)==false) {
-        fprintf(stderr, "forced terminate of %s\n", pythonbinary.toStdString().c_str());
-        py.terminate();
-    }
-
-    // scan output
-    QRegExp contents("^ZZ(.*)ZZ.*ZZ(.*)ZZ.*ZZ(.*)ZZ.*$");
-    printd("Output: %s\n", output.toStdString().c_str());
-    if (contents.exactMatch(output)) {
-        QString vmajor=contents.cap(1);
-        QString vminor=contents.cap(2);
-        QString path=contents.cap(3);
-
-        // check its Python 3 matching the version used for build
-        if (vmajor.toInt() != 3 || vminor.toInt() != PYTHON3_VERSION) {
-            fprintf(stderr, "Python version mismatch: GoldenCheetah was built with Python 3.%d, but found Python %d.%d at %s\n",
-                    PYTHON3_VERSION, vmajor.toInt(), vminor.toInt(), pythonbinary.toStdString().c_str());
-            return false;
-        }
-
-        // now get python path
-#ifdef WIN32
-        pypath = path.replace("\\", "/");
-#else
-        pypath = path;
-#endif
-        printd("Python path: %s\n", pypath.toStdString().c_str());
-        return true;
-
-    } else {
-
-        // didn't understand !
-        printd("Python output doesn't parse: %s\n", output.toStdString().c_str());
-    }
-
-    // by default we return false (pessimistic)
-    return false;
+    return PythonDeploymentLocator::validate(PYTHONHOME, pybin, pypath);
 }
 
 PythonEmbed::PythonEmbed(const bool verbose, const bool interactive) : verbose(verbose), interactive(interactive)
@@ -208,44 +105,45 @@ PythonEmbed::PythonEmbed(const bool verbose, const bool interactive) : verbose(v
     qRegisterMetaType<QStringList>();
 
 
-    // Deployed Python location
-    QString deployedPython = QCoreApplication::applicationDirPath();
-#if defined(Q_OS_MAC)
-    deployedPython += "/../Frameworks/Python.framework/Versions/Current";
-#elif defined(Q_OS_LINUX)
-    deployedPython += QString("/opt/python3.%1").arg(PYTHON3_VERSION);
-#endif
-
-    // config, deployed or environment variable
-    QString PYTHONHOME = appsettings->value(NULL, GC_PYTHON_HOME, "").toString().trimmed();
-    if (PYTHONHOME == "") {
-        if (pythonInstalled(pybin, pypath, deployedPython)) {
-            PYTHONHOME = deployedPython;
-            qputenv("PYTHONHOME",PYTHONHOME.toUtf8());
-        } else {
-            PYTHONHOME = QProcessEnvironment::systemEnvironment().value("PYTHONHOME", "");
-        }
-    } else {
-        qputenv("PYTHONHOME",PYTHONHOME.toUtf8());
-    }
-    if (PYTHONHOME !="") printd("PYTHONHOME setting used: %s\n", PYTHONHOME.toStdString().c_str());
+    // Configured home, deployed payload, inherited PYTHONHOME, or
+    // bare PATH search, all via the one locator PyProcessBootstrap's
+    // bootstrap (main.cpp) also consumes, so the two can no longer compute
+    // different homes for the same inputs. No qputenv("PYTHONHOME", ...)
+    // anymore: the selected home now reaches CPython as an explicit
+    // PyConfig field (bootCfg.home below), not a mutated process environment
+    // variable — the exact channel that let this and PyProcessBootstrap's
+    // own PyConfig_Read() disagree.
+    QString configuredHome = appsettings->value(NULL, GC_PYTHON_HOME, "").toString().trimmed();
+    PythonDeploymentLocator::Selection deployment = PythonDeploymentLocator::select(configuredHome);
 
     // is python3 installed?
-    if (pythonInstalled(pybin, pypath, PYTHONHOME)) {
+    if (deployment.found) {
 
+        pybin = deployment.pybin;
+        pypath = deployment.pypath;
         printd("Python is installed: %s\n", pybin.toStdString().c_str());
 
-        // tell python our program name - pretend to be the usual interpreter
-        printd("Py_SetProgramName: %s\n", pybin.toStdString().c_str()); // not wide char string as printd uses printf not wprintf
-        Py_SetProgramName((wchar_t*) pybin.toStdWString().c_str());
+        // Bring up (or attach to) the shared, process-level
+        // interpreter. registerGoldenCheetahInittab() and the interpreter's
+        // FIRST Py_InitializeFromConfig() only run on whichever call reaches
+        // PyProcessBootstrap::ensureInitialized() first across the whole
+        // process (main.cpp calls this before any Garmin worker can start,
+        // so in practice that's always this call). The GIL state on return
+        // differs by path — released if this call initialized; left
+        // untouched/unknown if it merely observed a prior external init
+        // — so PythonEmbed always acquires it explicitly below
+        // via PyGILState_Ensure() rather than branching on which path was
+        // taken: PyGILState_Ensure() is safe to call either way.
+        printd("PyProcessBootstrap::ensureInitialized\n");
+        PyProcessBootstrap::Config bootCfg;
+        bootCfg.preInitHook = &registerGoldenCheetahInittab;
+        bootCfg.home = deployment.home;
+        bootCfg.programName = deployment.programName;
+        PyProcessBootstrap::Result bootResult = PyProcessBootstrap::ensureInitialized(bootCfg);
 
-        // our own module
-        printd("PyImport_AppendInittab: goldencheetah\n");
-        PyImport_AppendInittab("goldencheetah", PyInit_goldencheetah);
+        if (bootResult.ok) {
 
-        // need to load the interpreter etc
-        printd("PyInitializeEx(0)\n");
-        Py_InitializeEx(0);
+        PyGILState_STATE embedGil = PyGILState_Ensure();
 
         // set path - allocate storage for it...
         //printd("set path=%s\n", pypath.toStdString().c_str());
@@ -293,7 +191,7 @@ PythonEmbed::PythonEmbed(const bool verbose, const bool interactive) : verbose(v
 
  #ifdef Q_OS_LINUX
             // ensure site-packages is in path when using deployed Python on Linux
-            if (PYTHONHOME == deployedPython) {
+            if (deployment.isDeployedPayload) {
                 std::string ensureSitePackages = ("import sys\n"
                                                   "import os\n"
                                                   "sys.setdlopenflags(os.RTLD_NOW | os.RTLD_DEEPBIND)\n"
@@ -320,16 +218,26 @@ PythonEmbed::PythonEmbed(const bool verbose, const bool interactive) : verbose(v
             PyErr_Print(); //make python print any errors
             PyErr_Clear(); //and clear them !
 
-            // prepare for threaded processing
-            printd("PyEval_InitThreads\n");
-            PyEval_InitThreads();
-            mainThreadState = PyEval_SaveThread();
+            // The shared bootstrap already released the GIL from
+            // its own initializing call exactly once (or observed an
+            // already-initialized interpreter and touched no thread state at
+            // all); PythonEmbed releases only the GIL IT acquired above
+            // (embedGil) instead of calling PyEval_SaveThread() again here —
+            // an unconditional second release on an already-initialized path
+            // is the exact hazard here.
             loaded = true;
 
             printd("Embedding completes\n");
+            PyGILState_Release(embedGil);
             return;
         } // sys != NULL
-    } // pythonInstalled == true
+
+        PyGILState_Release(embedGil);
+
+        } else {
+            fprintf(stderr, "Python embedding failed: %s\n", bootResult.error.toUtf8().constData());
+        } // bootResult.ok
+    } // deployment.found == true
 
     // if we get here loading failed
     fprintf(stderr, "Python embedding failed. GoldenCheetah requires Python 3.%d installed and in PATH.\n", PYTHON3_VERSION);

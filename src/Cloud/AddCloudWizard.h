@@ -34,8 +34,15 @@
 #include <QCommandLinkButton>
 #include <QScrollArea>
 #include <QComboBox>
+#include <QPointer>
+#include <QUuid>
 
 class SettingCombo;
+
+#ifdef GC_WANT_GARMINCONNECT
+class GarminAuthChain;
+class PyEmbeddedAdapter;
+#endif
 
 class AddCloudWizard : public QWizard
 {
@@ -43,6 +50,7 @@ class AddCloudWizard : public QWizard
 
 public:
     AddCloudWizard(Context *context, QString sname="", bool sync=false);
+    ~AddCloudWizard();
     QSize sizeHint() const { return QSize(600,650); }
 
     void reject() override;
@@ -61,6 +69,70 @@ public:
 
     // this is cloned for our context
     CloudService *cloudService;
+
+#ifdef GC_WANT_GARMINCONNECT
+    // Garmin Connect native-auth stack (lifecycle: the wizard owns
+    // the adapter and the chain; destruction order wizard > chain(worker) >
+    // adapter). Created lazily on first entry to the Garmin path; page 21
+    // (AddGarminAuth, defined in AddCloudWizard.cpp) is registered at the
+    // same moment and receives garminChain->client().
+    void ensureGarminAuthPage();
+    PyEmbeddedAdapter *garminAdapter = nullptr; // owned; destroyed AFTER chain
+    GarminAuthChain *garminChain = nullptr;     // owned; destroyed first
+
+    // one-time ToS-risk notice, shown once before Garmin tokens
+    // ever persist. Returns true iff the user acknowledged ("I understand —
+    // connect"); a Cancel rejects the wizard (like the CAPTCHA-cancel
+    // precedent) and returns false. Skipped (returns true immediately) once
+    // GC_GARMIN_CONNECT_TOS_ACK is already set from a prior session.
+    bool showGarminToSNoticeIfNeeded();
+
+    // The exact acceptance text/button labels — single source of
+    // truth for both the real modal and its test coverage.
+    static QString garminToSNoticeText();
+    static QString garminToSAcceptButtonText();
+    static QString garminToSCancelButtonText();
+
+    // Test seam: overrides the real modal with a scripted answer (true ==
+    // accept, false == cancel). Pass nullptr to restore the production
+    // QMessageBox.
+    static void setGarminToSPromptForTest(bool (*prompt)());
+    static bool (*s_garminToSPromptOverride)();
+
+    // opt-in post-connect profile auto-fill
+    // offer. Shown once PER ATHLETE after a successful persisted
+    // connect (gated by GC_GARMIN_PROFILE_OFFERED — distinct from the ToS
+    // flag's GLOBAL one-time ack, since this is about THIS athlete's
+    // profile). Skip/decline is silent; opting in dispatches
+    // GarminWorker::fetchProfile() asynchronously and fills only
+    // currently-empty dob/weight/height Athlete fields when the result
+    // arrives. hr_max/ftp_w are explicitly deferred
+    // and are never touched here.
+    void showGarminProfileOfferIfNeeded();
+
+    // Test seam: overrides the real profile-offer modal with a scripted
+    // answer (true == opted in: checkbox ticked + Apply; false == Skip, or
+    // Apply without ticking the checkbox). Pass nullptr to restore the
+    // production QMessageBox.
+    static void setGarminProfileOfferPromptForTest(bool (*prompt)());
+    static bool (*s_garminProfileOfferPromptOverride)();
+
+    // Correlates the async fetchProfile() dispatch with its eventual
+    // profileFetched()/profileFailed() result (stale/duplicate-result guard,
+    // same discipline as the credentials/MFA pages' pending-id checks).
+    QUuid m_pendingProfileRequestId;
+
+    // Captured in showGarminProfileOfferIfNeeded()
+    // at the moment `context` is known-alive, so the async profileFetched()
+    // handler (which can run arbitrarily long after dispatch, across the
+    // worker-thread round trip) can detect an athlete-tab-close teardown that
+    // happened while the fetch was in flight. The raw `context` member itself
+    // would be left DANGLING (not null) by such a teardown — same class this
+    // file already guards in AddAuth::doAuth()/AddSettings::browseFolder()
+    // via QPointer<Context> — so the handler must check this QPointer, not
+    // `context` directly.
+    QPointer<Context> m_pendingProfileContext;
+#endif
 
 public slots:
 
@@ -119,7 +191,7 @@ class AddConsent : public QWizardPage
         void initializePage();
         bool isComplete() const { return consented; }
         //bool isCommitPage() { return true; }
-        int nextId() const { return 20; }
+        int nextId() const; // 20, or 21 for Garmin Connect (GC_WANT_GARMINCONNECT)
 
     public slots:
         void setConsent();

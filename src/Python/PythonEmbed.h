@@ -33,6 +33,15 @@ class PythonChart;
 class PythonEmbed;
 extern PythonEmbed *python;
 
+// Registers the "goldencheetah" SIP module into
+// CPython's inittab. Python-free signature (matches
+// PyProcessBootstrap::PreInitHook) so main.cpp can pass this to
+// PyProcessBootstrap::ensureInitialized() directly, without including
+// Python.h, whenever GC_WANT_PYTHON is compiled in — regardless of whether
+// scripting is enabled for THIS run. See PythonEmbed.cpp's definition for
+// why that "regardless" matters.
+void registerGoldenCheetahInittab();
+
 // Context for Python Scripts
 class ScriptContext {
     public:

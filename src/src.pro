@@ -43,7 +43,7 @@ CONFIG += c++17
 ###=======================================================================
 ### Directory Structure - Split into subdirs to be more manageable
 ###=======================================================================
-INCLUDEPATH += ./ANT ./Train ./FileIO ./Cloud ./Charts ./Metrics ./Gui ./Core ./Planning
+INCLUDEPATH += ./ANT ./Train ./FileIO ./Cloud ./Charts ./Metrics ./Gui ./Core ./Planning ./Python
 QMAKE_CFLAGS_ISYSTEM =
 
 
@@ -232,6 +232,120 @@ contains(DEFINES, "GC_WANT_PYTHON") {
                 FileIO/FixPyScript.h FileIO/FixPyDataProcessor.h
     SOURCES += FileIO/FixPyScriptsDialog.cpp FileIO/FixPySettings.cpp FileIO/FixPyRunner.cpp \
                 FileIO/FixPyDataProcessor.cpp
+}
+
+###================================
+### OPTIONAL => Garmin Connect
+###================================
+# Mirrors src/CMakeLists.txt's
+# if(GC_WANT_GARMINCONNECT) block so the qmake/appveyor release build carries
+# the same sources as the CMake build. PyEmbeddedAdapter.cpp is the only TU
+# that embeds CPython, but the link dependency is target-wide once
+# the flag is ON. Independent of GC_WANT_PYTHON's embedded-Python detection
+# above (own GARMIN_PYTHONINCLUDES/GARMIN_PYTHONLIBS vars) so either feature
+# can be enabled without the other.
+
+contains(DEFINES, "GC_WANT_GARMINCONNECT") {
+    message("Enabling Garmin Connect support")
+    INCLUDEPATH += $$replace(GARMIN_PYTHONINCLUDES, ^-I, )
+    LIBS += $${GARMIN_PYTHONLIBS}
+
+    # GarminConnect.cpp includes "zipreader.h" by bare name (matching CMake's
+    # global qzip include dir); qmake's other qzip consumers use "../qzip/..."
+    # relative includes instead, so this path isn't in the default INCLUDEPATH.
+    INCLUDEPATH += ../contrib/qzip
+
+    # No compiled default module
+    # path. The runtime env var GC_GARMIN_PYPATH is the only override (see
+    # AddCloudWizard::ensureGarminAuthPage); with none set, the adapter
+    # imports the installed `gc_garmin_adapter` package.
+
+    HEADERS += Cloud/GarminConnect.h Cloud/GarminAccountEpoch.h \
+                Cloud/GarminCredentialsPage.h Cloud/GarminErrors.h Cloud/GarminMfaPage.h \
+                Cloud/GarminWorker.h Cloud/WorkerAuthClient.h Cloud/GarminAuthChain.h \
+                Cloud/GarminDownloadChain.h Cloud/GarminDownloadClient.h Cloud/PyEmbeddedAdapter.h \
+                Cloud/GarminTokenStore.h Cloud/GarminSidecarStore.h Cloud/AtomicFile.h \
+                Cloud/IGarminAuthClient.h Cloud/IGarminDownloadClient.h Cloud/IGarminPyAdapter.h \
+                Cloud/GarminBackfillController.h Cloud/GarminBackfillDialog.h
+
+    # Cloud/PyEmbeddedAdapter.cpp is deliberately NOT listed here — it needs
+    # to be compiled without the forced PCH include because it requires
+    # Python.h to precede any Qt header (see the NO_PCH_SOURCES branch below).
+    SOURCES += Cloud/GarminConnect.cpp Cloud/GarminAccountEpoch.cpp \
+                Cloud/GarminCredentialsPage.cpp Cloud/GarminErrors.cpp Cloud/GarminMfaPage.cpp \
+                Cloud/GarminWorker.cpp Cloud/WorkerAuthClient.cpp Cloud/GarminAuthChain.cpp \
+                Cloud/GarminDownloadChain.cpp Cloud/GarminDownloadClient.cpp \
+                Cloud/GarminTokenStore.cpp Cloud/GarminSidecarStore.cpp Cloud/AtomicFile.cpp \
+                Cloud/GarminBackfillController.cpp Cloud/GarminBackfillDialog.cpp
+
+    # Cloud/PyEmbeddedAdapter.cpp needs Python.h to precede any Qt header
+    # (Qt's `slots` keyword-macro collides with the `slots` field in CPython's
+    # object.h — see the file's own include-order comment). qmake's PCH on
+    # unix/GCC force-includes stable.h (Qt) ahead of every source file's own
+    # includes with no per-file opt-out (`<file>.CONFIG -= precompile_header`
+    # is a no-op for .cpp under the unix Makefile generator — verified via an
+    # isolated qmake repro). qmake's own precompile_header.prf ships exactly
+    # this escape hatch: NO_PCH_SOURCES, which — unlike a hand-rolled
+    # QMAKE_EXTRA_COMPILERS rule — also gets correct header-dependency
+    # tracking (TYPE_C) for free. On macOS the PCH is disabled entirely
+    # (see PRECOMPILED HEADER section below), so there's nothing to opt out
+    # of there; compile it as a normal source instead.
+    macx {
+        SOURCES += Cloud/PyEmbeddedAdapter.cpp
+    } else {
+        NO_PCH_SOURCES += Cloud/PyEmbeddedAdapter.cpp
+    }
+}
+
+###==========================================================
+### OPTIONAL => Shared CPython process bootstrap
+###==========================================================
+# Fix: one shared, process-level Py_InitializeFromConfig() owner,
+# compiled whenever EITHER GC_WANT_PYTHON or GC_WANT_GARMINCONNECT is ON (an
+# OR, not either alone) — PythonEmbed.cpp's own initialization and
+# Cloud/PyEmbeddedAdapter.cpp's Py_IsInitialized() fail-safe both
+# depend on it. Previously nothing called Py_Initialize() at all whenever
+# GC_WANT_PYTHON was off, silently breaking Garmin Connect regardless of the
+# "either flag independent of the other" claim made just above and in
+# gcconfig.pri.in. Python-header-free public interface (same
+# invariant) — only the .cpp includes Python.h.
+#
+# INCLUDEPATH/LIBS for Python.h itself are already supplied by whichever of
+# the two blocks above is active (GC_WANT_PYTHON's PYTHONINCLUDES/PYTHONLIBS,
+# or GC_WANT_GARMINCONNECT's GARMIN_PYTHONINCLUDES/GARMIN_PYTHONLIBS just
+# above); qmake's `+=` accumulates regardless of file order, so whichever
+# flag(s) are actually on already cover this TU too.
+contains(DEFINES, "GC_WANT_PYTHON") | contains(DEFINES, "GC_WANT_GARMINCONNECT") {
+    message("Enabling shared CPython process bootstrap")
+    HEADERS += Python/PyProcessBootstrap.h
+
+    # Shared deployment locator both PythonEmbed and
+    # PyProcessBootstrap's bootstrap caller consume; wired into this same
+    # OR block (rather than only GC_WANT_PYTHON's own SOURCES above) so a
+    # Garmin-only build still has it. Python-free
+    # header, so it needs no NO_PCH_SOURCES treatment of its own — but its
+    # .cpp does (see PythonDeploymentLocator.cpp's own comment), for
+    # the same reason PyProcessBootstrap.cpp does below.
+    HEADERS += Python/PythonDeploymentLocator.h
+
+    # PyProcessBootstrap.cpp needs Python.h to precede any Qt
+    # header, exactly like Cloud/PyEmbeddedAdapter.cpp just above (Qt's `slots` keyword-macro collides with the `slots` field in CPython's
+    # object.h). qmake's PCH on unix/GCC force-includes stable.h (Qt) ahead of
+    # every source file's own includes with no per-file opt-out, so this TU
+    # must go through the same NO_PCH_SOURCES escape hatch PyEmbeddedAdapter.cpp
+    # already uses (see that block's comment for the full rationale) — a plain
+    # SOURCES += here would silently reintroduce the exact collision
+    # this guards against, invisible to CMake (which has no PCH) and only
+    # surfacing in the real qmake/Makefile build. On macOS the PCH is disabled
+    # entirely (see PRECOMPILED HEADER section below), so compile it as a
+    # normal source there instead.
+    macx {
+        SOURCES += Python/PyProcessBootstrap.cpp
+        SOURCES += Python/PythonDeploymentLocator.cpp
+    } else {
+        NO_PCH_SOURCES += Python/PyProcessBootstrap.cpp
+        NO_PCH_SOURCES += Python/PythonDeploymentLocator.cpp
+    }
 }
 
 ###====================

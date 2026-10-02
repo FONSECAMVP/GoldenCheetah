@@ -1,0 +1,65 @@
+# ruff (lint+format) + mypy --strict scoped to this directory.
+# pytest + coverage.py for the Python adapter.
+# This config is intentionally narrow so it does not touch legacy src/Python/* scripts.
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gc-garminconnect"
+version = "0.0.1"
+description = "Embedded Python adapter for Garmin Connect download (Phase 1)."
+requires-python = ">=3.9"
+
+# Distribution root stays src/Python/garminconnect/ (where
+# this file already lives); the installable package is the gc_garmin_adapter/
+# subdirectory, discovered by name rather than by adding a src/ nesting level.
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["gc_garmin_adapter*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+strict = true
+python_version = "3.9"
+files = ["."]
+# mypy_path is resolved against cwd, not the config-file directory. Pre-commit
+# invokes mypy from the repo root, so spell the path out explicitly. Adapter
+# modules live under the gc_garmin_adapter/ package rooted here —
+# explicit_package_bases stops mypy from instead walking up to this
+# directory's own __init__.py and resolving them as `garminconnect.*` (a name
+# collision with the upstream `garminconnect` PyPI package the adapter wraps).
+mypy_path = ["src/Python/garminconnect"]
+explicit_package_bases = true
+# Third-party stubs we accept as untyped:
+[[tool.mypy.overrides]]
+module = ["garminconnect", "curl_cffi.*", "freezegun", "pytest"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+# Adapter modules live under gc_garmin_adapter/ (garmin_client.py, gc_rate.py);
+# adding "." to pythonpath lets tests import gc_garmin_adapter.* directly
+# without a build step.
+pythonpath = ["."]
+
+[tool.coverage.run]
+source = ["."]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
