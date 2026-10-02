@@ -12,8 +12,10 @@ PHASE:     2.2 · Garmin Connect integration, Stage 9 discharged 2026-10-02. Sta
            import from inside the shipped bundle (REQ-NF-Pkg-001). Feature ships on this fork.
 OPEN:      Stage 10 · upstream hand-off (DEC-090): PR 1 Garmin-only branch `garmin/upstream-garmin` from
            upstream/master, fork CI all 3 green, then user opens PR; PR 2 Coach after. UPR-1 plan accepted
-           (B-STAGE10-01..10): /tmp/upr1/contract.md + wt (volatile /tmp). UPR-2 (builder): cut the branch
-           from upstream/master f12e72296 per contract.md, local qmake build. Fork-only filter revert staged on
+           (B-STAGE10-01..10): /tmp/upr1/contract.md. UPR-2: branch `garmin/upstream-garmin` (worktree
+           .claude/worktrees/upstream-garmin, uncommitted, = plan byte-for-byte) qmake Garmin-on build GREEN,
+           reviewer PASS. Pending: Garmin-off build (copy .claude/worktrees/upstream-garmin-off), then commit
+           the branch; UPR-3 fork CI on it; UPR-4 comment scrub (B-STAGE10-11). Fork-only filter revert staged on
            local branch `garmin/upstream-pr` (`62b10f292`, worktree /tmp/gc-upstream-pr). Frozen upstream,
            NOT this branch's: `ArchiveFile.cpp` GZIP arm, `CloudService.cpp:565` `gUncompress`,
            `RideImportWizard` raw `Context*` (DEC-077/-080 / B-STAGE9-116) — HARD HOLD.
@@ -28,7 +30,7 @@ NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not 
            (B-STAGE9-115). -128 is subsumed by DEC-084 (landed in `e15d863ba`).
            Fork CI history ci.1..ci.10 (-168..-193, DEC-089): findings.md rows; ci.10 is the first
            all-3-leg pass. macOS DMG root holds GoldenCheetah.app (ci.10 ls output).
-           NEXT: UPR-2 (see OPEN). Never push while a build is queued (-187).
+           NEXT: UPR-2 Garmin-off build, then commit branch (see OPEN). Never push while a build is queued (-187).
            AppVeyor connected 2026-09-29 (fork webhook live); `appveyor.yml` branch filter now includes
            this branch (fork-only CI edit — revert before any upstream PR).
            -79's completion seam is settled by measurement: no tolerance window without new

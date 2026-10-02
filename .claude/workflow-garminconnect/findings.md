@@ -614,3 +614,4 @@ notes are in `archive/findings-notes.md`. Row shape: ledger writing contract (QG
 | B-STAGE10-08 | rev UPR-1-r2 10-02 | blocking | nostderr buffering change rides along, non-Garmin (main.cpp:189) | fixed | wt main.cpp; rev r3 CLOSED |
 | B-STAGE10-09 | rev UPR-1-r3 10-02 | blocking | Refresh List keeps batchId: stale fail labels new row (wt CloudService.cpp:1651) | fixed | ReadTicket row+batch, recheck; rev r4 PASS |
 | B-STAGE10-10 | rev UPR-1-r3 10-02 | blocking | no batchId recheck after processEvents: advances restarted batch (wt :1667) | fixed | ReadTicket row+batch, recheck; rev r4 PASS |
+| B-STAGE10-11 | rev UPR-2 10-02 | non-blocking | upstream branch comments cite internal ids (DEC/B-STAGE/DES), ~76 lines in 10 modified files | fix-now | scrub before PR (UPR-4) |
