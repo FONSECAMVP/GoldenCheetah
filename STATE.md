@@ -9,11 +9,13 @@
 PHASE:     2.2 · Garmin Connect integration, Stage 9 discharged 2026-10-02. Stages 1-8 on executed
            evidence; Stage 9: live journey 2026-09-29 (qmake binary `5226bdbf6`: connect, 2FA, sync,
            cancel) + AppVeyor ci.10 (`774ba3533`): all 3 installers built and pass the DEC-069 payload
-           import from inside the shipped bundle (REQ-NF-Pkg-001). Goal reached on this fork.
-OPEN:      Only the upstream hand-off, a user decision: revert the fork-only `appveyor.yml` branch
-           filter, then the upstream PR. Frozen upstream, NOT this branch's: `ArchiveFile.cpp` GZIP arm,
-           `CloudService.cpp:565` `gUncompress`, `RideImportWizard` raw `Context*` (DEC-077/-080 /
-           B-STAGE9-116) — HARD HOLD.
+           import from inside the shipped bundle (REQ-NF-Pkg-001). Feature ships on this fork.
+OPEN:      Stage 10 · upstream hand-off (DEC-090): PR 1 Garmin-only branch `garmin/upstream-garmin` from
+           upstream/master, fork CI all 3 green, then user opens PR; PR 2 Coach after. Unit UPR-1 (builder):
+           dependency map + extraction plan, read-only, no branch yet. Fork-only filter revert staged on
+           local branch `garmin/upstream-pr` (`62b10f292`, worktree /tmp/gc-upstream-pr). Frozen upstream,
+           NOT this branch's: `ArchiveFile.cpp` GZIP arm, `CloudService.cpp:565` `gUncompress`,
+           `RideImportWizard` raw `Context*` (DEC-077/-080 / B-STAGE9-116) — HARD HOLD.
 BLOCKING:
            # none on this branch. -116 is blocking but FROZEN upstream (DEC-077).
            # Non-blocking, unlisted: B-STAGE9-73/-76/-77/-117..-120/-122..-125/-128; -71 residual
@@ -25,7 +27,7 @@ NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not 
            (B-STAGE9-115). -128 is subsumed by DEC-084 (landed in `e15d863ba`).
            Fork CI history ci.1..ci.10 (-168..-193, DEC-089): findings.md rows; ci.10 is the first
            all-3-leg pass. macOS DMG root holds GoldenCheetah.app (ci.10 ls output).
-           NEXT: user decides the upstream hand-off (see OPEN). Never push while a build is queued (-187).
+           NEXT: UPR-1 (see OPEN). Never push while a build is queued (-187).
            AppVeyor connected 2026-09-29 (fork webhook live); `appveyor.yml` branch filter now includes
            this branch (fork-only CI edit — revert before any upstream PR).
            -79's completion seam is settled by measurement: no tolerance window without new

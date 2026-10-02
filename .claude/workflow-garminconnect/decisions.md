@@ -103,6 +103,7 @@ Compact schema per `references/formats.md` § `decisions.md`. **The recap source
 | DEC-087 | B-STAGE9-154 v0 stamp class → WRITERS PRESERVE v0: only migration phase 3 stamps v1 | accepted | 2026-09-28 |
 | DEC-088 | D2XX CI fetch completeness → MARKER after upstream-recipe copy; malformed-vendor-archive residual PINNED | accepted | 2026-09-29 |
 | DEC-089 | Fork CI recipe lag behind upstream → SYNC appveyor.yml + appveyor/** to upstream/master, re-apply fork deltas | accepted | 2026-09-30 |
+| DEC-090 | Upstream hand-off → Garmin-only PR from upstream/master, then separate Coach PR | accepted | 2026-10-02 |
 
 ### Dormant index
 
@@ -1410,4 +1411,17 @@ Dormant — the remainder is the Garmin dialog-lifetime family and every one sti
   4. Fork-only cache deltas (60-min hosted cap; cold Qwt build costs 14.5 min Win at -j1, 20.7 min macOS): qwt cache is the built `qwt/lib` only, content-keyed (a dependency key froze lib-less copies, B-STAGE9-186); srmio drops the `appveyor.yml` dependency; Windows Qwt stays -j1 (-j2 raced Debug/Release moc, B-STAGE9-184); SAVE_CACHE_ON_ERROR stays true until the first green run. Revert all before any upstream PR.
   5. Cold-Qwt cache priming (a hosted-cap timeout skips cache save, ci.4): if the Qwt library is absent at job start, every leg (Windows, Linux, macOS; was macOS-only until B-STAGE9-186) builds Qwt (macOS also SRMIO), prints an explicit "cache priming, intentional failure" line and fails with a non-zero command status before `sub-src` — never shell `exit`, which ends the AppVeyor session before cache save (B-STAGE9-185) — so save-on-error stores them. Fork-only; revert before any upstream PR.
 - Dependents: appveyor.yml, appveyor/**, B-STAGE9-175, B-STAGE9-176, B-STAGE9-177
+- Full record: this entry
+
+## DEC-090 — upstream hand-off: a Garmin-only PR from upstream/master, then a separate Coach PR
+- Status: accepted 2026-10-02 (user decision)
+- Why: branch vs upstream/master is 253 commits / 401 files / ~129k lines mixing Garmin, Coach, CMake/Qt modernization, qwt patches and QGDW governance files.
+- Chose: option 1 of 3 — (2) this branch minus governance: still mixes features; (3) hold. 1 = clean branch per feature.
+- Binding:
+  1. PR 1 branch `garmin/upstream-garmin` starts from current upstream/master; carries only Garmin product files + the minimal non-Garmin pieces they need to build (each named with its reason).
+  2. Never carries .claude/, wiki/, WIKI.md, STATE.md, lessons.md, governance logs, scripts/ledger tooling.
+  3. Proven on fork AppVeyor (all 3 legs green, DEC-069 check) before the PR opens; the fork-only branch filter is its own last commit, dropped before the PR.
+  4. PR 2 (Coach) follows the same rules after PR 1, as branch `coach/upstream-coach`.
+  5. Opening each PR, and every push, is a user-approved action. Draft text: /tmp/garmin-upstream-pr-draft.md.
+- Dependents: appveyor.yml, src/Cloud/**, src/Python/garminconnect/**, src/Coach/**, B-STAGE9-116 (frozen upstream)
 - Full record: this entry
