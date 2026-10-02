@@ -593,7 +593,7 @@ notes are in `archive/findings-notes.md`. Row shape: ledger writing contract (QG
 | B-STAGE9-180 | reviewer 09-30 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macos/after_build.sh:120 drops upstream pip shebang/_sysconfigdata fix | fixed | rev2 CLOSED |
 | B-STAGE9-181 | reviewer 09-30 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | windows/*.ps1: no ErrorActionPreference Stop; cmdlet errors pass | fixed | rev3 CLOSED |
 | B-STAGE9-182 | AppVeyor ci.4 09-30 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | Win leg: EAP Stop turns native stderr (R --version) into a fatal error | fixed | Invoke-NativeChecked, rev PASS |
-| B-STAGE9-183 | reviewer 10-01 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | DEC-089/5 qwt step: failed make sub-qwt no longer fails the step | fixed | make || exit 1, rev PASS |
+| B-STAGE9-183 | reviewer 10-01 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | DEC-089/5 qwt step: failed make sub-qwt no longer fails the step | fixed | make \|\| exit 1, rev PASS |
 | B-STAGE9-184 | AppVeyor ci.5 10-01 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | Win qwt jom -j2 races Debug/Release moc dir: Permission denied | fixed | jom -j1 as upstream, rev PASS |
 | B-STAGE9-185 | AppVeyor ci.5 10-01 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS: no cache restore/save; DEC-089/5 priming unsaved | fixed | fail by command status, not exit; rev PASS |
 | B-STAGE9-186 | AppVeyor ci.6 10-01 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | qwt cache key qwtconfig.pri.in froze lib-less copies | fixed | qwt/lib content-keyed, cold legs prime; PASS |
@@ -601,6 +601,16 @@ notes are in `archive/findings-notes.md`. Row shape: ledger writing contract (QG
 | B-STAGE9-188 | AppVeyor ci.9 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS DEC-069 check: python3.11 not at mounted-DMG path | fixed | abs mount, find 1 python, status end; PASS |
 | B-STAGE9-189 | rev -188-r1 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | check hard-coded the .app path; -srcfolder may put Contents at root | fixed | find exactly one interpreter; PASS |
 | B-STAGE9-190 | rev -188-r1 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS check: abort-on-error shell skips PY_RC capture + detach | fixed | rc captured, detach always runs; rev PASS |
-| B-STAGE9-191 | rev -188-r2 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS check: `|| true` hid a failed detach; green with DMG mounted | fixed | detach rc kept; python rc first; PASS |
+| B-STAGE9-191 | rev -188-r2 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS check: `\|\| true` hid a failed detach; green with DMG mounted | fixed | detach rc kept; python rc first; PASS |
 | B-STAGE9-192 | rev -188-r3 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | macOS check ends by shell exit, skips finalization (as -185) | fixed | no exit; ci.8: cache saved after false |
 | B-STAGE9-193 | Inspector r4 10-02 | blocking BLOCKS: {CHECKPOINT:STAGE9;RELEASE} | 2 final [ ] tests: without sh -e a python fail is hidden | fixed | single && verdict line; rev PASS |
+| B-STAGE10-01 | rev UPR-1-r1 10-02 | blocking | plan misses CloudServiceSyncDialog::start (AddCloudWizard.cpp:1130) | fixed | wt contract; rev r2 CLOSED |
+| B-STAGE10-02 | rev UPR-1-r1 10-02 | blocking | defaulted 4-arg readFile hides upstream 3-arg overrides (CloudService.h:341) | fixed | wt contract; rev r2 CLOSED |
+| B-STAGE10-03 | rev UPR-1-r1 10-02 | blocking | contract omits sync/auto-download read-fail receivers (CloudService.cpp:1441,4337) | fixed | wt contract; rev r2 CLOSED |
+| B-STAGE10-04 | rev UPR-1-r1 10-02 | blocking | contract omits rideRegistrationCompleted + consumers (CloudService.cpp:3561,4505) | fixed | wt contract; rev r2 CLOSED |
+| B-STAGE10-05 | rev UPR-1-r1 10-02 | blocking | whole-file src.pro carries non-Garmin flags/lrelease (src.pro:115) | fixed | wt contract; rev r2 CLOSED |
+| B-STAGE10-06 | rev UPR-1-r2 10-02 | blocking | wt failedRead uses current listindex: stale fail advances new batch (CloudService.cpp:1631) | fixed | via -09/-10; rev r4 PASS |
+| B-STAGE10-07 | rev UPR-1-r2 10-02 | blocking | unconditional PyProcessBootstrap ignores --no-python, Garmin off (main.cpp:524) | fixed | wt main.cpp; rev r3 CLOSED |
+| B-STAGE10-08 | rev UPR-1-r2 10-02 | blocking | nostderr buffering change rides along, non-Garmin (main.cpp:189) | fixed | wt main.cpp; rev r3 CLOSED |
+| B-STAGE10-09 | rev UPR-1-r3 10-02 | blocking | Refresh List keeps batchId: stale fail labels new row (wt CloudService.cpp:1651) | fixed | ReadTicket row+batch, recheck; rev r4 PASS |
+| B-STAGE10-10 | rev UPR-1-r3 10-02 | blocking | no batchId recheck after processEvents: advances restarted batch (wt :1667) | fixed | ReadTicket row+batch, recheck; rev r4 PASS |
