@@ -617,3 +617,4 @@ notes are in `archive/findings-notes.md`. Row shape: ledger writing contract (QG
 | B-STAGE10-11 | rev UPR-2 10-02 | non-blocking | upstream branch comments cite internal ids (DEC/B-STAGE/DES), ~76 lines in 10 modified files | fixed | UPR-4a..e: 0 ids left, C++ rev PASS |
 | B-STAGE10-12 | rev UPR-4a-r1 10-02 | non-blocking | fork-only refs left after id scrub (pyproject, Slice A/B, Unit 3) | accept-with-note | 3 SAME rounds; rest -> B-STAGE10-13 |
 | B-STAGE10-13 | rev UPR-4e-r3 10-02 | non-blocking | 7 .py prose nits: Option B, Open residual, stray ), stale contracts | deferred | upstream review polish |
+| B-STAGE10-14 | insp UPR-3 10-02 | blocking | upstream branch lacks Garmin CI/packaging (appveyor.yml + appveyor/*): DEC-069 check cannot run | open | UPR-3a port |
