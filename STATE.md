@@ -33,7 +33,7 @@ NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not 
            Fork CI history ci.1..ci.10 (-168..-193, DEC-089): findings.md rows; ci.10 is the first
            all-3-leg pass. macOS DMG root holds GoldenCheetah.app (ci.10 ls output).
            NEXT: ci.11 on `994d338a1` failed on fork infra (B-STAGE10-15/-16); fork-only infra commit `40712ef4a`
-           (DEC-091, rev PASS). Pushed (user-approved) → ci.12 on `40712ef4a`; a cold Qwt cache fails run 1 on purpose. Never push while a build is queued (-187).
+           (DEC-091, rev PASS). ci.12 on `40712ef4a`: Linux+macOS green incl. DEC-069 check; Windows >60 min (B-STAGE10-17, open). Never push while a build is queued (-187).
            AppVeyor connected 2026-09-29 (fork webhook live); `appveyor.yml` branch filter now includes
            this branch (fork-only CI edit — revert before any upstream PR).
            -79's completion seam is settled by measurement: no tolerance window without new
