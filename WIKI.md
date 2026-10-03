@@ -20,7 +20,7 @@ build/ caches src/*.o,moc_*  [SKIP] generated
 
 ## REGISTRIES (point only; ledger .claude/workflow-garminconnect/; notes → wiki/registry-detail.md)
 REQ garmin:001–030 +16 NF           next:garmin-031
-DEC garmin:001–091                  next:garmin-092
+DEC garmin:001–092                  next:garmin-093
 DES garmin:001–014(+001a,003a)      next:garmin-015
 TEST garmin:T-001–T-263(+261b)      next:garmin-T-264
 VAL garmin:001–018                  next:garmin-019

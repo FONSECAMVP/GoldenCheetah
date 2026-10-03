@@ -105,6 +105,7 @@ Compact schema per `references/formats.md` § `decisions.md`. **The recap source
 | DEC-089 | Fork CI recipe lag behind upstream → SYNC appveyor.yml + appveyor/** to upstream/master, re-apply fork deltas | accepted | 2026-09-30 |
 | DEC-090 | Upstream hand-off → Garmin-only PR from upstream/master, then separate Coach PR | accepted | 2026-10-02 |
 | DEC-091 | Upstream-branch fork CI fails on fork infra → FORK-ONLY infra commit (DEC-088/-089 deltas), dropped with the filter | accepted | 2026-10-02 |
+| DEC-092 | Garmin PR 1 destination → merged into fork branch `upstream-base` (fork PR #1), no upstream PR | accepted | 2026-10-03 |
 
 ### Dormant index
 
@@ -1433,3 +1434,10 @@ Dormant — the remainder is the Garmin dialog-lifetime family and every one sti
 - Chose: 1 of 3 — (2) port the infra deltas into the PR commits: pollutes PR 1 with fork tuning; (3) accept ci.10 proof: not this branch's build. 1 = re-apply the DEC-088/-089 fork deltas (cache keys/priming, -j2, D2XX gating) as fork-only commits after the filter.
 - Binding: every fork-only commit sits after the Garmin commits and is dropped before the PR; Garmin commits unchanged.
 - Dependents: appveyor.yml, appveyor/**, B-STAGE10-14/-15/-16
+
+## DEC-092 — Garmin PR 1 lands on the fork, not upstream
+- Status: accepted 2026-10-03 (user decision; amends DEC-090/1,/3,/5 for Garmin)
+- Why: after review of fork PR #1 the user chose not to open a PR to GoldenCheetah/GoldenCheetah.
+- Chose: 1 of 3 — (2) fork master stays the only product, close #1: discards the clean upstream-based branch; (3) hold for upstream later: leaves the work unmerged. 1 = merge #1 into fork branch `upstream-base` (`a8d144efd` = upstream/master `f12e72296` + `acc6e9bd6` + `476630af5`).
+- Binding: no PR to GoldenCheetah upstream unless the user reopens it. PR 2 (Coach, DEC-090/4) destination is open, user's call.
+- Dependents: DEC-090, branches `upstream-base`, `garmin/upstream-garmin`
