@@ -36,8 +36,9 @@ NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not 
            (DEC-091, rev PASS). ci.12 on `40712ef4a`: Linux+macOS green incl. DEC-069 check; Windows >60 min (B-STAGE10-17) → fork-only `5eb437a0d`. ci.13: Win+Linux green;
            macOS capped twice on slow hosts (B-STAGE10-18) → UPR-3d fork-only `26f8fb08d` (macOS ccache +
            group-kill compile time-box, rev PASS) → ci.14 on `26f8fb08d`: all 3 legs green incl. DEC-069
-           check (2026-10-03). NEXT: PR branch = upstream/master + `acc6e9bd6` + `476630af5` (fork-only
-           commits dropped, DEC-090/3); move/force-push and PR open are user actions. `garmin/upstream-pr`
+           check (2026-10-03). PR branch `garmin/upstream-garmin` = upstream/master + `acc6e9bd6` + `476630af5`,
+           fork-only commits dropped and force-pushed 2026-10-03 (CI tip kept: local `garmin/upstream-garmin-forkci`).
+           NEXT: user opens PR 1 (draft /tmp/garmin-upstream-pr-draft.md); then PR 2 Coach (DEC-090/4). `garmin/upstream-pr`
            (`62b10f292`) is stale (pre-DEC-090 base), not the PR branch. Never push while a build is queued (-187).
            AppVeyor connected 2026-09-29 (fork webhook live); `appveyor.yml` branch filter now includes
            this branch (fork-only CI edit — revert before any upstream PR).
