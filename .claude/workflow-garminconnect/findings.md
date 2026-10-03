@@ -622,3 +622,4 @@ notes are in `archive/findings-notes.md`. Row shape: ledger writing contract (QG
 | B-STAGE10-16 | AppVeyor ci.11 10-02 | blocking | Linux+macOS legs: D2XX fetch 403 on empty cache (= B-STAGE9-170/-171) | fixed | ci.12 Linux+macOS green |
 | B-STAGE10-17 | AppVeyor ci.12 10-03 | blocking | Win leg: warm cache still >60 min (v3.9 base +19 units, ~5 min over; ci.10 55:46) | fixed | ci.13 Win green 49:57 (`5eb437a0d`) |
 | B-STAGE10-18 | AppVeyor ci.13 10-03 | blocking | macOS leg: 60-min cap, VM ~3-4x slower (install+compile); ci.12 43 min; re-run also capped | open | UPR-3d: ccache + 52-min time-box |
+| B-STAGE10-19 | rev UPR-3d r1 10-03 | blocking | macOS time-box kill -TERM hits outer make only; children run on to cap | open | appveyor.yml sub-src step |
