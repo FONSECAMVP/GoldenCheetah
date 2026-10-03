@@ -1,4 +1,4 @@
-# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-10-02 by `garmin_inspector_v1_81`
+# STATE — GoldenCheetah (garmin/req028-row-lifetime)   updated: 2026-10-03 by `garmin_inspector_v1_81`
 # Project cursor only (QGDW Tier-0 schema, quality-gated-dev-workflow references/state-and-tiers.md).
 # Id counters live in WIKI.md REGISTRIES only.
 # Per-id status lives ONLY in .claude/workflow-garminconnect/traceability.md (DEC-015 SSOT);
@@ -34,7 +34,8 @@ NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not 
            all-3-leg pass. macOS DMG root holds GoldenCheetah.app (ci.10 ls output).
            NEXT: ci.11 on `994d338a1` failed on fork infra (B-STAGE10-15/-16); fork-only infra commit `40712ef4a`
            (DEC-091, rev PASS). ci.12 on `40712ef4a`: Linux+macOS green incl. DEC-069 check; Windows >60 min (B-STAGE10-17) → fork-only `5eb437a0d`. ci.13: Win+Linux green;
-           macOS capped twice on slow hosts (B-STAGE10-18) → user chose a fork-only macOS speedup. Never push while a build is queued (-187).
+           macOS capped twice on slow hosts (B-STAGE10-18) → UPR-3d fork-only macOS ccache +
+           time-boxed compile (builder, uncommitted in worktree) → reviewer → push for ci.14 (user approval). Never push while a build is queued (-187).
            AppVeyor connected 2026-09-29 (fork webhook live); `appveyor.yml` branch filter now includes
            this branch (fork-only CI edit — revert before any upstream PR).
            -79's completion seam is settled by measurement: no tolerance window without new
