@@ -620,4 +620,5 @@ notes are in `archive/findings-notes.md`. Row shape: ledger writing contract (QG
 | B-STAGE10-14 | insp UPR-3 10-02 | blocking | upstream branch lacks Garmin CI/packaging (appveyor.yml + appveyor/*): DEC-069 check cannot run | open | UPR-3a `476630af5` PASS; closes on CI |
 | B-STAGE10-15 | AppVeyor ci.11 10-02 | blocking | Win leg: 60-min hosted cap, cold cache (upstream keys, no priming) | fixed | ci.12: qwt cache restored |
 | B-STAGE10-16 | AppVeyor ci.11 10-02 | blocking | Linux+macOS legs: D2XX fetch 403 on empty cache (= B-STAGE9-170/-171) | fixed | ci.12 Linux+macOS green |
-| B-STAGE10-17 | AppVeyor ci.12 10-03 | blocking | Win leg: warm cache still >60 min (v3.9 base +19 units, ~5 min over; ci.10 55:46) | fixed | `5eb437a0d` rev PASS; CI unproven |
+| B-STAGE10-17 | AppVeyor ci.12 10-03 | blocking | Win leg: warm cache still >60 min (v3.9 base +19 units, ~5 min over; ci.10 55:46) | fixed | ci.13 Win green 49:57 (`5eb437a0d`) |
+| B-STAGE10-18 | AppVeyor ci.13 10-03 | blocking | macOS leg: 60-min cap, VM ~3-4x slower (install+compile); ci.12 same recipe 43 min | open | re-run macOS job |
