@@ -35,7 +35,7 @@ NEXT_GATE: Canonical gate `ctest -LE gate-exclude` (DEC-054, dod.md:16-47), not 
            NEXT: ci.11 on `994d338a1` failed on fork infra (B-STAGE10-15/-16); fork-only infra commit `40712ef4a`
            (DEC-091, rev PASS). ci.12 on `40712ef4a`: Linux+macOS green incl. DEC-069 check; Windows >60 min (B-STAGE10-17) → fork-only `5eb437a0d`. ci.13: Win+Linux green;
            macOS capped twice on slow hosts (B-STAGE10-18) → UPR-3d fork-only `26f8fb08d` (macOS ccache +
-           group-kill compile time-box, rev PASS) → push for ci.14 (user approval). Never push while a build is queued (-187).
+           group-kill compile time-box, rev PASS) → ci.14 running on `26f8fb08d` (pushed 10-03). Never push while a build is queued (-187).
            AppVeyor connected 2026-09-29 (fork webhook live); `appveyor.yml` branch filter now includes
            this branch (fork-only CI edit — revert before any upstream PR).
            -79's completion seam is settled by measurement: no tolerance window without new
