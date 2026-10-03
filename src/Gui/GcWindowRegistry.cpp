@@ -45,6 +45,7 @@
 #include "LiveMapWebPageWindow.h"
 #include "CalendarWindow.h"
 #include "AgendaWindow.h"
+#include "PlanAdherenceWindow.h"
 #ifdef GC_WANT_R
 #include "RChart.h"
 #endif
@@ -57,8 +58,7 @@
 #endif
 #include "UserChartWindow.h"
 #include "Overview.h"
-// Not until v4.0
-//#include "RouteWindow.h"
+#include "HtmlChart.h"
 
 // GcWindows initialization is done in initialize method to enable translations
 GcWindowRegistry* GcWindows;
@@ -111,16 +111,19 @@ GcWindowRegistry::initialize()
     { VIEW_TRAIN, tr("Video Player"),GcWindowTypes::VideoPlayer },
     { VIEW_TRAIN, tr("Workout Editor"),GcWindowTypes::WorkoutWindow },
     { VIEW_TRAIN, tr("Live Map"),GcWindowTypes::LiveMapWebPageWindow },
+    { VIEW_TRAIN, tr("HTML Chart"),GcWindowTypes::HtmlTraining },
     { VIEW_TRAIN, tr("Elevation Chart"),GcWindowTypes::ElevationChart },
-    { VIEW_ANALYSIS|VIEW_TRENDS|VIEW_TRAIN, tr("Web page"),GcWindowTypes::WebPageWindow },
+    { VIEW_ANALYSIS|VIEW_TRENDS|VIEW_PLAN|VIEW_TRAIN, tr("Web page"),GcWindowTypes::WebPageWindow },
     { VIEW_TRENDS|VIEW_PLAN, tr("Calendar"),GcWindowTypes::Calendar },
-    { VIEW_TRENDS|VIEW_PLAN, tr("Agenda"),GcWindowTypes::Agenda },
+    { VIEW_PLAN, tr("Agenda"),GcWindowTypes::Agenda },
+    { VIEW_PLAN, tr("Plan Adherence"),GcWindowTypes::PlanAdherence },
     { 0, "", GcWindowTypes::None }};
   // initialize the global registry
   GcWindows = GcWindowsInit;
 }
 
-QStringList windowsForType(int type)
+QStringList
+GcWindowRegistry::windowsForType(int type)
 {
     QStringList returning;
 
@@ -141,7 +144,8 @@ GcWindowRegistry::title(GcWinID id)
     return QString("unknown");
 }
 
-QList<GcWinID> idsForType(int type)
+QList<GcWinID>
+GcWindowRegistry::idsForType(int type)
 {
     QList<GcWinID> returning;
 
@@ -150,6 +154,16 @@ QList<GcWinID> idsForType(int type)
             returning << GcWindows[i].id;
     }
     return returning;
+}
+
+unsigned int
+GcWindowRegistry::relevanceForId(GcWinID id)
+{
+    for(int i=0; GcWindows[i].relevance; i++) {
+        if (GcWindows[i].id == id)
+            return GcWindows[i].relevance;
+    }
+    return 0;
 }
 
 // instantiate a new window
@@ -229,12 +243,9 @@ GcWindowRegistry::newGcWindow(GcWinID id, Context *context)
 
     case GcWindowTypes::WebPageWindow: returning = new WebPageWindow(context); break;
     case GcWindowTypes::LiveMapWebPageWindow: returning = new LiveMapWebPageWindow(context); break;
+    case GcWindowTypes::HtmlTraining: returning = new HtmlChart(context); break;
     case GcWindowTypes::ElevationChart: returning = new ElevationChartWindow(context); break;
-#if 0 // not till v4.0
-    case GcWindowTypes::RouteSegment: returning = new RouteWindow(context); break;
-#else
-    case GcWindowTypes::RouteSegment: returning = new GcChartWindow(context); break;
-#endif
+    case GcWindowTypes::RouteSegment: returning = new GcChartWindow(context); break; // Deprecated
 
     // summary and old ride summary charts now replaced with an Overview - note id gets reset
     case GcWindowTypes::Summary:
@@ -263,6 +274,7 @@ GcWindowRegistry::newGcWindow(GcWinID id, Context *context)
     case GcWindowTypes::Diary:
     case GcWindowTypes::Calendar: returning = new CalendarWindow(context); break;
     case GcWindowTypes::Agenda: returning = new AgendaWindow(context); break;
+    case GcWindowTypes::PlanAdherence: returning = new PlanAdherenceWindow(context); break;
     default: return NULL; break;
     }
     if (returning) returning->setProperty("type", QVariant::fromValue<GcWinID>(id));

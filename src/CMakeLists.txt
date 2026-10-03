@@ -41,7 +41,6 @@ endif()
 option(GC_WANT_PYTHON "Enable Python scripting support" OFF)
 option(GC_WANT_R "Enable R statistical computing support" OFF)
 option(GC_WANT_HTTP "Enable HTTP API web services" ON)
-option(GC_HAVE_ICAL "Enable iCal calendar support" OFF)
 option(GC_HAVE_LIBUSB "Enable USB device support" OFF)
 option(GC_HAVE_VLC "Enable VLC video playback" OFF)
 option(GC_HAVE_SAMPLERATE "Enable sample rate conversion" OFF)
@@ -251,7 +250,7 @@ set(GC_SOURCES_CHARTS
     Charts/RideMapWindow.cpp
     Charts/CalendarWindow.cpp
     Charts/AgendaWindow.cpp
-    # Charts/RouteWindow.cpp  # Disabled - has refactoring issues (missing getRides(), protected routes, etc.)
+    Charts/PlanAdherenceWindow.cpp
     Charts/ScatterPlot.cpp
     Charts/ScatterWindow.cpp
     Charts/SmallPlot.cpp
@@ -314,7 +313,7 @@ set(GC_HEADERS_CHARTS
     Charts/ReferenceLineDialog.h
     Charts/RideEditor.h
     Charts/RideMapWindow.h
-    # Charts/RouteWindow.h  # Disabled - has refactoring issues
+    Charts/PlanAdherenceWindow.h
     Charts/ScatterPlot.h
     Charts/ScatterWindow.h
     Charts/SmallPlot.h
@@ -329,7 +328,6 @@ set(GC_HEADERS_CHARTS
 
 # Cloud services
 set(GC_SOURCES_CLOUD
-    Cloud/CalendarDownload.cpp
     Cloud/CloudService.cpp
     Cloud/LocalFileStore.cpp
     Cloud/OAuthDialog.cpp
@@ -351,10 +349,13 @@ set(GC_SOURCES_CLOUD
     Cloud/PolarFlow.cpp
     Cloud/SportTracks.cpp
     Cloud/Nolio.cpp
+    Cloud/OAuthPKCE.cpp
+    Cloud/Tredict.cpp
+    Cloud/TredictWorkoutDownload.cpp
+    Cloud/TredictMeasuresDownload.cpp
 )
 
 set(GC_HEADERS_CLOUD
-    Cloud/CalendarDownload.h
     Cloud/CloudService.h
     Cloud/LocalFileStore.h
     Cloud/OAuthDialog.h
@@ -376,6 +377,10 @@ set(GC_HEADERS_CLOUD
     Cloud/PolarFlow.h
     Cloud/SportTracks.h
     Cloud/Nolio.h
+    Cloud/OAuthPKCE.h
+    Cloud/Tredict.h
+    Cloud/TredictWorkoutDownload.h
+    Cloud/TredictMeasuresDownload.h
 )
 
 # Core data structures
@@ -643,7 +648,9 @@ set(GC_SOURCES_GUI
     Gui/CalendarData.cpp
     Gui/CalendarItemDelegates.cpp
     Gui/Agenda.cpp
-    Gui/RepeatScheduleWizard.cpp
+    Gui/PlanWizards.cpp
+    Gui/PlanAdherence.cpp
+    Gui/CalendarSyncDialog.cpp
 )
 
 set(GC_HEADERS_GUI
@@ -781,10 +788,12 @@ set(GC_HEADERS_METRICS
 # Planning
 set(GC_SOURCES_PLANNING
     Planning/PlanningWindow.cpp
+    Planning/PlanBundle.cpp
 )
 
 set(GC_HEADERS_PLANNING
     Planning/PlanningWindow.h
+    Planning/PlanBundle.h
 )
 
 # Coach AI Module (optional, enabled by default)
@@ -838,6 +847,8 @@ set(GC_SOURCES_TRAIN
     Train/VideoSyncFile.cpp
     Train/WorkoutPlotWindow.cpp
     Train/WebPageWindow.cpp
+    Train/HtmlChart.cpp
+    Train/HtmlTrainingBridge.cpp
     Train/WorkoutWidget.cpp
     Train/WorkoutWidgetItems.cpp
     Train/WorkoutWindow.cpp
@@ -927,6 +938,8 @@ set(GC_HEADERS_TRAIN
     Train/VideoSyncFile.h
     Train/WorkoutPlotWindow.h
     Train/WebPageWindow.h
+    Train/HtmlChart.h
+    Train/HtmlTrainingBridge.h
     Train/WorkoutWidget.h
     Train/WorkoutWidgetItems.h
     Train/WorkoutWindow.h
@@ -1108,21 +1121,66 @@ if(GC_WANT_R)
     add_definitions(-DSTRICT_R_HEADERS)
 endif()
 
-# iCal Support
-if(GC_HAVE_ICAL)
-    set(GC_SOURCES_ICAL
-        Core/ICalendar.cpp
-        Cloud/CalDAV.cpp
-        Cloud/CalDAVCloud.cpp
-    )
-    
-    set(GC_HEADERS_ICAL
-        Core/ICalendar.h
-        Cloud/CalDAV.h
-        Cloud/CalDAVCloud.h
-    )
-    
-    add_definitions(-DGC_HAVE_ICAL)
+# libical is a mandatory dependency (src.pro: REQUIRED => ICAL)
+find_package(PkgConfig QUIET)
+if(PKG_CONFIG_FOUND)
+    pkg_check_modules(ICAL QUIET IMPORTED_TARGET libical)
+endif()
+# TARGET, not ICAL_FOUND: that is cached and stale when pkg-config disappears between configures
+if(TARGET PkgConfig::ICAL)
+    set(GC_ICAL_TARGET PkgConfig::ICAL)
+else()
+    # No pkg-config (e.g. MSVC): honour ICAL_INSTALL as in gcconfig.pri
+    find_path(ICAL_INCLUDE_DIR libical/ical.h HINTS "${ICAL_INSTALL}/include")
+    find_library(ICAL_LIBRARY NAMES ical libical libical-static HINTS "${ICAL_INSTALL}"
+        PATH_SUFFIXES lib lib64 lib-release lib/${CMAKE_LIBRARY_ARCHITECTURE})
+    find_library(ICAL_LIBRARY_DEBUG NAMES icald libicald libical-staticd HINTS "${ICAL_INSTALL}"
+        PATH_SUFFIXES lib lib64 lib-debug debug/lib lib/${CMAKE_LIBRARY_ARCHITECTURE})
+    if(NOT ICAL_INCLUDE_DIR OR NOT ICAL_LIBRARY)
+        message(FATAL_ERROR "libical is a mandatory dependency but was not found. Install it or pass -DICAL_INSTALL=<prefix>.")
+    endif()
+    add_library(GC_ical UNKNOWN IMPORTED)
+    set_target_properties(GC_ical PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${ICAL_INCLUDE_DIR}")
+    if(ICAL_LIBRARY_DEBUG)
+        set_target_properties(GC_ical PROPERTIES
+            IMPORTED_CONFIGURATIONS "RELEASE;DEBUG"
+            IMPORTED_LOCATION_RELEASE "${ICAL_LIBRARY}"
+            IMPORTED_LOCATION_DEBUG "${ICAL_LIBRARY_DEBUG}")
+    else()
+        set_target_properties(GC_ical PROPERTIES IMPORTED_LOCATION "${ICAL_LIBRARY}")
+    endif()
+    set(GC_ICAL_TARGET GC_ical)
+endif()
+
+add_definitions(-DGC_HAVE_ICAL)
+
+set(GC_SOURCES_ICAL
+    Core/CalendarSync.cpp
+    Cloud/CalDAV.cpp
+    Cloud/CalDAVCloud.cpp
+    Cloud/CalDAVAuth.cpp
+    Cloud/CalDAVDiscovery.cpp
+)
+
+set(GC_HEADERS_ICAL
+    Core/CalendarSync.h
+    Cloud/CalDAV.h
+    Cloud/CalDAVCloud.h
+    Cloud/CalDAVAuth.h
+    Cloud/CalDAVDiscovery.h
+)
+
+# Google Calendar is opt-in, like GC_WANT_GOOGLECAL in src.pro
+option(GC_WANT_GOOGLECAL "Enable Google Calendar sync" OFF)
+if(GC_WANT_GOOGLECAL)
+    list(APPEND GC_SOURCES_ICAL Cloud/GoogleCalDAVCloud.cpp Cloud/GoogleCalendarDiscovery.cpp)
+    list(APPEND GC_HEADERS_ICAL Cloud/GoogleCalDAVCloud.h Cloud/GoogleCalendarDiscovery.h)
+    add_definitions(-DGC_WANT_GOOGLECAL)
+    foreach(_gc_id GC_GOOGLECAL_CLIENT_ID GC_GOOGLECAL_CLIENT_SECRET)
+        if(DEFINED ${_gc_id})
+            add_definitions(-D${_gc_id}="${${_gc_id}}")
+        endif()
+    endforeach()
 endif()
 
 # libusb Support
@@ -1531,6 +1589,7 @@ endif()
 
 # Link Qt libraries
 target_link_libraries(GoldenCheetah PRIVATE
+    ${GC_ICAL_TARGET}
     Qt${QT_VERSION_MAJOR}::Core
     Qt${QT_VERSION_MAJOR}::Widgets
     Qt${QT_VERSION_MAJOR}::Xml
@@ -1617,7 +1676,6 @@ message(STATUS "  R Support: ${GC_WANT_R}")
 message(STATUS "  HTTP API: ${GC_WANT_HTTP}")
 message(STATUS "  AI Coach: ${GC_WANT_COACH}")
 message(STATUS "  Garmin Connect: ${GC_WANT_GARMINCONNECT}")
-message(STATUS "  iCal Support: ${GC_HAVE_ICAL}")
 message(STATUS "  USB Support: ${GC_HAVE_LIBUSB}")
 message(STATUS "  VLC Support: ${GC_HAVE_VLC}")
 message(STATUS "  Samplerate: ${GC_HAVE_SAMPLERATE}")

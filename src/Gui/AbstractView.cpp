@@ -476,11 +476,8 @@ AbstractView::importPerspective(QString filename)
     if (newone) {
         appendPerspective(newone);
         return true;
-    } else {
-        // no valid perspective found for this view... (maybe its for another type of view)
-        QMessageBox::information(this, tr("Perspective Import"), tr("No perspectives found that are appropriate for the current view."));
-        return false;
     }
+    return false;
 }
 
 void
@@ -1014,7 +1011,6 @@ bool ViewParser::startElement( const QString&, const QString&, const QString &na
         type = static_cast<GcWinID>(typeStr.toInt());
         chart = GcWindowRegistry::newGcWindow(type, context);
         if (chart != NULL) {
-            chart->hide();
             chart->setProperty("title", QVariant(title));
         }
     }
@@ -1036,6 +1032,7 @@ bool ViewParser::startElement( const QString&, const QString&, const QString &na
         // deprecate dateRange asa chart property THAT IS DSAVED IN STATE
         if (type == "QString" && name != "dateRange" && chart) chart->setProperty(name.toLatin1(), QVariant(QString(value)));
         if (type == "QDate" && chart) chart->setProperty(name.toLatin1(), QVariant(QDate::fromString(value)));
+        if (type == "QTime" && chart) chart->setProperty(name.toLatin1(), QVariant(QTime::fromString(value, "hh:mm:ss")));
         if (type == "bool" && chart) chart->setProperty(name.toLatin1(), QVariant(value.toInt() ? true : false));
         if (type == "LTMSettings" && chart) {
             QByteArray base64(value.toLatin1());

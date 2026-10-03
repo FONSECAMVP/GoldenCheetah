@@ -24,7 +24,13 @@
 #include "Settings.h"
 #include "Colors.h"
 #include "CloudService.h"
+#include "CalDAVDiscovery.h"
+#ifdef GC_WANT_GOOGLECAL
+#include "GoogleCalendarDiscovery.h"
+#endif
 #include "OAuthDialog.h"
+#include "OAuthPKCE.h"
+#include "Secrets.h"
 
 #ifdef GC_WANT_GARMINCONNECT
 #include "GarminAuthChain.h"
@@ -40,6 +46,7 @@
 #include <QPixmap>
 #include <QPointer>
 #include <QRegExp>
+#include <QInputDialog>
 
 // WIZARD FLOW
 //
@@ -401,6 +408,18 @@ void AddCloudWizard::showGarminProfileOfferIfNeeded()
 }
 #endif
 
+
+void
+AddCloudWizard::reject()
+{
+    QAbstractButton *cancelButton = button(QWizard::CancelButton);
+    if (cancelButton && ! cancelButton->isEnabled()) {
+        return;
+    }
+    QWizard::reject();
+}
+
+
 /*----------------------------------------------------------------------
  * Wizard Pages
  *--------------------------------------------------------------------*/
@@ -497,7 +516,7 @@ AddService::initializePage()
         const CloudService *s = factory.service(name);
 
         // only ones with the capability we need.
-        if (s->type() != wizard->type) continue;
+        if (!(s->type() & wizard->type)) continue;
 
         QCommandLinkButton *p = new QCommandLinkButton(s->uiName(), s->description(), this);
         p->setStyleSheet(QString("font-size: %1px;").arg(font.pointSizeF() * dpiXFactor));
@@ -649,7 +668,17 @@ AddAuth::AddAuth(AddCloudWizard *parent) : QWizardPage(parent), wizard(parent)
     layout->addRow(messageLabel, message);
     layout->addRow(tokenLabel, token);
 
+    calendarLabel = new QLabel(tr("Calendar"));
+    calendar = new QLineEdit(this);
+    calendar->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    calendar->setReadOnly(true); // only set via Discover Calendars, below
+    discover = new QPushButton(tr("Discover Calendars"), this);
+    discover->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    layout->addRow(new QLabel(""), discover);
+    layout->addRow(calendarLabel, calendar);
+
     connect(auth, SIGNAL(clicked(bool)), this, SLOT(doAuth()));
+    connect(discover, SIGNAL(clicked(bool)), this, SLOT(discoverCalendars()));
 
     setLayout(layout);
     setFinalPage(false);
@@ -674,7 +703,55 @@ AddAuth::doAuth()
     // so they are up-to-date before we perform an OAUTH process
     updateServiceSettings();
 
-    if (wizard->cloudService->capabilities() & CloudService::OAuth) {
+    // T208-ALLOW:I18N-TR-WRAP service id, not UI text
+    if (wizard->cloudService->id() == "Google Calendar") {
+#ifdef GC_WANT_GOOGLECAL
+        OAuthPKCE oauth;
+        oauth.setAuthorizationUrl("https://accounts.google.com/o/oauth2/v2/auth");
+        oauth.setTokenUrl("https://oauth2.googleapis.com/token");
+        oauth.setClientId(GC_GOOGLECAL_CLIENT_ID);
+        oauth.setClientSecret(GC_GOOGLECAL_CLIENT_SECRET);
+        oauth.setScope("https://www.googleapis.com/auth/calendar");
+
+        QMap<QString,QString> extraParams;
+        extraParams.insert("access_type", "offline");
+        extraParams.insert("prompt", "consent");
+        oauth.setExtraAuthParams(extraParams);
+
+        QPointer<AddAuth> guard(this);
+        bool ok = oauth.execute();
+        if (! guard) {
+            return;
+        }
+
+        if (ok) {
+            wizard->cloudService->setSetting(cname, oauth.accessToken());
+
+            QString refreshKey = wizard->cloudService->settings.value(CloudService::Local3, "");
+            QString lastRefreshKey = wizard->cloudService->settings.value(CloudService::Local4, "");
+            if (refreshKey != "") {
+                wizard->cloudService->setSetting(refreshKey, oauth.refreshToken());
+            }
+            if (lastRefreshKey != "") {
+                wizard->cloudService->setSetting(lastRefreshKey, QDateTime::currentDateTime());
+            }
+
+            token->setText(oauth.accessToken());
+
+            QString info = QString(tr("Google Calendar authorization was successful."));
+            QMessageBox information(QMessageBox::Information, tr("Information"), info);
+            information.exec();
+        } else {
+            QMessageBox err;
+            err.setText(tr("Google Authorisation Failed"));
+            err.setDetailedText(oauth.errorString());
+            err.setIcon(QMessageBox::Warning);
+            err.exec();
+        }
+#else
+        return;
+#endif
+    } else if (wizard->cloudService->capabilities() & CloudService::OAuth) {
         OAuthDialog *oauthDialog = new OAuthDialog(wizard->context, OAuthDialog::NONE, wizard->cloudService);
         if (oauthDialog->sslLibMissing()) {
             delete oauthDialog;
@@ -704,6 +781,69 @@ AddAuth::doAuth()
 }
 
 void
+AddAuth::discoverCalendars()
+{
+    updateServiceSettings();
+
+    QPointer<AddAuth> guard(this);
+
+    QList<CalDAVDiscovery::CalendarInfo> found;
+    QString error;
+
+    QAbstractButton *cancelButton = wizard->button(QWizard::CancelButton);
+    if (cancelButton) {
+        cancelButton->setEnabled(false);
+    }
+    QGuiApplication::setOverrideCursor(Qt::WaitCursor);
+    bool ok = false;
+    // T208-ALLOW:I18N-TR-WRAP service id, not UI text
+    if (wizard->cloudService->id() == "Google Calendar") {
+#ifdef GC_WANT_GOOGLECAL
+        ok = GoogleCalendarDiscovery::listCalendars(wizard->cloudService, &found, &error);
+#else
+        error = tr("Google Calendar not enabled in this build");
+#endif
+    } else {
+        ok = CalDAVDiscovery::discoverCalendars(wizard->cloudService, &found, &error);
+    }
+    QGuiApplication::restoreOverrideCursor();
+    if (cancelButton) {
+        cancelButton->setEnabled(true);
+    }
+    if (! guard) {
+        return;
+    }
+
+    if (! ok || found.isEmpty()) {
+        QMessageBox err;
+        err.setText(tr("No Calendars Found"));
+        err.setDetailedText(error);
+        err.setIcon(QMessageBox::Warning);
+        err.exec();
+        return;
+    }
+
+    QStringList names;
+    for (const CalDAVDiscovery::CalendarInfo &c : found) {
+        names << c.displayName;
+    }
+
+    bool selected = false;
+    QString choice = QInputDialog::getItem(this, tr("Choose Calendar"), tr("Calendar:"), names, 0, false, &selected);
+    if (! selected) {
+        return;
+    }
+
+    int index = names.indexOf(choice);
+    if (index < 0) {
+        return;
+    }
+
+    calendar->setText(found.at(index).displayName);
+    resolvedCalendarUrl = found.at(index).url;
+}
+
+void
 AddAuth::initializePage()
 {
     setSubTitle(tr("Credentials and authorisation"));
@@ -727,6 +867,9 @@ AddAuth::initializePage()
     authLabel->hide();
     messageLabel->hide();
     tokenLabel->hide();
+    calendarLabel->hide();
+    calendar->hide();
+    discover->hide();
 
     // clone to do next few steps!
     setSubTitle(QString(tr("%1 Credentials and authorisation")).arg(wizard->cloudService->uiName()));
@@ -761,6 +904,18 @@ AddAuth::initializePage()
     if ((cname=wizard->cloudService->settings.value(CloudService::CloudServiceSetting::URL, "")) != "") {
         url->show(); urlLabel->show();
         url->setText(wizard->cloudService->getSetting(cname, "").toString());
+    }
+
+    if (wizard->cloudService->type() & CloudService::Calendar) {
+
+        discover->show();
+
+        QString calKey = wizard->cloudService->settings.value(CloudService::CloudServiceSetting::Local2, "");
+        calendarLabel->show(); calendar->show();
+        if (calKey != "") calendar->setText(wizard->cloudService->getSetting(calKey, "").toString());
+
+        QString extKey = wizard->cloudService->settings.value(CloudService::CloudServiceSetting::Local1, "");
+        if (extKey != "") resolvedCalendarUrl = wizard->cloudService->getSetting(extKey, "").toString();
     }
     if ((cname=wizard->cloudService->settings.value(CloudService::CloudServiceSetting::Key, "")) != "") {
         key->show(); keyLabel->show();
@@ -801,6 +956,14 @@ AddAuth::updateServiceSettings()
     }
     if ((cname=wizard->cloudService->settings.value(CloudService::CloudServiceSetting::URL, "")) != "") {
         wizard->cloudService->setSetting(cname, url->text());
+    }
+
+    if (wizard->cloudService->type() & CloudService::Calendar) {
+        QString calKey = wizard->cloudService->settings.value(CloudService::CloudServiceSetting::Local2, "");
+        if (calKey != "") wizard->cloudService->setSetting(calKey, calendar->text());
+
+        QString extKey = wizard->cloudService->settings.value(CloudService::CloudServiceSetting::Local1, "");
+        if (extKey != "" && !resolvedCalendarUrl.isEmpty()) wizard->cloudService->setSetting(extKey, resolvedCalendarUrl);
     }
     if ((cname=wizard->cloudService->settings.value(CloudService::CloudServiceSetting::Key, "")) != "") {
         wizard->cloudService->setSetting(cname, key->text());
@@ -945,7 +1108,7 @@ AddSettings::initializePage()
         browse->show(); folder->show(); folderLabel->show();
         folder->setText(wizard->cloudService->getSetting(cname, "").toString());
     }
-    if (wizard->cloudService->capabilities() & CloudService::Query) {
+    if (wizard->cloudService->capabilities() & CloudService::Download) {
         QString value = wizard->cloudService->getSetting(wizard->cloudService->syncOnStartupSettingName(), "false").toString();
         syncStartup->setChecked(value == "true");
         syncStartup->show();
@@ -1050,6 +1213,8 @@ AddFinish::initializePage()
     want.toFront();
     while(want.hasNext()) {
         want.next();
+
+        if (want.key() == CloudService::Local1 && (wizard->cloudService->type() & CloudService::Calendar)) continue;
 
         QString label, value, sname=want.value();
         switch(want.key()) {

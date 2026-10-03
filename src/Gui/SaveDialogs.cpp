@@ -214,7 +214,9 @@ MainWindow::saveSilent(Context *context, RideItem *rideItem)
 void
 MainWindow::saveAllFilesSilent(Context *context)
 {
-    for (RideItem *rideItem : context->athlete->rideCache->rides()) {
+    // iterate over snapshot of rides to prevent crash by iterator invalidation
+    const QList<RideItem*> snapshot = context->athlete->rideCache->rides().toList();
+    for (RideItem *rideItem : snapshot) {
         if (rideItem->isDirty()) {
             this->saveRideSingleDialog(context, rideItem);
         }
@@ -294,7 +296,7 @@ SaveOnExitDialogWidget::SaveOnExitDialogWidget(MainWindow *mainWindow, Context *
     QVBoxLayout *mainLayout = new QVBoxLayout(this);
 
     // Warning text
-    warnText = new QLabel(tr("WARNING\n\nYou have made changes to some rides which\nhave not been saved. They are listed below."));
+    warnText = new QLabel(tr("WARNING for athlete %1\n\nYou have made changes to some rides which\nhave not been saved. They are listed below.").arg(context->athlete->cyclist));
     mainLayout->addWidget(warnText);
 
     // File List

@@ -55,7 +55,6 @@
 #include "PhysicsUtility.h"
 #include "BicycleSim.h"
 
-
 // Status settings
 #define RT_MODE_ERGO        0x0001        // load generation modes
 #define RT_MODE_SPIN        0x0002        // spinscan like modes
@@ -254,6 +253,7 @@ class TrainSidebar : public GcWindow
 
         int FTP; // current FTP / CP
         int WPRIME; // current W'
+        int TAU; // current W'bal Tau
 
         QList<DeviceConfiguration> Devices;
         QList<int> activeDevices;
@@ -267,6 +267,7 @@ class TrainSidebar : public GcWindow
         double displayDistance, displayWorkoutDistance;
         double displayLapDistance, displayLapDistanceRemaining;
         double displayLatitude, displayLongitude, displayAltitude; // geolocation
+        double displayVAM;
         double displayCoreTemp, displaySkinTemp, displayHeatStrain;
         long load;
         double slope;
@@ -282,10 +283,9 @@ class TrainSidebar : public GcWindow
 
         void maintainLapDistanceState();
 
-        // for non-zero average calcs
-        int pwrcount, cadcount, hrcount, spdcount, lodcount, grdcount; // for NZ average calc
+        RealtimeDataSession rtData;
+
         int status;
-        int displaymode;
 
         QString codeWorkoutKey;     // traindb-key of the workout in the case of a code-workout; empty otherwise
         QString codeWorkoutTitle;   // title of the workout in the case of a code-workout; empty otherwise
@@ -337,7 +337,6 @@ class TrainSidebar : public GcWindow
         QCheckBox   *recordSelector;
         QSharedPointer<QFileSystemWatcher> watcher;
         bool calibrating;
-        double wbalr, wbal;
 };
 
 class MultiDeviceDialog : public QDialog

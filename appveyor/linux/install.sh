@@ -18,7 +18,7 @@ R --version
 # D2XX - marker-gated: D2XX/.gc-d2xx-complete (written last, after the whole
 # release/ tree is extracted) means D2XX/ is populated; anything else
 # refetches, and a 403/short archive prints one WARNING instead of aborting
-# the leg under set -e (B-STAGE9-172).
+# the leg under set -e.
 D2XX_VERSION=1.4.27
 if [ ! -f D2XX/.gc-d2xx-complete ] || [ "$(cat D2XX/.gc-d2xx-complete)" != "$D2XX_VERSION" ]; then
     rm -rf D2XX D2XX.tmp
@@ -31,14 +31,14 @@ if [ ! -f D2XX/.gc-d2xx-complete ] || [ "$(cat D2XX/.gc-d2xx-complete)" != "$D2X
         && mv D2XX.tmp D2XX; then
         :
     else
-        echo "WARNING (B-STAGE9-172): D2XX archive fetch/extract failed; building without D2XX support."
+        echo "WARNING: D2XX archive fetch/extract failed; building without D2XX support."
         rm -rf D2XX.tmp
         mkdir -p D2XX
     fi
 fi
 
 # SRMIO - gated on srmio's own build artifact (.libs/libsrmio.a), not a
-# non-empty directory (B-STAGE9-178: a failed genautomake.sh/configure/make
+# non-empty directory (a failed genautomake.sh/configure/make
 # left srmio/ non-empty but unbuilt, and SAVE_CACHE_ON_ERROR cached that).
 if [ ! -f srmio/.libs/libsrmio.a ]; then
     rm -rf srmio

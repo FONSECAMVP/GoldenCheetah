@@ -102,6 +102,7 @@
         <file>images/addchart.png</file>
         <file>images/library.png</file>
         <file>images/tile-edit.png</file>
+        <file>translations/gc_en.qm</file>
         <file>translations/gc_fr.qm</file>
         <file>translations/gc_ja.qm</file>
         <file>translations/gc_it.qm</file>
@@ -128,6 +129,8 @@
         <file>images/breeze/trash-empty.svg</file>
         <file>images/breeze/edit-image-face-add.svg</file>
         <file>images/breeze/media-playlist-repeat.svg</file>
+        <file>images/breeze/document-export.svg</file>
+        <file>images/breeze/document-import.svg</file>
         <file>images/breeze/games-highscores.svg</file>
         <file>images/breeze/network-mobile-0.svg</file>
         <file>images/breeze/network-mobile-20.svg</file>
@@ -239,6 +242,7 @@
         <file>images/services/polarflow.png</file>
         <file>images/services/sporttracks.png</file>
         <file>images/services/nolio.png</file>
+        <file>images/services/tredict.png</file>
         <file>python/library.py</file>
         <file>images/devices/imagic.png</file>
         <file>data/powerprofile.csv</file>

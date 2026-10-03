@@ -75,7 +75,7 @@ Replace-InFile $gcconfig "#DEFINES \+= GC_WANT_PYTHON" "DEFINES += GC_WANT_PYTHO
 Replace-InFile $gcconfig "#PYTHONINCLUDES =" "PYTHONINCLUDES = -ICore -I`"$(python -c "import sys; print(sys.prefix)")\include`""
 Replace-InFile $gcconfig "#PYTHONLIBS =" "PYTHONLIBS = -L`"$(python -c "import sys; print(sys.prefix)")\libs`" -lpython311"
 
-# 14a. Garmin Connect Support (own embedded-CPython vars, independent of GC_WANT_PYTHON above)
+# 14a. Garmin Connect Support
 Replace-InFile $gcconfig "#DEFINES \+= GC_WANT_GARMINCONNECT" "DEFINES += GC_WANT_GARMINCONNECT"
 Replace-InFile $gcconfig "#GARMIN_PYTHONINCLUDES =" "GARMIN_PYTHONINCLUDES = -ICore -I`"$(python -c "import sys; print(sys.prefix)")\include`""
 Replace-InFile $gcconfig "#GARMIN_PYTHONLIBS =" "GARMIN_PYTHONLIBS = -L`"$(python -c "import sys; print(sys.prefix)")\libs`" -lpython311"
@@ -100,3 +100,12 @@ Replace-InFile $gcconfig "#DEFINES \+= NOMINMAX" "DEFINES += NOMINMAX"
 
 Add-Content $gcconfig "CONFIG += lex"
 Add-Content $gcconfig "CONFIG += yacc"
+
+# Skip debug info for the CI installer; each removal fails the leg if its line is missing
+function Remove-LineChecked {
+    param ([string]$File, [string]$Pattern)
+    if (-not (Select-String -Path $File -Pattern $Pattern -Quiet)) { throw "Line not found in ${File}: $Pattern" }
+    Replace-InFile $File $Pattern ""
+}
+Remove-LineChecked "src\src.pro" '^\s*CONFIG \+= force_debug_info\s*$'
+Remove-LineChecked "src\Resources\win32\GC3.9-Master-W64-QT6.nsi" '^\s*File "GoldenCheetah\.pdb"\s*$'

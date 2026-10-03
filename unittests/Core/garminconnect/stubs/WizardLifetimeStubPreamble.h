@@ -39,6 +39,7 @@
 #include <QCommandLinkButton>
 #include <QDialog>
 #include <QDir>
+#include <QGuiApplication>
 #include <QEventLoop>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -378,5 +379,22 @@ class OAuthDialog : public QDialog
     CloudService* service = nullptr;
 };
 #endif
+
+// ===========================================================================
+// CalDAVDiscovery.h (guard: _Gc_CalDAVDiscovery_h) — never executed; must link
+// ===========================================================================
+#ifndef _Gc_CalDAVDiscovery_h
+#    define _Gc_CalDAVDiscovery_h
+class CalDAVDiscovery
+{
+  public:
+    struct CalendarInfo
+    {
+        QString url;
+        QString displayName;
+    };
+    static bool discoverCalendars(CloudService*, QList<CalendarInfo>*, QString* = nullptr) { return false; }
+};
+#endif // _Gc_CalDAVDiscovery_h
 
 #endif // _GC_WIZARD_LIFETIME_STUB_PREAMBLE_H

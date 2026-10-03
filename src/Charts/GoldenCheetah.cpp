@@ -961,6 +961,7 @@ GcChartWindow::serializeChartToQTextStream(QTextStream& out) {
             if (QString(p.typeName()) == "int")      out<<"\t\t\t\""<<p.name()<<"\":\""<<p.read(this).toInt()<<"\",\n";
             if (QString(p.typeName()) == "double")   out<<"\t\t\t\""<<p.name()<<"\":\""<<p.read(this).toDouble()<<"\",\n";
             if (QString(p.typeName()) == "QDate")    out<<"\t\t\t\""<<p.name()<<"\":\""<<p.read(this).toDate().toString()<<"\",\n";
+            if (QString(p.typeName()) == "QTime")    out<<"\t\t\t\""<<p.name()<<"\":\""<<p.read(this).toTime().toString("hh:mm:ss")<<"\",\n";
             if (QString(p.typeName()) == "QString")  out<<"\t\t\t\""<<p.name()<<"\":\""<<Utils::jsonprotect(p.read(this).toString())<<"\",\n";
             if (QString(p.typeName()) == "bool")     out<<"\t\t\t\""<<p.name()<<"\":\""<<p.read(this).toBool()<<"\",\n";
             if (QString(p.typeName()) == "LTMSettings") {
@@ -1101,7 +1102,8 @@ GcChartWindow::exportChartToCloudDB()
          chart.ChartType.toInt() == GcWindowTypes::MetadataWindow ||
          chart.ChartType.toInt() == GcWindowTypes::Summary ||
          chart.ChartType.toInt() == GcWindowTypes::RideEditor ||
-         chart.ChartType.toInt() == GcWindowTypes::Diary ||
+         chart.ChartType.toInt() == GcWindowTypes::Diary || chart.ChartType.toInt() == GcWindowTypes::Calendar ||
+         chart.ChartType.toInt() == GcWindowTypes::Agenda || chart.ChartType.toInt() == GcWindowTypes::PlanAdherence ||
          chart.ChartType.toInt() == GcWindowTypes::ActivityNavigator ||
          chart.ChartType.toInt() == GcWindowTypes::DateRangeSummary ||
          chart.ChartType.toInt() == GcWindowTypes::GoogleMap ||

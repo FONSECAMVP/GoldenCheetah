@@ -31,8 +31,11 @@
 #include "TrainDB.h"
 #include "Library.h"
 #include "CloudService.h"
+#include "IconManager.h"
+#include "Seasons.h"
 
 #include <QDebug>
+#include <QUuid>
 #include <QMessageBox>
 #include <QFileDialog>
 #include <QScrollBar>
@@ -465,6 +468,25 @@ GcUpgrade::upgrade(const QDir &home)
         }
     }
 
+    // Prompt for default icons only when:
+    // none are installed and the dialog hasn't been answered,
+    // or we're upgrading from a version older than 3.8.
+    int numIcons = IconManager::instance().listIconFiles().count();
+    bool passedDefaultIconsQuestion = appsettings->value(nullptr, GC_PASSED_DIALOG_DEFAULT_ICONS, false).toBool();
+    if (numIcons == 0 && (! passedDefaultIconsQuestion || last < VERSION38_BUILD)) {
+        if (QMessageBox::question(nullptr,
+                                  tr("Download Default Icons"),
+                                  tr("Since version 3.8, GoldenCheetah supports icons for sports and subsports. The default icons are distributed separately. Would you like to download them now?<br><br>You can also download the icons later under <code>Preferences > Data Fields > Icons</code>."),
+                                  QMessageBox::Yes | QMessageBox::No,
+                                  QMessageBox::Yes) == QMessageBox::Yes) {
+            QUrl url(QString("%1/icons.zip").arg(VERSION_CONFIG_PREFIX));
+            if (! IconManager::instance().importBundle(url)) {
+                QMessageBox::warning(nullptr, tr("Icons Failed to Install"), tr("Bundle file %1 cannot be imported.").arg(url.toString()));
+            }
+        }
+        appsettings->setValue(GC_PASSED_DIALOG_DEFAULT_ICONS, true);
+    }
+
     //----------------------------------------------------------------------
     // All Version dependent Upgrade Steps are done ...
     //----------------------------------------------------------------------
@@ -814,6 +836,32 @@ GcUpgrade::upgradeLate(Context *context)
         // user can only select "Accept" to end with the upgrade step
         return 0;
 
+    }
+
+    //////////////////////////////////////////////////////////////////////////////
+    // Add unique ids to all SeasonEvents
+    // Never overwrite
+    bool idsEnriched = appsettings->cvalue(context->athlete->home->root().dirName(), GC_UPGRADE_ID_ENRICHED, false).toBool();
+    if (! idsEnriched) {
+        // Enrich SeasonEvents
+        bool seEnriched = false;
+        bool seSuccess = true;
+        QString seasonsFilename = context->athlete->home->config().canonicalPath() + "/seasons.xml";
+        QFile seasonsFile(seasonsFilename);
+        QList<Season> seasons = SeasonParser::readSeasons(&seasonsFile, &seEnriched);
+        if (seEnriched) {
+            seSuccess = SeasonParser::serialize(seasonsFilename, seasons);
+        }
+
+        // Log and set repetition prevention marker if successful
+        qDebug() << "GcUpgrade: id enrichment for athlete"
+                 << context->athlete->home->root().dirName()
+                 << "- SeasonEvents:"
+                 << "enriched" << seEnriched
+                 << "success" << seSuccess;
+        if (seSuccess) {
+            appsettings->setCValue(context->athlete->home->root().dirName(), GC_UPGRADE_ID_ENRICHED, true);
+        }
     }
 
     if (trainDB->needsUpgrade()) {

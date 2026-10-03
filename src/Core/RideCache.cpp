@@ -146,6 +146,11 @@ RideCache::RideCache(Context *context) : context(context)
     connect(rideCacheLoader, SIGNAL(finished()), this, SLOT(postLoad()));
     connect(rideCacheLoader, SIGNAL(finished()), this, SIGNAL(loadComplete()));
     rideCacheLoader->start();
+
+    saveThread_ = new QThread(this);
+    saveWorker_ = new QObject();
+    saveWorker_->moveToThread(saveThread_);
+    saveThread_->start();
 }
 
 void
@@ -184,8 +189,23 @@ RideCache::~RideCache()
 {
     exiting = true;
 
+    if (estimator) {
+        estimator->stop();
+        if (! estimator->wait(5000)) {
+            qWarning() << "Estimator did not stop in time, forcing termination.";
+            estimator->terminate();
+            estimator->wait();
+        }
+        delete estimator;
+        estimator = nullptr;
+    }
+
     // cancel any refresh that may be running
     cancel();
+
+    saveThread_->quit();
+    saveThread_->wait();
+    delete saveWorker_;
 
     // save to store
     save();
@@ -439,11 +459,107 @@ RideCache::removeRide(const QString& filenameToDelete) {
         context->notifyRideSelected(context->ride);
     }
 
+    refresh();
     // model estimates (lazy refresh)
     estimator->refresh();
 
     return true;
 }
+
+
+bool
+RideCache::removeRides
+(const QStringList &filenamesToDelete, bool triggerRefresh)
+{
+    if (filenamesToDelete.isEmpty()) {
+        return false;
+    }
+    cancel();
+
+    bool anyDeleted = false;
+    for (const QString &filenameToDelete : filenamesToDelete) {
+        if (filenameToDelete.isEmpty()) {
+            continue;
+        }
+
+        RideItem *todelete = nullptr;
+        RideItem *select = nullptr;
+        int index = 0;
+
+        for (index = 0; index < rides_.count(); index++) {
+            RideItem *rideI = rides_[index];
+            if (rideI->fileName == filenameToDelete) {
+                todelete = rideI;
+                if (context->ride == todelete) {
+                    if (rides_.count() - index > 1) {
+                        select = rides_[index + 1];
+                    } else if (index > 0) {
+                        select = rides_[index - 1];
+                    }
+                }
+                break;
+            }
+        }
+
+        if (! todelete) {
+            qDebug() << "ERROR: delete not found:" << filenameToDelete;
+            continue;
+        }
+
+        if (todelete->hasLinkedActivity()) {
+            RideItem *linkedItem = getLinkedActivity(todelete);
+            if (linkedItem) {
+                linkedItem->clearLinkedFileName();
+                QString error;
+                saveActivity(linkedItem, error);
+            }
+        }
+
+        DataProcessorFactory::instance().autoProcess(todelete->ride(), "Save", "DELETE");
+
+        model_->startRemove(index);
+        rides_.remove(index, 1);
+        delete_ << todelete;
+        model_->endRemove(index);
+
+        QFile file((todelete->planned ? plannedDirectory : directory).canonicalPath() + "/" + filenameToDelete);
+        QString strNewName = filenameToDelete + ".bak";
+        QFile::remove(context->athlete->home->fileBackup().canonicalPath() + "/" + strNewName);
+        if (! file.rename(context->athlete->home->fileBackup().canonicalPath() + "/" + strNewName)) {
+            QMessageBox::critical(NULL, "Rename Error", tr("Can't rename %1 to %2 in %3")
+                                                          .arg(filenameToDelete)
+                                                          .arg(strNewName)
+                                                          .arg(context->athlete->home->fileBackup().canonicalPath()));
+        }
+
+        QStringList extras;
+        extras << "notes" << "cpi" << "cpx";
+        for (const QString &extension : extras) {
+            QString deleteMe = QFileInfo(filenameToDelete).baseName() + "." + extension;
+            QFile::remove(context->athlete->home->cache().canonicalPath() + "/" + deleteMe);
+        }
+
+        if (select) {
+            context->mainWindow->setUpdatesEnabled(false);
+            context->ride = select;
+            context->notifyRideDeleted(todelete);
+            context->mainWindow->setUpdatesEnabled(true);
+            QApplication::processEvents();
+            context->notifyRideSelected(select);
+        } else {
+            context->notifyRideSelected(context->ride);
+        }
+
+        anyDeleted = true;
+    }
+
+    if (anyDeleted && triggerRefresh) {
+        refresh();
+        estimator->refresh();
+    }
+    return anyDeleted;
+}
+
 
 // NOTE:
 // We use a bison parser to reduce memory
@@ -522,18 +638,41 @@ RideCache::nextRefresh()
     return(returning);
 }
 
+
+RideCacheRefreshThread::RideCacheRefreshThread(RideCache *cache)
+: cache(cache)
+{
+    QPointer<RideCacheRefreshThread> weakSelf(this);
+    connect(this, &QThread::finished, cache, [weakSelf, c = QPointer<RideCache>(cache)]() {
+        if (weakSelf && c) {
+            c->cleanupThread(weakSelf.data());
+        }
+    }, Qt::QueuedConnection);
+}
+
+void
+RideCache::cleanupThread(RideCacheRefreshThread *thread)
+{
+    thread->wait();
+    delete thread;
+}
+
 void
 RideCache::threadCompleted(RideCacheRefreshThread*thread)
 {
     updateMutex.lock();
     refreshThreads.removeOne(thread);
+    bool isLast = refreshThreads.isEmpty();
+    bool cancelled = isCancelled;
     updateMutex.unlock();
 
-    if (refreshThreads.count() == 0) {
+    if (isLast && ! cancelled) {
         //fprintf(stderr,"refresh ended\n"); fflush(stderr);
         context->notifyRefreshEnd();
         garbageCollect();
-        save();
+        QMetaObject::invokeMethod(saveWorker_, [this]() {
+            save();
+        }, Qt::QueuedConnection);
     }
 }
 
@@ -555,16 +694,24 @@ void
 RideCache::cancel()
 {
     updateMutex.lock();
-    QVector<RideCacheRefreshThread*>current = refreshThreads;
-    updates=-1;
+    QVector<RideCacheRefreshThread*> current = refreshThreads;
+    updates = -1;
+    isCancelled = true;
     updateMutex.unlock();
 
     // wait till threads are empty, but use our copy as the master
     // is going to be changing as threads terminate and we need to be
     // sure all our threads have stopped before returning.
-    foreach(RideCacheRefreshThread *thread, current) {
+    for (RideCacheRefreshThread *thread : current) {
+        thread->requestInterruption();
+        disconnect(thread, &QThread::finished, nullptr, nullptr);
         thread->wait();
+        delete thread;
     }
+
+    updateMutex.lock();
+    isCancelled = false;
+    updateMutex.unlock();
 }
 
 // check if we need to refresh the metrics then start the thread if needed
@@ -1187,20 +1334,37 @@ RideCache::moveActivity
         return result;
     }
 
+    QDate originalDate = QDate::fromString(ride->getTag("Original Date", ""), "yyyy/MM/dd");
+    if (! originalDate.isValid()) {
+        ride->setTag("Original Date", oldDateTime.date().toString("yyyy/MM/dd"));
+    }
     item->setStartTime(newDateTime);
     ride->setTag("Year", newDateTime.toString("yyyy"));
     ride->setTag("Month", newDateTime.toString("MMMM"));
     ride->setTag("Weekday", newDateTime.toString("ddd"));
+    ride->setTag("Filename", newFileName);
     item->metadata_.insert("Calendar Text", GlobalContext::context()->rideMetadata->calendarText(item));
-    item->close();
 
     QString renameError;
     if (! renameRideFiles(oldFileName, newFileName, item->planned, renameError)) {
         item->dateTime = oldDateTime;
         item->fileName = oldFileName;
         result.error = tr("Failed to rename files: %1").arg(renameError);
+        item->close();
         return result;
     }
+
+    QString newPath = (item->planned ? plannedDirectory : directory).canonicalPath() + "/" + newFileName;
+    QFile outFile(newPath);
+    if (! RideFileFactory::instance().writeRideFile(context, ride, outFile, QFileInfo(newFileName).suffix())) {
+        renameRideFiles(newFileName, oldFileName, item->planned, renameError);
+        item->dateTime = oldDateTime;
+        item->fileName = oldFileName;
+        result.error = tr("Failed to save activity file after rename");
+        item->close();
+        return result;
+    }
+    item->close();
 
     int index = rides_.indexOf(item);
     if (index >= 0) {
@@ -1236,6 +1400,7 @@ RideCache::moveActivity
     if (context->ride == item) {
         context->notifyRideSelected(item);
     }
+    refresh();
     estimator->refresh();
 
     result.success = true;
@@ -1302,7 +1467,8 @@ RideCache::copyPlannedActivity
     std::sort(rides_.begin(), rides_.end(), rideCacheLessThan);
     model_->endReset();
 
-    newItem->refresh();
+    refresh();
+    estimator->refresh();
 
     result.success = true;
     result.affectedCount = 1;
@@ -1387,9 +1553,6 @@ RideCache::copyPlannedActivities
         rides_ << newItems;
         std::sort(rides_.begin(), rides_.end(), rideCacheLessThan);
         model_->endReset();
-        foreach(RideItem *item, newItems) {
-            item->refresh();
-        }
         refresh();
         estimator->refresh();
     }
@@ -1541,18 +1704,33 @@ RideCache::shiftPlannedActivities
             continue;
         }
 
+        QDate originalDate = QDate::fromString(ride->getTag("Original Date", ""), "yyyy/MM/dd");
+        if (! originalDate.isValid()) {
+            ride->setTag("Original Date", item->dateTime.date().toString("yyyy/MM/dd"));
+        }
         item->setStartTime(newDateTime);
         ride->setTag("Year", newDateTime.toString("yyyy"));
         ride->setTag("Month", newDateTime.toString("MMMM"));
         ride->setTag("Weekday", newDateTime.toString("ddd"));
+        ride->setTag("Filename", newFileName);
         item->metadata_.insert("Calendar Text", GlobalContext::context()->rideMetadata->calendarText(item));
-        item->close();
 
         QString renameError;
         if (! renameRideFiles(oldFileName, newFileName, true, renameError)) {
             failedFiles << oldFileName;
+            item->close();
             continue;
         }
+
+        QString newPath = plannedDirectory.canonicalPath() + "/" + newFileName;
+        QFile outFile(newPath);
+        if (! RideFileFactory::instance().writeRideFile(context, ride, outFile, QFileInfo(newFileName).suffix())) {
+            renameRideFiles(newFileName, oldFileName, true, renameError);
+            failedFiles << oldFileName;
+            item->close();
+            continue;
+        }
+        item->close();
         item->setFileName(plannedDirectory.canonicalPath(), newFileName);
         updateFromWorkout(item, true);
         item->isstale = true;
@@ -1770,24 +1948,28 @@ bool
 RideCache::updateFromWorkoutAfter
 (const QDate &when, bool autoSave)
 {
+    cancel();
+
     QList<RideItem*> changedItems;
-    for (RideItem *item : context->athlete->rideCache->rides()) {
-        if (item->planned && item->dateTime.date() >= when) {
-            if (context->athlete->rideCache->updateFromWorkout(item, false)) {
+    for (RideItem *item : rides()) {
+        if (   item
+            && item->planned
+            && item->dateTime.date() >= when) {
+            if (updateFromWorkout(item, false)) {
                 changedItems << item;
             }
         }
     }
-    if (changedItems.count() > 0) {
+
+    if (! changedItems.isEmpty()) {
         if (autoSave) {
             QString error;
             saveActivities(changedItems, error);
         }
-        cancel();
         refresh();
         estimator->refresh();
     }
-    return changedItems.count() > 0;
+    return ! changedItems.isEmpty();
 }
 
 
@@ -1837,9 +2019,11 @@ RideCache::copyPlannedRideFile
     }
 
     newRide->setStartTime(QDateTime(newDate, sourceItem->dateTime.time()));
+    newRide->setId(QUuid::createUuid().toString());
     newRide->setTag("Year", newDateTime.toString("yyyy"));
     newRide->setTag("Month", newDateTime.toString("MMMM"));
     newRide->setTag("Weekday", newDateTime.toString("ddd"));
+    newRide->setTag("Original Date", newDateTime.date().toString("yyyy/MM/dd"));
 
     if (! newRide->getTag("Linked Filename", "").isEmpty()) {
         newRide->removeTag("Linked Filename");
@@ -1865,26 +2049,35 @@ RideCache::copyPlannedRideFile
 // refresh metrics
 void RideCacheRefreshThread::run()
 {
-    //fprintf(stderr, "worker thread starts!\n"); fflush(stderr);
-    while (1) {
-
+    while (! isInterruptionRequested()) {
         int n = cache->nextRefresh();
         //fprintf(stderr, "refreshing %d of %d\n", n+1, cache->reverse_.count()); fflush(stderr);
-        if (n<0) {
+        if (n < 0) {
             //fprintf(stderr, "worker thread exits!\n"); fflush(stderr);
             goto exitthread;
         }
 
-        // we have one to do
-        RideItem *item = cache->reverse_[n];
-        if(item->isstale) {
+        if (isInterruptionRequested()) {
+            goto exitthread;
+        }
+
+        RideItem *item = nullptr;
+        {
+            QMutexLocker locker(&cache->updateMutex);
+            if (n < cache->reverse_.count()) {
+                item = cache->reverse_[n];
+            }
+        }
+
+        if (item && item->isstale) {
             item->refresh();
-            if (item == item->context->currentRideItem())
+            if (item == item->context->currentRideItem()) {
                 item->context->notifyRideChanged(item);
+            }
         }
     }
-
 exitthread:
-    cache->threadCompleted(this);
-    return;
+    if (cache) {
+        cache->threadCompleted(this);
+    }
 }

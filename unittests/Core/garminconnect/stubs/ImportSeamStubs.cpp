@@ -325,8 +325,6 @@ DateRange::DateRange(QDate from, QDate to, QString name, QColor color)
 {
 }
 
-GC_STUB_METAOBJECT(DateRange)
-
 DateRange& DateRange::operator=(const DateRange& other)
 {
     from = other.from;
@@ -353,6 +351,11 @@ QString kphToPace(double kph, bool metric, bool swim)
 
 // --- Specification ---------------------------------------------------------
 Specification::Specification() : it(nullptr), ri(nullptr), recintsecs(0) {}
+PlanFilter::PlanFilter(PlanFilterType type) : type(type) {}
+bool Context::isValid(Context* p)
+{
+    return p != nullptr;
+}
 
 bool Specification::pass(RideItem* item) const
 {

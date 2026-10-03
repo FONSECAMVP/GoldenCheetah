@@ -2,12 +2,14 @@
 set -ev
 
 date
+echo "cpus: $(sysctl -n hw.ncpu) memsize: $(sysctl -n hw.memsize)"
 # Don't update or cleanup
 export HOMEBREW_NO_AUTO_UPDATE=1
 export HOMEBREW_NO_INSTALL_CLEANUP=1
 
 brew install bison@2.7
 brew install gsl
+brew install ccache
 brew install libical
 brew upgrade libusb
 brew install libsamplerate
@@ -20,7 +22,7 @@ sudo installer -pkg R-4.1.1.pkg -target /
 R --version
 
 # SRMIO - gated on srmio's own build artifact (.libs/libsrmio.a), not a
-# non-empty directory (B-STAGE9-178: a failed genautomake.sh/configure/make
+# non-empty directory (a failed genautomake.sh/configure/make
 # left srmio/ non-empty but unbuilt, and SAVE_CACHE_ON_ERROR cached that).
 if [ ! -f srmio/.libs/libsrmio.a ]; then
     rm -rf srmio
@@ -38,7 +40,7 @@ cd ..
 # D2XX - marker-gated: D2XX/.gc-d2xx-complete (written last, after dylib +
 # .a + headers are all copied) means D2XX/ is populated; anything else
 # refetches, and a 403/short zip/incomplete dmg prints one WARNING instead of
-# aborting the leg under set -e (B-STAGE9-172).
+# aborting the leg under set -e.
 D2XX_VERSION=1.4.24
 if [ ! -f D2XX/.gc-d2xx-complete ] || [ "$(cat D2XX/.gc-d2xx-complete)" != "$D2XX_VERSION" ]; then
     rm -rf D2XX D2XX.tmp
@@ -57,7 +59,7 @@ if [ ! -f D2XX/.gc-d2xx-complete ] || [ "$(cat D2XX/.gc-d2xx-complete)" != "$D2X
         :
     else
         hdiutil detach D2XX.tmp/mnt -quiet 2>/dev/null || true
-        echo "WARNING (B-STAGE9-172): D2XX archive fetch/extract failed; building without D2XX support."
+        echo "WARNING: D2XX archive fetch/extract failed; building without D2XX support."
         rm -rf D2XX.tmp
         mkdir -p D2XX
     fi

@@ -5,6 +5,7 @@ branches:
   only:
     - master
     - garmin/req028-row-lifetime
+    - integrate/upstream-v3.9
 
 image:
   - Visual Studio 2022
@@ -12,7 +13,7 @@ image:
   - macos-monterey
 
 environment:
-  # DEC-089/4: stays true until the first green run (60-min hosted cap risk during resync)
+  # stays true until the first green run (60-min hosted cap risk during resync)
   APPVEYOR_SAVE_CACHE_ON_ERROR: true
   PYTHON_VERSION: "3.11"
   GC_CLOUD_OPENDATA_SECRET:
@@ -73,7 +74,6 @@ init:
       sudo update-alternatives --set gcc "/usr/bin/gcc-11"
       # Setup QT 6.8
       export QTDIR=$HOME/Qt/6.8
-      # B-STAGE9-174: the ICU libs qmake needs live in $QTDIR; match upstream's loader path.
       export LD_LIBRARY_PATH=$QTDIR:$LD_LIBRARY_PATH
       export PATH=$QTDIR/bin:$PATH
       qmake --version
@@ -85,17 +85,23 @@ init:
       qmake --version
       # Setup Xcode 14.2
       sudo xcode-select -s /Applications/Xcode-14.2.0.app
+      # ccache dir lives in the checkout so it is cached; the deadline stops the compile before the hosted cap
+      export CCACHE_DIR="${APPVEYOR_BUILD_FOLDER:-$HOME/projects/goldencheetah}/.ccache"
+      export CCACHE_MAXSIZE=600M
+      export CCACHE_COMPRESS=1
+      export GC_COMPILE_DEADLINE=$(( $(date +%s) + 3060 ))
     fi
 
 cache:
-- C:\LIBS -> appveyor.yml
+- C:\LIBS
 - C:\JOM
-- C:\R -> appveyor.yml
-- C:\Python -> src\Python\requirements.txt, appveyor.yml
+- C:\R
+- C:\Python -> src\Python\requirements.txt
 - c:\tools\vcpkg\installed\
-# DEC-089/4: drop the appveyor.yml dependency on srmio; qwt caches the built lib only, content-keyed (B-STAGE9-186).
+# drop the appveyor.yml dependency on srmio; qwt caches the built lib only, content-keyed.
 - qwt/lib
 - srmio
+- .ccache
 - D2XX
 - src\Python\SIP\release\sip_lib.lib -> src\Python\SIP\goldencheetah.sip
 - src\Python\SIP\libsip_lib.a -> src\Python\SIP\goldencheetah.sip
@@ -127,44 +133,58 @@ before_build:
 - sh: lupdate src/src.pro
 
 # Patch Secrets.h (Windows / Linux / macOS)
-# util/add_secrets.ps1 does not exist on this branch (still pre-a1247996d); inlined
-# here to match its upstream replacement set exactly.
-- ps: (Get-Content src\Core\Secrets.h) -replace 'OPENDATA_DISABLE', 'OPENDATA_ENABLE' | Set-Content src\Core\Secrets.h
-- ps: (Get-Content src\Core\Secrets.h) -replace '__GC_CLOUD_OPENDATA_SECRET__', $env:GC_CLOUD_OPENDATA_SECRET | Set-Content src\Core\Secrets.h
-- ps: (Get-Content src\Core\Secrets.h) -replace '__GC_NOKIA_CLIENT_SECRET__', $env:GC_NOKIA_CLIENT_SECRET | Set-Content src\Core\Secrets.h
-- ps: (Get-Content src\Core\Secrets.h) -replace '__GC_DROPBOX_CLIENT_SECRET__', $env:GC_DROPBOX_CLIENT_SECRET | Set-Content src\Core\Secrets.h
-- ps: (Get-Content src\Core\Secrets.h) -replace '__GC_STRAVA_CLIENT_SECRET__', $env:GC_STRAVA_CLIENT_SECRET | Set-Content src\Core\Secrets.h
-- ps: (Get-Content src\Core\Secrets.h) -replace '__GC_CYCLINGANALYTICS_CLIENT_SECRET__', $env:GC_CYCLINGANALYTICS_CLIENT_SECRET | Set-Content src\Core\Secrets.h
-- ps: (Get-Content src\Core\Secrets.h) -replace '__GC_CLOUD_DB_BASIC_AUTH__', $env:GC_CLOUD_DB_BASIC_AUTH | Set-Content src\Core\Secrets.h
-- ps: (Get-Content src\Core\Secrets.h) -replace '__GC_CLOUD_DB_APP_NAME__', $env:GC_CLOUD_DB_APP_NAME | Set-Content src\Core\Secrets.h
-- ps: (Get-Content src\Core\Secrets.h) -replace '__GC_POLARFLOW_CLIENT_SECRET__', $env:GC_POLARFLOW_CLIENT_SECRET | Set-Content src\Core\Secrets.h
-- ps: (Get-Content src\Core\Secrets.h) -replace '__GC_SPORTTRACKS_CLIENT_SECRET__', $env:GC_SPORTTRACKS_CLIENT_SECRET | Set-Content src\Core\Secrets.h
-- ps: (Get-Content src\Core\Secrets.h) -replace '__GC_RWGPS_API_KEY__', $env:GC_RWGPS_API_KEY | Set-Content src\Core\Secrets.h
-- ps: (Get-Content src\Core\Secrets.h) -replace '__GC_NOLIO_CLIENT_ID__', $env:GC_NOLIO_CLIENT_ID | Set-Content src\Core\Secrets.h
-- ps: (Get-Content src\Core\Secrets.h) -replace '__GC_NOLIO_SECRET__', $env:GC_NOLIO_SECRET | Set-Content src\Core\Secrets.h
-- ps: (Get-Content src\Core\Secrets.h) -replace '__GC_XERT_CLIENT_SECRET__', $env:GC_XERT_CLIENT_SECRET | Set-Content src\Core\Secrets.h
-- ps: (Get-Content src\Core\Secrets.h) -replace '__GC_AZUM_CLIENT_SECRET__', $env:GC_AZUM_CLIENT_SECRET | Set-Content src\Core\Secrets.h
-- ps: (Get-Content src\Core\Secrets.h) -replace '__GC_TRAINERDAY_API_KEY__', $env:GC_TRAINERDAY_API_KEY | Set-Content src\Core\Secrets.h
+- ps: util/add_secrets.ps1
 
 build_script:
 
 # Windows
 - cmd: qmake.exe build.pro -r -spec win32-msvc
-# DEC-089/5: cold Qwt is built then the step fails by exit /b so it is cache-saved.
-- cmd: if not exist qwt\lib\qwt.lib (jom -j1 sub-qwt && echo DEC-089/5 Qwt cache priming complete; intentional failure, re-run for the real build & exit /b 1)
+# cold Qwt is built then the step fails by exit /b so it is cache-saved.
+- cmd: if not exist qwt\lib\qwt.lib (jom -j1 sub-qwt && echo Qwt cache priming complete; intentional failure, re-run for the real build & exit /b 1)
 - cmd: jom -j2 sub-src
 
 # Linux / macOS
-- sh: qmake build.pro -r QMAKE_CXXFLAGS_WARN_ON+="-Wno-unused-private-field -Wno-c++11-narrowing -Wno-deprecated-declarations -Wno-deprecated-register -Wno-nullability-completeness -Wno-sign-compare -Wno-inconsistent-missing-override" QMAKE_CFLAGS_WARN_ON+="-Wno-deprecated-declarations -Wno-sign-compare"
-# DEC-089/5: fail on purpose after a cold Qwt build so it is cache-saved; never shell `exit` (ends the session before cache save, B-STAGE9-185).
+- sh: |-
+    if $CI_LINUX; then
+      qmake build.pro -r QMAKE_CXXFLAGS_WARN_ON+="-Wno-unused-private-field -Wno-c++11-narrowing -Wno-deprecated-declarations -Wno-deprecated-register -Wno-nullability-completeness -Wno-sign-compare -Wno-inconsistent-missing-override" QMAKE_CFLAGS_WARN_ON+="-Wno-deprecated-declarations -Wno-sign-compare"
+    else
+      qmake build.pro -r QMAKE_CC="ccache clang" QMAKE_CXX="ccache clang++" QMAKE_CXXFLAGS_WARN_ON+="-Wno-unused-private-field -Wno-c++11-narrowing -Wno-deprecated-declarations -Wno-deprecated-register -Wno-nullability-completeness -Wno-sign-compare -Wno-inconsistent-missing-override" QMAKE_CFLAGS_WARN_ON+="-Wno-deprecated-declarations -Wno-sign-compare"
+    fi
+# fail on purpose after a cold Qwt build so it is cache-saved; never shell `exit` (ends the session before cache save).
 - sh: >-
     if test ! -f qwt/lib/libqwt.a; then
       make -j2 sub-qwt && {
-        echo "DEC-089/5: Qwt/SRMIO cache priming complete; intentional failure, re-run for the real build";
+        echo "Qwt/SRMIO cache priming complete; intentional failure, re-run for the real build";
         false;
       };
     fi
-- sh: make -j2 sub-src
+# macOS stops the whole make process group at the deadline and fails by status so the cache is saved
+- sh: |-
+    if $CI_LINUX; then
+      make -j2 sub-src
+    else
+      set -m
+      make -j2 sub-src &
+      GC_MAKE_PID=$!
+      set +m
+      GC_TIMED_OUT=0
+      while kill -0 $GC_MAKE_PID 2>/dev/null; do
+        if [ "$(date +%s)" -ge "$GC_COMPILE_DEADLINE" ]; then
+          GC_TIMED_OUT=1
+          echo "Compile time box reached; stopping make so the ccache is saved, re-run to continue"
+          kill -TERM -- -$GC_MAKE_PID
+          GC_GRACE=0
+          while kill -0 -- -$GC_MAKE_PID 2>/dev/null && [ "$GC_GRACE" -lt 10 ]; do sleep 1; GC_GRACE=$((GC_GRACE + 1)); done
+          kill -KILL -- -$GC_MAKE_PID 2>/dev/null || true
+          break
+        fi
+        sleep 5
+      done
+      GC_MAKE_RC=0
+      wait $GC_MAKE_PID || GC_MAKE_RC=$?
+      ccache -s
+      [ "$GC_TIMED_OUT" -eq 0 ] && [ "$GC_MAKE_RC" -eq 0 ]
+    fi
 
 after_build:
 
@@ -183,31 +203,30 @@ test_script:
 # Windows
 - cmd: src\release\GoldenCheetah --version 2>GCversionWindows.txt
 - cmd: git log -1 >> GCversionWindows.txt
-- ps: if ($isWindows) { CertUtil -hashfile GoldenCheetah_v3.8_x64.exe sha256 | Select-Object -First 2 | Add-Content GCversionWindows.txt }
+- ps: if ($isWindows) { CertUtil -hashfile GoldenCheetah_v3.9_x64.exe sha256 | Select-Object -First 2 | Add-Content GCversionWindows.txt }
 - cmd: type GCversionWindows.txt
-# DEC-069
-- cmd: 7z x -y GoldenCheetah_v3.8_x64.exe -ogcwin-installroot || exit 1
+- cmd: 7z x -y GoldenCheetah_v3.9_x64.exe -ogcwin-installroot || exit 1
 - cmd: gcwin-installroot\python.exe -I -s -c "import gc_garmin_adapter.garmin_client as m, os, sys; r = os.path.realpath('gcwin-installroot') + os.sep; ok = os.path.realpath(m.__file__).startswith(r) and m._gc is not None and m._gc.__name__ == 'garminconnect' and os.path.realpath(m._gc.__file__).startswith(r) and callable(m._gc.Garmin) and all(isinstance(x := getattr(m._gc.exceptions, e), type) and issubclass(x, BaseException) for e in ('GarminConnectAuthenticationError', 'GarminConnectConnectionError', 'GarminConnectTooManyRequestsError')); sys.exit(0 if ok else 1)" || exit 1
 - cmd: rmdir /s /q gcwin-installroot || exit 1
 
 # Linux / macOS
 - sh: >-
     if $CI_LINUX; then
-      ./GoldenCheetah_v3.8_x64.AppImage --version 2>GCversionLinux.txt
-      ./GoldenCheetah_v3.8_x64.AppImage --appimage-extract || exit 1
+      ./GoldenCheetah_v3.9_x64.AppImage --version 2>GCversionLinux.txt
+      ./GoldenCheetah_v3.9_x64.AppImage --appimage-extract || exit 1
       env -u PYTHONPATH -u PYTHONHOME -u PYTHONUSERBASE ./squashfs-root/usr/bin/python3 -I -s -c 'import gc_garmin_adapter.garmin_client as m, os, sys; r = os.path.realpath("squashfs-root") + os.sep; ok = os.path.realpath(m.__file__).startswith(r) and m._gc is not None and m._gc.__name__ == "garminconnect" and os.path.realpath(m._gc.__file__).startswith(r) and callable(m._gc.Garmin) and all(isinstance(x := getattr(m._gc.exceptions, e), type) and issubclass(x, BaseException) for e in ("GarminConnectAuthenticationError", "GarminConnectConnectionError", "GarminConnectTooManyRequestsError")); sys.exit(0 if ok else 1)' || exit 1
       rm -rf squashfs-root || exit 1
       git log -1 >> GCversionLinux.txt
-      shasum -a 256 GoldenCheetah_v3.8_x64.AppImage | cut -f 1 -d ' '  >> GCversionLinux.txt
+      shasum -a 256 GoldenCheetah_v3.9_x64.AppImage | cut -f 1 -d ' '  >> GCversionLinux.txt
       cat GCversionLinux.txt
     else
       src/GoldenCheetah.app/Contents/MacOS/GoldenCheetah --version 2>GCversionMacOS.txt
       git log -1 >> GCversionMacOS.txt
-      shasum -a 256 GoldenCheetah_v3.8_x64.dmg | cut -f 1 -d ' ' >> GCversionMacOS.txt
+      shasum -a 256 GoldenCheetah_v3.9_x64.dmg | cut -f 1 -d ' ' >> GCversionMacOS.txt
       cat GCversionMacOS.txt
       GC_MNT="$(/bin/pwd -P)/gcmacos-installroot"
       mkdir -p "$GC_MNT"
-      if hdiutil attach GoldenCheetah_v3.8_x64.dmg -nobrowse -readonly -noautoopen -mountpoint "$GC_MNT"; then
+      if hdiutil attach GoldenCheetah_v3.9_x64.dmg -nobrowse -readonly -noautoopen -mountpoint "$GC_MNT"; then
         ls "$GC_MNT" || true
         GC_PY_RC=0
         GC_PYS=$(find "$GC_MNT" -type f -path "*/Python.framework/Versions/$PYTHON_VERSION/bin/python$PYTHON_VERSION" 2>/dev/null) || true
@@ -215,7 +234,7 @@ test_script:
         if [ "$GC_PY_N" -eq 1 ]; then
           "$GC_PYS" -I -s -c 'import gc_garmin_adapter.garmin_client as m, os, sys; r = os.path.realpath("gcmacos-installroot") + os.sep; ok = os.path.realpath(m.__file__).startswith(r) and m._gc is not None and m._gc.__name__ == "garminconnect" and os.path.realpath(m._gc.__file__).startswith(r) and callable(m._gc.Garmin) and all(isinstance(x := getattr(m._gc.exceptions, e), type) and issubclass(x, BaseException) for e in ("GarminConnectAuthenticationError", "GarminConnectConnectionError", "GarminConnectTooManyRequestsError")); sys.exit(0 if ok else 1)' || GC_PY_RC=$?
         else
-          echo "DEC-069: expected exactly one bundled python$PYTHON_VERSION in the DMG, found $GC_PY_N"; GC_PY_RC=1
+          echo "expected exactly one bundled python$PYTHON_VERSION in the DMG, found $GC_PY_N"; GC_PY_RC=1
         fi
         GC_DET_RC=0
         hdiutil detach "$GC_MNT" -quiet || hdiutil detach "$GC_MNT" -force || GC_DET_RC=1
@@ -227,17 +246,17 @@ test_script:
 
 artifacts:
 # Windows
-- path: GoldenCheetah_v3.8_x64.exe
+- path: GoldenCheetah_v3.9_x64.exe
   name: GCwindowsInstaller
 - path: GCversionWindows.txt
   name: GCversionWindows
 # macOS
-- path: GoldenCheetah_v3.8_x64.dmg
+- path: GoldenCheetah_v3.9_x64.dmg
   name: GCmacOSpackage
 - path: GCversionMacOS.txt
   name: GCversionMacOS
 # Linux
-- path: GoldenCheetah_v3.8_x64.AppImage
+- path: GoldenCheetah_v3.9_x64.AppImage
   name: GClinuxAppImage
 - path: GCversionLinux.txt
   name: GCversionLinux

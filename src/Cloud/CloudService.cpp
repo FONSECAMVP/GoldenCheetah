@@ -463,6 +463,10 @@ CloudService::newCloudServiceEntry()
 bool
 CloudService::upload(QWidget *parent, Context *context, CloudService *store, RideItem *item)
 {
+    if (item->planned) {
+        QMessageBox::critical(parent, tr("Upload"), tr("Planned activity upload is not supported"));
+        return false;
+    }
 
     // DEC-garmin-029 (A3-R027-F1) - HEAP + WA_DeleteOnClose + two-phase init,
     // the lifetime contract DEC-026/027 already gave the sync dialog.
@@ -2070,8 +2074,8 @@ CloudServiceSyncDialog::refreshClicked()
     // returns immediately unless a suspension is actually in force.
     restoreListSorting();
 
-    double distanceFactor = GlobalContext().useMetricUnits ? 1.0 : MILES_PER_KM;
-    QString distanceUnits = GlobalContext().useMetricUnits ? tr("km") : tr("mi");
+    double distanceFactor = GlobalContext::context()->useMetricUnits ? 1.0 : MILES_PER_KM;
+    QString distanceUnits = GlobalContext::context()->useMetricUnits ? tr("km") : tr("mi");
 
     progressLabel->setText(tr(""));
     progressBar->setMinimum(0);
@@ -4129,6 +4133,10 @@ CloudServiceAutoDownload::checkDownload()
 void
 CloudServiceAutoDownload::run()
 {
+    // There are cases when athletes are opened and closed in quick succession that lead
+    // to the context becoming invalid, so we need to protect all uses of context.
+    if (!Context::isValid(context)) exit(0);
+
     // this is a separate thread and can run in parallel with the main gui
     // so we can loop through services and download the data needed.
     // we notify the main gui via the usual signals.
@@ -4140,6 +4148,7 @@ CloudServiceAutoDownload::run()
     // get a list of services to sync from
     QStringList worklist;
     foreach(QString name, CloudServiceFactory::instance().serviceNames()) {
+        if (!Context::isValid(context)) exit(0);
         if (appsettings->cvalue(context->athlete->cyclist, CloudServiceFactory::instance().service(name)->syncOnStartupSettingName(), "false").toString() == "true") {
             worklist << name;
         }
@@ -4151,13 +4160,14 @@ CloudServiceAutoDownload::run()
     if (worklist.count()) {
 
         // Start means we are looking for downloads to do
-        context->notifyAutoDownloadStart();
+        if (Context::isValid(context)) context->notifyAutoDownloadStart();
 
         // workthrough
         for(int i=0; i<worklist.count(); i++) {
 
             // instantiate
-            CloudService *service = CloudServiceFactory::instance().newService(worklist[i], context);
+            CloudService *service = (Context::isValid(context)) ? CloudServiceFactory::instance().newService(worklist[i], context) : nullptr;
+            if (service == nullptr) continue;
 
             // DEC-043 - extends DEC-040 Stage 2's CancelToken onto auto-
             // download's own worklist services, so Athlete::close()'s
@@ -4249,7 +4259,9 @@ CloudServiceAutoDownload::run()
 
                 Specification specification;
                 specification.setDateRange(DateRange(now.addDays(-30).date(), now.date()));
-                foreach(RideItem *item, context->athlete->rideCache->rides()) {
+
+                QVector<RideItem*> rides = (Context::isValid(context)) ? context->athlete->rideCache->rides() : QVector<RideItem*> {};
+                foreach(RideItem *item, rides) {
                     if (specification.pass(item))
                         rideFiles << QFileInfo(item->fileName).baseName().mid(0,16);
                 }
@@ -4321,7 +4333,7 @@ CloudServiceAutoDownload::run()
     for(int i=0; i<downloadlist.count(); i++) {
 
         // update progress indicator
-        context->notifyAutoDownloadProgress(downloadlist[i].provider->uiName(), progress, i, downloadlist.count());
+        if (Context::isValid(context)) context->notifyAutoDownloadProgress(downloadlist[i].provider->uiName(), progress, i, downloadlist.count());
 
         CloudServiceDownloadEntry download= downloadlist[i];
 
@@ -4349,14 +4361,16 @@ CloudServiceAutoDownload::run()
         progress += inc;
 
         // if last one we need to signal done.
-        if ((i+1) == downloadlist.count()) context->notifyAutoDownloadProgress(download.provider->uiName(), progress, i+1, downloadlist.count());
+        if ((i+1) == downloadlist.count()) {
+            if (Context::isValid(context)) context->notifyAutoDownloadProgress(download.provider->uiName(), progress, i+1, downloadlist.count());
+        }
     }
 
     // time to see completion
     sleep(3);
 
     // all done, close the sync notification, regardless of if anything was downloaded
-    context->notifyAutoDownloadEnd();
+    if (Context::isValid(context)) context->notifyAutoDownloadEnd();
 
     // remove providers
     foreach(CloudService *s, providers) {
@@ -4472,7 +4486,7 @@ CloudServiceAutoDownload::readComplete(QByteArray*data,QString name,QString)
                            .arg ( ridedatetime.time().minute(), 2, 10, zero )
                            .arg ( ridedatetime.time().second(), 2, 10, zero );
 
-    QString filename = context->athlete->home->activities().canonicalPath() + "/" + targetnosuffix + ".json";
+    QString filename = (Context::isValid(context)) ? context->athlete->home->activities().canonicalPath() + "/" + targetnosuffix + ".json" : "";
 
     // exists? -- totally should never happen unless readdir timestamp mismatches actual ride
     //            could happen if same file available at two services XXX should check above... XXX
@@ -4500,7 +4514,7 @@ CloudServiceAutoDownload::readComplete(QByteArray*data,QString name,QString)
     delete ride;
 
     // add to the ride list -- but don't select it
-    context->athlete->addRide(fileinfo.fileName(), true, false);
+    if (Context::isValid(context)) context->athlete->addRide(fileinfo.fileName(), true, false);
 
     entry.provider->rideRegistrationCompleted(name); // DEC-080, B-STAGE9-111
 }

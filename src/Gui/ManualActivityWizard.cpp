@@ -111,6 +111,9 @@ ManualActivityWizard::done
         rideFile.setRecIntSecs(0.00);
         rideFile.setDeviceType("Manual");
         rideFile.setFileFormat("GoldenCheetah Json");
+        if (plan) {
+            rideFile.setTag("Original Date", field("activityDate").toDate().toString("yyyy/MM/dd"));
+        }
 
         field2TagString(rideFile, "sport", "Sport");
         field2TagString(rideFile, "subSport", "SubSport");
@@ -300,9 +303,7 @@ ManualActivityPageBasics::ManualActivityPageBasics
     woTypeEdit->addItem(tr("Manual Entry"));
     woTypeEdit->setCurrentIndex(1);
     if (plan) {
-
         connect(woTypeEdit, &QComboBox::currentIndexChanged, this, [sportEdit](int index) {
-
             sportEdit->setEnabled(index != 0);
             if (index == 0) {
                 sportEdit->setText("Bike");
@@ -328,8 +329,6 @@ ManualActivityPageBasics::ManualActivityPageBasics
         }
     }
 
-    workoutCodeLabel->setVisible(! plan);
-    workoutCodeEdit->setVisible(! plan);
     rpeLabel->setVisible(! plan);
     rpeEdit->setVisible(! plan);
     woTypeLabel->setVisible(plan);

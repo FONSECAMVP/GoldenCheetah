@@ -36,7 +36,13 @@
 #include "CalendarData.h"
 #include "TimeUtils.h"
 #include "Measures.h"
+#include "CalendarSync.h"
 
+
+struct DateRangeDesc {
+    bool isSeason = false;
+    bool canHavePhasesOrEvents = false;
+};
 
 class CalendarOverview : public QCalendarWidget {
     Q_OBJECT
@@ -64,7 +70,7 @@ class CalendarBaseTable : public QTableWidget {
     Q_OBJECT
 
 public:
-    explicit CalendarBaseTable(QWidget *parent = nullptr);
+    explicit CalendarBaseTable(CloudCalendarLister const * const cloudCalendarLister = nullptr, QWidget *parent = nullptr);
 
 signals:
     void showInTrainMode(CalendarEntry ctivity);
@@ -79,7 +85,10 @@ signals:
     void delActivity(CalendarEntry activity);
     void saveChanges(CalendarEntry activity);
     void discardChanges(CalendarEntry activity);
-    void repeatSchedule(QDate day);
+    void repeatPlan(QDate day);
+    void exportPlan(CalendarEntry entry);
+    void exportPlan();
+    void importPlan(QDate day);
     void insertRestday(QDate day);
     void delRestday(QDate day);
     void addEvent(QDate date);
@@ -88,9 +97,14 @@ signals:
     void addPhase(QDate date);
     void editPhase(CalendarEntry entry);
     void delPhase(CalendarEntry entry);
+    void syncToRemote(QString cloudServiceName, CalendarEntry entry);
+    void syncToRemote(QString cloudServiceName);
 
 protected:
-    QMenu *buildContextMenu(const CalendarDay &day, CalendarEntry const * const entryPtr, const QTime &time, bool canHavePhasesEvents);
+    QMenu *buildContextMenu(const CalendarDay &day, CalendarEntry const * const entryPtr, const QTime &time, bool isInDateRange, const DateRangeDesc &drDesc);
+
+private:
+    CloudCalendarLister const * const cloudCalendarLister;
 };
 
 
@@ -104,7 +118,7 @@ class CalendarDayTable : public CalendarBaseTable {
     Q_OBJECT
 
 public:
-    explicit CalendarDayTable(const QDate &date, CalendarDayTableType type = CalendarDayTableType::Day, Qt::DayOfWeek firstDayOfWeek = Qt::Monday, QWidget *parent = nullptr);
+    explicit CalendarDayTable(const QDate &date, CalendarDayTableType type = CalendarDayTableType::Day, Qt::DayOfWeek firstDayOfWeek = Qt::Monday, CloudCalendarLister const * const cloudCalendarLister = nullptr, QWidget *parent = nullptr);
 
     bool setDay(const QDate &date);
     QDate firstVisibleDay() const;
@@ -114,7 +128,7 @@ public:
     QDate selectedDate() const;
     bool isInDateRange(const QDate &date) const;
     void fillEntries(const QHash<QDate, QList<CalendarEntry>> &activityEntries, const QList<CalendarSummary> &summaries, const QHash<QDate, QList<CalendarEntry>> &headlineEntries);
-    void limitDateRange(const DateRange &dr, bool canHavePhasesOrEvents = false);
+    void limitDateRange(const DateRange &dr, const DateRangeDesc &drDesc);
     void setFirstDayOfWeek(Qt::DayOfWeek firstDayOfWeek);
     void setStartHour(int hour);
     void setEndHour(int hour);
@@ -145,7 +159,7 @@ private:
     Qt::DayOfWeek firstDayOfWeek = Qt::Monday;
     QDate date;
     DateRange dr;
-    bool canHavePhasesOrEvents = false;
+    DateRangeDesc drDesc;
     CalendarDayTableType type;
     int defaultStartHour = 8;
     int defaultEndHour = 21;
@@ -172,8 +186,8 @@ public:
         DateRole = Qt::UserRole + 1000 // [QDate] Date of cell
     };
 
-    explicit CalendarMonthTable(Qt::DayOfWeek firstDayOfWeek = Qt::Monday, QWidget *parent = nullptr);
-    explicit CalendarMonthTable(const QDate &dateInMonth, Qt::DayOfWeek firstDayOfWeek = Qt::Monday, QWidget *parent = nullptr);
+    explicit CalendarMonthTable(Qt::DayOfWeek firstDayOfWeek = Qt::Monday, CloudCalendarLister const * const cloudCalendarLister = nullptr, QWidget *parent = nullptr);
+    explicit CalendarMonthTable(const QDate &dateInMonth, Qt::DayOfWeek firstDayOfWeek = Qt::Monday, CloudCalendarLister const * const cloudCalendarLister = nullptr, QWidget *parent = nullptr);
 
     bool selectDay(const QDate &day);
     bool setMonth(const QDate &dateInMonth, bool allowKeepMonth = false);
@@ -183,7 +197,7 @@ public:
     QDate firstVisibleDay() const;
     QDate lastVisibleDay() const;
     QDate selectedDate() const;
-    void limitDateRange(const DateRange &dr, bool allowKeepMonth = false, bool canHavePhasesOrEvents = false);
+    void limitDateRange(const DateRange &dr, bool allowKeepMonth = false, const DateRangeDesc &drDesc = { false, false });
     void setFirstDayOfWeek(Qt::DayOfWeek firstDayOfWeek);
 
 signals:
@@ -223,7 +237,7 @@ private:
     QDate endDate; // last visible date
     QDate currentDate; // currently selected date
     DateRange dr;
-    bool canHavePhasesOrEvents = false;
+    DateRangeDesc drDesc;
 
     QTimer dragTimer;
     QPoint pressedPos;
@@ -246,15 +260,16 @@ class CalendarDayView : public QWidget {
     Q_OBJECT
 
 public:
-    explicit CalendarDayView(const QDate &date, Measures * const athleteMeasures = nullptr, QWidget *parent = nullptr);
+    explicit CalendarDayView(const QDate &date, Measures * const athleteMeasures = nullptr, CloudCalendarLister const * const cloudCalendarLister = nullptr, QWidget *parent = nullptr);
 
     bool setDay(const QDate &date);
     void setFirstDayOfWeek(Qt::DayOfWeek firstDayOfWeek);
+    void setMeasureTime(QTime time);
     void setStartHour(int hour);
     void setEndHour(int hour);
     void setSummaryVisible(bool visible);
     void fillEntries(const QHash<QDate, QList<CalendarEntry>> &activityEntries, const QList<CalendarSummary> &summaries, const QHash<QDate, QList<CalendarEntry>> &headlineEntries);
-    void limitDateRange(const DateRange &dr, bool canHavePhasesOrEvents = false);
+    void limitDateRange(const DateRange &dr, const DateRangeDesc &drDesc);
     QDate firstVisibleDay() const;
     QDate lastVisibleDay() const;
     QDate selectedDate() const;
@@ -276,7 +291,10 @@ signals:
     void delActivity(CalendarEntry activity);
     void saveChanges(CalendarEntry activity);
     void discardChanges(CalendarEntry activity);
-    void repeatSchedule(QDate day);
+    void repeatPlan(QDate day);
+    void exportPlan(CalendarEntry entry);
+    void exportPlan();
+    void importPlan(QDate day);
     void insertRestday(QDate day);
     void delRestday(QDate day);
     void addEvent(QDate date);
@@ -285,12 +303,15 @@ signals:
     void addPhase(QDate date);
     void editPhase(CalendarEntry entry);
     void delPhase(CalendarEntry entry);
+    void syncToRemote(QString cloudServiceName, CalendarEntry entry);
+    void syncToRemote(QString cloudServiceName);
 
 private:
     Measures * const athleteMeasures;
     CalendarOverview *dayDateSelector;
     QTabWidget *measureTabs;
     CalendarDayTable *dayTable;
+    QTime measureTime;
 
     bool measureDialog(const QDateTime &when, MeasuresGroup * const measuresGroup, bool update);
     void updateMeasures(const QDate &date);
@@ -301,7 +322,7 @@ class CalendarWeekView : public QWidget {
     Q_OBJECT
 
 public:
-    explicit CalendarWeekView(const QDate &date, QWidget *parent = nullptr);
+    explicit CalendarWeekView(const QDate &date, CloudCalendarLister const * const cloudCalendarLister = nullptr, QWidget *parent = nullptr);
 
     bool setDay(const QDate &date);
     void setFirstDayOfWeek(Qt::DayOfWeek firstDayOfWeek);
@@ -309,7 +330,7 @@ public:
     void setEndHour(int hour);
     void setSummaryVisible(bool visible);
     void fillEntries(const QHash<QDate, QList<CalendarEntry>> &activityEntries, const QList<CalendarSummary> &summaries, const QHash<QDate, QList<CalendarEntry>> &headlineEntries);
-    void limitDateRange(const DateRange &dr, bool canHavePhasesOrEvents = false);
+    void limitDateRange(const DateRange &dr, const DateRangeDesc &drDesc);
     QDate firstVisibleDay() const;
     QDate firstVisibleDay(const QDate &date) const;
     QDate lastVisibleDay() const;
@@ -332,7 +353,10 @@ signals:
     void delActivity(CalendarEntry activity);
     void saveChanges(CalendarEntry activity);
     void discardChanges(CalendarEntry activity);
-    void repeatSchedule(QDate day);
+    void repeatPlan(QDate day);
+    void exportPlan(CalendarEntry entry);
+    void exportPlan();
+    void importPlan(QDate day);
     void insertRestday(QDate day);
     void delRestday(QDate day);
     void addEvent(QDate date);
@@ -341,6 +365,8 @@ signals:
     void addPhase(QDate date);
     void editPhase(CalendarEntry entry);
     void delPhase(CalendarEntry entry);
+    void syncToRemote(QString cloudServiceName, CalendarEntry entry);
+    void syncToRemote(QString cloudServiceName);
 
 private:
     CalendarDayTable *weekTable;
@@ -351,7 +377,7 @@ class Calendar : public QWidget {
     Q_OBJECT
 
 public:
-    explicit Calendar(const QDate &dateInMonth, Qt::DayOfWeek firstDayOfWeek = Qt::Monday, Measures * const athleteMeasures = nullptr, QWidget *parent = nullptr);
+    explicit Calendar(const QDate &dateInMonth, Qt::DayOfWeek firstDayOfWeek = Qt::Monday, Measures * const athleteMeasures = nullptr, CloudCalendarLister const * const cloudCalendarLister = nullptr, QWidget *parent = nullptr);
 
     void setDate(const QDate &dateInMonth, bool allowKeepMonth = false);
     void fillEntries(const QHash<QDate, QList<CalendarEntry>> &activityEntries, const QList<CalendarSummary> &summaries, const QHash<QDate, QList<CalendarEntry>> &headlineEntries, bool isFiltered);
@@ -369,8 +395,9 @@ public:
 
 public slots:
     void setView(CalendarView view);
-    void activateDateRange(const DateRange &dr, bool allowKeepMonth = false, bool canHavePhasesOrEvents = false);
+    void activateDateRange(const DateRange &dr, bool allowKeepMonth = false, const DateRangeDesc &drDesc = { false, false });
     void setFirstDayOfWeek(Qt::DayOfWeek firstDayOfWeek);
+    void setMeasureTime(QTime time);
     void setStartHour(int hour);
     void setEndHour(int hour);
     void setSummaryDayVisible(bool visible);
@@ -401,7 +428,10 @@ signals:
     void delActivity(CalendarEntry activity);
     void saveChanges(CalendarEntry activity);
     void discardChanges(CalendarEntry activity);
-    void repeatSchedule(QDate day);
+    void repeatPlan(QDate day);
+    void exportPlan(CalendarEntry entry);
+    void exportPlan();
+    void importPlan(QDate day);
     void insertRestday(QDate day);
     void delRestday(QDate day);
     void addEvent(QDate date);
@@ -410,6 +440,8 @@ signals:
     void addPhase(QDate date);
     void editPhase(CalendarEntry entry);
     void delPhase(CalendarEntry entry);
+    void syncToRemote(QString cloudServiceName, CalendarEntry entry);
+    void syncToRemote(QString cloudServiceName);
 
 private:
     QToolBar *toolbar;

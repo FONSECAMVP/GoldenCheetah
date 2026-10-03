@@ -32,6 +32,7 @@
 #include "Season.h"
 #include "Calendar.h"
 #include "CalendarData.h"
+#include "CalendarSync.h"
 
 
 struct LinkEntry {
@@ -71,14 +72,17 @@ class LinkDialog : public QDialog
 };
 
 
-class CalendarWindow : public GcChartWindow
+class CalendarWindow : public GcChartWindow, public CloudCalendarLister
 {
     Q_OBJECT
 
     Q_PROPERTY(int defaultView READ getDefaultView WRITE setDefaultView USER true)
     Q_PROPERTY(int firstDayOfWeek READ getFirstDayOfWeek WRITE setFirstDayOfWeek USER true)
+    Q_PROPERTY(QTime measureTime READ getMeasureTime WRITE setMeasureTime USER true)
     Q_PROPERTY(int startHour READ getStartHour WRITE setStartHour USER true)
     Q_PROPERTY(int endHour READ getEndHour WRITE setEndHour USER true)
+    Q_PROPERTY(int minVisibleMins READ getMinVisibleMins WRITE setMinVisibleMins USER true)
+    Q_PROPERTY(int summaryIncludePlanned READ getSummaryIncludePlanned WRITE setSummaryIncludePlanned USER true)
     Q_PROPERTY(bool summaryVisibleDay READ isSummaryVisibleDay WRITE setSummaryVisibleDay USER true)
     Q_PROPERTY(bool summaryVisibleWeek READ isSummaryVisibleWeek WRITE setSummaryVisibleWeek USER true)
     Q_PROPERTY(bool summaryVisibleMonth READ isSummaryVisibleMonth WRITE setSummaryVisibleMonth USER true)
@@ -94,8 +98,11 @@ class CalendarWindow : public GcChartWindow
 
         int getDefaultView() const;
         int getFirstDayOfWeek() const;
+        QTime getMeasureTime() const;
         int getStartHour() const;
         int getEndHour() const;
+        int getMinVisibleMins() const;
+        int getSummaryIncludePlanned() const;
         bool isSummaryVisibleDay() const;
         bool isSummaryVisibleWeek() const;
         bool isSummaryVisibleMonth() const;
@@ -110,11 +117,16 @@ class CalendarWindow : public GcChartWindow
         QString getSummaryMetrics() const;
         QStringList getSummaryMetricsList() const;
 
+        QList<CloudCalendarStatus> getCloudCalendarStatus() const override;
+
     public slots:
         void setDefaultView(int view);
         void setFirstDayOfWeek(int fdw);
+        void setMeasureTime(QTime time);
         void setStartHour(int hour);
         void setEndHour(int hour);
+        void setMinVisibleMins(int mins);
+        void setSummaryIncludePlanned(int type);
         void setSummaryVisibleDay(bool visible);
         void setSummaryVisibleWeek(bool visible);
         void setSummaryVisibleMonth(bool svm);
@@ -137,8 +149,11 @@ class CalendarWindow : public GcChartWindow
         QPalette palette;
         QComboBox *defaultViewCombo;
         QComboBox *firstDayOfWeekCombo;
+        QTimeEdit *measureTimeEdit;
         QSpinBox *startHourSpin;
         QSpinBox *endHourSpin;
+        QSpinBox *minVisibleMinsSpin;
+        QComboBox *includePlannedCombo;
         QCheckBox *summaryDayCheck;
         QCheckBox *summaryWeekCheck;
         QCheckBox *summaryMonthCheck;
@@ -158,9 +173,12 @@ class CalendarWindow : public GcChartWindow
         QList<CalendarSummary> getSummaries(const QDate &firstDay, const QDate &lastDay, int timeBucketSize = 7) const;
         QHash<QDate, QList<CalendarEntry>> getPhasesEvents(const Season &season, const QDate &firstDay, const QDate &lastDay) const;
         RideItem *getRideItem(const CalendarEntry &entry, bool linked = false);
+        Phase *getPhase(const CalendarEntry &entry, Season **season = nullptr, int *idx = nullptr) const;
+        SeasonEvent *getSeasonEvent(const CalendarEntry &entry, Season **season = nullptr, int *idx = nullptr) const;
         QString getPrimary(RideItem const * const rideItem) const;
         QTime findFreeSlot(RideItem *sourceItem, QDate newDate, QTime time);
         QTime findFreeSlot(QList<std::pair<QTime, int>> busySlots, QTime targetTime, int requiredDurationSeconds) const;
+        QString buildOriginalLabel(RideItem const * const item) const;
 
     private slots:
         void updateActivities();
@@ -178,6 +196,7 @@ class CalendarWindow : public GcChartWindow
         void addPhase(const QDate &date);
         void editPhase(const CalendarEntry &entry);
         void delPhase(const CalendarEntry &entry);
+        void exportPlan(const CalendarEntry &entry);
 };
 
 #endif

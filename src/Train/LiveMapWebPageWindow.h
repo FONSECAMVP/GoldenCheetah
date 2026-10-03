@@ -88,7 +88,6 @@ class LiveMapWebPageWindow : public GcChartWindow
 
         QWebEngineView *view;
         QWebEnginePage* webPage;
-        LiveMapWebPageWindow();  // default ctor
         // setting dialog
         QLabel* customUrlLabel;
         QLabel* customLonLabel;
@@ -107,7 +106,7 @@ class LiveMapWebPageWindow : public GcChartWindow
         void drawRoute(ErgFile* f);
 
     private slots:
-        void telemetryUpdate(RealtimeData rtd);
+        void telemetryUpdate(const RealtimeData &rtd);
         void stop();
 
     protected:

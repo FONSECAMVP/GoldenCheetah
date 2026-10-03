@@ -27,14 +27,14 @@
 #include "UserMetricParser.h"
 #include "SpecialFields.h"
 #include "DataFilter.h"
+#include "HtmlTrainingBridge.h"
 
 #include <QXmlInputSource>
 #include <QXmlSimpleReader>
 #include <QMutex>
 #include <QWebEngineProfile>
 
-// singleton
-static GlobalContext *globalContext = NULL;
+
 static QList<Context*> _contexts;
 
 GlobalContext::GlobalContext()
@@ -42,6 +42,14 @@ GlobalContext::GlobalContext()
     rideMetadata = NULL;
     colorEngine = NULL;
     readConfig(0); // don't reread user metrics just yet
+}
+
+GlobalContext*
+GlobalContext::context()
+{
+    // Meyer's singleton pattern
+    static GlobalContext globalContext; // Guaranteed thread-safe initialization
+    return &globalContext;
 }
 
 void
@@ -130,11 +138,6 @@ GlobalContext::userMetricsConfigChanged()
     SpecialFields::getInstance().reloadFields();
 }
 
-GlobalContext *GlobalContext::context()
-{
-    if (globalContext == NULL) globalContext = new GlobalContext();
-    return globalContext;
-}
 
 bool Context::isValid(Context *p) { return p != NULL &&_contexts.contains(p); }
 
@@ -154,6 +157,7 @@ Context::Context(MainWindow *mainWindow): mainWindow(mainWindow)
     isfiltered = ishomefiltered = false;
     isCompareIntervals = isCompareDateRanges = false;
     isRunning = isPaused = false;
+    m_HtmlTrainingBridge = nullptr;
 
     connect(this, SIGNAL(loadProgress(QString, double)), mainWindow, SLOT(loadProgress(QString, double)));
 
@@ -167,6 +171,16 @@ Context::Context(MainWindow *mainWindow): mainWindow(mainWindow)
     webEngineProfile->setPersistentCookiesPolicy(QWebEngineProfile::ForcePersistentCookies);
 
     _contexts.append(this);
+}
+
+HtmlTrainingBridge *
+Context::getHtmlTrainingBridge()
+{
+    if (!m_HtmlTrainingBridge) {
+        m_HtmlTrainingBridge = new HtmlTrainingBridge(this, this);
+        qDebug() << "Context: HtmlTrainingBridge created";
+    }
+    return m_HtmlTrainingBridge;
 }
 
 Context::~Context()

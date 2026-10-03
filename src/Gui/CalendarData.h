@@ -26,6 +26,7 @@
 #include <QHash>
 #include <QMap>
 #include <QColor>
+
 #include <utility>
 
 #define ENTRY_TYPE_ACTUAL_ACTIVITY 0
@@ -63,12 +64,15 @@ struct CalendarEntry {
     QString reference;
     QTime start;
     int durationSecs = 0;
+    int visibleSecs = 0;
     int type = 0;
+    bool isExcludedFromSummary = false;
     bool isRelocatable = false;
     bool hasTrainMode = false;
     bool dirty = false;
     QDate spanStart = QDate();
     QDate spanEnd = QDate();
+    QString originalPlanLabel = QString();
 
     QString linkedReference = QString();
     QString linkedPrimary = QString();

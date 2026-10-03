@@ -26,6 +26,7 @@
 #include <QGraphicsItem>
 #include "MetadataDialog.h"
 #include "MetricOverrideDialog.h"
+#include "Colors.h"
 
 // qt charts for zone chart
 #include <QtCharts>
@@ -561,7 +562,7 @@ class IntervalOverviewItem : public ChartSpaceItem
         BubbleViz *bubble;
 
         bool block; // block when signals occur too quickly
-        RideItem *item;  // remember what we are showing
+        QPointer<RideItem> item;  // remember what we are showing
         IntervalItem *hover = nullptr; // currently being hovered
 
         OverviewItemConfig *configwidget;
@@ -888,6 +889,8 @@ class Button : public QObject, public QGraphicsItem
 
         void setText(QString text) { this->text = text; update(); }
         void setFont(QFont font) { this->font = font; }
+        void setBkgdColor(const QColor& color) { bkgdColor = color; update(); }
+        void resetBkgdColor() { bkgdColor = GColor(CCARDBACKGROUND); update(); }
 
         // we monkey around with this *A LOT*
         void setGeometry(double x, double y, double width, double height);
@@ -912,6 +915,7 @@ class Button : public QObject, public QGraphicsItem
         QGraphicsItem *parent;
         QString text;
         QFont font;
+        QColor bkgdColor;
 
         QRectF geom;
         enum { None, Clicked } state;

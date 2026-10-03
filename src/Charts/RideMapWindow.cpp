@@ -490,6 +490,9 @@ RideMapWindow::rideSelected()
 
     RideItem * ride = myRideItem;
 
+    // don't select deleted rides (!!)
+    if (ride && context->athlete->rideCache->isInDeleteList(ride)) return;
+
     // set/unset blank then decide what to do next
     if (!ride || !ride->ride() || !ride->ride()->dataPoints().count()) setIsBlank(true);
     else setIsBlank(false);
@@ -584,6 +587,7 @@ void RideMapWindow::createHtml()
     currentPage = QString("<!DOCTYPE html> \n"
     "<html>\n"
     "<head>\n"
+    "<meta name=\"referrer\" content=\"strict-origin-when-cross-origin\">\n"
     "<meta name=\"viewport\" content=\"initial-scale=1.0, user-scalable=yes\"/> \n"
     "<meta http-equiv=\"content-type\" content=\"text/html; charset=UTF-8\"/>\n"
     "<title>Golden Cheetah Map</title>\n"

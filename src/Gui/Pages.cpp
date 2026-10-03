@@ -265,7 +265,7 @@ GeneralPage::GeneralPage(Context *context) : context(context)
 
     startupView = new QComboBox();
     startupView->addItem(tr("Trends"));
-    startupView->addItem(tr("Analysis"));
+    startupView->addItem(tr("Activities"));
     startupView->addItem(tr("Plan"));
     startupView->addItem(tr("Train"));
 
@@ -1674,12 +1674,12 @@ CustomMetricsPage::CustomMetricsPage(QWidget *parent, Context *context) :
     exportButton = new QPushButton(tr("Export"));
     exportButton->setEnabled(false);
     importButton = new QPushButton(tr("Import"));
-    importButton->setEnabled(false);
+    importButton->setEnabled(true);
 #ifdef GC_HAS_CLOUD_DB
     uploadButton = new QPushButton(tr("Upload"));
     uploadButton->setEnabled(false);
     downloadButton = new QPushButton(tr("Download"));
-    downloadButton->setEnabled(false);
+    downloadButton->setEnabled(true);
 #endif
 
     ActionButtonBox *actionButtons = new ActionButtonBox(ActionButtonBox::AddDeleteGroup | ActionButtonBox::EditGroup);
@@ -1703,10 +1703,8 @@ CustomMetricsPage::CustomMetricsPage(QWidget *parent, Context *context) :
             bool selected = table->currentItem() != nullptr;
             actionButtons->setButtonEnabled(ActionButtonBox::Edit, selected);
             exportButton->setEnabled(selected);
-            importButton->setEnabled(selected);
 #ifdef GC_HAS_CLOUD_DB
             uploadButton->setEnabled(selected);
-            downloadButton->setEnabled(selected);
 #endif
         });
     connect(actionButtons, &ActionButtonBox::addRequested, this, &CustomMetricsPage::addClicked);
@@ -2087,7 +2085,7 @@ MetadataPage::saveClicked()
     defaultsPage->getDefinitions(defaultDefinitions);
 
     // save settings
-    appsettings->setValue(GC_RIDEBG, keywordsPage->rideBG->isChecked());
+    appsettings->setValue(GC_SUMMARYROWS, fieldsPage->summarySpin->value());
 
     // write to metadata.xml
     RideMetadata::serialize(QDir(gcroot).canonicalPath() + "/metadata.xml", keywordDefinitions, fieldDefinitions, colorfield, defaultDefinitions);
@@ -2125,10 +2123,6 @@ KeywordsPage::KeywordsPage(MetadataPage *parent, QList<KeywordDefinition>keyword
     field->addWidget(fieldChooser);
     field->addStretch();
     mainLayout->addLayout(field);
-
-    rideBG = new QCheckBox(tr("Use for Background"));
-    rideBG->setChecked(appsettings->value(this, GC_RIDEBG, false).toBool());
-    field->addWidget(rideBG);
 
     keywords = new QTreeWidget;
     keywords->headerItem()->setText(0, tr("Keyword"));
@@ -2866,6 +2860,17 @@ FieldsPage::FieldsPage(QWidget *parent, QList<FieldDefinition>fieldDefinitions) 
         add->setText(6, field.expression); // expression
     }
 
+    summarySpin = new QSpinBox();
+    summarySpin->setRange(0, 5);
+    summarySpin->setSingleStep(1);
+    summarySpin->setValue(appsettings->value(this, GC_SUMMARYROWS, 2).toInt());
+
+    QHBoxLayout *extraConfigLayout = new QHBoxLayout();
+    extraConfigLayout->addWidget(new QLabel(tr("Summary rows in activities list")));
+    extraConfigLayout->addWidget(summarySpin);
+    extraConfigLayout->addStretch();
+
+    mainLayout->addLayout(extraConfigLayout);
     mainLayout->addWidget(fields);
     mainLayout->addWidget(actionButtons);
 

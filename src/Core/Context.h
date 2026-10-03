@@ -74,7 +74,7 @@ class RideMetadata;
 class ColorEngine;
 class ModelFilter;
 class QWebEngineProfile;
-
+class HtmlTrainingBridge;
 
 class GlobalContext : public QObject
 {
@@ -82,8 +82,9 @@ class GlobalContext : public QObject
 
     public:
 
-        GlobalContext();
         static GlobalContext *context();
+
+        void notifyNamedSearchesChanged() { namedSearchesChanged(); }
         void notifyConfigChanged(qint32);
 
         // metadata etc
@@ -97,9 +98,23 @@ class GlobalContext : public QObject
         void readConfig(qint32);
         void userMetricsConfigChanged();
 
+        void notifyStart() { emit start(); }
+        void notifyStop() { emit stop(); }
+
     signals:
         void configChanged(qint32); // for global widgets that aren't athlete specific
 
+        // realtime signals global widgets that aren't athlete specific
+        void start();
+        void stop();
+
+        void namedSearchesChanged();
+
+    private:
+        // singleton pattern
+        GlobalContext();
+        GlobalContext(const GlobalContext&) = delete;
+        GlobalContext& operator=(const GlobalContext&) = delete;
 };
 
 class RideNavigator;
@@ -122,6 +137,8 @@ class Context : public QObject
         QString searchText;
         QString workoutFilterText;
         bool scopehighlighted;
+
+        HtmlTrainingBridge *getHtmlTrainingBridge();
 
         // ride item
         RideItem *rideItem() const { return ride; }
@@ -217,10 +234,10 @@ class Context : public QObject
         void notifySetNow(long x) { now = x; setNow(x); }
         long getNow() { return now; }
         void notifyNewLap() { emit newLap(); }
-        void notifyStart() { emit start(); }
+        void notifyStart() { GlobalContext::context()->notifyStart(); emit start(); }
         void notifyUnPause() { emit unpause(); }
         void notifyPause() { emit pause(); }
-        void notifyStop() { emit stop(); }
+        void notifyStop() { GlobalContext::context()->notifyStop(); emit stop(); }
         void notifySeek(long x) { emit seek(x); }
         void notifyIntensityChanged(int intensity) { emit intensityChanged(intensity); };
 
@@ -278,6 +295,9 @@ class Context : public QObject
         // we need to act since the user metric config changed
         // and we need to notify other contexts !
         void userMetricsConfigChanged();
+
+    private:
+        HtmlTrainingBridge *m_HtmlTrainingBridge;
 
     signals:
 
@@ -343,7 +363,7 @@ class Context : public QObject
         void rideClean(RideItem*);
 
         // realtime
-        void telemetryUpdate(RealtimeData rtData);
+        void telemetryUpdate(const RealtimeData &rtData);
         void ergFileSelected(ErgFile *);
         void ergFileSelected(ErgFileBase *);
         void videoSyncFileSelected(VideoSyncFile *);

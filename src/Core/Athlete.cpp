@@ -34,14 +34,9 @@
 #include "HrZones.h"
 #include "PaceZones.h"
 #include "WithingsDownload.h"
-#include "CalendarDownload.h"
 #include "PMCData.h"
 #include "Banister.h"
 #include "TrainerDay.h"
-#ifdef GC_HAVE_ICAL
-#include "ICalendar.h"
-#include "CalDAV.h"
-#endif
 #include "NamedSearch.h"
 #include "IntervalItem.h"
 #include "IntervalTreeView.h"
@@ -50,6 +45,8 @@
 #include "RideAutoImportConfig.h"
 #include "AthleteBackup.h"
 #include "CloudService.h"
+#include "MeasuresDownload.h"
+#include "CalendarSync.h"
 
 #include "Route.h"
 
@@ -146,17 +143,14 @@ Athlete::Athlete(Context *context, const QDir &homeDir)
     autoImportConfig = new RideAutoImportConfig(home->config());
     autoImport = NULL;
 
-    // Search / filter
-    namedSearches = new NamedSearches(this); // must be before navigator
-
     // Metadata
     rideCache = NULL; // let metadata know we don't have a ridecache yet
 
-    // Date Ranges
-    seasons = new Seasons(home->config());
-
     // seconds step of the upgrade - now everything of configuration needed should be in place in Context
     v3.upgradeLate(context);
+
+    // Date Ranges
+    seasons = new Seasons(home->config());
 
     // Routes
     routes = new Routes(context, home->config());
@@ -167,6 +161,8 @@ Athlete::Athlete(Context *context, const QDir &homeDir)
     // auto downloader
     cloudAutoDownload = new CloudServiceAutoDownload(context);
     connect(context, SIGNAL(refreshEnd()), cloudAutoDownload, SLOT(autoDownload()));
+
+    calendarSync = new CalendarSync(context);
 
     // now most dependencies are in get cache
     QEventLoop loop;
@@ -189,14 +185,7 @@ Athlete::loadComplete()
     loadCharts();
 
     // Downloaders
-    calendarDownload = new CalendarDownload(context);
-
-    // Calendar
-#ifdef GC_HAVE_ICAL
-    rideCalendar = new ICalendar(context); // my local/remote calendar entries
-    davCalendar = new CalDAV(context); // remote caldav
-    davCalendar->download(true); // refresh the diary window but do not show any error messages
-#endif
+    MeasuresDownload::autoDownload(context);
 
     // trap signals
     connect(context, SIGNAL(configChanged(qint32)), this, SLOT(configChanged(qint32)));
@@ -258,14 +247,6 @@ Athlete::~Athlete()
                                                // all the changes to LTM settings and chart config
                                                // have not been reflected in the charts.xml file
 
-    delete calendarDownload;
-
-#ifdef GC_HAVE_ICAL
-    delete rideCalendar;
-    delete davCalendar;
-#endif
-
-    delete namedSearches;
     delete routes;
     delete seasons;
     delete measures;

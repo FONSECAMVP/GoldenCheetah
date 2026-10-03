@@ -37,12 +37,8 @@ class PaceZones;
 class RideFile;
 class ErgFile;
 class RideMetadata;
-class CalendarDownload;
-class ICalendar;
-class CalDAV;
 class Seasons;
 class RideNavigator;
-class NamedSearches;
 class RideFileCache;
 class RideItem;
 class IntervalItem;
@@ -63,6 +59,7 @@ class AthleteTab;
 class Leaf;
 class DataFilterRuntime;
 class CloudServiceAutoDownload;
+class CalendarSync;
 class Banister;
 
 class Athlete : public QObject
@@ -99,6 +96,8 @@ class Athlete : public QObject
         // cloud download
         CloudServiceAutoDownload *cloudAutoDownload;
 
+        CalendarSync *calendarSync = nullptr;
+
         // Estimates
         PDEstimate getPDEstimateFor(QDate, QString model, bool wpk, QString sport) const;
         PDEstimate getPDEstimateClosestFor(QDate date, QString model, bool wpk, QString sport) const;
@@ -118,16 +117,6 @@ class Athlete : public QObject
         double getWeight(QDate date, RideFile *ride=NULL);
         double getHeight(RideFile *ride=NULL);
 
-        // interval items access (stub for RouteWindow compatibility)
-        QTreeWidgetItem* allIntervalItems() { return NULL; }
-
-        // athlete's calendar
-        CalendarDownload *calendarDownload;
-#ifdef GC_HAVE_ICAL
-        ICalendar *rideCalendar;
-        CalDAV *davCalendar;
-#endif
-
         // Athlete's autoimport handling
         RideImportWizard *autoImport;
         RideAutoImportConfig *autoImportConfig;
@@ -136,9 +125,6 @@ class Athlete : public QObject
         QList<LTMSettings> presets;
         void loadCharts(); // load charts.xml
         void translateDefaultCharts(QList<LTMSettings>&charts);
-
-        // named filters / queries
-        NamedSearches *namedSearches;
 
         // DataFilter global storage/cache
         QMap<QString,Result> dfcache;
@@ -153,7 +139,6 @@ class Athlete : public QObject
         // zones etc
         void notifyZonesChanged() { zonesChanged(); }
         void notifySeasonsChanged() { seasonsChanged(); }
-        void notifyNamedSearchesChanged() { namedSearchesChanged(); }
 
         // import rides from athlete specific directory
         void importFilesWhenOpeningAthlete();
@@ -161,7 +146,6 @@ class Athlete : public QObject
     signals:
         void zonesChanged();
         void seasonsChanged();
-        void namedSearchesChanged();
 
     public slots:
         void checkCPX(RideItem*ride);

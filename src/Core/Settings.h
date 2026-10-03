@@ -149,9 +149,9 @@
 #define GC_LINEWIDTH                    "<global-general>linewidth"
 #define GC_ANTIALIAS                    "<global-general>antialias"
 #define GC_MAC_FORMS                    "<global-general>macForms"
-#define GC_RIDEBG                       "<global-general>rideBG"
 #define GC_RIDESCROLL                   "<global-general>rideScroll"
 #define GC_RIDEHEAD                     "<global-general>rideHead"
+#define GC_SUMMARYROWS                  "<global-general>summaryRows"
 #define GC_SHADEZONES                   "<global-general>shadezones"
 #define GC_LANG                         "<global-general>lang"
 #define GC_PACE                         "<global-general>pace"
@@ -165,6 +165,7 @@
 #define GC_LAST_VERSION_CHECKED         "<global-general>lastVersionChecked"
 #define GC_LAST_VERSION_CHECK_DATE      "<global-general>lastVersionCheckDate"
 #define GC_STARTUP_VIEW                 "<global-general>startupView"
+#define GC_PASSED_DIALOG_DEFAULT_ICONS  "<global-general>passedDialogDefaultIcons"
 
 
 
@@ -256,6 +257,7 @@
 #define GC_VERSION_USED                 "<athlete-general>versionused"
 #define GC_SAFEEXIT                     "<athlete-general>safeexit"
 #define GC_UPGRADE_FOLDER_SUCCESS       "<athlete-general>upgradesuccess/folder"     // success tracking of folder upgrade stored on athlete level
+#define GC_UPGRADE_ID_ENRICHED          "<athlete-general>upgradesuccess/idEnriched" // success tracking of id enrichment for activities and SeasonEvents on athlete level
 #define GC_ATHLETE_SNIPPETID            "<athlete-general>snippetid"
 
 #define GC_OPENDATA_GRANTED             "<athlete-general>opendata/allowed"         // did the user grant permission? (Y, N, X)
@@ -306,6 +308,14 @@
 #define GC_CLOUDDB_TC_ACCEPTANCE_DATE  "<athlete-preferences>clouddb/acceptancedate"              // date/time string of acceptance
 #define GC_CLOUDDB_EMAIL               "<athlete-preferences>clouddb/email"
 
+#define GC_CALDAV_TITLE                "<athlete-preferences>caldav/titleField"
+#define GC_CALDAV_DESCRIPTION          "<athlete-preferences>caldav/descriptionField"
+#define GC_CALDAV_STRATEGY_SEASON      "<athlete-preferences>caldav/strategySeason"
+#define GC_CALDAV_STRATEGY_PHASE       "<athlete-preferences>caldav/strategyPhase"
+#define GC_CALDAV_STRATEGY_EVENT       "<athlete-preferences>caldav/strategyEvent"
+#define GC_CALDAV_STRATEGY_PLANNED_ACT "<athlete-preferences>caldav/strategyPlannedActivity"
+#define GC_CALDAV_STRATEGY_ACTUAL_ACT  "<athlete-preferences>caldav/strategyActualActivity"
+
 // ride navigator
 #define GC_NAVHEADINGS                  "<athlete-preferences>navigator/headings"
 #define GC_NAVHEADINGWIDTHS             "<athlete-preferences>navigator/headingwidths"
@@ -313,9 +323,6 @@
 #define GC_SORTBY                       "<athlete-preferences>navigator/sortby"
 #define GC_SORTBYORDER                  "<athlete-preferences>navigator/sortbyorder"
 #define GC_NAVDISPLAYFILTER             "<athlete-preferences>navigator/displayfilter"
-
-// Calendar sync
-#define GC_WEBCAL_URL                   "<athlete-preferences>webcal_url"
 
 // OSM Tileserver
 #define GC_OSM_TS_DEFAULT               "<athlete-preferences>osmts/default"
@@ -361,6 +368,10 @@
 #define GC_SIM_BICYCLE_Tk                     "<athlete-preferences>sim_bicycle/Tk"
 #define GC_SIM_BICYCLE_ACTUALTRAINERALTITUDEM "<athlete-preferences>sim_bicycle/ActualTrainerAltitudeM"
 
+#define GC_REALTIMEDATA_HEATLOAD              "<athlete-preferences>RealtimeData/HeatLoad"
+#define GC_REALTIMEDATA_HEATLOAD_MSEC         "<athlete-preferences>RealtimeData/HeatLoadMSec"
+#define GC_REALTIMEDATA_HEATLOAD_LOCALDATE    "<athlete-preferences>RealtimeData/HeatLoadLocalDate"
+
 #define GC_RWGPSUSER                    "<athlete-private>rwgps/user"
 #define GC_RWGPSPASS                    "<athlete-private>rwgps/pass"
 #define GC_RWGPS_AUTH_TOKEN             "<athlete-private>rwgps/auth_token"
@@ -376,7 +387,13 @@
 #define GC_DVURL                        "<athlete-private>dv/url"
 #define GC_DVUSER                       "<athlete-private>dv/user"
 #define GC_DVPASS                       "<athlete-private>dv/pass"
-#define GC_DVCALDAVTYPE                 "<athlete-private>dv/type"
+#define GC_DVRESOLVEDURL                "<athlete-private>dv/resolved_url"
+#define GC_DVCALENDARNAME               "<athlete-private>dv/calendar_name"
+#define GC_GOOGLECAL_TOKEN              "<athlete-private>googlecal/token"
+#define GC_GOOGLECAL_RESOLVEDURL        "<athlete-private>googlecal/resolved_url"
+#define GC_GOOGLECAL_CALENDARNAME       "<athlete-private>googlecal/calendar_name"
+#define GC_GOOGLECAL_REFRESH_TOKEN      "<athlete-private>googlecal/refresh_token"
+#define GC_GOOGLECAL_LAST_REFRESH       "<athlete-private>googlecal/last_refresh"
 
 //Dropbox oauth keys
 #define GC_DROPBOX_TOKEN                "<athlete-private>dropbox/token"
@@ -411,6 +428,11 @@
 #define GC_AZUM_USERKEY                 "<athlete-private>azum_userkey"
 #define GC_AZUM_URL                     "<athlete-private>azum_url"
 #define GC_AZUM_ATHLETE_ID              "<athlete-private>azum_athlete_id"
+
+// Tredict
+#define GC_TREDICT_TOKEN                "<athlete-private>tredict_token"
+#define GC_TREDICT_REFRESH_TOKEN        "<athlete-private>tredict_refresh_token"
+#define GC_TREDICT_LAST_REFRESH         "<athlete-private>tredict_last_refresh"
 
 // Polar Flow
 #define GC_POLARFLOW_TOKEN             "<athlete-private>polarflow_token"

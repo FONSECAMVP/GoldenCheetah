@@ -53,6 +53,8 @@ public:
     ~AddCloudWizard();
     QSize sizeHint() const { return QSize(600,650); }
 
+    void reject() override;
+
     Context *context;
     bool done; // have we finished?
 
@@ -212,9 +214,10 @@ class AddAuth : public QWizardPage
     public slots:
         void initializePage();
         bool validatePage();
-        int nextId() const { return wizard->cloudService->type() & (CloudService::Measures|CloudService::Calendar) ? 90 : (hasAthlete ? 25 : 30); }
+        int nextId() const { return wizard->cloudService->type() & CloudService::Calendar ? 90 : (hasAthlete ? 25 : 30); }
         void updateServiceSettings();
         void doAuth();
+        void discoverCalendars();
 
     private:
         AddCloudWizard *wizard;
@@ -237,6 +240,11 @@ class AddAuth : public QWizardPage
         QLabel *token;
         QLabel *messageLabel;
         QLabel *message;
+
+        QLabel *calendarLabel;
+        QLineEdit *calendar;
+        QPushButton *discover;
+        QString resolvedCalendarUrl;
 
 };
 
