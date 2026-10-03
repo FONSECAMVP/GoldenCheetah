@@ -106,6 +106,7 @@ Compact schema per `references/formats.md` § `decisions.md`. **The recap source
 | DEC-090 | Upstream hand-off → Garmin-only PR from upstream/master, then separate Coach PR | accepted | 2026-10-02 |
 | DEC-091 | Upstream-branch fork CI fails on fork infra → FORK-ONLY infra commit (DEC-088/-089 deltas), dropped with the filter | accepted | 2026-10-02 |
 | DEC-092 | Garmin PR 1 destination → merged into fork branch `upstream-base` (fork PR #1), no upstream PR | accepted | 2026-10-03 |
+| DEC-093 | Fork master = everything → merge upstream/master into dev on `integrate/upstream-v3.9`, fork CI, then fast-forward fork master | accepted | 2026-10-03 |
 
 ### Dormant index
 
@@ -1441,3 +1442,10 @@ Dormant — the remainder is the Garmin dialog-lifetime family and every one sti
 - Chose: 1 of 3 — (2) fork master stays the only product, close #1: discards the clean upstream-based branch; (3) hold for upstream later: leaves the work unmerged. 1 = merge #1 into fork branch `upstream-base` (`a8d144efd` = upstream/master `f12e72296` + `acc6e9bd6` + `476630af5`).
 - Binding: no PR to GoldenCheetah upstream unless the user reopens it. PR 2 (Coach, DEC-090/4) destination is open, user's call.
 - Dependents: DEC-090, branches `upstream-base`, `garmin/upstream-garmin`
+
+## DEC-093 — fork master carries everything, on current upstream
+- Status: accepted 2026-10-03 (user goal; Inspector chose the method)
+- Why: fork master `82a0de52a` (2026-08-16) is 188 commits behind dev and lacks 64 upstream commits; user wants master to hold every feature, up to date.
+- Chose: 1 of 3 — (2) rebase dev onto upstream: rewrites 250+ commits, loses CI-proven SHAs; (3) fast-forward master to dev only: stays on the old upstream base. 1 = merge upstream/master into a branch cut from dev (26 conflicted files), full gate + fork CI all 3 legs, then fast-forward fork master (master is an ancestor of dev).
+- Binding: every push and the master move are user-approved; dev branch and fork master untouched until the final fast-forward.
+- Dependents: branches `integrate/upstream-v3.9`, `garmin/req028-row-lifetime`, fork `master`; DEC-092
