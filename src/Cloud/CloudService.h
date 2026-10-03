@@ -20,6 +20,7 @@
 #define GC_CloudService_h
 #include <QList>
 #include <QMap>
+#include <QHash>
 #include <QString>
 #include <QStringList>
 #include <QDateTime>
@@ -131,6 +132,19 @@ class CloudService : public QObject {
         }
         void notifyReadComplete(QByteArray *data, QString name, QString message) { emit readComplete(data,name,message); }
 
+        // Garmin contract (UPR-1): the 4-arg readFile is the dispatch point the dialogs call; its default
+        // forwards to the unchanged 3-arg virtual, so upstream providers keep working and need no edits.
+        enum ReadFileArmed { ArmedNothing, ArmedCompletion };
+        virtual bool readFile(QByteArray *data, QString remotename, QString remoteid, ReadFileArmed *armed) {
+            if (armed) *armed = ArmedNothing;
+            return readFile(data, remotename, remoteid);
+        }
+        void notifyReadFailed(QByteArray *data, QString name, QString reason) { emit readFailed(data,name,reason); }
+        virtual void persistConnectSuccess(const QString &garminUserId, const QString &tokenBlob)
+            { Q_UNUSED(garminUserId); Q_UNUSED(tokenBlob); }
+        virtual void disconnectService() {}
+        virtual void rideRegistrationCompleted(const QString &remoteId) { Q_UNUSED(remoteId); }
+
         // list and select an athlete - list will need to block rather than notify asynchronously
         virtual QList<CloudServiceAthlete> listAthletes() { return QList<CloudServiceAthlete>(); }
         virtual bool selectAthlete(CloudServiceAthlete) { return false; }
@@ -207,6 +221,7 @@ class CloudService : public QObject {
     signals:
         void writeComplete(QString id, QString message);
         void readComplete(QByteArray *data, QString id, QString message);
+        void readFailed(QByteArray *data, QString id, QString reason);
 
     protected:
 
@@ -337,7 +352,10 @@ class CloudServiceSyncDialog : public QDialog
         void selectAllSyncChanged(int);
 
         void completedRead(QByteArray *data, QString name, QString message);
+        void failedRead(QByteArray *data, QString name, QString reason);
         void completedWrite(QString name,QString message);
+    public:
+        void reject() override { batchId++; QDialog::reject(); } // close abandons the batch
     private:
         Context *context;
         CloudService *store;
@@ -357,6 +375,14 @@ class CloudServiceSyncDialog : public QDialog
             downloadtotal,      // x of *n* downloading
             successful,         // how many downloaded ok?
             listindex;          // where in rideList we've got to
+
+        // identity of each in-flight read, so a failure labels its OWN row and
+        // a stale one cannot advance a later batch. batchId is bumped by every
+        // operation that abandons the current batch or rebuilds the lists
+        // (restart, abort, refresh, close); refresh also nulls the rows.
+        struct ReadTicket { QTreeWidgetItem *row; int col; int batch; };
+        int batchId = 0;
+        QHash<QByteArray*, ReadTicket> pendingReads;
 
         bool saveRide(RideFile *, QStringList &);
         bool syncNext();        // kick off another download/upload
@@ -469,6 +495,7 @@ class CloudServiceAutoDownload : public QThread {
 
         // receiver for downloaded files to add to the ridecache
         void readComplete(QByteArray*,QString,QString);
+        void readFailed(QByteArray*,QString,QString);
 
     private:
 

@@ -10,6 +10,8 @@ lmfit
 plotly
 importlib_metadata
 Jinja2
+garminconnect
+curl_cffi
 #
 # Nice to have
 #

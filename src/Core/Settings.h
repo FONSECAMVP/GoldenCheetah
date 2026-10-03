@@ -173,6 +173,9 @@
 #define GC_GARMIN_SMARTRECORD           "<global-general>garminSmartRecord"
 #define GC_GARMIN_HWMARK                "<global-general>garminHWMark"
 
+// one-time Garmin Connect ToS-risk notice acknowledgement
+#define GC_GARMIN_CONNECT_TOS_ACK       "<global-general>garminConnectTosAck"
+
 // data processor config
 #define GC_DPFG_TOLERANCE               "<global-general>dataprocess/fixgaps/tolerance"
 #define GC_DPFG_STOP                    "<global-general>dataprocess/fixgaps/stop"
@@ -278,6 +281,12 @@
 #define GC_DOB                          "<athlete-preferences>dob"
 #define GC_WEIGHT                       "<athlete-preferences>weight"
 #define GC_HEIGHT                       "<athlete-preferences>height"
+// per-athlete gate for the opt-in Garmin
+// profile auto-fill offer: whether this athlete has already been
+// asked, so the post-connect dialog only ever shows once per athlete. Unlike
+// GC_GARMIN_CONNECT_TOS_ACK (a GLOBAL one-time risk acknowledgement), this is
+// about THIS athlete's profile, not the app as a whole.
+#define GC_GARMIN_PROFILE_OFFERED       "<athlete-preferences>garminProfileOffered"
 #define GC_WBALTAU                      "<athlete-preferences>wbaltau"
 #define GC_SEX                          "<athlete-preferences>sex"
 #define GC_BIO                          "<athlete-preferences>bio"

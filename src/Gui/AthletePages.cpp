@@ -32,6 +32,10 @@
 #include "Colors.h"
 #include "AddDeviceWizard.h"
 #include "AddCloudWizard.h"
+#ifdef GC_WANT_GARMINCONNECT
+#include "GarminBackfillDialog.h"
+#include "GarminConnect.h"
+#endif
 #include "DeviceTypes.h"
 #include "DeviceConfiguration.h"
 #include "ColorButton.h"
@@ -75,6 +79,16 @@ CredentialsPage::CredentialsPage(Context *context) : context(context)
     accounts->setAlternatingRowColors(true);
 
     ActionButtonBox *actionButtons = new ActionButtonBox(ActionButtonBox::EditGroup | ActionButtonBox::AddDeleteGroup);
+
+#ifdef GC_WANT_GARMINCONNECT
+    // The persistent, reusable entry point for
+    // GarminBackfillController: MainWindow.cpp already carries unrelated
+    // in-flight changes on this branch (out of scope to touch — see the
+    // Build report), so this reuses the Accounts page's existing
+    // per-row action-button convention instead of a new menu action.
+    QPushButton *backfillButton = actionButtons->addButton(tr("Backfill..."), ActionButtonBox::Left);
+    connect(backfillButton, &QPushButton::clicked, this, &CredentialsPage::backfillClicked);
+#endif
 
     mainLayout->addWidget(accounts, 0,0);
     mainLayout->addWidget(actionButtons, 1,0);
@@ -155,6 +169,19 @@ CredentialsPage::deleteClicked()
         appsettings->setCValue(context->athlete->cyclist, service->syncOnStartupSettingName(), false);
         appsettings->setCValue(context->athlete->cyclist, service->syncOnImportSettingName(), false);
 
+        // Actually clear any stored session on
+        // disconnect. disconnectService() is a GENERIC CloudService virtual (default
+        // no-op); only GarminConnect overrides it (to delete its tokens.json +
+        // active-account.json while preserving the per-account sidecars).
+        // NO per-service special-case here — the factory singleton is const, so we
+        // mint a callable instance bound to this athlete's context (mirrors the
+        // sync-now path in AddCloudWizard), which resolves the same config dir.
+        CloudService *instance = CloudServiceFactory::instance().newService(service->id(), context);
+        if (instance) {
+            instance->disconnectService();
+            delete instance;
+        }
+
         // reset
         resetList();
     }
@@ -174,6 +201,40 @@ CredentialsPage::editClicked()
     edit->exec();
 
 }
+
+#ifdef GC_WANT_GARMINCONNECT
+// GarminBackfillController has no UI call site otherwise
+// Garmin-only, since the controller is not a generic
+// CloudService feature (it stays decoupled from CloudService).
+void
+CredentialsPage::backfillClicked()
+{
+    if (accounts->selectedItems().count() == 0) return;
+
+    const CloudService *service = CloudServiceFactory::instance().service(accounts->selectedItems().first()->text(2));
+    if (!service || service->id() != QStringLiteral("Garmin Connect")) {
+        QMessageBox::information(this, tr("Backfill History"),
+                                  tr("Backfilling activity history is currently only available for Garmin Connect."));
+        return;
+    }
+
+    // Mints a callable instance bound to this athlete's context - same idiom
+    // deleteClicked() uses for disconnectService() (resolves the same config dir).
+    CloudService *instance = CloudServiceFactory::instance().newService(service->id(), context);
+    GarminConnect *garmin = dynamic_cast<GarminConnect*>(instance);
+    if (!garmin) {
+        delete instance;
+        return;
+    }
+
+    // Ownership contract - see GarminBackfillDialog.h.
+    // Two-phase init: start() opens `garmin`, builds
+    // the rest of the widget, and shows it; on failure it closes+deletes
+    // itself (WA_DeleteOnClose), so there is no else-branch delete here.
+    GarminBackfillDialog *dialog = new GarminBackfillDialog(context, garmin);
+    dialog->start();
+}
+#endif
 
 
 //

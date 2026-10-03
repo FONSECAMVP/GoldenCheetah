@@ -48,6 +48,7 @@ rm -f "${PYTHON_APPIMAGE_FILE}"
 export PATH="$(pwd)/squashfs-root/usr/bin:$PATH"
 pip install --upgrade pip
 pip install -q -r Python/requirements.txt
+pip install -q --no-deps ./Python/garminconnect
 mv squashfs-root/usr appdir/usr
 mv squashfs-root/opt appdir/opt
 rm -rf squashfs-root

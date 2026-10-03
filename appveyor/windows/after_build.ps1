@@ -17,6 +17,7 @@ if (-not (Test-Path 'C:\Python')) {
   C:\Python\python -m pip install --upgrade pip
   # Install your project's dependencies from a requirements.txt file
   C:\Python\python -m pip install --upgrade --only-binary :all: -r src\Python\requirements.txt -t C:\Python\lib\site-packages
+  C:\Python\python -m pip install --no-deps src\Python\garminconnect -t C:\Python\lib\site-packages
 }
 
 Set-Location src\release

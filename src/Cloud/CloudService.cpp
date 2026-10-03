@@ -751,6 +751,7 @@ CloudServiceSyncDialog::CloudServiceSyncDialog(Context *context, CloudService *s
     // notification when upload/download completes
     connect (store, SIGNAL(writeComplete(QString,QString)), this, SLOT(completedWrite(QString,QString)));
     connect (store, SIGNAL(readComplete(QByteArray*,QString,QString)), this, SLOT(completedRead(QByteArray*,QString,QString)));
+    connect (store, SIGNAL(readFailed(QByteArray*,QString,QString)), this, SLOT(failedRead(QByteArray*,QString,QString)));
 
     // combo box
     athleteCombo = new QComboBox(this);
@@ -979,6 +980,11 @@ CloudServiceSyncDialog::refreshClicked()
     progressBar->setMinimum(0);
     progressBar->setMaximum(1);
     progressBar->setValue(0);
+
+    // outstanding reads belong to the rows about to be freed: stale them, and
+    // forget the rows so a late failure cannot label (or find) a rebuilt one
+    batchId++;
+    for (auto t = pendingReads.begin(); t != pendingReads.end(); ++t) t.value().row = nullptr;
 
     // wipe out current
     foreach (QTreeWidgetItem *curr, rideListDown->invisibleRootItem()->takeChildren()) {
@@ -1332,6 +1338,7 @@ CloudServiceSyncDialog::downloadClicked()
         downloadButton->setText(tr("Download"));
         downloading=false;
         aborted=true;
+        batchId++; // reads still in flight belong to the abandoned batch
         cancelButton->show();
         return;
     } else {
@@ -1348,6 +1355,7 @@ CloudServiceSyncDialog::downloadClicked()
     successful = 0;
     downloadtotal = 0;
     listindex = 0;
+    batchId++;
 
     QTreeWidget *which = NULL;
     switch(tabs->currentIndex()) {
@@ -1401,7 +1409,8 @@ CloudServiceSyncDialog::syncNext()
                 rideListSync->setCurrentItem(curr);
 
                 QByteArray *data = new QByteArray;
-                store->readFile(data, curr->text(1), curr->text(8)); // filename
+                pendingReads.insert(data, ReadTicket{curr, 7, batchId});
+                store->readFile(data, curr->text(1), curr->text(8), nullptr); // filename
                 QApplication::processEvents();
 
             } else {
@@ -1483,7 +1492,8 @@ CloudServiceSyncDialog::downloadNext()
             progressLabel->setText(QString(tr("Downloaded %1 of %2")).arg(downloadcounter).arg(downloadtotal));
 
             QByteArray *data = new QByteArray; // gets deleted when read completes
-            store->readFile(data, curr->text(1), curr->text(6));
+            pendingReads.insert(data, ReadTicket{curr, 5, batchId});
+            store->readFile(data, curr->text(1), curr->text(6), nullptr);
             QApplication::processEvents();
             //delete data;
             return true;
@@ -1517,6 +1527,7 @@ CloudServiceSyncDialog::downloadNext()
 void
 CloudServiceSyncDialog::completedRead(QByteArray *data, QString name, QString /*message*/)
 {
+    pendingReads.remove(data); // no longer in flight
     QTreeWidget *which = sync ? rideListSync : rideListDown;
     int col = sync ? 7 : 5;
 
@@ -1543,6 +1554,7 @@ CloudServiceSyncDialog::completedRead(QByteArray *data, QString name, QString /*
         if (saveRide(ride, errors) == true) {
             curr->setText(col, tr("Saved"));
             successful++;
+            store->rideRegistrationCompleted(name);
         } else {
             curr->setText(col, errors.join(" "));
         }
@@ -1623,6 +1635,43 @@ CloudServiceSyncDialog::uploadNext()
     }
     progressLabel->setText(QString(tr("Uploaded %1 of %2 successfully")).arg(successful).arg(downloadtotal));
     return false;
+}
+
+void
+CloudServiceSyncDialog::failedRead(QByteArray *data, QString, QString reason)
+{
+    // the store's signal reaches every listener; only act on a read this
+    // dialog dispatched (another consumer owns, and frees, its own buffer)
+    const auto it = pendingReads.constFind(data);
+    if (it == pendingReads.constEnd()) return;
+    const ReadTicket ticket = it.value();
+    pendingReads.remove(data);
+
+    // was allocated before calling readFile; the service hands back the same pointer
+    delete data;
+
+    // the row was freed by a refresh: nothing left to label
+    if (ticket.row == nullptr) return;
+
+    // a read from an abandoned batch labels its own row but must not advance the live one
+    if (ticket.batch != batchId) {
+        ticket.row->setText(ticket.col, reason);
+        return;
+    }
+
+    progressBar->setValue(++downloadcounter);
+    ticket.row->setText(ticket.col, reason);
+
+    const int batch = batchId;
+    QApplication::processEvents();
+
+    // an abort/refresh/restart/close delivered by the event loop above
+    if (batchId != batch) return;
+
+    if (sync)
+        syncNext();
+    else
+        downloadNext();
 }
 
 void
@@ -1786,6 +1835,7 @@ CloudServiceAutoDownload::run()
 
             // we want to trap received files
             connect(service, SIGNAL(readComplete(QByteArray*,QString,QString)), this, SLOT(readComplete(QByteArray*,QString,QString)));
+            connect(service, SIGNAL(readFailed(QByteArray*,QString,QString)), this, SLOT(readFailed(QByteArray*,QString,QString)));
 
             // open connection
             QStringList errors;
@@ -1880,12 +1930,13 @@ CloudServiceAutoDownload::run()
         // we block on read completing
         QEventLoop loop;
         connect(download.provider, SIGNAL(readComplete(QByteArray*,QString,QString)), &loop, SLOT(quit()));
+        connect(download.provider, SIGNAL(readFailed(QByteArray*,QString,QString)), &loop, SLOT(quit()));
         QTimer::singleShot(30000,&loop, SLOT(quit())); // timeout after 30 seconds
 
         // preallocate
         downloadlist[i].data = new QByteArray;
 
-        download.provider->readFile(downloadlist[i].data, download.entry->name, download.entry->id);
+        download.provider->readFile(downloadlist[i].data, download.entry->name, download.entry->id, nullptr);
 
         // block on timeout or readComplete...
         loop.exec();
@@ -1917,6 +1968,24 @@ CloudServiceAutoDownload::run()
 
     // and end thread
     exit(0);
+}
+
+void
+CloudServiceAutoDownload::readFailed(QByteArray*data,QString name,QString reason)
+{
+    bool found=false;
+    foreach(CloudServiceDownloadEntry p, downloadlist) {
+        if (p.data == data) found=true;
+    }
+
+    if (!found) {
+        qDebug() <<"Autodownload: failed read has no download entry";
+        return;
+    }
+
+    qDebug() <<"Autodownload: could not download"<<name<<":"<<reason;
+
+    delete data;
 }
 
 void
@@ -1992,6 +2061,8 @@ CloudServiceAutoDownload::readComplete(QByteArray*data,QString name,QString)
 
     // add to the ride list -- but don't select it
     if (Context::isValid(context)) context->athlete->addRide(fileinfo.fileName(), true, false);
+
+    entry.provider->rideRegistrationCompleted(name);
 
 }
 

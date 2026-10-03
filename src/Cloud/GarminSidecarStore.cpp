@@ -1,0 +1,536 @@
+/*
+ * Copyright (c) 2026 GoldenCheetah Contributor
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the Free
+ * Software Foundation; either version 2 of the License, or (at your option)
+ * any later version.
+ */
+
+#include "GarminSidecarStore.h"
+
+#include "AtomicFile.h"
+#include "GarminTime.h"
+
+#include <QDateTime>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonValue>
+#include <QMutex>
+#include <QMutexLocker>
+
+namespace {
+
+// JSON keys for the two sidecar schemas.
+const QString kStartTimeGMT = QStringLiteral("startTimeGMT");
+const QString kLocalFilename = QStringLiteral("local_filename");
+const QString kLastSuccess = QStringLiteral("last_success_startTimeGMT");
+const QString kRangeStart = QStringLiteral("range_start");
+const QString kRangeEnd = QStringLiteral("range_end");
+const QString kPending = QStringLiteral("pending");              // Pending manifest
+const QString kSchemaVersion = QStringLiteral("schema_version");
+
+// The schema version this store writes. A file with no `schema_version` key
+// (pre-versioning) loads as version 0 — never produced by a write in this file.
+constexpr int kCurrentBackfillSchemaVersion = 1;
+
+// The result of the shared permission-enforcing read step: a load status and
+// the raw bytes (valid only when status==Ok). Parse/decode is layered on top by
+// the two public loaders, so the perm/absent discipline lives in ONE place.
+struct RawLoad
+{
+    GarminSidecarStore::LoadStatus status = GarminSidecarStore::LoadStatus::NotFound;
+    QByteArray bytes;
+};
+
+// Read `path` with the owner-only guard, mirroring
+// GarminTokenStore::loadChecked. Reads the ACTUAL on-disk mode NOW (
+// never a cached value). POSIX: any group/other bit set → PermissionsRejected,
+// no bytes. Absent → NotFound. Otherwise Ok + bytes. Torn is decided by the
+// caller after a parse attempt (this step does not interpret the bytes).
+RawLoad readChecked(const QString& path)
+{
+    RawLoad r;
+
+    const QFileInfo info(path);
+    if (!info.exists()) {
+        r.status = GarminSidecarStore::LoadStatus::NotFound;
+        return r;
+    }
+
+#ifndef Q_OS_WIN
+    // POSIX: refuse a mode WIDER than owner-only 0600 — any group- or
+    // other-class bit (read/write/exec). Decided from the mode bits directly so
+    // the refusal holds even under a DAC-overriding user (root) — finding
+    const QFileDevice::Permissions perms = info.permissions();
+    const QFileDevice::Permissions groupOther = QFileDevice::ReadGroup | QFileDevice::WriteGroup |
+                                                QFileDevice::ExeGroup | QFileDevice::ReadOther |
+                                                QFileDevice::WriteOther | QFileDevice::ExeOther;
+    if ((perms & groupOther) != QFileDevice::Permissions()) {
+        // Do NOT read/return the bytes — the caller forces a re-fetch.
+        r.status = GarminSidecarStore::LoadStatus::SidecarPermissionsRejected;
+        return r;
+    }
+#else
+    // TODO: Windows ACL check — verify the DACL
+    // grants only the owning user before returning bytes; refuse otherwise.
+    // Phase-2 CI territory, mirroring GarminTokenStore::loadChecked and
+    // AtomicFile's cross-platform split. Until then the file opens normally on
+    // Windows (no regression to any existing path).
+#endif
+
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) {
+        r.status = GarminSidecarStore::LoadStatus::NotFound;
+        return r;
+    }
+    r.bytes = f.readAll();
+    r.status = GarminSidecarStore::LoadStatus::Ok;
+    return r;
+}
+
+// Parse `bytes` as a top-level JSON object. On any parse error or non-object
+// document, returns false (the caller maps this to LoadStatus::Torn).
+bool parseObject(const QByteArray& bytes, QJsonObject& out)
+{
+    QJsonParseError err{};
+    const QJsonDocument doc = QJsonDocument::fromJson(bytes, &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject())
+        return false;
+    out = doc.object();
+    return true;
+}
+
+// Ensure <athleteConfigDir>/garminconnect/ exists. Created 0700 (owner-only)
+// ONLY when ABSENT; this does NOT tighten an existing dir's perms.
+bool ensureDir(const QString& dirPath)
+{
+    if (!QFileInfo(dirPath).isDir()) {
+        if (!QDir().mkpath(dirPath))
+            return false;
+        QFile::setPermissions(dirPath, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+    }
+    return true;
+}
+
+// Condition 1.
+QJsonObject serializeBackfillStateWithVersion(const GarminSidecarStore::BackfillState& state, int version)
+{
+    QJsonObject obj;
+    obj.insert(kLastSuccess, state.lastSuccessStartTimeGMT);
+    obj.insert(kRangeStart, state.rangeStart);
+    obj.insert(kRangeEnd, state.rangeEnd);
+    obj.insert(kSchemaVersion, version);
+
+    QJsonObject pending;
+    for (auto it = state.pending.constBegin(); it != state.pending.constEnd(); ++it) {
+        QJsonObject e;
+        e.insert(kStartTimeGMT, it.value().startTimeGMT);
+        e.insert(kLocalFilename, it.value().localFilename);
+        pending.insert(it.key(), e);
+    }
+    obj.insert(kPending, pending);
+    return obj;
+}
+
+QJsonObject serializeBackfillState(const GarminSidecarStore::BackfillState& state)
+{
+    return serializeBackfillStateWithVersion(state, kCurrentBackfillSchemaVersion);
+}
+
+// a file whose current status is one of these two cannot be safely
+// modelled (Rejected: bytes never read; PendingManifestMalformed: parsed but
+// `pending` uninterpretable), so a cursor writer must refuse rather than
+// overwrite it. NotFound/Torn have nothing recoverable and keep self-healing.
+bool refuseCursorOverwrite(GarminSidecarStore::LoadStatus status)
+{
+    return status == GarminSidecarStore::LoadStatus::SidecarPermissionsRejected ||
+           status == GarminSidecarStore::LoadStatus::PendingManifestMalformed;
+}
+
+// The mutex guarding one path's load-modify-write transaction. Keyed
+// by the resolved sidecar file path, so imported-<uid>.json and
+// backfill-state-<uid>.json (even for the same uid) are independent locks.
+// Function-local statics (Meyer's singleton, thread-safe init) avoid
+// static-init-order; entries are never erased, so `m` stays valid for the
+// process lifetime once created — bounded by the distinct paths this process
+// ever resolves. Callers hold this from their load through their
+// AtomicFile::writeOver; the public loaders (loadImported/loadBackfillState)
+// take no lock themselves, so a writer already holding it can call them.
+QMutex& transactionLockFor(const QString& path)
+{
+    static QMutex tableGuard;
+    static QHash<QString, QMutex*> locks;
+
+    QMutexLocker guard(&tableGuard);
+    QMutex*& m = locks[path];
+    if (!m)
+        m = new QMutex();
+    return *m;
+}
+
+// Condition 1: UNLOCKED — caller already holds the non-recursive state-path mutex; must never call
+// transactionLockFor.
+bool writeBackfillStateWithVersion(const QString& athleteConfigDir, const QString& garminUserId,
+                                   const GarminSidecarStore::BackfillState& state, int version)
+{
+    if (!ensureDir(GarminSidecarStore::directoryFor(athleteConfigDir)))
+        return false;
+
+    const QByteArray bytes =
+        QJsonDocument(serializeBackfillStateWithVersion(state, version)).toJson(QJsonDocument::Compact);
+    return AtomicFile::writeOver(GarminSidecarStore::backfillStateFilePath(athleteConfigDir, garminUserId), bytes);
+}
+
+bool writeBackfillStatePreservingVersion(const QString& athleteConfigDir, const QString& garminUserId,
+                                         const GarminSidecarStore::BackfillState& state,
+                                         const GarminSidecarStore::BackfillLoadResult& current)
+{
+    const int version = (current.isOk() && current.state.schemaVersion == 0) ? 0 : kCurrentBackfillSchemaVersion;
+    return writeBackfillStateWithVersion(athleteConfigDir, garminUserId, state, version);
+}
+
+} // namespace
+
+QString GarminSidecarStore::directoryFor(const QString& athleteConfigDir)
+{
+    return QDir(athleteConfigDir).filePath(QStringLiteral("garminconnect"));
+}
+
+QString GarminSidecarStore::importedFilePath(const QString& athleteConfigDir, const QString& garminUserId)
+{
+    return QDir(directoryFor(athleteConfigDir)).filePath(QStringLiteral("imported-%1.json").arg(garminUserId));
+}
+
+QString GarminSidecarStore::backfillStateFilePath(const QString& athleteConfigDir, const QString& garminUserId)
+{
+    return QDir(directoryFor(athleteConfigDir)).filePath(QStringLiteral("backfill-state-%1.json").arg(garminUserId));
+}
+
+GarminSidecarStore::ImportedMap GarminSidecarStore::loadImported(const QString& athleteConfigDir,
+                                                                 const QString& garminUserId)
+{
+    ImportedMap result;
+    result.path = importedFilePath(athleteConfigDir, garminUserId);
+
+    const RawLoad raw = readChecked(result.path);
+    if (raw.status != LoadStatus::Ok) {
+        // NotFound or SidecarPermissionsRejected — no data, propagate the status.
+        result.status = raw.status;
+        return result;
+    }
+
+    QJsonObject obj;
+    if (!parseObject(raw.bytes, obj)) {
+        // Present but unparseable — soft fallback, NOT a crash.
+        result.status = LoadStatus::Torn;
+        return result;
+    }
+    result.rawBytes = raw.bytes; // the byte-exact classification snapshot
+
+    for (auto it = obj.constBegin(); it != obj.constEnd(); ++it) {
+        const QJsonValue v = it.value();
+        if (!v.isObject())
+            continue; // skip a malformed entry rather than fail the whole map
+        const QJsonObject e = v.toObject();
+        ImportedEntry entry;
+        entry.startTimeGMT = e.value(kStartTimeGMT).toString();
+        entry.localFilename = e.value(kLocalFilename).toString();
+        result.entries.insert(it.key(), entry);
+    }
+    result.status = LoadStatus::Ok;
+    return result;
+}
+
+bool GarminSidecarStore::recordImported(const QString& athleteConfigDir, const QString& garminUserId,
+                                        const QString& activityId, const ImportedEntry& entry)
+{
+    const QString path = importedFilePath(athleteConfigDir, garminUserId);
+    QMutexLocker locker(&transactionLockFor(path)); // load-through-writeOver
+
+    if (!ensureDir(directoryFor(athleteConfigDir)))
+        return false;
+
+    // Read-modify-write: start from the current object. A present-but-torn file
+    // is treated as empty so recording never propagates a
+    // parse failure. An owner-wider existing file is likewise not read for its
+    // bytes (readChecked refuses it); recording rewrites it 0600.
+    QJsonObject obj;
+    const RawLoad raw = readChecked(path);
+    if (raw.status == LoadStatus::Ok)
+        parseObject(raw.bytes, obj); // best-effort; leaves obj empty on parse fail
+
+    QJsonObject e;
+    e.insert(kStartTimeGMT, entry.startTimeGMT);
+    e.insert(kLocalFilename, entry.localFilename);
+    obj.insert(activityId, e);
+
+    const QByteArray bytes = QJsonDocument(obj).toJson(QJsonDocument::Compact);
+    return AtomicFile::writeOver(path, bytes);
+}
+
+GarminSidecarStore::BackfillLoadResult GarminSidecarStore::loadBackfillState(const QString& athleteConfigDir,
+                                                                             const QString& garminUserId)
+{
+    BackfillLoadResult result;
+    result.path = backfillStateFilePath(athleteConfigDir, garminUserId);
+
+    const RawLoad raw = readChecked(result.path);
+    if (raw.status != LoadStatus::Ok) {
+        result.status = raw.status;
+        return result;
+    }
+
+    QJsonObject obj;
+    if (!parseObject(raw.bytes, obj)) {
+        result.status = LoadStatus::Torn;
+        return result;
+    }
+
+    // a present `pending` key that is not an object, or an entry
+    // within it that is not an object, is parsed JSON we still cannot model —
+    // refuse the whole load rather than silently drop the offending entry (a
+    // silent drop would become permanent on the next write).
+    if (obj.contains(kPending)) {
+        const QJsonValue pendingVal = obj.value(kPending);
+        if (!pendingVal.isObject()) {
+            result.status = LoadStatus::PendingManifestMalformed;
+            return result;
+        }
+        const QJsonObject pendingObj = pendingVal.toObject();
+        for (auto it = pendingObj.constBegin(); it != pendingObj.constEnd(); ++it) {
+            if (!it.value().isObject()) {
+                result.status = LoadStatus::PendingManifestMalformed;
+                return result;
+            }
+        }
+    }
+
+    result.state.lastSuccessStartTimeGMT = obj.value(kLastSuccess).toString();
+    result.state.rangeStart = obj.value(kRangeStart).toString();
+    result.state.rangeEnd = obj.value(kRangeEnd).toString();
+    // Missing key (pre-versioning legacy file) -> version 0, NOT Torn.
+    result.state.schemaVersion = obj.value(kSchemaVersion).toInt(0);
+
+    // Missing key (legacy file) -> not present, pending stays empty. Present
+    // means every entry validated as an object above.
+    if (obj.contains(kPending)) {
+        const QJsonObject pendingObj = obj.value(kPending).toObject();
+        for (auto it = pendingObj.constBegin(); it != pendingObj.constEnd(); ++it) {
+            const QJsonObject e = it.value().toObject();
+            ImportedEntry entry;
+            entry.startTimeGMT = e.value(kStartTimeGMT).toString();
+            entry.localFilename = e.value(kLocalFilename).toString();
+            result.state.pending.insert(it.key(), entry);
+        }
+    }
+    result.status = LoadStatus::Ok;
+    return result;
+}
+
+bool GarminSidecarStore::saveBackfillState(const QString& athleteConfigDir, const QString& garminUserId,
+                                           const BackfillState& state)
+{
+    QMutexLocker locker( // load-through-writeOver
+        &transactionLockFor(backfillStateFilePath(athleteConfigDir, garminUserId)));
+
+    const BackfillLoadResult current = loadBackfillState(athleteConfigDir, garminUserId);
+    if (refuseCursorOverwrite(current.status))
+        return false;
+
+    // Pending is single-writer — this call never persists its own
+    // `state.pending` argument, only the on-disk map (empty if there wasn't one).
+    BackfillState toWrite = state;
+    toWrite.pending = current.isOk() ? current.state.pending : QHash<QString, GarminSidecarStore::ImportedEntry>();
+    return writeBackfillStatePreservingVersion(athleteConfigDir, garminUserId, toWrite, current);
+}
+
+bool GarminSidecarStore::saveBackfillRange(const QString& athleteConfigDir, const QString& garminUserId,
+                                           const QString& rangeStart, const QString& rangeEnd)
+{
+    QMutexLocker locker( // load-through-writeOver
+        &transactionLockFor(backfillStateFilePath(athleteConfigDir, garminUserId)));
+
+    const BackfillLoadResult current = loadBackfillState(athleteConfigDir, garminUserId);
+    if (refuseCursorOverwrite(current.status))
+        return false;
+
+    // range-only write. lastSuccessStartTimeGMT AND
+    // pending both come from the freshly-loaded on-disk state, never from a
+    // caller-supplied value — this is the read-modify-write that keeps a
+    // cursor advanced by a concurrent promotePendingBackfill() from being
+    // overwritten by a controller holding a stale in-memory cursor.
+    BackfillState state = current.isOk() ? current.state : BackfillState();
+    state.rangeStart = rangeStart;
+    state.rangeEnd = rangeEnd;
+    return writeBackfillStatePreservingVersion(athleteConfigDir, garminUserId, state, current);
+}
+
+bool GarminSidecarStore::recordPendingBackfill(const QString& athleteConfigDir, const QString& garminUserId,
+                                               const QString& activityId, const ImportedEntry& entry)
+{
+    QMutexLocker locker( // load-through-writeOver
+        &transactionLockFor(backfillStateFilePath(athleteConfigDir, garminUserId)));
+
+    const BackfillLoadResult current = loadBackfillState(athleteConfigDir, garminUserId);
+    if (refuseCursorOverwrite(current.status))
+        return false;
+
+    // NotFound/Torn treated as empty, same precedent as
+    // recordImported: recording never propagates a prior parse failure.
+    BackfillState state = current.isOk() ? current.state : BackfillState();
+    state.pending.insert(activityId, entry);
+    return writeBackfillStatePreservingVersion(athleteConfigDir, garminUserId, state, current);
+}
+
+bool GarminSidecarStore::dropPendingBackfill(const QString& athleteConfigDir, const QString& garminUserId,
+                                             const QString& activityId)
+{
+    QMutexLocker locker( // load-through-writeOver
+        &transactionLockFor(backfillStateFilePath(athleteConfigDir, garminUserId)));
+
+    const BackfillLoadResult current = loadBackfillState(athleteConfigDir, garminUserId);
+    if (refuseCursorOverwrite(current.status))
+        return false;
+
+    BackfillState state = current.isOk() ? current.state : BackfillState();
+
+    // Clearing lastSuccessStartTimeGMT here means
+    // "no prior success" to GarminBackfillController::start() — that controller's filter
+    // is split so an empty prior-success no longer falls
+    // back to an exclusive marker, letting rangeStartGmt apply inclusively
+    // instead. Dropping any entry AT OR BEFORE the cursor clears it (no
+    // greatest-surviving rewind — rejected as unneeded
+    // complexity); a dropped entry strictly after the cursor leaves it
+    // untouched.
+    const auto it = state.pending.constFind(activityId);
+    if (it != state.pending.constEnd() && !state.lastSuccessStartTimeGMT.isEmpty()) {
+        const QDateTime droppedInstant = garminInstantFromString(it.value().startTimeGMT);
+        const QDateTime cursorInstant = garminInstantFromString(state.lastSuccessStartTimeGMT);
+        // STORE branch: an unparseable instant on either
+        // side counts as at-or-before, so the cursor clears rather than
+        // leaving the dropped row unreachable for ever.
+        if (!droppedInstant.isValid() || !cursorInstant.isValid() || droppedInstant <= cursorInstant) {
+            state.lastSuccessStartTimeGMT.clear();
+        }
+    }
+
+    state.pending.remove(activityId);
+    return writeBackfillStatePreservingVersion(athleteConfigDir, garminUserId, state, current);
+}
+
+bool GarminSidecarStore::promotePendingBackfill(const QString& athleteConfigDir, const QString& garminUserId,
+                                                const QString& activityId)
+{
+    QMutexLocker locker( // state-path lock spans load, recordImported, and the write
+        &transactionLockFor(backfillStateFilePath(athleteConfigDir, garminUserId)));
+
+    const BackfillLoadResult current = loadBackfillState(athleteConfigDir, garminUserId);
+    if (refuseCursorOverwrite(current.status))
+        return false;
+
+    BackfillState state = current.isOk() ? current.state : BackfillState();
+    const auto it = state.pending.constFind(activityId);
+    if (it == state.pending.constEnd())
+        return false; // nothing pending under this id — no-op
+    const ImportedEntry entry = it.value();
+
+    // imported-write-before-pending-removal. recordImported
+    // takes the imported-<uid>.json path's OWN lock (per-path
+    // locking, a distinct QMutex from the one held here), so this nested
+    // call cannot deadlock against this function's own lock.
+    if (!recordImported(athleteConfigDir, garminUserId, activityId, entry))
+        return false;
+
+    state.pending.remove(activityId);
+
+    // Advance the cursor to this entry's own startTimeGMT ONLY when no
+    // surviving pending row is at or before it — an earlier row, or an
+    // equal-second sibling, still unpromoted must stay reachable.
+    // a pending row (or this entry) that fails to parse
+    // counts as SURVIVING — this guard protects completeness, so an instant
+    // it cannot order must never let the cursor advance past it.
+    const QDateTime entryInstant = garminInstantFromString(entry.startTimeGMT);
+    bool earlierOrEqualPendingSurvives = false;
+    for (auto pit = state.pending.constBegin(); pit != state.pending.constEnd(); ++pit) {
+        const QDateTime pendingInstant = garminInstantFromString(pit.value().startTimeGMT);
+        if (!pendingInstant.isValid() || !entryInstant.isValid() || pendingInstant <= entryInstant) {
+            earlierOrEqualPendingSurvives = true;
+            break;
+        }
+    }
+    bool advance = false;
+    if (!earlierOrEqualPendingSurvives && entryInstant.isValid()) {
+        if (state.lastSuccessStartTimeGMT.isEmpty()) {
+            advance = true;
+        } else {
+            const QDateTime storedInstant = garminInstantFromString(state.lastSuccessStartTimeGMT);
+            advance = storedInstant.isValid() && entryInstant > storedInstant;
+        }
+    }
+    if (advance)
+        state.lastSuccessStartTimeGMT = entry.startTimeGMT;
+
+    return writeBackfillStatePreservingVersion(athleteConfigDir, garminUserId, state, current);
+}
+
+bool GarminSidecarStore::migrateLegacyImported(const QString& athleteConfigDir, const QString& garminUserId,
+                                               const QHash<QString, ImportedEntry>& unmatched,
+                                               const QByteArray& classifiedImportedBytes,
+                                               bool classifiedImportedPresent)
+{
+    // Condition 2: lock order state-then-imported, held through phase 3; both non-recursive.
+    QMutexLocker stateLock(&transactionLockFor(backfillStateFilePath(athleteConfigDir, garminUserId)));
+    const QString importedPath = importedFilePath(athleteConfigDir, garminUserId);
+    QMutexLocker importedLock(&transactionLockFor(importedPath));
+
+    const BackfillLoadResult stateResult = loadBackfillState(athleteConfigDir, garminUserId);
+    if (refuseCursorOverwrite(stateResult.status)) // applied before phase 1
+        return false;
+    if (!stateResult.isOk() || stateResult.state.schemaVersion != 0)
+        return false;
+
+    // Read the RAW object, not loadImported()'s decoded entries — decoding silently drops non-object
+    // members.
+    const RawLoad rawImported = readChecked(importedPath);
+    QJsonObject rawObj;
+    bool importedPresent = false;
+    if (rawImported.status == LoadStatus::Ok) {
+        if (!parseObject(rawImported.bytes, rawObj))
+            return false; // Torn: an unmodel-able imported map must not be classified or pruned
+        importedPresent = true;
+    } else if (rawImported.status != LoadStatus::NotFound) {
+        return false; // SidecarPermissionsRejected: must not be classified or pruned
+    }
+
+    if (importedPresent != classifiedImportedPresent ||
+        (importedPresent && rawImported.bytes != classifiedImportedBytes))
+        return false;
+
+    BackfillState migratingState = stateResult.state;
+
+    // Phases 1-2 (conditions 1/4): skipped entirely for a NotFound imported file — nothing to merge
+    // or prune.
+    if (importedPresent) {
+        for (auto it = unmatched.constBegin(); it != unmatched.constEnd(); ++it)
+            migratingState.pending.insert(it.key(), it.value());
+        if (!writeBackfillStateWithVersion(athleteConfigDir, garminUserId, migratingState, 0))
+            return false;
+
+        QJsonObject prunedObj;
+        for (auto it = rawObj.constBegin(); it != rawObj.constEnd(); ++it) {
+            if (unmatched.contains(it.key()))
+                continue;
+            prunedObj.insert(it.key(), it.value());
+        }
+        if (!ensureDir(directoryFor(athleteConfigDir)))
+            return false;
+        if (!AtomicFile::writeOver(importedPath, QJsonDocument(prunedObj).toJson(QJsonDocument::Compact)))
+            return false;
+    }
+
+    return writeBackfillStateWithVersion(athleteConfigDir, garminUserId, migratingState, kCurrentBackfillSchemaVersion);
+}

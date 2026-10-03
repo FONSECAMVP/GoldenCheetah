@@ -61,6 +61,7 @@ if [ -f "$PYTHON_BIN" ]; then
     echo "Installing Python packages to bundle target: $SITE_PACKAGES"
 
     "$PYTHON_BIN" -m pip install --target "$SITE_PACKAGES" --ignore-installed --break-system-packages --no-cache-dir --only-binary :all: -r ../src/Python/requirements.txt
+    "$PYTHON_BIN" -m pip install --target "$SITE_PACKAGES" --no-deps ../src/Python/garminconnect
 else
     echo "ERROR: Bundled python binary not found at $PYTHON_BIN"
     exit 1

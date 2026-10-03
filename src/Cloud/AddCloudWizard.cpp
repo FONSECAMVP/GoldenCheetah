@@ -32,7 +32,17 @@
 #include "OAuthPKCE.h"
 #include "Secrets.h"
 
+#ifdef GC_WANT_GARMINCONNECT
+#include "GarminAuthChain.h"
+#include "GarminCredentialsPage.h"
+#include "GarminMfaPage.h"
+#include "PyEmbeddedAdapter.h"
+#endif
+
+#include <QCheckBox>
+#include <QDate>
 #include <QMessageBox>
+#include <QMetaObject>
 #include <QPixmap>
 #include <QPointer>
 #include <QRegExp>
@@ -44,10 +54,62 @@
 // 10. Select Cloud Service Type (via CloudServiceFactory)
 // 15. Agree to terms of service (optional)
 // 20. Authenticate Account (URL+Key, OAUTH or User/Pass)
+// 21. Garmin Connect native credentials (GC_WANT_GARMINCONNECT only,
+//     Replaces 20 for the Garmin Connect service)
+// 22. Garmin Connect MFA OTP (GC_WANT_GARMINCONNECT only, conditional,
+//     pushed by page 21 when Garmin answers mfaRequired)
 // 25. Select Athlete [optional]
 // 30. Settings (Folder,sync on startup, sync on import)
 // 90. Finalise (Confirm complete and add)
 //
+
+#ifdef GC_WANT_GARMINCONNECT
+// Page 21 — thin wizard-local wrapper over GarminCredentialsPage.
+// Mirrors AddAuth::nextId() semantics for an Activities service: the Garmin
+// tile is Activities-only (never Measures/Calendar), so the 90-branch of
+// AddAuth::nextId() cannot apply — hasAthlete ? 25 : 30.
+// No Q_OBJECT: no new signals/slots, so no moc pass needed for this TU.
+class AddGarminAuth : public GarminCredentialsPage
+{
+    public:
+        AddGarminAuth(AddCloudWizard *wizard, IGarminAuthClient *client)
+            : GarminCredentialsPage(client, wizard), wizard(wizard) {}
+
+        int nextId() const override {
+            // If Garmin answered mfaRequired for the
+            // in-flight credentials request, route to the conditional MFA page
+            // (21 → 22). Otherwise continue the post-auth flow.
+            if (mfaPending()) return 22;
+            bool hasAthlete = wizard->cloudService &&
+                wizard->cloudService->settings.value(CloudService::CloudServiceSetting::AthleteID, "") != "";
+            return hasAthlete ? 25 : 30;
+        }
+
+    private:
+        AddCloudWizard *wizard;
+};
+
+// Page 22 — thin wizard-local wrapper over GarminMfaPage, mirroring
+// AddGarminAuth. Post-MFA the flow continues identically to the post-auth path
+// (hasAthlete ? 25 : 30) — a valid OTP simply resumes the same session.
+// No Q_OBJECT: it adds no signals/slots (aborted() lives on the GarminMfaPage
+// base), so no moc pass is needed for this TU.
+class AddGarminMfa : public GarminMfaPage
+{
+    public:
+        AddGarminMfa(AddCloudWizard *wizard, IGarminAuthClient *client)
+            : GarminMfaPage(client, wizard), wizard(wizard) {}
+
+        int nextId() const override {
+            bool hasAthlete = wizard->cloudService &&
+                wizard->cloudService->settings.value(CloudService::CloudServiceSetting::AthleteID, "") != "";
+            return hasAthlete ? 25 : 30;
+        }
+
+    private:
+        AddCloudWizard *wizard;
+};
+#endif
 
 // Main wizard - if passed a service name we are in edit mode, not add mode.
 AddCloudWizard::AddCloudWizard(Context *context, QString sname, bool sync) : QWizard(context->mainWindow), context(context), service(sname), fsync(sync)
@@ -84,6 +146,16 @@ AddCloudWizard::AddCloudWizard(Context *context, QString sname, bool sync) : QWi
     setPage(30, new AddSettings(this)); // done
     setPage(90, new AddFinish(this));     // done
 
+#ifdef GC_WANT_GARMINCONNECT
+    // Edit mode for Garmin Connect: page 20 (generic AddAuth) has nothing to
+    // show for the native SSO service, so register page 21 and start there.
+    // Service identity key comparison, not display text.
+    if (service == "Garmin Connect") { // T208-ALLOW:I18N-TR-WRAP
+        ensureGarminAuthPage();
+        setStartId(21);
+    }
+#endif
+
     done = false;
 }
 
@@ -98,6 +170,253 @@ AddCloudWizard::reject()
     QWizard::reject();
 }
 
+AddCloudWizard::~AddCloudWizard()
+{
+#ifdef GC_WANT_GARMINCONNECT
+    // Destruction order: wizard > chain(worker) > adapter. The
+    // chain's destructor stops the worker thread (quit()+wait(), bounded) before the adapter it calls into goes away.
+    // Page 21 holds only a non-owning IGarminAuthClient* and is destroyed
+    // later by ~QObject child cleanup without dereferencing it.
+    delete garminChain;
+    garminChain = nullptr;
+    delete garminAdapter;
+    garminAdapter = nullptr;
+#endif
+}
+
+#ifdef GC_WANT_GARMINCONNECT
+// Lazily build the Garmin auth stack on first entry to the Garmin path and
+// register wizard page 21. Idempotent — routing may pass this way repeatedly
+// (Back/Next, service re-selection).
+void
+AddCloudWizard::ensureGarminAuthPage()
+{
+    if (garminChain) return;
+
+    // modulePath: GC_GARMIN_PYPATH is the
+    // developer escape hatch and, when set, is an EXPLICIT override,
+    // prepended to sys.path before the adapter's only import attempt. With
+    // no override, the adapter makes exactly one plain import against the
+    // installed `gc_garmin_adapter` package.
+    const QString envOverride = QString::fromLocal8Bit(qgetenv("GC_GARMIN_PYPATH"));
+    const GarminPyModulePath modulePath = envOverride.isEmpty()
+        ? GarminPyModulePath::none()
+        : GarminPyModulePath::explicitOverride(envOverride);
+
+    // The adapter constructs the library
+    // AUTH-ONLY — no tokenstore path is forwarded (the library must self-write
+    // no token file). C++ token persistence (routing the per-athlete config dir
+    // into GarminTokenStore::save) is the deferred worker-in-CloudService
+    // lifecycle, wired in later — so no path is computed
+    // here yet.
+    garminAdapter = new PyEmbeddedAdapter(modulePath);
+    garminChain = new GarminAuthChain(garminAdapter);
+    AddGarminAuth *authPage = new AddGarminAuth(this, garminChain->client());
+    setPage(21, authPage);
+
+    // The conditional MFA page. Registered on
+    // the SAME non-owning client as page 21 (both drive the one auth session).
+    // Guarded by the same `if (garminChain) return;` above, so it is registered
+    // exactly once. Its aborted() (3 invalid OTPs, non-retry) closes the wizard:
+    // the terminal error is already shown on the page before aborted() fires.
+    AddGarminMfa *mfaPage = new AddGarminMfa(this, garminChain->client());
+    setPage(22, mfaPage);
+    connect(mfaPage, &GarminMfaPage::aborted, this, &AddCloudWizard::reject);
+
+    // The SINGLE wizard-level persist trigger
+    // for the connect-success producer, which finally gets
+    // a production caller. Both auth paths funnel through this one capture:
+    //   * direct path  — GarminCredentialsPage::succeeded (page 21)
+    //   * post-MFA path — GarminMfaPage::succeeded          (page 22)
+    // Each page emits succeeded() ONLY from its m_pendingId-gated terminal Success
+    // (stale-reply option b), so a slow/superseded reply from an abandoned earlier
+    // attempt can never reach here and can never overwrite a freshly
+    // persisted token — the guard is preserved by construction. Registered under
+    // the same `if (garminChain) return;` idempotency, so it is wired exactly once.
+    // The persist is dispatched generically through the service handle
+    // (cloudService is the GarminConnect instance on this path — cloned by
+    // AddService::clicked before routing here, or set at ctor in edit mode); the
+    // service resolves the SAME athlete config dir as GarminConnect::resolveConfigDir().
+    // The one-time ToS-risk notice sits directly in front of the
+    // persist call on both paths: Cancel must leave no tokens on disk.
+    auto persist = [this](const GarminAuthSuccess &result) {
+        if (!cloudService) return;
+        if (!showGarminToSNoticeIfNeeded()) return;
+        cloudService->persistConnectSuccess(result.garmin_user_id, result.tokenBlob);
+        // The profile auto-fill offer needs a
+        // persisted, live session to fetch against, so it runs AFTER persist.
+        showGarminProfileOfferIfNeeded();
+    };
+    connect(authPage, &GarminCredentialsPage::succeeded, this, persist);
+    connect(mfaPage, &GarminMfaPage::succeeded, this, persist);
+
+    // Wire the profile-fetch result handlers
+    // ONCE, under the SAME `if (garminChain) return;` idempotency as the
+    // persist lambda above. showGarminProfileOfferIfNeeded() dispatches
+    // fetchProfile() on garminChain->worker() asynchronously; these two
+    // handlers fill only currently-empty dob/weight/height Athlete fields
+    // when the result lands, guarded by request-id correlation
+    // (m_pendingProfileRequestId) so a late/duplicate result can never be
+    // double-applied. A fetch failure is silently dropped (there is
+    // no error UI for this nice-to-have feature).
+    connect(garminChain->worker(), &GarminWorker::profileFetched, this,
+            [this](QUuid id, GarminProfileResult result) {
+        if (id != m_pendingProfileRequestId) return;
+        // This fetch is dispatched async (queued
+        // cross-thread) and can land arbitrarily long after dispatch, so an
+        // athlete-tab close in the meantime can free Context while this
+        // result is in flight — leaving the raw `context` member DANGLING
+        // (not null). Guard against m_pendingProfileContext (a QPointer
+        // captured while Context was still known-alive, at dispatch time in
+        // showGarminProfileOfferIfNeeded()) instead of `context` directly.
+        if (m_pendingProfileContext.isNull() || !m_pendingProfileContext->athlete) return;
+        const QString cyclist = m_pendingProfileContext->athlete->cyclist;
+
+        // "Currently empty" is checked against the RAW stored value (an
+        // explicit empty/invalid default), NOT Athlete::getWeight()/
+        // getHeight()'s own fallback defaults, which would always appear
+        // non-empty.
+        if (result.hasDob) {
+            const QDate existing = appsettings->cvalue(cyclist, GC_DOB).toDate();
+            if (!existing.isValid()) {
+                const QDate parsed = QDate::fromString(result.dob, Qt::ISODate);
+                if (parsed.isValid()) appsettings->setCValue(cyclist, GC_DOB, parsed);
+            }
+        }
+        if (result.hasWeightKg) {
+            const QString existing = appsettings->cvalue(cyclist, GC_WEIGHT, QString()).toString();
+            if (existing.isEmpty()) appsettings->setCValue(cyclist, GC_WEIGHT, result.weightKg);
+        }
+        if (result.hasHeightCm) {
+            const QString existing = appsettings->cvalue(cyclist, GC_HEIGHT, QString()).toString();
+            if (existing.isEmpty()) appsettings->setCValue(cyclist, GC_HEIGHT, result.heightCm);
+        }
+    });
+    connect(garminChain->worker(), &GarminWorker::profileFailed, this, [](QUuid, GarminProfileFailure) {});
+}
+
+bool (*AddCloudWizard::s_garminToSPromptOverride)() = nullptr;
+
+void AddCloudWizard::setGarminToSPromptForTest(bool (*prompt)())
+{
+    s_garminToSPromptOverride = prompt;
+}
+
+QString AddCloudWizard::garminToSNoticeText()
+{
+    return tr("GoldenCheetah connects to Garmin Connect using the same authentication flow as "
+              "Garmin's mobile app. Garmin does not officially endorse third-party clients, and "
+              "aggressive use may, in rare cases, lead to a temporary account restriction. "
+              "GoldenCheetah limits its requests to a low rate to avoid this. You can disconnect "
+              "at any time from the Cloud Services settings.");
+}
+
+QString AddCloudWizard::garminToSAcceptButtonText()
+{
+    return tr("I understand — connect");
+}
+
+QString AddCloudWizard::garminToSCancelButtonText()
+{
+    return tr("Cancel");
+}
+
+bool AddCloudWizard::showGarminToSNoticeIfNeeded()
+{
+    // one-time — a prior session's acknowledgement skips the modal.
+    if (appsettings->value(NULL, GC_GARMIN_CONNECT_TOS_ACK, false).toBool())
+        return true;
+
+    bool accepted;
+    if (s_garminToSPromptOverride) {
+        accepted = s_garminToSPromptOverride();
+    } else {
+        // ::doAuth, AddSettings::
+        // browseFolder): this wizard is NON-MODAL and can be torn down
+        // (MainWindow close, athlete-tab close) while the nested exec() below
+        // pumps the event loop. The box is deliberately PARENTLESS — a
+        // `this`-parented box would cascade-delete mid-exec() the instant the
+        // wizard dies, the same UAF class Stage 6 fixed elsewhere — and `self`
+        // guards every use of `this`/wizard state once exec() returns.
+        QPointer<AddCloudWizard> self(this);
+        QMessageBox box;
+        box.setWindowTitle(tr("Garmin Connect"));
+        box.setText(garminToSNoticeText());
+        QAbstractButton *acceptButton = box.addButton(garminToSAcceptButtonText(), QMessageBox::AcceptRole);
+        box.addButton(garminToSCancelButtonText(), QMessageBox::RejectRole);
+        box.exec();
+        if (self.isNull()) return false; // wizard torn down mid-modal
+        accepted = box.clickedButton() == acceptButton;
+    }
+
+    if (!accepted) {
+        reject(); // like the CAPTCHA-cancel precedent: decline closes the wizard
+        return false;
+    }
+    appsettings->setValue(GC_GARMIN_CONNECT_TOS_ACK, true);
+    return true;
+}
+
+bool (*AddCloudWizard::s_garminProfileOfferPromptOverride)() = nullptr;
+
+void AddCloudWizard::setGarminProfileOfferPromptForTest(bool (*prompt)())
+{
+    s_garminProfileOfferPromptOverride = prompt;
+}
+
+void AddCloudWizard::showGarminProfileOfferIfNeeded()
+{
+    if (!context || !context->athlete) return;
+    const QString cyclist = context->athlete->cyclist;
+
+    // per-athlete one-time gate: distinct from
+    // GC_GARMIN_CONNECT_TOS_ACK's GLOBAL one-time ack, since this is about
+    // whether THIS athlete's profile has already been offered.
+    if (appsettings->cvalue(cyclist, GC_GARMIN_PROFILE_OFFERED, false).toBool())
+        return;
+
+    bool optedIn;
+    if (s_garminProfileOfferPromptOverride) {
+        optedIn = s_garminProfileOfferPromptOverride();
+    } else {
+        // Same non-modal-wizard-survives-teardown guard as
+        // showGarminToSNoticeIfNeeded():
+        // a parentless box, `self` guarding every post-exec() use of `this`.
+        QPointer<AddCloudWizard> self(this);
+        QMessageBox box;
+        box.setWindowTitle(tr("Garmin Connect"));
+        box.setText(tr("Use Garmin profile data to fill in your Athlete profile?\n\n"
+                        "GoldenCheetah will only fill fields that are currently empty. "
+                        "Your existing data will not be changed."));
+        QCheckBox *checkbox = new QCheckBox(tr("Yes, use my Garmin profile to fill missing GC fields"));
+        box.setCheckBox(checkbox);
+        QAbstractButton *applyButton = box.addButton(tr("Apply"), QMessageBox::AcceptRole);
+        box.addButton(tr("Skip"), QMessageBox::RejectRole);
+        box.exec();
+        if (self.isNull()) return; // wizard torn down mid-modal
+        optedIn = (box.clickedButton() == applyButton) && checkbox->isChecked();
+    }
+
+    // One-time regardless of the answer — Skip must not re-prompt next time.
+    appsettings->setCValue(cyclist, GC_GARMIN_PROFILE_OFFERED, true);
+
+    if (!optedIn) return;
+    if (!garminChain) return;
+
+    m_pendingProfileRequestId = QUuid::createUuid();
+    // Captured now, while `context` is still
+    // known-alive (this function's own guard above just verified it), so the
+    // async profileFetched() handler can detect a teardown that happens
+    // before the result lands.
+    m_pendingProfileContext = context;
+    // String+Q_ARG form (not the function-pointer overload): GarminWorker
+    // lives on garminChain->workerThread(), so this MUST cross the thread
+    // boundary as a queued call (Qt::AutoConnection resolves to Queued here,
+    // same as WorkerAuthClient's dispatch-signal pattern one layer up).
+    QMetaObject::invokeMethod(garminChain->worker(), "fetchProfile", Qt::AutoConnection,
+                              Q_ARG(QUuid, m_pendingProfileRequestId));
+}
+#endif
 
 /*----------------------------------------------------------------------
  * Wizard Pages
@@ -211,7 +530,14 @@ int AddService::nextId() const
 {
     if (wizard->cloudService) {
         if (wizard->cloudService->settings.value(CloudService::CloudServiceSetting::Consent, "") != "") return 15;
-        else return 20;
+#ifdef GC_WANT_GARMINCONNECT
+        // Garmin Connect uses its own native credentials page (21), not the
+        // generic URL/Key/OAuth page (20). Non-Garmin services fall through
+        // to 20 exactly as before.
+        // Service identity key comparison, not display text.
+        if (wizard->cloudService->id() == "Garmin Connect") return 21; // T208-ALLOW:I18N-TR-WRAP
+#endif
+        return 20;
     }
 
     // loop round
@@ -227,6 +553,13 @@ AddService::clicked(QString p)
     // instatiate the cloudservice, complete with current configuration etc
     if (wizard->cloudService) delete wizard->cloudService;
     wizard->cloudService = CloudServiceFactory::instance().newService(p, wizard->context);
+
+#ifdef GC_WANT_GARMINCONNECT
+    // first entry to the Garmin path: stand up adapter + chain + page 21
+    // before next() asks nextId() to route there.
+    // Service identity key comparison, not display text.
+    if (p == "Garmin Connect") wizard->ensureGarminAuthPage(); // T208-ALLOW:I18N-TR-WRAP
+#endif
 
     wizard->next();
 }
@@ -261,6 +594,19 @@ void AddConsent::setConsent()
 
     // move on if accepted
     wizard->next();
+}
+
+int AddConsent::nextId() const
+{
+#ifdef GC_WANT_GARMINCONNECT
+    // Garmin Connect routes to its native credentials page (21); everything
+    // else keeps the historical hardcoded 20. (Garmin currently defines no
+    // Consent setting so this page is skipped for it, but if a consent text
+    // is ever added the routing stays correct.)
+    // Service identity key comparison, not display text.
+    if (wizard->cloudService && wizard->cloudService->id() == "Garmin Connect") return 21; // T208-ALLOW:I18N-TR-WRAP
+#endif
+    return 20;
 }
 
 void AddConsent::initializePage()

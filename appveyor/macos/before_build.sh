@@ -67,6 +67,9 @@ sed -i "" "s|#\(DEFINES += GC_WANT_R.*\)|\1 |" src/gcconfig.pri
 # Python (avoiding collision between GC Context.h and Python context.h)
 sed -i "" "s|#\(DEFINES += GC_WANT_PYTHON\)\.*|\1 |" src/gcconfig.pri
 
+# Garmin Connect
+sed -i "" "s|#\(DEFINES += GC_WANT_GARMINCONNECT\)\.*|\1 |" src/gcconfig.pri
+
 # TrainerDay Query API
 echo DEFINES += GC_WANT_TRAINERDAY_API >> src/gcconfig.pri
 echo DEFINES += GC_TRAINERDAY_API_PAGESIZE=25 >> src/gcconfig.pri
